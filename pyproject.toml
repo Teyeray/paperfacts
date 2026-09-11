@@ -1,0 +1,63 @@
+[project]
+name = "paperfacts"
+version = "0.1.0"
+description = "Keyword-driven extraction of tabular facts from scientific PDFs, with dual-parser cross-checking, LLM extraction, and page/bbox provenance."
+readme = "README.md"
+# The upper bound is load-bearing: MinerU requires <3.14 and paddlepaddle only ships cp313 wheels.
+# Without it uv eventually resolves to a 3.14 that nothing supports.
+requires-python = ">=3.13,<3.14"
+# The main package is pure Python. MinerU and PaddleOCR live in their own environments under runners/
+# and are never imported from here; see CLAUDE.md for why they cannot share one.
+dependencies = [
+    "pydantic>=2.11,<3",
+    "pypdfium2>=4.30,<6",
+    "pillow>=11,<12",
+    "typer>=0.15,<1",
+    "httpx>=0.28,<1",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+    "python-multipart>=0.0.32",
+]
+
+[project.scripts]
+paperfacts = "paperfacts.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paperfacts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "parser: integration tests needing real parser environments and weights; skipped unless --run-parser",
+]
+
+[tool.ruff]
+# 120 leaves room for the long type annotations and table-shaped literals in this codebase
+line-length = 120
+target-version = "py313"
+src = ["src", "tests", "runners"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ANN", "RUF"]
+ignore = [
+    "ANN401",  # explicit Any is allowed: a parser's native output has no static type
+    "RUF001", "RUF002", "RUF003",  # full-width punctuation in UI copy is not a typo
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+"src/paperfacts/extraction/prompts.py" = ["E501"]  # prompt text wraps by sentence, not by column
+
+[tool.coverage.run]
+source = ["paperfacts"]

@@ -1,0 +1,329 @@
+"""Data models for extraction results: validating the LLM response and converting it into stored records.
+
+The two layers are deliberately kept apart -- :class:`ExtractionResponse` only has the verbatim fields, so
+the LLM has no place to do unit conversion even structurally. What this file guards is the boundary of
+"response shape": a field missing its verbatim value must fail on the spot, not carry a null value
+downstream.
+"""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from paperfacts.extraction.fields import FIELD_BY_NAME
+from paperfacts.extraction.records import ExtractionResponse, response_to_records
+
+# Cleaning needs to know both "which source_ids actually exist" and "which fields are in the schema";
+# tests are given one fixed known set.
+KNOWN_IDS = frozenset({"b1", "b2", "b8", "b9", "mineru_p1_b9"})
+
+
+def to_records(response: ExtractionResponse, *, known_ids: frozenset[str] = KNOWN_IDS):
+    return response_to_records(response, known_ids=known_ids, known_fields=FIELD_BY_NAME)
+
+
+# ---- ExtractionResponse validation -----------------------------------------------------
+
+
+def make_response(**overrides) -> dict:
+    field = {"field": "thickness", "value_raw": "300", "unit_raw": "nm", "source_ids": ["mineru_p1_b9"]}
+    field.update(overrides)
+    return {"samples": [{"sample_id": "A", "fields": [field]}]}
+
+
+def test_a_well_formed_response_validates():
+    response = ExtractionResponse.model_validate(make_response())
+
+    assert response.samples[0].fields[0].value_raw == "300"
+
+
+def test_a_field_without_value_raw_is_rejected():
+    # value_raw is the sole verbatim evidence across the whole chain; without it this fact cannot be
+    # traced back to anything, so it must fail immediately.
+    payload = make_response()
+    del payload["samples"][0]["fields"][0]["value_raw"]
+
+    with pytest.raises(ValidationError, match="value_raw"):
+        ExtractionResponse.model_validate(payload)
+
+
+@pytest.mark.parametrize("empty", ["", None])
+def test_a_field_with_an_empty_value_raw_is_rejected(empty):
+    with pytest.raises(ValidationError, match="value_raw"):
+        ExtractionResponse.model_validate(make_response(value_raw=empty))
+
+
+def test_a_sample_without_an_id_is_rejected():
+    with pytest.raises(ValidationError, match="sample_id"):
+        ExtractionResponse.model_validate({"samples": [{"sample_id": "", "fields": []}]})
+
+
+def test_unknown_keys_in_the_response_are_ignored_rather_than_fatal():
+    # The model tacking on an extra key is common; failing the whole extraction over it is not worth it.
+    response = ExtractionResponse.model_validate(
+        {"samples": [{"sample_id": "A", "fields": [], "confidence": 0.9}], "commentary": "…"}
+    )
+
+    assert response.samples[0].sample_id == "A"
+
+
+def test_an_empty_response_is_valid_and_means_nothing_was_found():
+    response = ExtractionResponse.model_validate({})
+
+    assert response.target is None and response.samples == []
+
+
+# ---- response_to_records ---------------------------------------------------------------
+
+
+def test_duplicate_source_ids_are_removed_but_the_order_is_kept():
+    # Citing the same id twice is not an error, but the duplicate would make the provenance look like it
+    # has two pieces of corroborating evidence when it only has one.
+    response = ExtractionResponse.model_validate(
+        {
+            "samples": [
+                {
+                    "sample_id": "A",
+                    "source_ids": ["b1", "b2", "b1"],
+                    "fields": [{"field": "thickness", "value_raw": "300", "source_ids": ["b9", "b9", "b8"]}],
+                }
+            ]
+        }
+    )
+
+    records = to_records(response)
+
+    assert records.samples[0].source_ids == ("b1", "b2")
+    assert records.samples[0].fields[0].source_ids == ("b9", "b8")
+
+
+def test_surrounding_whitespace_is_stripped_from_every_text_field():
+    response = ExtractionResponse.model_validate(
+        {
+            "samples": [
+                {
+                    "sample_id": "  A  ",
+                    "label": "  O2 100 sccm ",
+                    "conditions": {"  O2  ": "  100 sccm "},
+                    "fields": [
+                        {
+                            "field": "thickness",
+                            "value_raw": "  300 ",
+                            "unit_raw": " nm ",
+                            "condition": " RT ",
+                            "note": "  from SEM ",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    sample = to_records(response).samples[0]
+
+    assert (sample.sample_id, sample.label) == ("A", "O2 100 sccm")
+    assert sample.conditions == {"O2": "100 sccm"}
+    assert (sample.fields[0].value_raw, sample.fields[0].unit_raw) == ("300", "nm")
+    assert (sample.fields[0].condition, sample.fields[0].note) == ("RT", "from SEM")
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_optional_text_that_is_only_whitespace_becomes_none(blank):
+    # "" and None mean two different things downstream (written but empty vs. never written); folding
+    # them into one None keeps every comparison from having to re-decide which case it is.
+    response = ExtractionResponse.model_validate(
+        {"samples": [{"sample_id": "A", "fields": [{"field": "thickness", "value_raw": "300", "unit_raw": blank}]}]}
+    )
+
+    records = to_records(response)
+
+    assert records.samples[0].fields[0].unit_raw is None
+
+
+def test_a_target_without_fields_becomes_none():
+    # An empty target record would add a spurious "paper level" tier to the report for nothing; better to
+    # have no target at all.
+    response = ExtractionResponse.model_validate({"target": {"source_ids": ["b1"], "fields": []}, "samples": []})
+
+    assert to_records(response).target is None
+
+
+def test_a_target_with_fields_is_kept_with_its_provenance():
+    response = ExtractionResponse.model_validate(
+        {"target": {"source_ids": ["b1"], "fields": [{"field": "density", "value_raw": "98.5", "unit_raw": "%"}]}}
+    )
+
+    target = to_records(response).target
+
+    assert target.source_ids == ("b1",)
+    assert target.get("density").value_raw == "98.5"
+
+
+def test_records_carry_no_normalized_values_yet():
+    # This step only carries the verbatim text across; value/unit are filled in by the normalisation
+    # layer, and mixing the two would blur who computed what.
+    response = ExtractionResponse.model_validate(make_response())
+
+    field = to_records(response).samples[0].fields[0]
+
+    assert (field.value, field.unit, field.normalization_note) == (None, None, None)
+
+
+# ---- Cleaning ---------------------------------------------------------------------------
+
+
+def test_a_source_id_that_does_not_exist_is_removed_and_reported():
+    # The LLM does invent source_ids; keeping one would leave the provenance pointing at a page region
+    # that does not exist.
+    response = ExtractionResponse.model_validate(
+        {
+            "samples": [
+                {
+                    "sample_id": "A",
+                    "fields": [{"field": "thickness", "value_raw": "300", "source_ids": ["b9", "ghost"]}],
+                }
+            ]
+        }
+    )
+
+    records = to_records(response)
+
+    assert records.samples[0].fields[0].source_ids == ("b9",)
+    assert records.invalid_source_ids == ("ghost",)
+
+
+def test_invalid_source_ids_are_deduplicated_and_sorted():
+    response = ExtractionResponse.model_validate(
+        {
+            "samples": [
+                {
+                    "sample_id": "A",
+                    "source_ids": ["zzz", "aaa"],
+                    "fields": [{"field": "thickness", "value_raw": "1", "source_ids": ["zzz"]}],
+                }
+            ]
+        }
+    )
+
+    assert to_records(response).invalid_source_ids == ("aaa", "zzz")
+
+
+def test_a_field_outside_the_schema_is_dropped_and_logged():
+    response = ExtractionResponse.model_validate(
+        {"samples": [{"sample_id": "A", "fields": [{"field": "carrier_concentration", "value_raw": "1e20"}]}]}
+    )
+
+    records = to_records(response)
+
+    assert records.samples[0].fields == ()
+    assert records.dropped == ("carrier_concentration: not in schema",)
+
+
+# ---- Field scope enforcement -----------------------------------------------------------
+
+
+def test_a_target_level_field_reported_under_a_sample_is_dropped_and_logged():
+    # `resistance` belongs to the sputtering target, not to any one film. The prompt has always said so,
+    # but a prompt is a request, not an enforcement mechanism -- a real run reported a film's dopant
+    # concentration as the target's own composition, which is exactly this failure mode.
+    response = ExtractionResponse.model_validate(
+        {"samples": [{"sample_id": "A", "fields": [{"field": "resistance", "value_raw": "0.3", "unit_raw": "Ω cm"}]}]}
+    )
+
+    records = to_records(response)
+
+    assert records.samples[0].fields == ()
+    assert records.dropped == ("resistance: target-level field reported under a sample",)
+
+
+def test_a_sample_level_field_reported_under_the_target_is_dropped_and_logged():
+    response = ExtractionResponse.model_validate(
+        {"target": {"fields": [{"field": "thickness", "value_raw": "300", "unit_raw": "nm"}]}}
+    )
+
+    records = to_records(response)
+
+    assert records.target is None
+    assert records.dropped == ("thickness: film-level field reported under the target",)
+
+
+def test_a_correctly_scoped_field_of_every_group_survives():
+    # Regression guard for the scope rule itself: it must reject the wrong scope without becoming
+    # overzealous and rejecting the right one, for every group (target, process, film).
+    response = ExtractionResponse.model_validate(
+        {
+            "target": {"fields": [{"field": "resistance", "value_raw": "0.3", "unit_raw": "Ω cm"}]},
+            "samples": [
+                {
+                    "sample_id": "A",
+                    "fields": [
+                        {"field": "sputtering_time", "value_raw": "30", "unit_raw": "min"},
+                        {"field": "resistivity", "value_raw": "1.2e-3", "unit_raw": "Ω cm"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    records = to_records(response)
+
+    assert records.target.get("resistance").value_raw == "0.3"
+    assert records.samples[0].get("sputtering_time").value_raw == "30"
+    assert records.samples[0].get("resistivity").value_raw == "1.2e-3"
+    assert records.dropped == ()
+
+
+@pytest.mark.parametrize("value_raw", ["minimum", "n.a.", "high"])
+def test_a_numeric_field_without_any_digit_is_dropped_and_logged(value_raw):
+    # "minimum" is not a fact value; keeping it would only normalize to None and then show up as a line
+    # of noise in the report.
+    response = ExtractionResponse.model_validate(
+        {"samples": [{"sample_id": "A", "fields": [{"field": "sheet_resistance", "value_raw": value_raw}]}]}
+    )
+
+    records = to_records(response)
+
+    assert records.samples[0].fields == ()
+    assert records.dropped == (f"sheet_resistance: non-numeric value {value_raw!r}",)
+
+
+def test_a_numeric_field_containing_a_digit_survives():
+    response = ExtractionResponse.model_validate(
+        {"samples": [{"sample_id": "A", "fields": [{"field": "thickness", "value_raw": "2 μm"}]}]}
+    )
+
+    records = to_records(response)
+
+    assert records.samples[0].get("thickness").value_raw == "2 μm"
+    assert records.dropped == ()
+
+
+def test_a_text_field_without_digits_is_not_affected_by_the_numeric_rule():
+    response = ExtractionResponse.model_validate(
+        {"target": {"fields": [{"field": "component", "value_raw": "SnO2:Ta"}]}}
+    )
+
+    records = to_records(response)
+
+    assert records.target.get("component").value_raw == "SnO2:Ta"
+    assert records.dropped == ()
+
+
+def test_a_target_whose_fields_are_all_dropped_becomes_none():
+    response = ExtractionResponse.model_validate(
+        {"target": {"source_ids": ["ghost"], "fields": [{"field": "not_a_field", "value_raw": "x"}]}}
+    )
+
+    records = to_records(response)
+
+    assert records.target is None
+    # The target's own invented id still belongs in the audit, even though every one of its fields was
+    # dropped.
+    assert records.invalid_source_ids == ("ghost",)
+
+
+def test_a_clean_response_reports_nothing_dropped_or_invalid():
+    records = to_records(ExtractionResponse.model_validate(make_response(source_ids=["mineru_p1_b9"])))
+
+    assert records.invalid_source_ids == () and records.dropped == ()

@@ -1,0 +1,193 @@
+"""Document library: what's under ``data/docs/``, how far each document got, and where uploaded
+PDFs live.
+
+The public document_id is the directory name (first 16 hex chars of the sha256, see
+:func:`paperfacts.storage.paths.document_key`); the full sha256, display name, and source are all
+read from the document directory's ``identity.json`` (:mod:`paperfacts.storage.identity`) — never
+recovered by falling back to meta.json / artifact files.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from paperfacts.config import Settings
+from paperfacts.consensus import ComparisonCounts, ComparisonReport, comparison_key
+from paperfacts.extraction.document import build_extraction_document
+from paperfacts.extraction.extractor import extractor_key
+from paperfacts.extraction.grounding import ground_lane
+from paperfacts.extraction.records import LaneExtraction
+from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
+from paperfacts.normalization import normalize_lane
+from paperfacts.pdf import render_page_cached
+from paperfacts.storage.atomic import write_bytes_atomic
+from paperfacts.storage.identity import DocumentIdentity, ensure_identity, mark_uploaded, read_identity
+from paperfacts.storage.paths import DataLayout, document_key, is_document_key
+
+logger = logging.getLogger(__name__)
+
+
+class DocumentSummary(BaseModel):
+    """One row, shared by the document list and the detail page."""
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str = Field(description="directory name (first 16 hex chars of the sha256)")
+    name: str
+    pdf_available: bool
+    parsed: dict[str, bool]
+    extracted: dict[str, bool]
+    compared: bool
+    counts: ComparisonCounts | None = None
+    uploaded_at: str | None = None
+
+
+class Library:
+    """Read-only queries over ``data/docs``, plus upload registration. Cache keys follow the current Settings."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.layout = DataLayout(settings.data_root)
+        self.extractor_key = extractor_key(settings.llm_model)
+        self.comparison_key = comparison_key()
+
+    # ---- listing and detail ----------------------------------------------------------------
+
+    def list(self) -> list[DocumentSummary]:
+        root = self.layout.docs_root()
+        if not root.is_dir():
+            return []
+        keys = []
+        for path in sorted(root.iterdir()):
+            if not path.is_dir():
+                continue
+            if not is_document_key(path.name):
+                # a hand-made scratch directory, rsync leftovers, etc.: skip anything that isn't a
+                # document, so one stray directory can't take down the whole listing
+                logger.warning("ignoring non-document directory under docs/: %s", path.name)
+                continue
+            keys.append(path.name)
+        summaries = [self.summary(key) for key in keys]
+        return sorted(summaries, key=lambda s: (s.uploaded_at or "", s.name), reverse=True)
+
+    def exists(self, document_id: str) -> bool:
+        """Whether this document's directory exists; a malformed id raises ``KeyError`` (also the
+        first line of defense against path traversal)."""
+        self._require_key(document_id)
+        return self.layout.doc_dir(document_id).is_dir()
+
+    def summary(self, document_id: str) -> DocumentSummary:
+        """How far processing got. An unseen but well-formed id gets an "empty" summary; existence
+        itself is answered by :meth:`exists`."""
+        self._require_key(document_id)
+        identity = self.identity(document_id)
+        report = self.report(document_id)
+        return DocumentSummary(
+            document_id=document_id,
+            name=identity.name if identity else document_id,
+            pdf_available=self.pdf_path(document_id) is not None,
+            parsed={b: self.layout.artifact_path(document_id, b).is_file() for b in BACKENDS},
+            extracted={b: self.layout.extraction_path(document_id, b, self.extractor_key).is_file() for b in BACKENDS},
+            compared=report is not None,
+            counts=report.counts if report else None,
+            uploaded_at=identity.created_at if identity and identity.uploaded else None,
+        )
+
+    def identity(self, document_id: str) -> DocumentIdentity | None:
+        # for a directory that predates identity.json, read_identity recovers it from the old files once and writes it
+        return read_identity(self.layout, document_id)
+
+    # ---- artifacts -----------------------------------------------------------------------
+
+    def report(self, document_id: str) -> ComparisonReport | None:
+        path = self.layout.comparison_path(document_id, self.extractor_key, self.comparison_key)
+        return ComparisonReport.read(path) if path.is_file() else None
+
+    def extraction(self, document_id: str, backend: Backend) -> LaneExtraction | None:
+        """Read one lane, re-deriving everything that is cheap to recompute.
+
+        Normalisation and grounding are both pure functions of the stored record, and both are re-run on
+        every read rather than trusted from the file. Skipping grounding here would let the browser show
+        verdicts from whenever the file happened to be written, which is how this method and
+        ``workflow.extract_document`` silently drifted apart once already.
+
+        Grounding additionally needs the artifact. Without it the stored verdicts are kept as they are:
+        they cannot be re-checked, but they are still the best answer available.
+        """
+        path = self.layout.extraction_path(document_id, backend, self.extractor_key)
+        if not path.is_file():
+            return None
+        lane = LaneExtraction.read(path)
+        artifact = self.artifact(document_id, backend)
+        if artifact is not None:
+            lane = ground_lane(lane, build_extraction_document(artifact).blocks)
+        return normalize_lane(lane)
+
+    def artifact(self, document_id: str, backend: Backend) -> ParsedArtifact | None:
+        path = self.layout.artifact_path(document_id, backend)
+        return ParsedArtifact.read(path) if path.is_file() else None
+
+    # ---- PDF and DocumentInput --------------------------------------------------------
+
+    def pdf_path(self, document_id: str) -> Path | None:
+        """A web-uploaded source.pdf wins; a CLI-processed document falls back to the original
+        path recorded in its identity (only valid on the same machine)."""
+        uploaded = self.layout.source_pdf(document_id)
+        if uploaded.is_file():
+            return uploaded
+        identity = self.identity(document_id)
+        if identity and identity.source_path and Path(identity.source_path).is_file():
+            return Path(identity.source_path)
+        return None
+
+    def page_image(self, document_id: str, page: int, *, dpi: int) -> Path:
+        """A rendered image of one page (cached). Raises ``FileNotFoundError`` when there's no
+        PDF, ``IndexError`` when the page number is out of range."""
+        pdf = self.pdf_path(document_id)
+        if pdf is None:
+            raise FileNotFoundError("This document has no available PDF to render pages from")
+        return render_page_cached(pdf, page, dpi=dpi, cache_dir=self.layout.page_cache_dir(document_id, dpi))
+
+    def document(self, document_id: str) -> DocumentInput:
+        identity = self.identity(document_id)
+        if identity is None:
+            raise FileNotFoundError(
+                f"Document {document_id} has no identity.json: please re-upload or reprocess via the CLI"
+            )
+        pdf = self.pdf_path(document_id)
+        if pdf is None:
+            raise FileNotFoundError(
+                f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
+            )
+        return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256)
+
+    def register_upload(self, filename: str, data: bytes) -> DocumentInput:
+        """Store an uploaded PDF in its document directory (re-uploading the same content is
+        idempotent), and return a DocumentInput that's ready to process.
+
+        Identity is written first (the one place the full sha256 gets recorded), then the PDF is
+        written **atomically**: dying partway through never leaves a document with a PDF but no
+        discoverable sha. The idempotency check doesn't just look at whether the file exists — a
+        file left truncated by a previous half-finished write gets repaired too.
+        """
+        sha = hashlib.sha256(data).hexdigest()
+        pdf = self.layout.source_pdf(sha)
+        document = DocumentInput(document_id=sha, pdf_path=pdf, sha256=sha)
+        name = Path(filename).name or f"{document_key(sha)}.pdf"
+        identity = ensure_identity(self.layout, document, name=name, uploaded=True)
+        if not pdf.is_file() or pdf.stat().st_size != len(data):
+            write_bytes_atomic(pdf, data)
+        mark_uploaded(self.layout, identity, name=name)
+        logger.info("registered upload doc=%s name=%s bytes=%d", document_key(sha), filename, len(data))
+        return document
+
+    # ---- internal -----------------------------------------------------------------------
+
+    @staticmethod
+    def _require_key(document_id: str) -> None:
+        if not is_document_key(document_id):
+            raise KeyError(f"Invalid document_id: {document_id!r}")
