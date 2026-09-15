@@ -402,3 +402,87 @@ def test_an_unknown_mode_is_rejected_before_any_call_is_made():
         extract_lane(make_artifact(make_blocks()), client, mode="passages")  # type: ignore[arg-type]
 
     assert client.call_count == 0
+
+
+# ---- Repeats, and what counts as the same value ------------------------------------------------------
+
+
+def test_the_same_value_quoted_twice_becomes_one_value_carrying_both_citations():
+    # A field question routinely gets the same number back from the table and again from the sentence
+    # discussing it. That is one fact with two citations, not two facts, and counting it twice would
+    # hand the comparison a duplicate to pair against. Both blocks here mention the field, so both are
+    # retrieved as candidates and both citations are ones the model was actually shown.
+    blocks = (
+        *make_blocks(),
+        make_block(page=0, order=2, content="Table 1 lists a sheet resistance of 12.5 ohm/sq for Sample A."),
+    )
+    cited = [blocks[1].source_id, blocks[2].source_id]
+    client = FakeLlmClient(
+        responder(
+            sheet_resistance=values_json(
+                {"sample_id": "A", "value_raw": "12.5", "unit_raw": "ohm/sq", "source_ids": [cited[0]]},
+                {"sample_id": "A", "value_raw": "12.5", "unit_raw": "ohm/sq", "source_ids": [cited[1]]},
+            )
+        )
+    )
+
+    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+
+    values = lane.samples[0].fields
+    assert [value.value_raw for value in values] == ["12.5"]
+    assert set(values[0].source_ids) == set(cited)
+
+
+def test_the_same_number_in_two_units_stays_two_values():
+    # "2.1 μm" and "2.1 nm" differ by a factor of a thousand: merging them would delete a parser
+    # disagreement, which is the one thing this pipeline exists to surface.
+    blocks = make_blocks()
+    cited = blocks[1].source_id
+    client = FakeLlmClient(
+        responder(
+            sheet_resistance=values_json(
+                {"sample_id": "A", "value_raw": "12.5", "unit_raw": "ohm/sq", "source_ids": [cited]},
+                {"sample_id": "A", "value_raw": "12.5", "unit_raw": "kohm/sq", "source_ids": [cited]},
+            )
+        )
+    )
+
+    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+
+    assert [value.unit_raw for value in lane.samples[0].fields] == ["ohm/sq", "kohm/sq"]
+
+
+# ---- The inventory's own mistakes ---------------------------------------------------------------------
+
+
+def test_a_sample_listed_twice_under_one_id_is_kept_once_and_audited():
+    # The inventory prompt demands unique ids. A repeat means the model conflated two samples, and every
+    # value later attributed to that id would land on the first of them, so the collision is recorded.
+    blocks = make_blocks()
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(
+                [
+                    {"sample_id": "A", "label": "first", "conditions": {"flow": "100 sccm"}},
+                    {"sample_id": "a ", "label": "second", "conditions": {"flow": "200 sccm"}},
+                ]
+            )
+        )
+    )
+
+    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+
+    assert [sample.label for sample in lane.samples] == ["first"]
+    assert any("repeats an id" in entry for entry in lane.dropped)
+
+
+def test_a_sample_with_a_blank_id_is_dropped_with_a_reason():
+    # min_length on the response model still admits "  ", and a sample with no id can be neither matched
+    # across lanes nor pointed at by a value.
+    blocks = make_blocks()
+    client = FakeLlmClient(responder(inventory=inventory_json([{"sample_id": "  ", "label": "nameless"}])))
+
+    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+
+    assert lane.samples == ()
+    assert any("no usable id" in entry for entry in lane.dropped)
