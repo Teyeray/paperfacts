@@ -15,8 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.adapters import convert
-from paperfacts.adapters.markdown import source_ids_in
+from paperfacts.adapters import convert, render_markdown
 from paperfacts.models import DocumentGeometry, DocumentInput, PageGeometry, RawParseOutput
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "mineru_real_sample"
@@ -57,13 +56,15 @@ def test_real_sample_every_bbox_is_normalized(real_artifact):
     assert {block.page for block in real_artifact.blocks} == {0, 1}
 
 
-def test_real_sample_markdown_spans_round_trip(real_artifact):
-    """The core invariant holds on real data: markdown[start:end] == content, and source_id
-    order matches block order."""
-    markdown = real_artifact.markdown
+def test_real_sample_renders_every_block_with_its_marker_in_block_order(real_artifact):
+    """On real data, every block's content appears right after its own marker, in block order."""
+    markdown = render_markdown(real_artifact.blocks)
+    cursor = 0
     for block in real_artifact.blocks:
-        assert markdown[block.markdown_start : block.markdown_end] == block.content
-    assert source_ids_in(markdown) == [block.source_id for block in real_artifact.blocks]
+        chunk = f"<!-- source: {block.source_id} -->\n{block.content}\n"
+        position = markdown.find(chunk, cursor)
+        assert position >= cursor, block.source_id
+        cursor = position + len(chunk)
 
 
 def test_real_sample_recognizes_title_and_running_header(real_artifact):

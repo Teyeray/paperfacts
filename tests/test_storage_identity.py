@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
-from paperfacts.models import META_FILENAME, DocumentInput
-from paperfacts.storage.identity import (
-    LEGACY_UPLOAD_META,
-    DocumentIdentity,
-    ensure_identity,
-    mark_uploaded,
-    read_identity,
-)
-from paperfacts.storage.paths import DataLayout
-from support.factories import DOC_ID, RawOutputFactory
+from paperfacts.models import DocumentInput
+from paperfacts.storage import DataLayout, DocumentIdentity, ensure_identity, mark_uploaded, read_identity
+from support.factories import DOC_ID
 
 
 @pytest.fixture
@@ -109,49 +101,7 @@ def test_an_uploaded_identity_is_left_alone(layout: DataLayout, document: Docume
     assert layout.identity_path(DOC_ID).stat().st_mtime_ns == before
 
 
-# ---- one-time recovery for legacy directories --------------------------------------------
-
-
-def test_a_legacy_upload_directory_recovers_its_identity_from_source_json(layout: DataLayout):
-    legacy = layout.doc_dir(DOC_ID) / LEGACY_UPLOAD_META
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text(
-        json.dumps({"name": "old-upload.pdf", "sha256": DOC_ID, "uploaded_at": "2026-09-01T00:00:00+00:00"}),
-        encoding="utf-8",
-    )
-
-    identity = read_identity(layout, DOC_ID)
-
-    assert identity == DocumentIdentity(
-        sha256=DOC_ID, name="old-upload.pdf", uploaded=True, created_at="2026-09-01T00:00:00+00:00"
-    )
-    assert layout.identity_path(DOC_ID).is_file()  # written back, so later reads skip the recovery path
-
-
-def test_a_legacy_cli_directory_recovers_its_identity_from_the_parser_meta(
-    layout: DataLayout, raw_output_factory: RawOutputFactory, mineru_content_list, document: DocumentInput
-):
-    raw = raw_output_factory.mineru(mineru_content_list, dir_name="prepared")
-    target = layout.raw_dir(document.document_id, "mineru")
-    target.mkdir(parents=True)
-    (target / META_FILENAME).write_bytes((raw.out_dir / META_FILENAME).read_bytes())
-
-    identity = read_identity(layout, document.document_id)
-
-    assert identity is not None
-    assert identity.sha256 == document.sha256
-    assert identity.name == document.pdf_path.name
-    assert identity.source_path == str(document.pdf_path)
-    assert identity.uploaded is False
-
-
-def test_an_unreadable_legacy_file_is_skipped_not_fatal(layout: DataLayout, caplog):
-    legacy = layout.doc_dir(DOC_ID) / LEGACY_UPLOAD_META
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text("{not json", encoding="utf-8")
-
-    assert read_identity(layout, DOC_ID) is None
-    assert LEGACY_UPLOAD_META in caplog.text
+# ---- nothing on disk ------------------------------------------------------------------------
 
 
 def test_a_directory_with_no_trace_of_its_origin_has_no_identity(layout: DataLayout):

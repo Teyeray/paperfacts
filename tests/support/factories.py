@@ -15,6 +15,7 @@ from typing import Any
 
 import pypdfium2 as pdfium
 
+from paperfacts import parsers
 from paperfacts.models import (
     META_FILENAME,
     Backend,
@@ -26,7 +27,6 @@ from paperfacts.models import (
     SourceBlock,
     make_source_id,
 )
-from paperfacts.storage import raw_layout
 
 # Page sizes (PDF points) for the two-page test PDF. Deliberately two different sizes, so a bug
 # like "used the wrong page's geometry" shows up immediately as a value mismatch instead of
@@ -111,11 +111,11 @@ class RawOutputFactory:
         extra_meta: Mapping[str, Any] | None = None,
     ) -> RawParseOutput:
         out_dir = self.base_dir / dir_name
-        native_dir = raw_layout.mineru_native_dir(out_dir)
+        native_dir = parsers.mineru_native_dir(out_dir)
         native_dir.mkdir(parents=True, exist_ok=True)
-        content_path = raw_layout.mineru_native_file(native_dir, "_content_list.json")
+        content_path = native_dir / f"{parsers.MINERU_NATIVE_STEM}_content_list.json"
         content_path.write_text(json.dumps(list(content_list), ensure_ascii=False), encoding="utf-8")
-        middle_path = raw_layout.mineru_native_file(native_dir, "_middle.json")
+        middle_path = native_dir / f"{parsers.MINERU_NATIVE_STEM}_middle.json"
         middle_path.write_text("{}", encoding="utf-8")
 
         meta: dict[str, Any] = {
@@ -150,13 +150,13 @@ class RawOutputFactory:
         construct a "runner output is incomplete" scenario.
         """
         out_dir = self.base_dir / dir_name
-        pages_dir = raw_layout.paddle_pages_dir(out_dir)
+        pages_dir = parsers.paddle_pages_dir(out_dir)
         pages_dir.mkdir(parents=True, exist_ok=True)
 
         records: list[dict[str, Any]] = []
         for page in pages:
             index = int(page["index"])
-            json_path = raw_layout.paddle_page_json(pages_dir, index)
+            json_path = parsers.paddle_page_files(pages_dir, index)[1]
             json_path.write_text(json.dumps(page["data"], ensure_ascii=False), encoding="utf-8")
             geo = self.geometry.page(index) if index < self.geometry.page_count else self.geometry.page(0)
             record: dict[str, Any] = {
@@ -165,9 +165,9 @@ class RawOutputFactory:
                 "height_pt": geo.height_pt,
                 "width_px": int(page["width_px"]),
                 "height_px": int(page["height_px"]),
-                "image": _relative(raw_layout.paddle_page_image(pages_dir, index), out_dir),
+                "image": _relative(parsers.paddle_page_files(pages_dir, index)[0], out_dir),
                 "json": _relative(json_path, out_dir),
-                "markdown_dir": _relative(raw_layout.paddle_page_markdown_dir(pages_dir, index), out_dir),
+                "markdown_dir": _relative(parsers.paddle_page_files(pages_dir, index)[2], out_dir),
             }
             for key in page.get("omit", ()):
                 record.pop(key, None)
@@ -181,7 +181,7 @@ class RawOutputFactory:
             "vl_backend": "in-process",
             "source": self._source_meta(page_range),
             "pages": records,
-            "files": {"pages_dir": raw_layout.PADDLE_PAGES_DIRNAME},
+            "files": {"pages_dir": parsers.PADDLE_PAGES_DIRNAME},
             "runner": {"script": "runners/paddle_runner.py"},
         }
         return self._finish(out_dir, meta, "paddleocr_vl")

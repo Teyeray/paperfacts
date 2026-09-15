@@ -1,16 +1,13 @@
 """Orchestration: parser -> adapter -> disk, then extraction, then comparison.
 
-This module is where "which parser implementation" is decided, and it is the only place that decides it:
-a configured ``*_url`` means an HTTP service (a GPU server), an empty one means the ``runners/`` script as
-a subprocess (a workstation). Nothing above this layer knows which it got.
+This is the only place that decides which parser implementation runs: a configured ``*_url`` means an HTTP
+service (a GPU server), an empty one means the ``runners/`` script as a subprocess (a workstation).
 
-:func:`run_document` is the single orchestration path. The CLI and the web job both call it, so the two
-cannot drift apart.
+:func:`run_document` is the single pipeline. The CLI and the web job both call it, so they cannot drift.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Callable
@@ -18,31 +15,37 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from paperfacts.adapters import convert
+from paperfacts.adapters import convert, render_markdown
+from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
-from paperfacts.consensus import ComparisonReport, compare_lanes, comparison_key, match_samples
-from paperfacts.extraction.document import build_extraction_document
-from paperfacts.extraction.extractor import extract_lane, extractor_key
-from paperfacts.extraction.grounding import ground_lane
-from paperfacts.extraction.llm import LlmClient, OpenAICompatibleClient
-from paperfacts.extraction.records import LaneExtraction
-from paperfacts.models.artifact import BACKENDS, Backend, DocumentInput, ParsedArtifact
-from paperfacts.normalization import normalize_lane
-from paperfacts.parsers.base import DocumentParser
-from paperfacts.parsers.http_parser import MinerUHttpParser, PaddleHttpParser
-from paperfacts.parsers.subprocess_parser import SubprocessParser, default_runner_script
+from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset
+from paperfacts.errors import ConfigError, PaperFactsError
+from paperfacts.extract import build_extraction_document, extract_lane
+from paperfacts.grounding import ground_lane
+from paperfacts.keys import comparison_key, extractor_key_for
+from paperfacts.llm import LlmClient, OpenAICompatibleClient
+from paperfacts.matching import match_samples
+from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
+from paperfacts.normalize import normalize_lane
+from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.storage.identity import ensure_identity
-from paperfacts.storage.paths import DataLayout
+from paperfacts.records import LaneExtraction
+from paperfacts.storage import DataLayout, ensure_identity
 
 logger = logging.getLogger(__name__)
+
+# The comparison is strictly between two lanes; a third parser would need compare_lanes redesigned.
+BACKEND_A, BACKEND_B = BACKENDS
+
+
+# ---- Parsing ----------------------------------------------------------------------------------------------
 
 
 def _uv_prefix(settings: Settings) -> tuple[str, ...]:
     return (settings.uv_bin, "run", "--locked", "--script")
 
 
-def _build_mineru(settings: Settings) -> DocumentParser:
+def _build_mineru(settings: Settings) -> Parser:
     if settings.mineru_url:
         return MinerUHttpParser(settings.mineru_url, timeout_s=settings.http_timeout_s)
     return SubprocessParser(
@@ -53,7 +56,7 @@ def _build_mineru(settings: Settings) -> DocumentParser:
     )
 
 
-def _build_paddle(settings: Settings) -> DocumentParser:
+def _build_paddle(settings: Settings) -> Parser:
     if settings.paddle_url:
         return PaddleHttpParser(
             settings.paddle_url, timeout_s=settings.http_timeout_s, render_dpi=settings.paddle_render_dpi
@@ -75,15 +78,15 @@ def _build_paddle(settings: Settings) -> DocumentParser:
     )
 
 
-# Mirrors adapters.ADAPTERS: a new backend is one builder plus one adapter, never an if-chain edit.
-PARSER_BUILDERS: dict[Backend, Callable[[Settings], DocumentParser]] = {
+# A new backend is one builder here plus one adapter in adapters.py, never an if-chain edit.
+PARSER_BUILDERS: dict[Backend, Callable[[Settings], Parser]] = {
     "mineru": _build_mineru,
     "paddleocr_vl": _build_paddle,
 }
 
 
-def build_parser(backend: Backend, settings: Settings) -> DocumentParser:
-    """Pick the parser implementation the configuration asks for."""
+def build_parser(backend: Backend, settings: Settings) -> Parser:
+    """The parser implementation the configuration asks for."""
     try:
         builder = PARSER_BUILDERS[backend]
     except KeyError as exc:
@@ -93,8 +96,6 @@ def build_parser(backend: Backend, settings: Settings) -> DocumentParser:
 
 @dataclass(frozen=True)
 class ParseReport:
-    """Summary of one parse, for the CLI and for run records."""
-
     backend: Backend
     backend_version: str | None
     cache_hit: bool
@@ -113,28 +114,21 @@ def parse_document(
     *,
     force: bool = False,
 ) -> tuple[ParsedArtifact, ParseReport]:
-    """Parse one lane: run the parser (or hit its cache), adapt it, write markdown/sources/artifact."""
+    """Parse one lane: run the parser (or hit its cache), adapt it, write the Markdown and the artifact."""
     layout = DataLayout(settings.data_root)
-    ensure_identity(layout, document)  # write identity the moment the directory exists; readers only read it
+    ensure_identity(layout, document)  # written the moment the directory exists; readers only read it
     parser = build_parser(backend, settings)
 
     clock = time.monotonic()
     raw = parser.parse(document, layout.raw_dir(document.document_id, backend), force=force)
-    geometry = read_geometry(document.pdf_path)
-    artifact = convert(raw, document, geometry)
+    artifact = convert(raw, document, read_geometry(document.pdf_path))
     runtime_s = time.monotonic() - clock
 
-    layout.parsed_dir(document.document_id).mkdir(parents=True, exist_ok=True)
     markdown_path = layout.markdown_path(document.document_id, backend)
-    sources_path = layout.sources_path(document.document_id, backend)
     artifact_path = layout.artifact_path(document.document_id, backend)
-    markdown_path.write_text(artifact.markdown, encoding="utf-8")
-    sources_path.write_text(
-        json.dumps([block.model_dump(mode="json") for block in artifact.blocks], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    # artifact.json last, same contract as raw/meta.json: its existence means parsed/ is complete.
-    artifact.write(artifact_path)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+    artifact.write(artifact_path)  # last: its existence means parsed/ is complete
 
     report = ParseReport(
         backend=backend,
@@ -152,18 +146,13 @@ def parse_document(
 
 
 def load_artifact(document: DocumentInput, backend: Backend, settings: Settings) -> ParsedArtifact:
-    """Read a stored artifact, or say which command produces it."""
     path = DataLayout(settings.data_root).artifact_path(document.document_id, backend)
     if not path.is_file():
         raise FileNotFoundError(f"no {backend} artifact at {path}; run `paperfacts parse` first")
     return ParsedArtifact.read(path)
 
 
-# ---- Extraction and two-lane alignment ------------------------------------------------------
-
-# The comparison is strictly between two lanes. A third parser would need compare_lanes redesigned, so the
-# assumption is stated here rather than hidden inside an unpacking.
-BACKEND_A, BACKEND_B = BACKENDS
+# ---- Extraction and comparison --------------------------------------------------------------------------------
 
 
 def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
@@ -174,7 +163,33 @@ def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
         settings.llm_model,
         timeout_s=settings.llm_timeout_s,
         cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+        retry_attempts=settings.llm_retry_attempts,
+        retry_backoff_s=settings.llm_retry_backoff_s,
     )
+
+
+def read_lane(
+    layout: DataLayout, document_id: str, backend: Backend, key: str, *, artifact: ParsedArtifact | None = None
+) -> LaneExtraction | None:
+    """A stored lane, re-deriving what is cheap: grounding against the artifact, then normalisation.
+
+    Both are pure functions of the stored record, so they are redone on every read rather than trusted from
+    the file: improving a rule costs nothing and never leaves a stale verdict behind. The artifact is read
+    from disk unless the caller already holds it; without one the stored grounding verdicts are kept, since
+    they cannot be re-checked but are still the best answer.
+    """
+    path = layout.extraction_path(document_id, backend, key)
+    if not path.is_file():
+        return None
+    lane = LaneExtraction.read(path)
+    artifact_path = layout.artifact_path(document_id, backend)
+    if artifact is None and artifact_path.is_file():
+        artifact = ParsedArtifact.read(artifact_path)
+    if artifact is not None:
+        lane = ground_lane(lane, build_extraction_document(artifact).blocks)
+    return normalize_lane(lane)
 
 
 def extract_document(
@@ -187,28 +202,28 @@ def extract_document(
 ) -> LaneExtraction:
     """Extract one lane. What is stored is the model's own wording; what is returned is normalised.
 
-    Normalisation is redone on every read -- it is pure and takes milliseconds -- so changing a conversion
-    rule costs nothing. Changing the prompt, the model or the schema changes ``extractor_key`` instead and
-    re-runs the extraction. ``force`` bypasses both this cache and the LLM cache, and really re-asks.
+    Changing the prompt, the model or the schema changes ``extractor_key`` and re-runs the extraction.
+    ``force`` bypasses both this cache and the LLM cache, and really re-asks.
     """
     layout = DataLayout(settings.data_root)
-    path = layout.extraction_path(
-        document.document_id, backend, extractor_key(client.model, passes=settings.extraction_passes)
-    )
+    key = extractor_key_for(settings, client.model)
     artifact = load_artifact(document, backend, settings)
-    if path.is_file() and not force:
-        logger.info("extraction cache_hit backend=%s doc=%s", backend, document.document_id[:16])
-        blocks = build_extraction_document(artifact).blocks
-        return normalize_lane(ground_lane(LaneExtraction.read(path), blocks))
+    if not force:
+        cached = read_lane(layout, document.document_id, backend, key, artifact=artifact)
+        if cached is not None:
+            logger.info("extraction cache_hit backend=%s doc=%s", backend, document.document_id[:16])
+            return cached
 
     lane = extract_lane(
         artifact,
         client,
+        mode=settings.extraction_mode,
         passes=settings.extraction_passes,
         context_tokens=settings.llm_context_tokens,
+        candidate_limit=settings.candidate_limit,
         refresh=force,
     )
-    lane.write(path)
+    lane.write(layout.extraction_path(document.document_id, backend, key))
     return normalize_lane(lane)
 
 
@@ -221,14 +236,15 @@ def compare_document(
 ) -> ComparisonReport:
     """Extract both lanes, match samples with the model, compare fields by rule, store the report.
 
-    The report path carries both keys: ``extractor_key`` (prompt, model, schema) and ``comparison_key``
-    (tolerances, normalisation rules). Changing a tolerance therefore recomputes the comparison without
-    paying for extraction again, and cannot serve a stale verdict either. ``force`` redoes matching and
-    comparison only; extraction has its own cache and its own force.
+    The report path carries both keys, so changing a tolerance recomputes the comparison without paying for
+    extraction again and cannot serve a stale verdict. ``force`` redoes matching and comparison only;
+    extraction has its own cache and its own force.
     """
     layout = DataLayout(settings.data_root)
     path = layout.comparison_path(
-        document.document_id, extractor_key(client.model, passes=settings.extraction_passes), comparison_key()
+        document.document_id,
+        extractor_key_for(settings, client.model),
+        comparison_key(),
     )
     if path.is_file() and not force:
         logger.info("comparison cache_hit doc=%s", document.document_id[:16])
@@ -243,15 +259,15 @@ def compare_document(
     return report
 
 
-# ---- The whole pipeline, shared by the CLI and the web job ------------------------------------
+# ---- The whole pipeline, shared by the CLI and the web job ------------------------------------------------------
 
 StageStatus = Literal["pending", "running", "done", "failed", "skipped"]
-# (stage, status, detail). Stage names are a public contract -- the progress bar and the CLI both use them.
+# (stage, status, detail). Stage names are a public contract: the progress bar and the CLI both use them.
 StageCallback = Callable[[str, StageStatus, str], None]
 
 
 def stage_names() -> tuple[str, ...]:
-    return (*(f"parse:{b}" for b in BACKENDS), *(f"extract:{b}" for b in BACKENDS), "compare")
+    return (*(f"parse:{b}" for b in BACKENDS), *(f"extract:{b}" for b in BACKENDS), "compare", "export")
 
 
 @dataclass(frozen=True)
@@ -259,6 +275,8 @@ class PipelineResult:
     parse_reports: dict[Backend, ParseReport]
     lanes: dict[Backend, LaneExtraction]
     report: ComparisonReport
+    dataset: DocumentDataset
+    excel_path: Path
 
 
 def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
@@ -272,7 +290,7 @@ def run_document(
     force: bool = False,
     on_stage: StageCallback = _ignore_stage,
 ) -> PipelineResult:
-    """Parse both lanes, extract both, match and compare, reporting each stage. Every step is cached."""
+    """Run both lanes and automatically export consolidated data. Expensive steps are cached."""
     parse_reports: dict[Backend, ParseReport] = {}
     for backend in BACKENDS:
         on_stage(f"parse:{backend}", "running", "")
@@ -298,4 +316,107 @@ def run_document(
         "done",
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
     )
-    return PipelineResult(parse_reports=parse_reports, lanes=lanes, report=report)
+    on_stage("export", "running", "")
+    dataset = consolidate_document(document, lanes, report)
+    excel_path = DataLayout(settings.data_root).dataset_path(document.document_id)
+    write_dataset([dataset], excel_path)
+    on_stage("export", "done", str(excel_path))
+    return PipelineResult(
+        parse_reports=parse_reports, lanes=lanes, report=report, dataset=dataset, excel_path=excel_path
+    )
+
+
+# ---- Directory batches and offline re-export -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BatchResult:
+    documents: tuple[DocumentDataset, ...]
+    failures: tuple[dict[str, str], ...]
+    duplicate_count: int
+    excel_path: Path
+
+
+def discover_pdfs(source: Path) -> tuple[Path, ...]:
+    """Keep discovery stable across runs, including uppercase PDF suffixes and nested folders."""
+    if source.is_file():
+        paths = (source,) if source.suffix.lower() == ".pdf" else ()
+    elif source.is_dir():
+        paths = tuple(sorted(p for p in source.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"))
+    else:
+        raise FileNotFoundError(source)
+    if not paths:
+        raise ConfigError(f"no PDF files found in {source}")
+    return paths
+
+
+def export_document(document: DocumentInput, settings: Settings) -> DocumentDataset:
+    """Rebuild a workbook row from current cached extractions without starting a parser or an LLM."""
+    layout = DataLayout(settings.data_root)
+    key = extractor_key_for(settings)
+    report_path = layout.comparison_path(document.document_id, key, comparison_key())
+    if not report_path.is_file():
+        raise FileNotFoundError(f"no current comparison for {document.pdf_path.name}; run `paperfacts run` first")
+    report = ComparisonReport.read(report_path)
+    lanes: dict[Backend, LaneExtraction] = {}
+    for backend in BACKENDS:
+        lane = read_lane(layout, document.document_id, backend, key)
+        if lane is None:
+            raise FileNotFoundError(f"no current {backend} extraction for {document.pdf_path.name}")
+        lanes[backend] = lane
+    # Grounding is rechecked on read, so comparison must use those same refreshed values.
+    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
+    return consolidate_document(document, lanes, report)
+
+
+def run_batch(
+    source: Path,
+    settings: Settings,
+    *,
+    output: Path | None = None,
+    force: bool = False,
+    export_only: bool = False,
+    on_stage: StageCallback = _ignore_stage,
+) -> BatchResult:
+    """Process unique PDFs serially and checkpoint the workbook after every attempted document.
+
+    Local parser models cannot safely share the laptop's memory. Completed parse/extraction caches
+    make interruption resumable, while expected per-paper errors remain visible in the workbook.
+    """
+    paths = discover_pdfs(source)
+    output = output or DataLayout(settings.data_root).batch_dataset_path()
+    if output.suffix.lower() != ".xlsx":
+        raise ConfigError("Excel output must have the .xlsx extension")
+    if force and export_only:
+        raise ConfigError("--force cannot be used with offline export")
+    datasets: list[DocumentDataset] = []
+    failures: list[dict[str, str]] = []
+    seen: set[str] = set()
+    duplicates = 0
+    for index, path in enumerate(paths, 1):
+        prefix = f"{index}/{len(paths)} {path.name}"
+        on_stage(prefix, "running", "")
+        document_id = ""
+        try:
+            document = DocumentInput.from_path(path)
+            document_id = document.document_id
+            if document_id in seen:
+                duplicates += 1
+                on_stage(prefix, "skipped", "duplicate PDF content")
+                continue
+            seen.add(document_id)
+            if export_only:
+                dataset = export_document(document, settings)
+            else:
+                result = run_document(document, settings, force=force, on_stage=on_stage)
+                dataset = result.dataset
+            datasets.append(dataset)
+        except (PaperFactsError, OSError, ValueError) as exc:
+            logger.exception("batch failed for %s", path.name)
+            failures.append({"document_id": document_id, "filename": path.name, "error": str(exc)})
+            on_stage(prefix, "failed", str(exc))
+        else:
+            on_stage(prefix, "done", "")
+        # Export failures are fatal: claiming progress without a writable output would be misleading.
+        write_dataset(datasets, output, failures=failures)
+    return BatchResult(tuple(datasets), tuple(failures), duplicates, output)

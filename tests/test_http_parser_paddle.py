@@ -16,10 +16,9 @@ import httpx
 import pytest
 from PIL import Image
 
+from paperfacts import parsers
 from paperfacts.models import META_FILENAME, DocumentInput, ParserMeta
-from paperfacts.parsers.base import ParserError
-from paperfacts.parsers.http_parser import PaddleHttpParser
-from paperfacts.storage import raw_layout
+from paperfacts.parsers import PaddleHttpParser, ParserError
 from support.http import make_client, recording_client
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -99,9 +98,9 @@ def test_each_request_carries_the_image_of_its_own_page(
     paddle_parser.parse(document, out_dir)
 
     sent = [base64.b64decode(json.loads(r.content)["file"]) for r in paddle_requests]
-    pages_dir = raw_layout.paddle_pages_dir(out_dir)
-    assert sent[0] == raw_layout.paddle_page_image(pages_dir, 0).read_bytes()
-    assert sent[1] == raw_layout.paddle_page_image(pages_dir, 1).read_bytes()
+    pages_dir = parsers.paddle_pages_dir(out_dir)
+    assert sent[0] == parsers.paddle_page_files(pages_dir, 0)[0].read_bytes()
+    assert sent[1] == parsers.paddle_page_files(pages_dir, 1)[0].read_bytes()
     assert sent[0] != sent[1]
 
 
@@ -127,11 +126,11 @@ def test_native_files_land_where_the_runner_would_have_put_them(
 
     paddle_parser.parse(document, out_dir)
 
-    pages_dir = raw_layout.paddle_pages_dir(out_dir)
-    assert json.loads(raw_layout.paddle_page_json(pages_dir, 0).read_text(encoding="utf-8")) == PRUNED_RESULT
-    markdown_dir = raw_layout.paddle_page_markdown_dir(pages_dir, 0)
-    assert raw_layout.paddle_page_markdown(markdown_dir, 0).read_text(encoding="utf-8") == "page markdown"
-    assert raw_layout.paddle_page_image(pages_dir, 1).is_file()
+    pages_dir = parsers.paddle_pages_dir(out_dir)
+    assert json.loads(parsers.paddle_page_files(pages_dir, 0)[1].read_text(encoding="utf-8")) == PRUNED_RESULT
+    markdown_dir = parsers.paddle_page_files(pages_dir, 0)[2]
+    assert (markdown_dir / f"page_{0:03d}.md").read_text(encoding="utf-8") == "page markdown"
+    assert parsers.paddle_page_files(pages_dir, 1)[0].is_file()
 
 
 def test_meta_pages_record_the_real_rendered_pixel_size(
@@ -144,7 +143,7 @@ def test_meta_pages_record_the_real_rendered_pixel_size(
     raw = paddle_parser.parse(document, out_dir)
 
     page0 = raw.meta.pages[0]
-    with Image.open(raw_layout.paddle_page_image(raw_layout.paddle_pages_dir(out_dir), 0)) as image:
+    with Image.open(parsers.paddle_page_files(parsers.paddle_pages_dir(out_dir), 0)[0]) as image:
         assert (page0.width_px, page0.height_px) == image.size
     assert (page0.width_pt, page0.height_pt) == (595.0, 842.0)
     assert page0.json_path == "pages/page_000.json"
@@ -160,7 +159,7 @@ def test_meta_marks_the_version_as_unknown_because_the_service_does_not_report_i
     assert raw.backend_version == "unknown"
     assert raw.meta.model_dump()["vl_backend"] == "http"
     assert raw.meta.model_dump()["render_dpi"] == 150
-    assert raw.meta.files == {"pages_dir": raw_layout.PADDLE_PAGES_DIRNAME}
+    assert raw.meta.files == {"pages_dir": parsers.PADDLE_PAGES_DIRNAME}
 
 
 def test_written_meta_json_validates_against_the_contract_with_the_json_alias(
@@ -212,7 +211,7 @@ def test_force_wipes_pages_left_over_from_a_longer_previous_run(
     # directory disagree with meta.pages.
     out_dir = tmp_path / "raw"
     paddle_parser.parse(document, out_dir)
-    stale = raw_layout.paddle_page_json(raw_layout.paddle_pages_dir(out_dir), 9)
+    stale = parsers.paddle_page_files(parsers.paddle_pages_dir(out_dir), 9)[1]
     stale.write_text("{}", encoding="utf-8")
 
     paddle_parser.parse(document, out_dir, force=True)
@@ -267,8 +266,8 @@ def test_missing_markdown_in_the_response_writes_an_empty_page_markdown(tmp_path
 
     parser.parse(document, out_dir)
 
-    markdown_dir = raw_layout.paddle_page_markdown_dir(raw_layout.paddle_pages_dir(out_dir), 0)
-    assert raw_layout.paddle_page_markdown(markdown_dir, 0).read_text(encoding="utf-8") == ""
+    markdown_dir = parsers.paddle_page_files(parsers.paddle_pages_dir(out_dir), 0)[2]
+    assert (markdown_dir / f"page_{0:03d}.md").read_text(encoding="utf-8") == ""
 
 
 def test_a_page_failing_midway_leaves_no_meta_json_behind(tmp_path: Path, document: DocumentInput):
@@ -289,4 +288,4 @@ def test_a_page_failing_midway_leaves_no_meta_json_behind(tmp_path: Path, docume
         parser.parse(document, out_dir)
 
     assert not (out_dir / META_FILENAME).exists()
-    assert raw_layout.paddle_page_json(raw_layout.paddle_pages_dir(out_dir), 0).is_file()
+    assert parsers.paddle_page_files(parsers.paddle_pages_dir(out_dir), 0)[1].is_file()

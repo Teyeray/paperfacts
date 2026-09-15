@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.storage.atomic import write_atomic, write_bytes_atomic, write_text_atomic
+from paperfacts.storage import write_atomic, write_bytes_atomic, write_text_atomic
 
 
 def test_bytes_are_written_and_parent_directories_are_created(tmp_path: Path):

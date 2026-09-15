@@ -17,10 +17,8 @@ from typing import Any
 
 import pytest
 
-from paperfacts.adapters import convert as dispatch_convert
-from paperfacts.adapters.paddle import convert
-from paperfacts.models import DocumentInput, ParsedArtifact
-from paperfacts.models.geometry import DocumentGeometry
+from paperfacts.adapters import convert, convert_paddle
+from paperfacts.models import DocumentGeometry, DocumentInput, ParsedArtifact
 from support.factories import RawOutputFactory, paddle_page_entry
 
 # Actual pixel size when a 595x842 pt page is rendered at 200 dpi (pypdfium2 rounds).
@@ -46,11 +44,6 @@ def test_every_bbox_is_inside_the_unit_square(artifact: ParsedArtifact):
     for block in artifact.blocks:
         assert 0.0 <= block.bbox.x1 < block.bbox.x2 <= 1.0, block.source_id
         assert 0.0 <= block.bbox.y1 < block.bbox.y2 <= 1.0, block.source_id
-
-
-def test_markdown_span_invariant_holds_for_the_whole_fixture(artifact: ParsedArtifact):
-    for block in artifact.blocks:
-        assert artifact.markdown[block.markdown_start : block.markdown_end] == block.content
 
 
 def test_backend_and_source_id_prefix_are_paddleocr_vl(artifact: ParsedArtifact):
@@ -268,7 +261,7 @@ def test_unknown_label_is_logged_once_per_label(
 ):
     raw = raw_output_factory.paddle([paddle_page_entry(0, paddle_page_wrapped, PAGE0_PX)])
 
-    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters.base"):
+    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters"):
         convert(raw, document, geometry)
 
     warnings = [r.getMessage() for r in caplog.records if "unknown block label" in r.getMessage()]
@@ -323,7 +316,6 @@ def test_meta_without_pages_yields_an_empty_artifact(
     artifact = convert(raw, document, geometry)
 
     assert artifact.blocks == ()
-    assert artifact.markdown == ""
 
 
 def test_missing_page_json_raises_file_not_found(
@@ -392,7 +384,7 @@ def test_a_page_level_error_is_not_recorded_as_a_skipped_block(
 ):
     raw = raw_output_factory.paddle([paddle_page_entry(0, paddle_page_wrapped, PAGE0_PX, omit=("json",))])
 
-    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters.base"), pytest.raises(ValueError):
+    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters"), pytest.raises(ValueError):
         convert(raw, document, geometry)
 
     assert not [r for r in caplog.records if "skip block" in r.getMessage()]
@@ -409,17 +401,4 @@ def test_dispatch_convert_routes_to_the_paddle_adapter(
 ):
     raw = raw_output_factory.paddle([paddle_page_entry(0, paddle_page_wrapped, PAGE0_PX)])
 
-    assert dispatch_convert(raw, document, geometry) == convert(raw, document, geometry)
-
-
-def test_dispatch_convert_rejects_an_unregistered_backend(
-    raw_output_factory: RawOutputFactory,
-    paddle_page_wrapped: dict[str, Any],
-    document: DocumentInput,
-    geometry: DocumentGeometry,
-):
-    raw = raw_output_factory.paddle([paddle_page_entry(0, paddle_page_wrapped, PAGE0_PX)])
-    unregistered = raw.model_copy(update={"backend": "brand_new_parser"})
-
-    with pytest.raises(ValueError, match="no adapter registered for backend="):
-        dispatch_convert(unregistered, document, geometry)
+    assert convert(raw, document, geometry) == convert_paddle(raw, document, geometry)

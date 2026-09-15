@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.storage.paths import DOC_DIR_ID_LENGTH, DataLayout
+from paperfacts.storage import DOC_DIR_ID_LENGTH, DataLayout
 
 DOC_ID = "0123456789abcdef" + "f" * 48  # 16-char prefix padded out to 64
 
@@ -40,11 +40,9 @@ def test_raw_dir_is_per_document_and_per_backend(layout: DataLayout, backend):
 
 
 def test_parsed_artifacts_share_one_directory_and_differ_only_by_filename(layout: DataLayout):
-    parsed = layout.parsed_dir(DOC_ID)
+    parsed = Path("/data/docs/0123456789abcdef/parsed")
 
-    assert parsed == Path("/data/docs/0123456789abcdef/parsed")
     assert layout.markdown_path(DOC_ID, "mineru") == parsed / "mineru.md"
-    assert layout.sources_path(DOC_ID, "mineru") == parsed / "mineru.sources.json"
     assert layout.artifact_path(DOC_ID, "mineru") == parsed / "mineru.artifact.json"
 
 
@@ -54,11 +52,9 @@ def test_the_two_backends_never_write_to_the_same_file(layout: DataLayout):
         layout.markdown_path(DOC_ID, "paddleocr_vl"),
         layout.artifact_path(DOC_ID, "mineru"),
         layout.artifact_path(DOC_ID, "paddleocr_vl"),
-        layout.sources_path(DOC_ID, "mineru"),
-        layout.sources_path(DOC_ID, "paddleocr_vl"),
     }
 
-    assert len(files) == 6
+    assert len(files) == 4
 
 
 def test_overlay_dir_is_per_document_and_per_backend(layout: DataLayout):
@@ -69,7 +65,7 @@ def test_every_derived_path_stays_under_the_data_root(layout: DataLayout):
     derived = [
         layout.doc_dir(DOC_ID),
         layout.raw_dir(DOC_ID, "mineru"),
-        layout.parsed_dir(DOC_ID),
+        layout.artifact_path(DOC_ID, "mineru"),
         layout.markdown_path(DOC_ID, "mineru"),
         layout.overlay_dir(DOC_ID, "mineru"),
     ]

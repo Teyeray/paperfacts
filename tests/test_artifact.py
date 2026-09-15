@@ -13,13 +13,13 @@ from paperfacts.models import (
     BACKENDS,
     META_FILENAME,
     DocumentInput,
+    PageGeometry,
     ParsedArtifact,
     RawParseOutput,
     SourceBlock,
     make_source_id,
     sha256_of_file,
 )
-from paperfacts.models.geometry import PageGeometry
 from support.factories import DOC_ID, make_block
 
 # ---- DocumentInput ------------------------------------------------------------------
@@ -88,27 +88,6 @@ def test_make_source_id_uses_the_documented_format():
     # changes the contract.
     assert make_source_id("mineru", 7, 12) == "mineru_p7_b12"
     assert make_source_id("paddleocr_vl", 0, 0) == "paddleocr_vl_p0_b0"
-
-
-def test_with_markdown_span_returns_a_new_object_and_leaves_the_original_untouched():
-    # The model is frozen: filling in the span must produce a new copy, never an in-place mutation.
-    block = make_block()
-
-    spanned = block.with_markdown_span(10, 15)
-
-    assert (spanned.markdown_start, spanned.markdown_end) == (10, 15)
-    assert (block.markdown_start, block.markdown_end) == (None, None)
-    assert spanned is not block
-
-
-def test_with_markdown_span_keeps_every_other_field():
-    block = make_block(page=3, order=4, type="table", content="<table></table>")
-
-    spanned = block.with_markdown_span(0, 15)
-
-    assert spanned.model_dump(exclude={"markdown_start", "markdown_end"}) == block.model_dump(
-        exclude={"markdown_start", "markdown_end"}
-    )
 
 
 @pytest.mark.parametrize("field", ["page", "order"])
@@ -191,7 +170,7 @@ def test_page_count_comes_from_the_page_geometry_table():
 def test_write_then_read_round_trips_to_an_equal_artifact(tmp_path: Path):
     # Writing to disk and reading it back must be exactly equal, or the overlay / extraction
     # stage would get different coordinates than what was parsed.
-    blocks = (make_block(page=0, order=0).with_markdown_span(3, 8), make_block(page=1, order=0, type="figure"))
+    blocks = (make_block(page=0, order=0), make_block(page=1, order=0, type="figure"))
     artifact = make_artifact(blocks)
     path = tmp_path / "nested" / "mineru.artifact.json"
 

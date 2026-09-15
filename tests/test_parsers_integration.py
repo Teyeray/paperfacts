@@ -18,7 +18,7 @@ import pytest
 
 from paperfacts.config import Settings
 from paperfacts.models import BACKENDS, META_FILENAME, DocumentInput, ParsedArtifact, ParserMeta
-from paperfacts.storage.paths import DataLayout
+from paperfacts.storage import DataLayout
 from paperfacts.workflow import parse_document
 
 # Local corpus of papers (copyrighted PDFs, not checked into git). Any *.pdf under template_files/ will
@@ -101,21 +101,12 @@ def test_every_bbox_is_normalised(artifacts: dict[str, ParsedArtifact], backend)
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_source_ids_are_unique_and_resolvable(artifacts: dict[str, ParsedArtifact], backend):
-    from paperfacts.adapters.markdown import source_ids_in
-
     artifact = artifacts[backend]
     ids = [block.source_id for block in artifact.blocks]
 
     assert len(set(ids)) == len(ids)
-    for source_id in source_ids_in(artifact.markdown):
-        assert artifact.block(source_id).source_id == source_id
-
-
-@pytest.mark.parametrize("backend", BACKENDS)
-def test_markdown_span_invariant_holds_on_a_real_paper(artifacts: dict[str, ParsedArtifact], backend):
-    artifact = artifacts[backend]
     for block in artifact.blocks:
-        assert artifact.markdown[block.markdown_start : block.markdown_end] == block.content, block.source_id
+        assert artifact.block(block.source_id) is block
 
 
 def test_both_backends_agree_on_the_page_count(artifacts: dict[str, ParsedArtifact]):

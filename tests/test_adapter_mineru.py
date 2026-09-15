@@ -20,11 +20,8 @@ from typing import Any
 
 import pytest
 
-from paperfacts.adapters import convert as dispatch_convert
-from paperfacts.adapters.markdown import source_ids_in
-from paperfacts.adapters.mineru import convert
-from paperfacts.models import DocumentInput, ParsedArtifact
-from paperfacts.models.geometry import DocumentGeometry
+from paperfacts.adapters import convert, convert_mineru
+from paperfacts.models import DocumentGeometry, DocumentInput, ParsedArtifact
 from support.factories import RawOutputFactory
 
 
@@ -46,11 +43,6 @@ def test_every_bbox_is_inside_the_unit_square(artifact: ParsedArtifact):
     for block in artifact.blocks:
         assert 0.0 <= block.bbox.x1 < block.bbox.x2 <= 1.0, block.source_id
         assert 0.0 <= block.bbox.y1 < block.bbox.y2 <= 1.0, block.source_id
-
-
-def test_markdown_span_invariant_holds_for_the_whole_fixture(artifact: ParsedArtifact):
-    for block in artifact.blocks:
-        assert artifact.markdown[block.markdown_start : block.markdown_end] == block.content
 
 
 def test_artifact_carries_backend_version_and_page_geometry(
@@ -131,7 +123,7 @@ def test_unknown_labels_are_logged_once(
 ):
     raw = raw_output_factory.mineru(mineru_content_list)
 
-    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters.base"):
+    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters"):
         convert(raw, document, geometry)
 
     assert sum("unknown block label" in record.getMessage() for record in caplog.records) == 1
@@ -200,7 +192,7 @@ def test_skipped_bad_bbox_is_reported_in_the_warning_log(
     # Never silently drop: a bad box must leave a trace in the log, so run-notes can count it.
     raw = raw_output_factory.mineru(mineru_content_list)
 
-    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters.base"):
+    with caplog.at_level(logging.WARNING, logger="paperfacts.adapters"):
         convert(raw, document, geometry)
 
     skips = [r.getMessage() for r in caplog.records if "skip block" in r.getMessage()]
@@ -314,9 +306,9 @@ def test_source_ids_are_unique_and_follow_the_documented_format(artifact: Parsed
         assert block.source_id == f"mineru_p{block.page}_b{block.order}"
 
 
-def test_every_source_id_in_the_markdown_can_be_looked_up(artifact: ParsedArtifact):
-    for source_id in source_ids_in(artifact.markdown):
-        assert artifact.block(source_id).source_id == source_id
+def test_every_source_id_can_be_looked_up(artifact: ParsedArtifact):
+    for block in artifact.blocks:
+        assert artifact.block(block.source_id) is block
 
 
 def test_type_counts_reflect_the_fixture(artifact: ParsedArtifact):
@@ -342,7 +334,7 @@ def test_dispatch_convert_routes_to_the_mineru_adapter(
 ):
     raw = raw_output_factory.mineru(mineru_content_list)
 
-    assert dispatch_convert(raw, document, geometry) == convert(raw, document, geometry)
+    assert convert(raw, document, geometry) == convert_mineru(raw, document, geometry)
 
 
 def test_meta_without_a_content_list_entry_raises_file_not_found(

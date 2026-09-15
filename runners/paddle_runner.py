@@ -42,7 +42,7 @@ The job is deliberately kept thin:
    pixels), and file locations.
 
 It does **not** do format conversion: the adapter that turns ``parsing_res_list`` into
-``SourceBlock`` lives in the main package at ``src/paperfacts/adapters/paddle.py`` as a pure
+``SourceBlock`` lives in the main package at ``src/paperfacts/adapters.py`` as a pure
 function, testable with fixtures, and doesn't need paddle installed.
 
 Isolation principle (both directions): the main package never ``import paddleocr``; this script

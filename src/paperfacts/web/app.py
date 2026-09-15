@@ -34,11 +34,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
+from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.consensus import ComparisonReport
-from paperfacts.extraction.records import LaneExtraction
 from paperfacts.models import Backend, ParsedArtifact
-from paperfacts.storage.paths import document_key
+from paperfacts.records import LaneExtraction
+from paperfacts.storage import document_key
 from paperfacts.web.documents import DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobManager, JobRunner
 from paperfacts.workflow import run_document, stage_names
@@ -46,10 +46,7 @@ from paperfacts.workflow import run_document, stage_names
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
-MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1 << 20
-DEFAULT_PAGE_DPI = 110
-MIN_PAGE_DPI, MAX_PAGE_DPI = 50, 220
 
 
 class UploadAccepted(BaseModel):
@@ -100,9 +97,9 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     async def upload_document(
         file: Annotated[UploadFile, File()], force: Annotated[bool, Query()] = False
     ) -> UploadAccepted:
-        if (file.size or 0) > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
-        data = await _read_limited(file, MAX_UPLOAD_BYTES)
+        if (file.size or 0) > settings.max_upload_bytes:
+            raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_bytes // (1024 * 1024)} MB")
+        data = await _read_limited(file, settings.max_upload_bytes)
         if not data.startswith(b"%PDF"):
             raise HTTPException(status_code=400, detail="Only PDF files are accepted (missing %PDF header)")
         # writing to disk is sync IO; offload to the threadpool so a multi-hundred-MB write can't stall the event loop
@@ -152,8 +149,14 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     def get_page_image(
         document_id: str,
         page: int,
-        dpi: Annotated[int, Query(ge=MIN_PAGE_DPI, le=MAX_PAGE_DPI)] = DEFAULT_PAGE_DPI,
+        dpi: Annotated[int, Query()] = settings.page_dpi,
     ) -> FileResponse:
+        # Checked here rather than in the annotation: the bounds come from the settings this app was built
+        # with, and `from __future__ import annotations` would leave FastAPI a string it cannot resolve.
+        if not settings.page_dpi_min <= dpi <= settings.page_dpi_max:
+            raise HTTPException(
+                status_code=422, detail=f"dpi must be between {settings.page_dpi_min} and {settings.page_dpi_max}"
+            )
         require_document(document_id)
         try:
             path = library.page_image(document_id, page, dpi=dpi)

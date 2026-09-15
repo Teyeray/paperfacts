@@ -18,6 +18,12 @@ export function renderKpis(root) {
     ["missing", "单路缺失", counts.missing, missingNote],
     ["samples", "样品配对", counts.samples_matched, matchNote],
   ];
+  // Only worth a tile when it happened: a lane that placed every value has nothing to report here.
+  const unplaced = Object.entries(counts.unattributed_by_backend ?? {});
+  if (unplaced.length) {
+    const total = unplaced.reduce((sum, [, n]) => sum + n, 0);
+    tiles.push(["unattributed", "未归属", total, unplaced.map(([b, n]) => `${LANE_LABEL[b] ?? b} ${n}`).join(" · ")]);
+  }
   for (const [cls, label, value, note] of tiles) {
     const div = document.createElement("div");
     div.className = `kpi ${cls}`;

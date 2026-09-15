@@ -15,10 +15,10 @@ from typing import Any
 import httpx
 import pytest
 
+from paperfacts import parsers
+from paperfacts.errors import ParserError
 from paperfacts.models import META_FILENAME, DocumentGeometry, DocumentInput, ParserMeta
-from paperfacts.parsers.base import ParserError
-from paperfacts.parsers.http_parser import DEFAULT_TIMEOUT_S, MinerUHttpParser
-from paperfacts.storage import raw_layout
+from paperfacts.parsers import DEFAULT_TIMEOUT_S, MinerUHttpParser
 from support.http import make_client, multipart_fields, multipart_files, recording_client
 
 CONTENT_LIST = json.dumps([{"type": "text", "page_idx": 0, "bbox": [0, 0, 500, 100], "text": "hello"}])
@@ -130,7 +130,7 @@ def test_the_pdf_is_sent_as_a_single_file_part_named_files(
     files = multipart_files(mineru_requests[0])
 
     assert set(files) == {"files"}
-    assert files["files"].filename == f"{raw_layout.MINERU_NATIVE_STEM}.pdf"
+    assert files["files"].filename == f"{parsers.MINERU_NATIVE_STEM}.pdf"
     assert files["files"].content_type == "application/pdf"
     assert files["files"].content == document.pdf_path.read_bytes()
 
@@ -153,10 +153,10 @@ def test_native_files_land_where_the_runner_would_have_put_them(
 
     raw = mineru_parser.parse(document, out_dir)
 
-    native = raw_layout.mineru_native_dir(out_dir)
-    assert raw_layout.mineru_native_file(native, "_content_list.json").read_text(encoding="utf-8") == CONTENT_LIST
-    assert raw_layout.mineru_native_file(native, "_middle.json").read_text(encoding="utf-8") == MIDDLE_JSON
-    assert raw_layout.mineru_native_file(native, ".md").read_text(encoding="utf-8") == MARKDOWN
+    native = parsers.mineru_native_dir(out_dir)
+    assert (native / f"{parsers.MINERU_NATIVE_STEM}_content_list.json").read_text(encoding="utf-8") == CONTENT_LIST
+    assert (native / f"{parsers.MINERU_NATIVE_STEM}_middle.json").read_text(encoding="utf-8") == MIDDLE_JSON
+    assert (native / f"{parsers.MINERU_NATIVE_STEM}.md").read_text(encoding="utf-8") == MARKDOWN
     assert raw.meta.files["content_list"] == "native/document/auto/document_content_list.json"
 
 

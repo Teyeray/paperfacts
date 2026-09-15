@@ -8,9 +8,9 @@ terminal looks fine while the problem has already been silently swallowed.
 
 from __future__ import annotations
 
-from paperfacts.consensus.compare import compare_lanes
-from paperfacts.consensus.matching import SampleMatch, SampleMatching
-from paperfacts.extraction.records import TargetRecord
+from paperfacts.compare import compare_lanes
+from paperfacts.matching import SampleMatch, SampleMatching
+from paperfacts.records import TargetRecord
 from paperfacts.report import render_lane, render_report
 from support.extraction import make_field, make_lane, make_sample
 

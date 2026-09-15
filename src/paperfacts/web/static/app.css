@@ -132,6 +132,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .kpi.conflict { border-left-color: var(--bad); }
 .kpi.ambiguous { border-left-color: var(--warn); }
 .kpi.missing { border-left-color: var(--neutral); }
+.kpi.unattributed { border-left-color: var(--warn); }
 
 /* ---------- workbench: table + viewer ---------- */
 .workbench { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr); gap: 18px; align-items: start; }

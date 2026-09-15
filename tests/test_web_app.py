@@ -15,6 +15,7 @@ so the tests here watch "is the mapping right", not the business outcome:
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -22,11 +23,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.consensus import ComparisonCounts, ComparisonReport
-from paperfacts.extraction.records import LaneExtraction
 from paperfacts.models import BACKENDS, Backend, ParsedArtifact
-from paperfacts.web.app import MAX_PAGE_DPI, MIN_PAGE_DPI, create_app, pipeline_runner
+from paperfacts.records import LaneExtraction
+from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
@@ -135,10 +136,10 @@ def test_a_file_that_is_not_a_pdf_is_rejected(client: TestClient):
     assert "%PDF" in response.json()["detail"]
 
 
-def test_a_file_larger_than_the_limit_is_rejected(client: TestClient, pdf_bytes: bytes, monkeypatch):
-    monkeypatch.setattr("paperfacts.web.app.MAX_UPLOAD_BYTES", 16)
-
-    response = client.post("/api/documents", files={"file": ("big.pdf", pdf_bytes, "application/pdf")})
+def test_a_file_larger_than_the_limit_is_rejected(settings: Settings, pdf_bytes: bytes):
+    # The limit is configuration, so the test sets it the way a deployment would rather than patching.
+    with TestClient(create_app(dataclasses.replace(settings, max_upload_bytes=16))) as client:
+        response = client.post("/api/documents", files={"file": ("big.pdf", pdf_bytes, "application/pdf")})
 
     assert response.status_code == 413
 
@@ -341,13 +342,13 @@ def test_the_second_request_serves_the_file_that_is_already_on_disk(
     assert cached.stat().st_mtime_ns == before
 
 
-@pytest.mark.parametrize("dpi", [1, MIN_PAGE_DPI - 1, MAX_PAGE_DPI + 1, 10_000])
+@pytest.mark.parametrize("dpi", [1, Settings().page_dpi_min - 1, Settings().page_dpi_max + 1, 10_000])
 def test_a_dpi_outside_the_sane_range_is_a_validation_error(client: TestClient, uploaded: str, dpi: int):
     # dpi comes straight from the URL: without a bound, dpi=10000 is a request that can take down the server
     assert client.get(f"/api/documents/{uploaded}/pages/0.png?dpi={dpi}").status_code == 422
 
 
-@pytest.mark.parametrize("dpi", [MIN_PAGE_DPI, MAX_PAGE_DPI])
+@pytest.mark.parametrize("dpi", [Settings().page_dpi_min, Settings().page_dpi_max])
 def test_the_dpi_bounds_themselves_are_allowed(client: TestClient, library: Library, uploaded: str, dpi: int):
     response = client.get(f"/api/documents/{uploaded}/pages/0.png?dpi={dpi}")
 

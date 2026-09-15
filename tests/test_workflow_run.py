@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.consensus import ComparisonCounts, ComparisonReport
-from paperfacts.consensus.matching import SampleMatching
-from paperfacts.extraction.records import LaneExtraction
+from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
+from paperfacts.records import LaneExtraction
 from paperfacts.workflow import ParseReport, run_document, stage_names
 from support.extraction import make_lane, make_sample
 from support.llm import FakeLlmClient
@@ -67,7 +67,11 @@ def install_fake_pipeline(
     ) -> LaneExtraction:
         spy.extract.append((backend, force))
         spy.clients.append(client)
-        return make_lane(backend=backend, samples=[make_sample(f"S{i}") for i in range(sample_count)])
+        return make_lane(
+            backend=backend,
+            document_id=document.document_id,
+            samples=[make_sample(f"S{i}") for i in range(sample_count)],
+        )
 
     def fake_compare(
         document: DocumentInput, settings: Settings, client: object, *, force: bool = False
@@ -105,21 +109,22 @@ def run(document: DocumentInput, settings: Settings, *, force: bool = False) -> 
 # ---- Stage names are a public contract --------------------------------------------------
 
 
-def test_the_stage_names_cover_both_parses_both_extractions_and_the_comparison():
+def test_the_stage_names_cover_extraction_comparison_and_export():
     assert stage_names() == (
         "parse:mineru",
         "parse:paddleocr_vl",
         "extract:mineru",
         "extract:paddleocr_vl",
         "compare",
+        "export",
     )
-    assert len(stage_names()) == 2 * len(BACKENDS) + 1
+    assert len(stage_names()) == 2 * len(BACKENDS) + 2
 
 
 # ---- Orchestration ------------------------------------------------------------------------
 
 
-def test_the_pipeline_walks_the_five_stages_in_order(monkeypatch, document: DocumentInput, settings: Settings):
+def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: DocumentInput, settings: Settings):
     install_fake_pipeline(monkeypatch)
 
     marks, _ = run(document, settings)
@@ -135,6 +140,8 @@ def test_the_pipeline_walks_the_five_stages_in_order(monkeypatch, document: Docu
         ("extract:paddleocr_vl", "done", "2 samples"),
         ("compare", "running", ""),
         ("compare", "done", "agree 3 · conflict 1 · ambiguous 2 · missing 4"),
+        ("export", "running", ""),
+        ("export", "done", str(settings.data_root / "docs" / document.document_id[:16] / "dataset.xlsx")),
     ]
     assert [name for name, _, _ in marks[::2]] == list(stage_names())
 
@@ -156,6 +163,8 @@ def test_the_result_carries_every_intermediate_product(monkeypatch, document: Do
     assert set(result.parse_reports) == set(BACKENDS)
     assert {backend: len(lane.samples) for backend, lane in result.lanes.items()} == {b: 3 for b in BACKENDS}
     assert result.report.counts.agree == 3
+    assert result.excel_path.is_file()
+    assert result.dataset.document_id == document.document_id
 
 
 def test_force_reaches_every_step(monkeypatch, document: DocumentInput, settings: Settings):

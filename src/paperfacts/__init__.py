@@ -1,15 +1,23 @@
 """PaperFacts: traceable, sample-level measurements extracted from scientific PDFs.
 
-Package layout:
+Flat modules, in pipeline order:
 
-- ``models``       core data models (geometry, source blocks, the unified artifact); pure pydantic
-- ``pdf``          page geometry and rendering, and the only place pypdfium2 is called
-- ``parsers``      hand a PDF to MinerU / PaddleOCR-VL, as a subprocess or over HTTP
-- ``adapters``     native parser output -> SourceBlock -> Markdown with provenance markers
-- ``extraction``   prompt the LLM, then clean, validate and ground what it returns
-- ``normalization`` deterministic text, number and unit handling
-- ``consensus``    sample matching and field-by-field comparison of the two lanes
-- ``storage``      the single source of truth for on-disk paths and atomic writes
-- ``verification`` bbox overlays for checking provenance by eye
-- ``workflow``     orchestration; ``cli`` and ``web`` are thin layers over it
+- ``models``      page geometry, provenance blocks, the parse artifact, the ``meta.json`` contract
+- ``storage``     every on-disk path, atomic writes, the document identity file
+- ``pdf``         the only pypdfium2 caller: page geometry and rendering
+- ``parsers``     hand a PDF to MinerU / PaddleOCR-VL, as a subprocess or over HTTP
+- ``adapters``    native parser output -> blocks -> Markdown with provenance markers
+- ``overlay``     block boxes drawn on page images, to check provenance by eye
+- ``fields``      the target field table: units, tolerances, bare-number policy
+- ``prompts``     the extraction and matching prompts
+- ``llm``         OpenAI-compatible client with a request cache and one repair round
+- ``records``     the model's response schema, the stored records, and the cleaning between them
+- ``extract``     the document the model reads, the extraction itself, majority voting over passes
+- ``grounding``   the quoted text must occur in the block it cites
+- ``normalize``   text folding, number parsing, unit conversion
+- ``matching``    which sample in lane A is which sample in lane B
+- ``compare``     field-by-field comparison of the two lanes
+- ``dataset``     merge source evidence into unique values and export machine-learning tables to Excel
+- ``keys``        the cache keys that name stored extractions and comparisons
+- ``workflow``    orchestration; ``cli``, ``report`` and ``web`` are thin layers over it
 """

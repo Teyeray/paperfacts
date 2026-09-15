@@ -27,6 +27,7 @@ output/
 
 # deploy/.env.example is a template with no secrets and must be committed; the .env.* rule above
 # would otherwise exclude it.
+!.env.example
 !deploy/.env.example
 
 # Test and lint artifacts

@@ -10,7 +10,7 @@ lines:
    because the machine was slow, nor hangs forever because a job got stuck.
 
 Every ``seed_*`` helper that plants artifacts goes through
-:class:`~paperfacts.storage.paths.DataLayout`: a wrong path should show up as "the library can't
+:class:`~paperfacts.storage.DataLayout`: a wrong path should show up as "the library can't
 see it", not get papered over by a second, hand-written path living in the test.
 """
 
@@ -22,11 +22,11 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from paperfacts.consensus import ComparisonCounts, ComparisonReport
-from paperfacts.consensus.matching import SampleMatching
-from paperfacts.extraction.records import LaneExtraction, SampleRecord
+from paperfacts.compare import ComparisonCounts, ComparisonReport
+from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend, DocumentInput, ParsedArtifact, SourceBlock
-from paperfacts.storage.identity import DocumentIdentity, ensure_identity
+from paperfacts.records import LaneExtraction, SampleRecord
+from paperfacts.storage import DocumentIdentity, ensure_identity
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import Job, JobManager, JobStatus, StageStatus
 from support.extraction import make_artifact, make_lane

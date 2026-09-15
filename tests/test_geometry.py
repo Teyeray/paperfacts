@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from paperfacts.models.geometry import DocumentGeometry, NormalizedBBox, PageGeometry
+from paperfacts.models import DocumentGeometry, NormalizedBBox, PageGeometry
 
 
 def make_bbox(x1: float = 0.1, y1: float = 0.2, x2: float = 0.5, y2: float = 0.6) -> NormalizedBBox:

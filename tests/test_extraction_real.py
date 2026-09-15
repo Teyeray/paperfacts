@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.adapters import convert
-from paperfacts.extraction.extractor import extract_lane
+from paperfacts.adapters import convert, render_markdown
+from paperfacts.extract import extract_lane
 from paperfacts.models import DocumentGeometry, DocumentInput, PageGeometry, RawParseOutput
-from paperfacts.normalization import normalize_lane
+from paperfacts.normalize import normalize_lane
 from support.llm import FakeLlmClient
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "mineru_real_sample"
@@ -123,14 +123,14 @@ REAL_RESPONSE = json.dumps(
 def test_the_real_source_ids_all_exist_in_the_artifact(real_artifact):
     """The most important thing: the provenance id format matches the real artifact, and not one of them
     gets thrown out as invented."""
-    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]))
+    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document")
 
     assert lane.invalid_source_ids == ()
     assert {ABSTRACT_ID, TABLE_ID, METHOD_ID} <= {block.source_id for block in real_artifact.blocks}
 
 
 def test_nothing_from_the_real_response_is_dropped_by_the_cleaning_rules(real_artifact):
-    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]))
+    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document")
 
     assert lane.dropped == ()
     assert len(lane.samples) == 3
@@ -138,7 +138,7 @@ def test_nothing_from_the_real_response_is_dropped_by_the_cleaning_rules(real_ar
 
 
 def test_the_resistivity_written_in_plain_decimal_normalizes(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE])))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
 
     field = lane.sample("this-work-225C").get("resistivity")
     assert field.value == pytest.approx(0.3)
@@ -148,7 +148,7 @@ def test_the_resistivity_written_in_plain_decimal_normalizes(real_artifact):
 def test_the_scientific_notation_from_the_real_table_cell_normalizes(real_artifact):
     # The table cell is written as $6 . 4 \times 1 0 ^ { - 3 }$; when the model copies it as the
     # superscript "6.4 × 10⁻³" it must be read as 0.0064, not 6.4.
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE])))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
 
     field = lane.sample("muto-200C").get("resistivity")
     assert field.value == pytest.approx(6.4e-3)
@@ -164,7 +164,7 @@ def test_a_latex_exponent_copied_verbatim_is_parsed(real_artifact):
     ``$`` / ``\\times`` / braces and rejoins the split-up digits first, so the exponent must parse
     correctly.
     """
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE])))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
 
     field = lane.sample("mientus-25C").get("resistivity")
     assert field.value == pytest.approx(4e-3)
@@ -184,7 +184,7 @@ def test_a_latex_exponent_copied_verbatim_is_parsed(real_artifact):
 def test_the_spellings_a_well_behaved_model_produces_all_parse(value_raw, expected):
     """The same table cell could be copied by the model as any of these spellings; the result must be
     the same regardless."""
-    from paperfacts.normalization.numbers import parse_number
+    from paperfacts.normalize import parse_number
 
     assert parse_number(value_raw)[0] == pytest.approx(expected)
 
@@ -201,7 +201,7 @@ def test_the_spellings_a_well_behaved_model_produces_all_parse(value_raw, expect
 def test_the_latex_spellings_from_mineru_tables_parse_to_the_exponent(value_raw, expected):
     """LaTeX spellings that really occur in MinerU's tables and formula blocks must parse to the correct
     exponent, and leave no weak "found N numbers" note behind."""
-    from paperfacts.normalization.numbers import parse_number
+    from paperfacts.normalize import parse_number
 
     value, note = parse_number(value_raw)
 
@@ -212,13 +212,13 @@ def test_the_latex_spellings_from_mineru_tables_parse_to_the_exponent(value_raw,
 def test_spaces_between_digits_are_only_merged_inside_latex():
     """ "10 20" is two numbers, and must not be merged into 1020 just because LaTeX handling ran; only
     text carrying a $ or a backslash command has the spaces between its digits collapsed."""
-    from paperfacts.normalization.numbers import parse_number
+    from paperfacts.normalize import parse_number
 
     assert parse_number("10 20") == (10.0, "2 numbers found, first used")
 
 
 def test_the_thickness_in_millimetres_converts_to_nanometres(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE])))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
 
     field = lane.sample("this-work-225C").get("thickness")
     assert field.value == pytest.approx(3e6)
@@ -228,7 +228,7 @@ def test_the_thickness_in_millimetres_converts_to_nanometres(real_artifact):
 def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_artifact):
     # "40 × 10 cm" contains two numbers: the first is taken, with a note left so the reader knows the
     # value is incomplete.
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE])))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
 
     field = lane.target.get("inch")
     assert field.value == pytest.approx(40 / 2.54)
@@ -237,7 +237,7 @@ def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_
 
 
 def test_the_composition_text_is_kept_verbatim(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE])))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
 
     field = lane.target.get("component")
     assert field.value_raw == "Sn/Ta target 95:5 wt.%"
@@ -247,7 +247,7 @@ def test_the_composition_text_is_kept_verbatim(real_artifact):
 def test_the_provenance_survives_all_the_way_to_the_normalized_lane(real_artifact):
     """Normalization only adds fields alongside; source_id must survive unchanged all the way through, or
     the value could never be traced back to a PDF page."""
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE])))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
 
     field = lane.sample("muto-200C").get("resistivity")
     assert field.source_ids == (TABLE_ID,)
@@ -261,7 +261,7 @@ def test_every_informative_block_of_the_real_paper_reaches_the_model(real_artifa
     tabulated are usually pages apart. Only page furniture is withheld."""
     client = FakeLlmClient([REAL_RESPONSE])
 
-    extract_lane(real_artifact, client)
+    extract_lane(real_artifact, client, mode="document")
 
     prompt = client.users[0]
     assert f"<!-- source: {TABLE_ID} -->" in prompt
@@ -274,11 +274,11 @@ def test_page_furniture_is_withheld_from_the_model(real_artifact):
     """Running heads, page numbers and figure image paths cost context and invite bad citations."""
     client = FakeLlmClient([REAL_RESPONSE])
 
-    extract_lane(real_artifact, client)
+    extract_lane(real_artifact, client, mode="document")
 
     prompt = client.users[0]
     furniture = [b for b in real_artifact.blocks if b.type in {"unknown", "figure"}]
     assert furniture, "the fixture should contain some page furniture for this test to mean anything"
     for block in furniture:
         assert f"<!-- source: {block.source_id} -->" not in prompt
-    assert len(prompt) < len(real_artifact.markdown)
+    assert len(prompt) < len(render_markdown(real_artifact.blocks))

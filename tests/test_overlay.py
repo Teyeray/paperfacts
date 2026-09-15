@@ -13,14 +13,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from paperfacts.models import ParsedArtifact
-from paperfacts.models.geometry import DocumentGeometry, NormalizedBBox
-from paperfacts.verification.overlay import (
-    DEFAULT_OVERLAY_DPI,
-    TYPE_COLORS,
-    draw_page_overlay,
-    render_overlays,
-)
+from paperfacts.models import DocumentGeometry, NormalizedBBox, ParsedArtifact
+from paperfacts.overlay import DEFAULT_OVERLAY_DPI, TYPE_COLORS, draw_page_overlay, render_overlays
 from support.factories import DOC_ID, PAGE_SIZES_PT, make_block
 
 

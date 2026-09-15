@@ -14,22 +14,15 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.consensus.compare import ComparisonReport, comparison_key
 from paperfacts.errors import ConfigError
-from paperfacts.extraction.extractor import extractor_key
-from paperfacts.extraction.llm import OpenAICompatibleClient
-from paperfacts.models.artifact import BACKENDS, Backend, DocumentInput
-from paperfacts.parsers.subprocess_parser import SubprocessParser
-from paperfacts.storage.paths import DataLayout
-from paperfacts.workflow import (
-    BACKEND_A,
-    BACKEND_B,
-    build_llm_client,
-    build_parser,
-    compare_document,
-    extract_document,
-)
+from paperfacts.keys import comparison_key, extractor_key
+from paperfacts.llm import OpenAICompatibleClient
+from paperfacts.models import BACKENDS, Backend, DocumentInput
+from paperfacts.parsers import SubprocessParser
+from paperfacts.storage import DataLayout
+from paperfacts.workflow import BACKEND_A, BACKEND_B, build_llm_client, build_parser, compare_document, extract_document
 from support.extraction import make_artifact
 from support.factories import make_block
 from support.llm import FakeLlmClient
@@ -123,7 +116,9 @@ def test_the_client_is_wired_from_the_settings(tmp_path: Path):
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test")
+    # Document mode explicitly: these cases queue one canned answer per lane and count the calls, which is
+    # the shape of a whole-document extraction. Passage mode has its own file.
+    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", extraction_mode="document")
 
 
 @pytest.fixture
@@ -161,7 +156,9 @@ def test_extract_document_calls_the_model_once_and_writes_the_result(
     lane = extract_document(document, "mineru", settings, client)
 
     assert client.call_count == 1
-    path = DataLayout(settings.data_root).extraction_path(document.document_id, "mineru", extractor_key(client.model))
+    path = DataLayout(settings.data_root).extraction_path(
+        document.document_id, "mineru", extractor_key(client.model, mode="document")
+    )
     assert path.is_file()
     assert lane.sample("A") is not None
 
@@ -174,12 +171,14 @@ def test_the_returned_lane_is_normalized_but_the_file_on_disk_is_not(
     That way changing a normalization rule never needs a fresh LLM call -- only changing the prompt,
     model or field schema changes extractor_key.
     """
-    from paperfacts.extraction.records import LaneExtraction
+    from paperfacts.records import LaneExtraction
 
     client = FakeLlmClient([extraction_json(value="1.25", source_id=None)])
 
     lane = extract_document(document, "mineru", settings, client)
-    path = DataLayout(settings.data_root).extraction_path(document.document_id, "mineru", extractor_key(client.model))
+    path = DataLayout(settings.data_root).extraction_path(
+        document.document_id, "mineru", extractor_key(client.model, mode="document")
+    )
     on_disk = LaneExtraction.read(path)
 
     assert lane.sample("A").get("sheet_resistance").value == 1.25
@@ -220,7 +219,7 @@ def test_each_backend_has_its_own_cache_entry(settings: Settings, document: Docu
     extract_document(document, "paddleocr_vl", settings, client)
 
     layout = DataLayout(settings.data_root)
-    key = extractor_key(client.model)
+    key = extractor_key(client.model, mode="document")
     assert layout.extraction_path(document.document_id, "mineru", key).is_file()
     assert layout.extraction_path(document.document_id, "paddleocr_vl", key).is_file()
     assert client.call_count == 2
@@ -269,7 +268,7 @@ def test_compare_document_extracts_both_lanes_then_matches_and_writes_the_report
 
     assert client.call_count == 2
     path = DataLayout(settings.data_root).comparison_path(
-        document.document_id, extractor_key(client.model), comparison_key()
+        document.document_id, extractor_key(client.model, mode="document"), comparison_key()
     )
     assert path.is_file()
     assert report.backend_a == BACKEND_A and report.backend_b == BACKEND_B

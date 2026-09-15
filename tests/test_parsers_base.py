@@ -1,4 +1,4 @@
-"""``CachingParser`` template method: check cache, clear the directory, produce, write meta.json, validate.
+"""``Parser`` template method: check cache, clear the directory, produce, write meta.json, validate.
 
 Every parser implementation (subprocess / both HTTP backends) inherits from it, so these
 invariants only need verifying once, here:
@@ -21,8 +21,9 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts.errors import ParserError
 from paperfacts.models import META_FILENAME, Backend, DocumentInput, ParserMeta
-from paperfacts.parsers.base import CachingParser, ParserError, write_meta
+from paperfacts.parsers import Parser, write_meta
 
 
 def make_meta(parser: Backend = "mineru", *, version: str = "fake-1.0") -> ParserMeta:
@@ -43,7 +44,7 @@ def make_meta(parser: Backend = "mineru", *, version: str = "fake-1.0") -> Parse
     )
 
 
-class FakeParser(CachingParser):
+class FakeParser(Parser):
     """Minimal subclass: writes one native file and returns a ParserMeta for the base class to persist."""
 
     backend: Backend = "mineru"
@@ -203,7 +204,7 @@ def test_a_failed_run_is_not_mistaken_for_a_cache_hit_next_time(tmp_path: Path, 
 
 
 def test_a_subclass_that_writes_nothing_fails_at_the_output_stage(tmp_path: Path, document: DocumentInput):
-    class SilentParser(CachingParser):
+    class SilentParser(Parser):
         backend: Backend = "mineru"
 
         def _produce(self, document: DocumentInput, out_dir: Path) -> ParserMeta | None:
@@ -251,7 +252,7 @@ def test_force_recovers_from_an_invalid_cached_meta(tmp_path: Path, document: Do
 
 
 def test_the_base_class_requires_subclasses_to_implement_produce(tmp_path: Path, document: DocumentInput):
-    class Incomplete(CachingParser):
+    class Incomplete(Parser):
         backend: Backend = "mineru"
 
     with pytest.raises(NotImplementedError):

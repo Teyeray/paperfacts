@@ -18,11 +18,33 @@ this file is the part that is easy to get wrong.
   committed; after editing a dependency header run `uv lock --script runners/<name>.py`.
 - A runner only dumps the parser's native output plus `meta.json`. Converting that into `SourceBlock`s is
   an adapter in the main package: a pure function, tested against recorded fixtures.
-- `meta.json`'s structure is defined by `models/raw_output.py`. Runners do not import the main package, so
+- `meta.json`'s structure is defined in `models.py`. Runners do not import the main package, so
   the contract is held by tests (real-output fixtures plus the `--run-parser` integration suite). Changing
   a meta field means changing the model and the fixtures in the same commit.
 - Runner scripts must not be named `mineru.py` or `paddle.py`: uv puts the script's directory on
   `sys.path[0]`, where they would shadow the real packages.
+
+## Layout
+
+- `src/paperfacts/` is flat: one module per pipeline stage, listed in order in `__init__.py`. `web/` is
+  the only sub-package. Do not add re-exporting `__init__` files or nest packages; import from the module
+  that defines a name.
+- Every exception class is in `errors.py`.
+
+## Configuration
+
+- Everything that is not a secret lives in `config.json` at the repository root, including the field table.
+  `config.py` reads it once, validates it with errors that name the key and the file, and layers
+  `PAPERFACTS_*` environment variables over it. Built-in constants are the third layer underneath, and they
+  are the **baseline** the cache keys treat as "unedited" -- never change one to change a default; change
+  `config.json`.
+- Secrets only in `.env` (gitignored, loaded without overriding what the environment already has) and only
+  the API key. `config.json` has nowhere to put a key, which is the point.
+- A new setting means: a key in `config.json`, a field on `Settings`, a `PAPERFACTS_*` override, and a line
+  in the README. If it changes what the model is asked, it also goes into `extractor_key`; if it changes a
+  verdict, into `comparison_key`. The three exceptions with no override (`fields`, `condition_keywords`,
+  `comparison.ambiguous_match_confidence`) are listed in the README as file-only; do not add a fourth
+  without saying why.
 
 ## Code conventions
 
@@ -33,9 +55,8 @@ this file is the part that is easy to get wrong.
   through its `from_*` factories and nowhere else.
 - Backend literals are `"mineru"` and `"paddleocr_vl"`. Source ids are `{backend}_p{page}_b{order}`, pages
   0-based.
-- All on-disk paths come from `storage/paths.py`. Anything written atomically goes through
-  `storage/atomic.py`. A document's full sha256, display name and origin live only in `identity.json`
-  (`storage/identity.py`), written the moment the directory is created.
+- All on-disk paths and atomic writes come from `storage.py`. A document's full sha256, display name and
+  origin live only in `identity.json`, written the moment the directory is created.
 - **PDFium is not thread-safe.** Every pypdfium2 call goes through `pdf.py`, serialised behind its
   process-wide lock. Concurrent opens corrupt its global state, after which every subsequent open fails
   with "Data format error" until the process restarts.
@@ -48,18 +69,27 @@ this file is the part that is easy to get wrong.
 
 ## Extraction
 
-- Both lanes use the same prompt, model and temperature. Any asymmetry there contaminates the
+- Both lanes use the same prompts, model, temperature and retrieval. Any asymmetry there contaminates the
   disagreement signal, which is the whole measurement.
+- Two modes, both in `extract.py`: `document` asks for the whole paper at once, `passage` asks which samples
+  exist and then one question per field over the blocks `passages.py` retrieved for it. Retrieval is
+  deterministic code, never a model call. Passage is the default; `.omc/research/extraction-modes.md` has
+  the measurement that decided it.
+- A sample-level value the model cannot place on a sample goes to `LaneExtraction.unattributed`: kept,
+  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
-- Four guardrails on the response, in `extraction/`: schema and type cleaning, scope enforcement (a
-  paper-level field may not be attached to a sample), and citation validation — all in `records.py` — plus
-  grounding (`grounding.py`), where the quoted text must occur in the block it cites. The first three drop
-  the value with an audited reason; grounding only flags, never drops.
-- `extractor_key` hashes the model, the field schema, both prompts and the document renderer. Changing any
-  of them invalidates cached extractions automatically; do not add a hand-maintained version number.
-- `comparison_key` hashes tolerances and the normalisation sources, so changing a tolerance recomputes
-  comparisons without paying for extraction again.
+- Four guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
+  not be attached to a sample), and citation validation — all in `records.py` — plus grounding
+  (`grounding.py`), where the quoted text must occur in the block it cites. The first three drop the value
+  with an audited reason; grounding only flags, never drops.
+- Cache keys live in `keys.py`. `extractor_key` hashes the model, the field schema, the prompts, the
+  sampling settings and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its
+  two prompts plus `retrieval_fingerprint` (the keywords and `passages.py`). `comparison_key` hashes
+  tolerances, `normalize.py`, `compare.py`, `matching.py` and the matching prompt. Anything that is at its built-in
+  baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
+  hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
+  re-derives records for free as long as the rendered document and prompts stay byte-identical.
 
 ## Testing
 

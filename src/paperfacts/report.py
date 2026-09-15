@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from paperfacts.consensus import ComparisonReport, FieldComparison
-from paperfacts.extraction.records import FieldValue, LaneExtraction
+from paperfacts.compare import ComparisonReport, FieldComparison
+from paperfacts.records import FieldValue, LaneExtraction
 
 
 def render_lane(lane: LaneExtraction) -> Iterator[str]:
@@ -17,7 +17,7 @@ def render_lane(lane: LaneExtraction) -> Iterator[str]:
     yield (
         f"[{lane.backend}] samples={len(lane.samples)} target_fields={len(lane.target.fields) if lane.target else 0} "
         f"invalid_source_ids={len(lane.invalid_source_ids)} dropped={len(lane.dropped)} "
-        f"ungrounded={len(lane.ungrounded())}{passes} "
+        f"ungrounded={len(lane.ungrounded())} unattributed={len(lane.unattributed)}{passes} "
         f"tokens={lane.usage.get('total_tokens', '?')} model={lane.model} key={lane.extractor_key}"
     )
     if lane.target:
@@ -27,6 +27,11 @@ def render_lane(lane: LaneExtraction) -> Iterator[str]:
         yield f"    {sample.sample_id}  ({sample.label})"
         for field in sample.fields:
             yield f"        {_value(field)}  ← {', '.join(field.source_ids) or '(no source)'}"
+    if lane.unattributed:
+        # Printed apart from the samples because nothing compares them: they are findings without a place.
+        yield "    (unattributed)"
+        for field in lane.unattributed:
+            yield f"        ? {_value(field)}  ← {', '.join(field.source_ids) or '(no source)'}"
 
 
 def render_report(report: ComparisonReport) -> Iterator[str]:

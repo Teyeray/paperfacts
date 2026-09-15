@@ -151,13 +151,17 @@ def test_a_non_numeric_llm_timeout_fails_loudly():
 
 
 def test_the_llm_context_tokens_default_matches_the_extractor_default():
-    # Settings and the extractor must agree on the default context window, or a caller who never touches
+    # Settings and extract_lane() must agree on the default context window, or a caller who never touches
     # this setting still silently gets a different budget than extract_lane()'s own default.
-    from paperfacts.extraction.extractor import DEFAULT_CONTEXT_TOKENS
+    import inspect
+
+    from paperfacts.config import DEFAULT_LLM_CONTEXT_TOKENS
+    from paperfacts.extract import extract_lane
 
     settings = Settings.from_env({})
 
-    assert settings.llm_context_tokens == DEFAULT_CONTEXT_TOKENS
+    assert settings.llm_context_tokens == DEFAULT_LLM_CONTEXT_TOKENS
+    assert inspect.signature(extract_lane).parameters["context_tokens"].default == DEFAULT_LLM_CONTEXT_TOKENS
 
 
 def test_the_llm_context_tokens_are_read_from_the_environment():
@@ -191,6 +195,31 @@ def test_the_extraction_passes_are_read_from_the_environment():
 def test_a_non_numeric_extraction_passes_fails_loudly():
     with pytest.raises(ConfigError, match="EXTRACTION_PASSES"):
         Settings.from_env({f"{ENV_PREFIX}EXTRACTION_PASSES": "many"})
+
+
+def test_the_extraction_mode_defaults_to_asking_one_question_per_field():
+    # Passage mode costs ten small calls where whole-document mode costs one large one, and about three
+    # times the prompt tokens. It is the default because it found roughly twice as many values on the
+    # papers in data/docs, with a lower share of them ungrounded.
+    settings = Settings.from_env({})
+
+    assert settings.extraction_mode == "passage"
+
+
+@pytest.mark.parametrize("mode", ["document", "passage"])
+def test_each_extraction_mode_is_read_from_the_environment(mode: str):
+    settings = Settings.from_env({f"{ENV_PREFIX}EXTRACTION_MODE": mode})
+
+    assert settings.extraction_mode == mode
+
+
+def test_an_unknown_extraction_mode_fails_loudly_and_names_the_ones_that_exist():
+    # Falling back to the default would silently run a different extractor than the one asked for, and the
+    # results would be filed under that extractor's key -- a mistake nothing downstream could detect.
+    with pytest.raises(ConfigError, match="EXTRACTION_MODE") as excinfo:
+        Settings.from_env({f"{ENV_PREFIX}EXTRACTION_MODE": "passages"})
+
+    assert "document, passage" in str(excinfo.value)
 
 
 # ---- Key source (M2) ------------------------------------------------------------------
@@ -254,7 +283,7 @@ def test_require_llm_api_key_says_where_to_put_the_key_when_there_is_none(tmp_pa
     # Letting a request go out with an empty key and hit a 401 is one of the hardest failures to trace.
     settings = Settings.from_env(env_with_repo(tmp_path))
 
-    with pytest.raises(ConfigError, match="PAPERFACTS_LLM_API_KEY / DEEPSEEK_API_KEY") as excinfo:
+    with pytest.raises(ConfigError, match="PAPERFACTS_LLM_API_KEY") as excinfo:
         settings.require_llm_api_key()
 
     assert str(tmp_path / "deepseek_api_key") in str(excinfo.value)

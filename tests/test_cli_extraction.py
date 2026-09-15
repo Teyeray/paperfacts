@@ -18,8 +18,9 @@ from typer.testing import CliRunner
 
 from paperfacts.cli import app
 from paperfacts.config import Settings
+from paperfacts.errors import ParserError
 from paperfacts.models import BACKENDS, Backend, DocumentInput, RawParseOutput
-from paperfacts.storage.paths import DataLayout
+from paperfacts.storage import DataLayout
 from support.extraction import make_artifact, make_lane
 from support.factories import RawOutputFactory, make_block, paddle_page_entry
 from support.llm import FakeLlmClient
@@ -81,7 +82,9 @@ def test_extract_prints_the_samples_the_fields_and_the_provenance_summary(
 ):
     client = install_fake_llm(monkeypatch, [extraction_json()])
 
-    result = runner.invoke(app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root)])
+    result = runner.invoke(
+        app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root), "--mode", "document"]
+    )
 
     assert result.exit_code == 0, result.output
     assert "[mineru] samples=1" in result.output
@@ -96,7 +99,9 @@ def test_extract_shows_the_normalized_value_next_to_the_raw_one(
 ):
     install_fake_llm(monkeypatch, [extraction_json(value="1.2")])
 
-    result = runner.invoke(app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root)])
+    result = runner.invoke(
+        app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root), "--mode", "document"]
+    )
 
     assert "= 1.2 Ω/sq" in result.output
 
@@ -175,6 +180,87 @@ def test_the_passes_option_defaults_to_the_settings_default_when_omitted(
     assert captured[0].extraction_passes == 1
 
 
+def test_the_mode_option_reaches_the_settings_used_for_extraction(
+    monkeypatch, two_page_pdf: Path, data_root: Path, api_key, parsed
+):
+    # --mode decides which extractor runs and therefore which key the facts are filed under; if it stopped
+    # at the CLI boundary the run would quietly do the other thing.
+    monkeypatch.delenv("PAPERFACTS_EXTRACTION_MODE", raising=False)
+    captured: list[Settings] = []
+
+    def fake_extract_document(
+        document: DocumentInput, backend: Backend, settings: Settings, client, *, force: bool = False
+    ):
+        captured.append(settings)
+        return make_lane(backend=backend)
+
+    monkeypatch.setattr("paperfacts.cli.extract_document", fake_extract_document)
+    install_fake_llm(monkeypatch, [])
+
+    result = runner.invoke(
+        app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root), "--mode", "passage"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured[0].extraction_mode == "passage"
+
+
+def test_the_mode_option_defaults_to_the_settings_default_when_omitted(
+    monkeypatch, two_page_pdf: Path, data_root: Path, api_key, parsed
+):
+    monkeypatch.delenv("PAPERFACTS_EXTRACTION_MODE", raising=False)
+    captured: list[Settings] = []
+
+    def fake_extract_document(
+        document: DocumentInput, backend: Backend, settings: Settings, client, *, force: bool = False
+    ):
+        captured.append(settings)
+        return make_lane(backend=backend)
+
+    monkeypatch.setattr("paperfacts.cli.extract_document", fake_extract_document)
+    install_fake_llm(monkeypatch, [])
+
+    runner.invoke(app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root)])
+
+    assert captured[0].extraction_mode == "passage"
+
+
+def test_the_mode_option_reaches_compare(monkeypatch, two_page_pdf: Path, data_root: Path, api_key, parsed):
+    monkeypatch.delenv("PAPERFACTS_EXTRACTION_MODE", raising=False)
+    captured: list[Settings] = []
+
+    def fake_compare_document(document: DocumentInput, settings: Settings, client, *, force: bool = False):
+        captured.append(settings)
+        # Stop here rather than build a whole report: the flag has already been observed, and an expected
+        # error is the cheapest way back out of the command.
+        raise ParserError("mineru", "compare", "stop here")
+
+    monkeypatch.setattr("paperfacts.cli.compare_document", fake_compare_document)
+    install_fake_llm(monkeypatch, [])
+
+    runner.invoke(app, ["compare", str(two_page_pdf), "--data-root", str(data_root), "--mode", "passage"])
+
+    assert captured[0].extraction_mode == "passage"
+
+
+def test_the_mode_option_reaches_run(monkeypatch, two_page_pdf: Path, data_root: Path, api_key, parsed):
+    # `run` goes through workflow.run_document rather than the CLI's own extract_document, so the flag has
+    # a second path to survive.
+    monkeypatch.delenv("PAPERFACTS_EXTRACTION_MODE", raising=False)
+    captured: list[Settings] = []
+
+    def fake_run_document(document: DocumentInput, settings: Settings, *, force: bool = False, on_stage=None):
+        captured.append(settings)
+        raise ParserError("mineru", "run", "stop here, the flag has already been observed")
+
+    monkeypatch.setattr("paperfacts.cli.run_document", fake_run_document)
+    install_fake_llm(monkeypatch, [])
+
+    runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), "--mode", "passage"])
+
+    assert captured[0].extraction_mode == "passage"
+
+
 def test_extract_without_a_key_exits_one_and_points_at_the_key_file(
     monkeypatch, two_page_pdf: Path, data_root: Path, tmp_path: Path, parsed
 ):
@@ -219,7 +305,7 @@ def test_compare_prints_the_counts_the_pairs_and_the_field_lines(
 ):
     client = install_fake_llm(monkeypatch, [extraction_json(value="12.5"), extraction_json(value="99")])
 
-    result = runner.invoke(app, ["compare", str(two_page_pdf), "--data-root", str(data_root)])
+    result = runner.invoke(app, ["compare", str(two_page_pdf), "--data-root", str(data_root), "--mode", "document"])
 
     assert result.exit_code == 0, result.output
     assert "counts:" in result.output
@@ -297,7 +383,7 @@ def test_run_goes_from_pdf_to_comparison_in_one_command(
 ):
     client = install_fake_llm(monkeypatch, [extraction_json(), extraction_json()])
 
-    result = runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root)])
+    result = runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), "--mode", "document"])
 
     assert result.exit_code == 0, result.output
     assert f"document_id={document.document_id[:16]}" in result.output
@@ -313,8 +399,6 @@ def test_run_goes_from_pdf_to_comparison_in_one_command(
 
 
 def test_run_stops_with_code_one_when_a_parser_fails(monkeypatch, two_page_pdf: Path, data_root: Path, api_key):
-    from paperfacts.parsers.base import ParserError
-
     class ExplodingParser:
         def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
             raise ParserError("mineru", "run", "exit code 3")

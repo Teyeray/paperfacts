@@ -2,9 +2,8 @@
 PDFs live.
 
 The public document_id is the directory name (first 16 hex chars of the sha256, see
-:func:`paperfacts.storage.paths.document_key`); the full sha256, display name, and source are all
-read from the document directory's ``identity.json`` (:mod:`paperfacts.storage.identity`) — never
-recovered by falling back to meta.json / artifact files.
+:func:`paperfacts.storage.document_key`); the full sha256, display name, and source are read from the
+document directory's ``identity.json``.
 """
 
 from __future__ import annotations
@@ -15,18 +14,23 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.consensus import ComparisonCounts, ComparisonReport, comparison_key
-from paperfacts.extraction.document import build_extraction_document
-from paperfacts.extraction.extractor import extractor_key
-from paperfacts.extraction.grounding import ground_lane
-from paperfacts.extraction.records import LaneExtraction
+from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
-from paperfacts.normalization import normalize_lane
 from paperfacts.pdf import render_page_cached
-from paperfacts.storage.atomic import write_bytes_atomic
-from paperfacts.storage.identity import DocumentIdentity, ensure_identity, mark_uploaded, read_identity
-from paperfacts.storage.paths import DataLayout, document_key, is_document_key
+from paperfacts.records import LaneExtraction
+from paperfacts.storage import (
+    DataLayout,
+    DocumentIdentity,
+    document_key,
+    ensure_identity,
+    is_document_key,
+    mark_uploaded,
+    read_identity,
+    write_bytes_atomic,
+)
+from paperfacts.workflow import read_lane
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +56,8 @@ class Library:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.layout = DataLayout(settings.data_root)
-        self.extractor_key = extractor_key(settings.llm_model)
+        # The same key the pipeline writes under, or the browser looks for a file nothing ever wrote.
+        self.extractor_key = extractor_key_for(settings)
         self.comparison_key = comparison_key()
 
     # ---- listing and detail ----------------------------------------------------------------
@@ -98,7 +103,6 @@ class Library:
         )
 
     def identity(self, document_id: str) -> DocumentIdentity | None:
-        # for a directory that predates identity.json, read_identity recovers it from the old files once and writes it
         return read_identity(self.layout, document_id)
 
     # ---- artifacts -----------------------------------------------------------------------
@@ -108,24 +112,8 @@ class Library:
         return ComparisonReport.read(path) if path.is_file() else None
 
     def extraction(self, document_id: str, backend: Backend) -> LaneExtraction | None:
-        """Read one lane, re-deriving everything that is cheap to recompute.
-
-        Normalisation and grounding are both pure functions of the stored record, and both are re-run on
-        every read rather than trusted from the file. Skipping grounding here would let the browser show
-        verdicts from whenever the file happened to be written, which is how this method and
-        ``workflow.extract_document`` silently drifted apart once already.
-
-        Grounding additionally needs the artifact. Without it the stored verdicts are kept as they are:
-        they cannot be re-checked, but they are still the best answer available.
-        """
-        path = self.layout.extraction_path(document_id, backend, self.extractor_key)
-        if not path.is_file():
-            return None
-        lane = LaneExtraction.read(path)
-        artifact = self.artifact(document_id, backend)
-        if artifact is not None:
-            lane = ground_lane(lane, build_extraction_document(artifact).blocks)
-        return normalize_lane(lane)
+        # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.
+        return read_lane(self.layout, document_id, backend, self.extractor_key)
 
     def artifact(self, document_id: str, backend: Backend) -> ParsedArtifact | None:
         path = self.layout.artifact_path(document_id, backend)

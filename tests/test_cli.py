@@ -15,9 +15,9 @@ import pytest
 from typer.testing import CliRunner
 
 from paperfacts.cli import BackendOption, app
+from paperfacts.errors import ParserError
 from paperfacts.models import Backend, DocumentInput, RawParseOutput
-from paperfacts.parsers.base import ParserError
-from paperfacts.storage.paths import DataLayout
+from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
 
 runner = CliRunner()

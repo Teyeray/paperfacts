@@ -1,7 +1,7 @@
 """A fake LLM client. Every extraction and matching unit test runs on it; no real call is ever made.
 
 The extraction layer depends on exactly one method of the
-:class:`paperfacts.extraction.llm.LlmClient` protocol, so "never call the real model" reduces to passing
+:class:`paperfacts.llm.LlmClient` protocol, so "never call the real model" reduces to passing
 this object in.
 
 It doubles as an assertion surface: every (system, user) pair is recorded, which lets tests assert on the
@@ -14,7 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from paperfacts.extraction.llm import LlmResult
+from paperfacts.config import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
+from paperfacts.llm import LlmResult
 
 # Fake token counts. The numbers mean nothing; they only prove usage is recorded and summed.
 DEFAULT_USAGE: dict[str, int] = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
@@ -47,8 +48,14 @@ class FakeLlmClient:
         *,
         model: str = "fake-model",
         usage: dict[str, int] | None = None,
+        temperature: float = DEFAULT_TEMPERATURE,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> None:
         self.model = model
+        # Part of the LlmClient protocol: what the real client would send, and therefore what the cache key
+        # for an extraction records. The defaults match an unedited config.json.
+        self.temperature = temperature
+        self.max_tokens = max_tokens
         self.calls: list[LlmCall] = []
         self.closed = False
         self._usage = dict(DEFAULT_USAGE if usage is None else usage)

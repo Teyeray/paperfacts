@@ -24,7 +24,7 @@ The job is deliberately kept thin, just three steps:
    relative path of each output file.
 
 It does **not** do any format conversion: the adapter that turns the native JSON into
-``SourceBlock`` lives in the main package at ``src/paperfacts/adapters/mineru.py``, where it's a
+``SourceBlock`` lives in the main package at ``src/paperfacts/adapters.py``, where it's a
 pure function testable with fixtures and doesn't need torch installed.
 
 Isolation principle (both directions): the main package never ``import mineru``; this script

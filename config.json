@@ -1,0 +1,226 @@
+{
+  "$comment": "PaperFacts configuration: edit this file to change anything about a run. Secrets never live here -- the API key goes in .env (see .env.example). The PAPERFACTS_* environment variables listed in README.md still win over this file, which is how a deployment overrides one value without editing it.",
+  "data_root": "data",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "max_upload_mb": 200,
+    "page_dpi": {
+      "default": 110,
+      "min": 50,
+      "max": 220
+    }
+  },
+  "llm": {
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-chat",
+    "timeout_s": 300.0,
+    "context_tokens": 60000,
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "retry_attempts": 4,
+    "retry_backoff_s": 2.0
+  },
+  "extraction": {
+    "mode": "passage",
+    "passes": 1,
+    "candidate_limit": 8
+  },
+  "comparison": {
+    "ambiguous_match_confidence": 0.6
+  },
+  "parsers": {
+    "mineru_url": null,
+    "paddle_url": null,
+    "paddle_render_dpi": 200,
+    "paddle_vl_backend": null,
+    "paddle_vl_server_url": null,
+    "paddle_vl_model_name": null,
+    "subprocess_timeout_s": 3600.0,
+    "http_timeout_s": 900.0,
+    "uv_bin": "uv"
+  },
+  "overlay": {
+    "dpi": 150
+  },
+  "condition_keywords": [
+    "sample",
+    "substrate",
+    "deposition",
+    "deposited",
+    "sputtering",
+    "sputtered",
+    "annealing",
+    "annealed",
+    "flow",
+    "flow rate",
+    "power",
+    "pressure",
+    "temperature",
+    "atmosphere"
+  ],
+  "fields": [
+    {
+      "name": "component",
+      "group": "target",
+      "kind": "composition",
+      "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.",
+      "keywords": [
+        "target",
+        "sputtering target",
+        "component",
+        "composition",
+        "wt%",
+        "at%",
+        "purity"
+      ],
+      "canonical_unit": null,
+      "rel_tol": 0.0,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "resistance",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Electrical resistivity of the sputtering target itself (not the film).",
+      "keywords": [
+        "target resistivity",
+        "target resistance",
+        "resistivity of the target",
+        "bulk resistivity"
+      ],
+      "canonical_unit": "Ω·cm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "density",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Relative density of the sputtering target as a percentage of theoretical density.",
+      "keywords": [
+        "relative density",
+        "target density",
+        "theoretical density",
+        "density of the target"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.0,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "inch",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Size (diameter or length) of the sputtering target.",
+      "keywords": [
+        "inch",
+        "target size",
+        "diameter",
+        "target",
+        "magnetron",
+        "cathode"
+      ],
+      "canonical_unit": "inch",
+      "rel_tol": 0.01,
+      "abs_tol": 0.05,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sputtering_time",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Duration of the sputtering deposition for this sample.",
+      "keywords": [
+        "sputtering time",
+        "deposition time",
+        "duration",
+        "deposited for",
+        "sputtered for"
+      ],
+      "canonical_unit": "min",
+      "rel_tol": 0.02,
+      "abs_tol": 1.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sheet_resistance",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Sheet resistance of the film (Ω/sq).",
+      "keywords": [
+        "sheet resistance",
+        "sheet resistivity",
+        "Rs",
+        "R_s"
+      ],
+      "canonical_unit": "Ω/sq",
+      "rel_tol": 0.02,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "resistivity",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Electrical resistivity of the deposited film, as opposed to the `resistance` of the target it was sputtered from.",
+      "keywords": [
+        "resistivity",
+        "electrical resistivity",
+        "specific resistance",
+        "ρ"
+      ],
+      "canonical_unit": "Ω·cm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "transmittance",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Optical transmittance of the film (%). Always record the wavelength or range it refers to.",
+      "keywords": [
+        "transmittance",
+        "transmission",
+        "transparency",
+        "UV-vis",
+        "%T",
+        "AVT"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.0,
+      "abs_tol": 1.0,
+      "condition_hint": "wavelength or spectral range, e.g. '550 nm' or 'average 400-800 nm'",
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "thickness",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Film thickness (e.g. from SEM cross section or profilometry).",
+      "keywords": [
+        "thickness",
+        "film thickness",
+        "SEM cross section",
+        "profilometry",
+        "d ="
+      ],
+      "canonical_unit": "nm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    }
+  ]
+}

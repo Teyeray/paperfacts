@@ -17,6 +17,11 @@ function laneNode(lane, data) {
   if (data.target) box.append(sampleNode({ sample_id: "靶材", label: "论文级", conditions: {}, fields: data.target.fields }));
   if (!data.samples.length) box.append(note("模型没有识别出样品。"));
   for (const sample of data.samples) box.append(sampleNode(sample));
+  // Values the model found but could not place on any sample. Shown apart because nothing compares them:
+  // hiding them would make the lane look emptier than it was.
+  if (data.unattributed?.length) {
+    box.append(sampleNode({ sample_id: "未归属", label: "没能对应到任何样品", conditions: {}, fields: data.unattributed }));
+  }
   if (data.invalid_source_ids?.length || data.dropped?.length) {
     box.append(note(`清洗记录：${data.invalid_source_ids.length} 个编造的 source_id 被剔除；${data.dropped.length} 个取值被丢弃`));
   }

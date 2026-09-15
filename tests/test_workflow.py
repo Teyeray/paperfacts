@@ -7,21 +7,18 @@ native output into tmp_path, so none of these tests need mineru, paddleocr, a su
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from paperfacts.adapters import ADAPTERS
+from paperfacts.adapters import render_markdown
 from paperfacts.config import Settings
-from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact, RawParseOutput
-from paperfacts.models.geometry import DocumentGeometry
-from paperfacts.parsers.base import ParserError
-from paperfacts.parsers.http_parser import MinerUHttpParser, PaddleHttpParser
-from paperfacts.parsers.subprocess_parser import SubprocessParser
-from paperfacts.storage.paths import DataLayout
-from paperfacts.workflow import PARSER_BUILDERS, build_parser, load_artifact, parse_document
+from paperfacts.errors import ParserError
+from paperfacts.models import BACKENDS, Backend, DocumentGeometry, DocumentInput, ParsedArtifact, RawParseOutput
+from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, SubprocessParser
+from paperfacts.storage import DataLayout, read_identity
+from paperfacts.workflow import build_parser, load_artifact, parse_document
 from support.factories import RawOutputFactory, paddle_page_entry
 
 # ---- build_parser -------------------------------------------------------------------
@@ -75,15 +72,6 @@ def test_build_parser_treats_each_backend_url_independently():
 def test_build_parser_rejects_an_unknown_backend():
     with pytest.raises(ValueError, match="unknown backend"):
         build_parser("tesseract", Settings())
-
-
-def test_the_parser_registry_and_the_adapter_registry_cover_the_same_backends():
-    """The two registries must stay symmetric: every parseable backend has an adapter.
-
-    A gap on either side means either "the parse succeeded but nothing can convert it" or "this adapter is
-    dead code", and both only surface at runtime.
-    """
-    assert set(PARSER_BUILDERS) == set(ADAPTERS) == set(BACKENDS)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -152,7 +140,7 @@ def install_fake_parser(monkeypatch, parser: FakeParser) -> FakeParser:
     return parser
 
 
-def test_parse_document_writes_artifact_markdown_and_sources(
+def test_parse_document_writes_artifact_and_markdown(
     monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
 ):
     install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
@@ -161,11 +149,11 @@ def test_parse_document_writes_artifact_markdown_and_sources(
     artifact, report = parse_document(document, "mineru", settings)
 
     assert layout.artifact_path(document.document_id, "mineru").is_file()
-    assert layout.markdown_path(document.document_id, "mineru").read_text(encoding="utf-8") == artifact.markdown
-    sources = json.loads(layout.sources_path(document.document_id, "mineru").read_text(encoding="utf-8"))
-    assert len(sources) == len(artifact.blocks)
-    assert sources[0]["source_id"] == artifact.blocks[0].source_id
+    markdown = layout.markdown_path(document.document_id, "mineru").read_text(encoding="utf-8")
+    assert markdown == render_markdown(artifact.blocks)
+    assert f"<!-- source: {artifact.blocks[0].source_id} -->" in markdown
     assert report.artifact_path == layout.artifact_path(document.document_id, "mineru")
+    assert report.markdown_path == layout.markdown_path(document.document_id, "mineru")
 
 
 def test_parse_document_report_summarises_the_artifact(
@@ -299,15 +287,14 @@ def test_artifact_json_is_the_last_of_the_three_files_to_be_written(
     """artifact.json must be written last.
 
     ``load_artifact`` looks only at artifact.json, so its existence is the claim that parsed/ is complete.
-    Written before markdown and sources, one interrupted run leaves an artifact that loads fine while its
-    companion files are missing or stale. This records the actual write order rather than inspecting the
+    Written before the markdown, one interrupted run leaves an artifact that loads fine while its
+    companion file is missing or stale. This records the actual write order rather than inspecting the
     wreckage afterwards.
     """
     install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
     layout = DataLayout(settings.data_root)
     tracked = {
         layout.markdown_path(document.document_id, "mineru"): "markdown",
-        layout.sources_path(document.document_id, "mineru"): "sources",
         layout.artifact_path(document.document_id, "mineru"): "artifact",
     }
     order: list[str] = []
@@ -322,7 +309,7 @@ def test_artifact_json_is_the_last_of_the_three_files_to_be_written(
 
     parse_document(document, "mineru", settings)
 
-    assert order == ["markdown", "sources", "artifact"]
+    assert order == ["markdown", "artifact"]
 
 
 def test_a_crash_before_the_artifact_is_written_leaves_nothing_loadable(
@@ -344,29 +331,28 @@ def test_a_crash_before_the_artifact_is_written_leaves_nothing_loadable(
         load_artifact(document, "mineru", settings)
 
 
-def test_a_crash_while_writing_sources_leaves_no_artifact_json(
+def test_a_crash_while_writing_the_markdown_leaves_no_artifact_json(
     monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
 ):
     install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
     layout = DataLayout(settings.data_root)
-    sources_path = layout.sources_path(document.document_id, "mineru")
+    markdown_path = layout.markdown_path(document.document_id, "mineru")
     original_write_text = Path.write_text
 
-    def explode_on_sources(self, data, *args, **kwargs):
-        if self == sources_path:
+    def explode_on_markdown(self, data, *args, **kwargs):
+        if self == markdown_path:
             raise OSError("disk full")
         return original_write_text(self, data, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", explode_on_sources)
+    monkeypatch.setattr(Path, "write_text", explode_on_markdown)
 
     with pytest.raises(OSError, match="disk full"):
         parse_document(document, "mineru", settings)
 
-    assert layout.markdown_path(document.document_id, "mineru").is_file()
     assert not layout.artifact_path(document.document_id, "mineru").exists()
 
 
-def test_all_three_parsed_files_exist_after_a_successful_run(
+def test_both_parsed_files_exist_after_a_successful_run(
     monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
 ):
     install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
@@ -375,7 +361,6 @@ def test_all_three_parsed_files_exist_after_a_successful_run(
     parse_document(document, "mineru", settings)
 
     assert layout.markdown_path(document.document_id, "mineru").is_file()
-    assert layout.sources_path(document.document_id, "mineru").is_file()
     assert layout.artifact_path(document.document_id, "mineru").is_file()
 
 
@@ -387,8 +372,6 @@ def test_parse_document_writes_the_document_identity_first(
 ):
     """identity.json exists from the moment the directory does; the library reads nothing else for the
     full sha256 and the display name."""
-    from paperfacts.storage.identity import read_identity
-
     install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
 
     parse_document(document, "mineru", settings)

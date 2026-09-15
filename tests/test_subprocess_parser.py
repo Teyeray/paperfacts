@@ -15,11 +15,11 @@ from pathlib import Path
 import pytest
 
 from paperfacts.models import META_FILENAME, DocumentInput
-from paperfacts.parsers.base import ParserError
-from paperfacts.parsers.subprocess_parser import (
+from paperfacts.parsers import (
     DEFAULT_COMMAND_PREFIX,
     RUNNER_SCRIPTS,
     STDERR_TAIL_LINES,
+    ParserError,
     SubprocessParser,
     default_runner_script,
 )
@@ -354,7 +354,7 @@ def test_a_directory_is_not_accepted_as_a_runner_script(tmp_path: Path, document
 
 def test_stderr_tail_decodes_bytes_and_keeps_only_the_last_lines():
     # subprocess.TimeoutExpired gives bytes when text=False; this defensive branch must decode it.
-    from paperfacts.parsers.subprocess_parser import _tail
+    from paperfacts.parsers import _tail
 
     payload = "\n".join(f"line {i}" for i in range(100)).encode("utf-8")
 
@@ -365,13 +365,13 @@ def test_stderr_tail_decodes_bytes_and_keeps_only_the_last_lines():
 
 
 def test_stderr_tail_reports_empty_output_explicitly():
-    from paperfacts.parsers.subprocess_parser import _tail
+    from paperfacts.parsers import _tail
 
     assert _tail(None) == "(empty)"
     assert _tail("") == "(empty)"
 
 
 def test_stderr_tail_replaces_undecodable_bytes_instead_of_raising():
-    from paperfacts.parsers.subprocess_parser import _tail
+    from paperfacts.parsers import _tail
 
     assert "\ufffd" in _tail(b"\xff\xfe not utf-8")

@@ -2,7 +2,7 @@
 PDFs live.
 
 This layer has no business logic — everything it answers is "what's on disk" — so every test case
-starts by seeding artifacts at the paths :class:`~paperfacts.storage.paths.DataLayout` computes,
+starts by seeding artifacts at the paths :class:`~paperfacts.storage.DataLayout` computes,
 then asks the library whether it can see them. Two easy-to-silently-break things each get their
 own dedicated test case here:
 
@@ -20,11 +20,11 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts.compare import ComparisonCounts
 from paperfacts.config import Settings
-from paperfacts.consensus import ComparisonCounts
-from paperfacts.extraction.extractor import extractor_key
+from paperfacts.keys import extractor_key
 from paperfacts.models import DocumentInput
-from paperfacts.storage.atomic import write_text_atomic
+from paperfacts.storage import write_text_atomic
 from paperfacts.web.documents import Library
 from support.extraction import make_field, make_sample
 from support.factories import make_block

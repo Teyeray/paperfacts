@@ -21,13 +21,12 @@ from typing import Annotated, NoReturn, assert_never
 
 import typer
 
-from paperfacts.config import Settings
-from paperfacts.errors import PaperFactsError
-from paperfacts.models.artifact import Backend, DocumentInput
-from paperfacts.parsers.base import ParserError
+from paperfacts.config import EXTRACTION_MODES, Settings
+from paperfacts.errors import PaperFactsError, ParserError
+from paperfacts.models import Backend, DocumentInput
+from paperfacts.overlay import render_overlays
 from paperfacts.report import render_lane, render_report
-from paperfacts.storage.paths import DataLayout
-from paperfacts.verification.overlay import DEFAULT_OVERLAY_DPI, render_overlays
+from paperfacts.storage import DataLayout
 from paperfacts.workflow import (
     StageStatus,
     build_llm_client,
@@ -35,6 +34,7 @@ from paperfacts.workflow import (
     extract_document,
     load_artifact,
     parse_document,
+    run_batch,
     run_document,
 )
 
@@ -65,7 +65,21 @@ class BackendOption(StrEnum):
                 assert_never(self)  # a new member without a case fails here instead of returning None
 
 
+class ModeOption(StrEnum):
+    """Extraction mode on the command line. Typer needs an enum, so the literals live in two places; the
+    check below fails at import if they ever drift apart."""
+
+    document = "document"
+    passage = "passage"
+
+
+if {mode.value for mode in ModeOption} != set(EXTRACTION_MODES):
+    raise RuntimeError(f"CLI modes {[m.value for m in ModeOption]} do not match config's {list(EXTRACTION_MODES)}")
+
+
 PdfArg = Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="the paper")]
+SourceArg = Annotated[Path, typer.Argument(exists=True, readable=True, help="PDF or directory (searched recursively)")]
+OutputOpt = Annotated[Path | None, typer.Option("--output", "-o", help="Excel workbook (.xlsx)")]
 BackendOpt = Annotated[BackendOption, typer.Option("--backend", "-b", help="which parser lane to run")]
 DataRootOpt = Annotated[
     Path | None, typer.Option("--data-root", help="data directory; defaults to $PAPERFACTS_DATA_ROOT or ./data")
@@ -75,6 +89,10 @@ PassesOpt = Annotated[
     int | None,
     typer.Option("--passes", min=1, help="extract each lane this many times and keep the majority (costs N calls)"),
 ]
+ModeOpt = Annotated[
+    ModeOption | None,
+    typer.Option("--mode", help="how to ask the model: the whole paper at once, or one question per field"),
+]
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="ignore caches and redo this step (extraction re-calls the LLM, which costs)")
 ]
@@ -83,13 +101,15 @@ ForceOpt = Annotated[
 REPORTABLE_ERRORS = (PaperFactsError, FileNotFoundError)
 
 
-def _settings(data_root: Path | None, passes: int | None = None) -> Settings:
+def _settings(data_root: Path | None, passes: int | None = None, mode: ModeOption | None = None) -> Settings:
     settings = Settings.from_env()
     changes: dict[str, object] = {}
     if data_root is not None:
         changes["data_root"] = data_root
     if passes is not None:
         changes["extraction_passes"] = passes
+    if mode is not None:
+        changes["extraction_mode"] = mode.value
     return dataclasses.replace(settings, **changes) if changes else settings
 
 
@@ -141,7 +161,7 @@ def parse(
 def overlay(
     pdf: PdfArg,
     backend: BackendOpt = BackendOption.both,
-    dpi: Annotated[int, typer.Option(help="overlay rendering DPI")] = DEFAULT_OVERLAY_DPI,
+    dpi: Annotated[int | None, typer.Option(help="overlay rendering DPI; defaults to overlay.dpi")] = None,
     pages: Annotated[str | None, typer.Option(help="only these pages, comma separated, 0-based")] = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
@@ -159,7 +179,7 @@ def overlay(
         except FileNotFoundError as exc:
             _fail(name, exc)
         target = layout.overlay_dir(document.document_id, name)
-        written = render_overlays(pdf, artifact, target, dpi=dpi, pages=page_list)
+        written = render_overlays(pdf, artifact, target, dpi=dpi or settings.overlay_dpi, pages=page_list)
         typer.echo(f"[{name}] {len(written)} overlays -> {target}")
 
 
@@ -169,12 +189,13 @@ def extract(
     backend: BackendOpt = BackendOption.both,
     force: ForceOpt = False,
     passes: PassesOpt = None,
+    mode: ModeOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Extract sample-level records from parsed Markdown with the LLM. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes)
+    settings = _settings(data_root, passes, mode)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
@@ -189,12 +210,13 @@ def compare(
     pdf: PdfArg,
     force: ForceOpt = False,
     passes: PassesOpt = None,
+    mode: ModeOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Match samples across the two lanes and compare their fields. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes)
+    settings = _settings(data_root, passes, mode)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
@@ -209,12 +231,13 @@ def run(
     pdf: PdfArg,
     force: ForceOpt = False,
     passes: PassesOpt = None,
+    mode: ModeOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
-    """Parse both lanes, extract both, then match and compare. Every step is cached; --force redoes all."""
+    """Parse, extract, compare and automatically save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes)
+    settings = _settings(data_root, passes, mode)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -229,12 +252,59 @@ def run(
     for lane in result.lanes.values():
         _echo_lines(render_lane(lane))
     _echo_lines(render_report(result.report))
+    typer.echo(f"Excel -> {result.excel_path}")
+
+
+def _batch_summary(source: Path, settings: Settings, output: Path | None, *, force: bool, export_only: bool) -> None:
+    def on_stage(stage: str, status: StageStatus, detail: str) -> None:
+        typer.echo(f"[{stage}] {status} {detail}".rstrip())
+
+    try:
+        result = run_batch(source, settings, output=output, force=force, export_only=export_only, on_stage=on_stage)
+    except (*REPORTABLE_ERRORS, OSError) as exc:
+        _fail("export" if export_only else "batch", exc)
+    typer.echo(
+        f"Completed: {len(result.documents)} papers; failed: {len(result.failures)}; "
+        f"duplicates skipped: {result.duplicate_count}"
+    )
+    typer.echo(f"Excel -> {result.excel_path}")
+    if result.failures:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def batch(
+    source: SourceArg,
+    output: OutputOpt = None,
+    force: ForceOpt = False,
+    passes: PassesOpt = None,
+    mode: ModeOpt = None,
+    data_root: DataRootOpt = None,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
+    _configure_logging(verbose)
+    _batch_summary(source, _settings(data_root, passes, mode), output, force=force, export_only=False)
+
+
+@app.command()
+def export(
+    source: SourceArg,
+    output: OutputOpt = None,
+    passes: PassesOpt = None,
+    mode: ModeOpt = None,
+    data_root: DataRootOpt = None,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Re-export current cached results to Excel, without parser or LLM calls."""
+    _configure_logging(verbose)
+    _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True)
 
 
 @app.command()
 def serve(
-    host: Annotated[str, typer.Option(help="bind address; use 0.0.0.0 to allow other machines")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="port to listen on")] = 8000,
+    host: Annotated[str | None, typer.Option(help="bind address; defaults to server.host")] = None,
+    port: Annotated[int | None, typer.Option(help="port to listen on; defaults to server.port")] = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -245,6 +315,8 @@ def serve(
 
     _configure_logging(verbose)
     settings = _settings(data_root)
+    host = host or settings.server_host
+    port = port or settings.server_port
     typer.echo(f"PaperFacts UI -> http://{host}:{port}   (data_root={settings.data_root}, model={settings.llm_model})")
     uvicorn.run(create_app(settings), host=host, port=port, log_level="info" if verbose else "warning")
 

@@ -10,11 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from paperfacts.adapters.markdown import build_markdown
-from paperfacts.extraction.fields import schema_fingerprint
-from paperfacts.extraction.records import FieldValue, LaneExtraction, SampleRecord, TargetRecord
-from paperfacts.models.artifact import Backend, ParsedArtifact, SourceBlock
-from paperfacts.models.geometry import PageGeometry
+from paperfacts.keys import schema_fingerprint
+from paperfacts.models import Backend, PageGeometry, ParsedArtifact, SourceBlock
+from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, TargetRecord
 from support.factories import DOC_ID, make_block
 
 # Placeholder extractor_key for extraction-layer tests: the real value is computed by extractor_key();
@@ -30,8 +28,7 @@ def make_artifact(
     document_id: str = DOC_ID,
     backend_version: str | None = "3.4.5",
 ) -> ParsedArtifact:
-    """A minimal but self-consistent ParsedArtifact: the markdown is generated from the blocks, so the
-    source markers and the blocks correspond one to one."""
+    """A minimal but self-consistent ParsedArtifact."""
     if blocks is None:
         blocks = (
             make_block(page=0, order=0, backend=backend, document_id=document_id, content="Sample A was deposited."),
@@ -44,14 +41,12 @@ def make_artifact(
                 content="<table><tr><td>Rs</td><td>12.5 Ω/sq</td></tr></table>",
             ),
         )
-    markdown, with_spans = build_markdown(blocks)
     return ParsedArtifact(
         document_id=document_id,
         backend=backend,
         backend_version=backend_version,
         pages=(PageGeometry(index=0, width_pt=595.0, height_pt=842.0),),
-        markdown=markdown,
-        blocks=with_spans,
+        blocks=tuple(blocks),
     )
 
 
