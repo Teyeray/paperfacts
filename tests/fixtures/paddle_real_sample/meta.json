@@ -1,0 +1,54 @@
+{
+  "parser": "paddleocr_vl",
+  "parser_version": "3.7.0",
+  "framework": {
+    "paddlepaddle": "3.2.1",
+    "paddlex": "3.7.2"
+  },
+  "render_dpi": 200,
+  "vl_backend": "in-process",
+  "source": {
+    "pdf": "<sample.pdf>",
+    "sha256": "5c10f7a0128f15e06358cdfcb9fd2d36337fe35dafb670e31a00149274414fbd",
+    "page_count": 10,
+    "page_range": [
+      0,
+      1
+    ],
+    "parsed_page_count": 2
+  },
+  "pages": [
+    {
+      "index": 0,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188,
+      "width_px": 1654,
+      "height_px": 2174,
+      "image": "pages/page_000.png",
+      "json": "pages/page_000.json",
+      "markdown_dir": "pages/page_000_md"
+    },
+    {
+      "index": 1,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188,
+      "width_px": 1654,
+      "height_px": 2174,
+      "image": "pages/page_001.png",
+      "json": "pages/page_001.json",
+      "markdown_dir": "pages/page_001_md"
+    }
+  ],
+  "files": {
+    "pages_dir": "pages"
+  },
+  "runner": {
+    "script": "runners/paddle_runner.py",
+    "argv": [],
+    "python": "3.13.14",
+    "platform": "darwin",
+    "device": null,
+    "started_at": "2026-09-09T09:16:46.128150+00:00",
+    "duration_s": 4095.97
+  }
+}
