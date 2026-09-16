@@ -22,15 +22,18 @@ module only does the HTTP mapping.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
-from collections.abc import AsyncIterator
+import secrets
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
@@ -61,6 +64,27 @@ def pipeline_runner(settings: Settings, library: Library) -> JobRunner:
     return lambda job, mark: run_document(library.document(job.document_id), settings, force=job.force, on_stage=mark)
 
 
+def login_accepted(header: str | None, settings: Settings) -> bool:
+    """Is this ``Authorization`` header the configured HTTP Basic login?
+
+    ``compare_digest`` rather than ``==``: a wrong password should take the same time to reject whoever
+    guesses it, so the check does not hand out the password's length or its matching prefix.
+    """
+    scheme, _, credentials = (header or "").partition(" ")
+    if scheme.lower() != "basic" or not settings.web_password:
+        return False
+    try:
+        decoded = base64.b64decode(credentials, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):  # not base64, or not even UTF-8: not our login
+        return False
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return False
+    return secrets.compare_digest(username, settings.web_username) and secrets.compare_digest(
+        password, settings.web_password
+    )
+
+
 def create_app(settings: Settings | None = None, *, jobs: JobManager | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     library = Library(settings)
@@ -75,6 +99,23 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     app.state.settings = settings
     app.state.library = library
     app.state.jobs = manager
+
+    @app.middleware("http")
+    async def require_login(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        """The password gate, over every route -- the static frontend and ``/api`` alike.
+
+        The app is published through a tunnel on this machine, so this is all that stands between the
+        internet and a library that can upload PDFs and spend LLM tokens. Off unless a password is
+        configured, which is what a laptop wants. A 401 carrying ``WWW-Authenticate`` is what makes a
+        browser ask for the login instead of showing the app.
+        """
+        if not settings.web_password or login_accepted(request.headers.get("authorization"), settings):
+            return await call_next(request)
+        return PlainTextResponse(
+            "PaperFacts: login required",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="PaperFacts", charset="UTF-8"'},
+        )
 
     def require_document(document_id: str) -> DocumentSummary:
         try:

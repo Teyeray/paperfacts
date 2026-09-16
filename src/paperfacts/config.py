@@ -46,24 +46,35 @@ DEFAULT_RENDER_DPI = 200
 # server keeps its models resident, where fifteen minutes per paper is generous.
 DEFAULT_SUBPROCESS_TIMEOUT_S = 3600.0
 DEFAULT_HTTP_TIMEOUT_S = 900.0
-# Any OpenAI-compatible endpoint works. DeepSeek is the default: cheap, long context, JSON mode.
-DEFAULT_LLM_BASE_URL = "https://api.deepseek.com"
-DEFAULT_LLM_MODEL = "deepseek-chat"
-DEFAULT_LLM_TIMEOUT_S = 300.0
-# deepseek-chat serves a 64K context; leave headroom so an under-estimate cannot silently truncate.
-DEFAULT_LLM_CONTEXT_TOKENS = 60_000
+# Any OpenAI-compatible endpoint works. This deployment runs against an Alibaba Cloud Model Studio
+# workspace in its OpenAI-compatible ("compatible-mode") mode; plain DeepSeek was the earlier default.
+DEFAULT_LLM_BASE_URL = "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+DEFAULT_LLM_MODEL = "deepseek-v4.1-flash"
+# v4.1-flash reasons before it answers and the reasoning is billed against max_tokens, so a request takes
+# longer than one to a plain chat model; 600s is what the gateway needs for a full paper.
+DEFAULT_LLM_TIMEOUT_S = 600.0
+# Measured against this workspace's endpoint: a 178k-token prompt is accepted, so the window is at least
+# that. The budget the code plans against is this minus DEFAULT_MAX_TOKENS, which leaves headroom on both
+# sides instead of silently truncating the prompt or the answer that has to fit beside it.
+DEFAULT_LLM_CONTEXT_TOKENS = 200_000
 # The key stays on the machine: environment first, then this file in the repository root (gitignored).
 DEFAULT_API_KEY_FILENAME = "deepseek_api_key"
 # Built-in baselines for the knobs that change what the model is asked. config.json ships with these exact
 # values; paperfacts.keys treats them as the shape a cache key had before anybody edited anything, so the
 # stored facts of an unmodified checkout keep their filenames.
 DEFAULT_TEMPERATURE = 0.0
-DEFAULT_MAX_TOKENS = 8192
+# Room for the reasoning plus the JSON answer it precedes: 8192 was enough for a non-reasoning model and
+# is not for this one.
+DEFAULT_MAX_TOKENS = 65536
 DEFAULT_RETRY_ATTEMPTS = 4
 DEFAULT_RETRY_BACKOFF_S = 2.0
 DEFAULT_CANDIDATE_LIMIT = 8
 DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8000
+# The web interface's login. The username is configuration; the password is a secret and lives only in
+# the environment (.env), like the API key -- a default password in a committed file would be worse than
+# none, because it looks like protection.
+DEFAULT_WEB_USERNAME = "paperfacts"
 DEFAULT_MAX_UPLOAD_MB = 200
 DEFAULT_PAGE_DPI = 110
 DEFAULT_OVERLAY_DPI = 150
@@ -213,6 +224,10 @@ class Settings:
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT
     server_host: str = DEFAULT_SERVER_HOST
     server_port: int = DEFAULT_SERVER_PORT
+    # Login for the web interface. An empty password means the app is open, which is the right default for
+    # a laptop and the wrong one for a tunnel: see README, "The web interface".
+    web_username: str = DEFAULT_WEB_USERNAME
+    web_password: str | None = field(default=None, repr=False)
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_MB * 1024 * 1024
     page_dpi: int = DEFAULT_PAGE_DPI
     page_dpi_min: int = 50
@@ -276,6 +291,8 @@ class Settings:
             ),
             server_host=get("SERVER_HOST") or file.get("server.host", str),
             server_port=number("SERVER_PORT", file.get("server.port", int), int),
+            web_username=get("WEB_USERNAME") or file.get("web.username", str),
+            web_password=get("WEB_PASSWORD"),
             max_upload_bytes=number("MAX_UPLOAD_MB", file.get("server.max_upload_mb", int), int) * 1024 * 1024,
             page_dpi=number("PAGE_DPI", file.get("server.page_dpi.default", int), int),
             page_dpi_min=number("PAGE_DPI_MIN", file.get("server.page_dpi.min", int), int),

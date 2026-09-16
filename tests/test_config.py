@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.config import ENV_PREFIX, Settings
+from paperfacts.config import DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL, ENV_PREFIX, Settings
 from paperfacts.errors import ConfigError
 
 
@@ -117,11 +117,14 @@ def test_settings_is_frozen():
 # ---- LLM configuration (M2) ----------------------------------------------------------
 
 
-def test_llm_defaults_point_at_deepseek():
+def test_llm_defaults_point_at_the_configured_workspace():
+    # Any OpenAI-compatible endpoint works; this checkout is configured against a Model Studio workspace
+    # (deepseek-v4.1-flash), which is also what the shipped config.json carries.
     settings = Settings.from_env({})
 
-    assert settings.llm_base_url == "https://api.deepseek.com"
-    assert settings.llm_model == "deepseek-chat"
+    assert settings.llm_base_url == DEFAULT_LLM_BASE_URL
+    assert settings.llm_model == DEFAULT_LLM_MODEL
+    assert settings.llm_base_url.startswith("https://")
     assert settings.llm_timeout_s >= 60
 
 

@@ -11,13 +11,16 @@
       "max": 220
     }
   },
+  "web": {
+    "username": "paperfacts"
+  },
   "llm": {
-    "base_url": "https://api.deepseek.com",
-    "model": "deepseek-chat",
-    "timeout_s": 300.0,
-    "context_tokens": 60000,
+    "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "model": "deepseek-v4.1-flash",
+    "timeout_s": 600.0,
+    "context_tokens": 200000,
     "temperature": 0.0,
-    "max_tokens": 8192,
+    "max_tokens": 65536,
     "retry_attempts": 4,
     "retry_backoff_s": 2.0
   },

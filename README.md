@@ -81,9 +81,10 @@ export PAPERFACTS_PADDLE_VL_SERVER_URL=http://localhost:8111/
 export PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6
 ```
 
-Extraction needs an OpenAI-compatible LLM; the default is DeepSeek `deepseek-chat`. The key is read from
-`PAPERFACTS_LLM_API_KEY`, then `DEEPSEEK_API_KEY`, then `PAPERFACTS_LLM_API_KEY_FILE`, then a
-`deepseek_api_key` file in the repository root (gitignored).
+Extraction needs an OpenAI-compatible LLM; any endpoint works, and the default in `config.json` is an
+Alibaba Cloud Model Studio (百炼) workspace serving `deepseek-v4.1-flash` through its `compatible-mode/v1`
+address. The key is read from `PAPERFACTS_LLM_API_KEY`, then `DEEPSEEK_API_KEY`, then
+`PAPERFACTS_LLM_API_KEY_FILE`, then a `deepseek_api_key` file in the repository root (gitignored).
 
 ## Use
 
@@ -155,6 +156,17 @@ or absent results as failures. On Apple silicon, start and configure the MLX ser
 uv run paperfacts serve                    # local
 uv run paperfacts serve --host 0.0.0.0     # reachable from other machines
 ```
+
+Published on the internet — a cloudflared tunnel, a shared server — it needs a password:
+
+```bash
+echo 'PAPERFACTS_WEB_PASSWORD=...' >> .env   # the username is web.username in config.json
+```
+
+With `PAPERFACTS_WEB_PASSWORD` set, every route, `/api` included, answers 401 until a browser or a client
+sends HTTP Basic credentials, so an open tunnel cannot upload PDFs or spend tokens. Unset, the app is open,
+which is what running it on a laptop wants. The password is a secret and lives only in `.env`; the username
+is configuration and lives in `config.json`.
 
 Drop a PDF on the left and processing starts, with live per-stage progress. The result is a fact-by-fact
 comparison table, AGREE / CONFLICT / AMBIGUOUS / MISSING counts, and a page viewer: click any fact and
@@ -239,8 +251,10 @@ be edited:
   "data_root": "data",
   "server":     { "host": "127.0.0.1", "port": 8000, "max_upload_mb": 200,
                   "page_dpi": { "default": 110, "min": 50, "max": 220 } },
-  "llm":        { "base_url": "https://api.deepseek.com", "model": "deepseek-chat",
-                  "timeout_s": 300, "context_tokens": 60000, "temperature": 0.0, "max_tokens": 8192,
+  "web":        { "username": "paperfacts" },          // the password is PAPERFACTS_WEB_PASSWORD in .env
+  "llm":        { "base_url": "https://<workspace>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+                  "model": "deepseek-v4.1-flash",     // any OpenAI-compatible endpoint and model
+                  "timeout_s": 600, "context_tokens": 60000, "temperature": 0.0, "max_tokens": 16384,
                   "retry_attempts": 4, "retry_backoff_s": 2.0 },
   "extraction": { "mode": "passage", "passes": 1, "candidate_limit": 8 },
   "comparison": { "ambiguous_match_confidence": 0.6 },
@@ -273,8 +287,8 @@ which is how one machine points at its own services without editing the shared f
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
-`PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_UV_BIN`. `PAPERFACTS_CONFIG` points at a different configuration
-file altogether.
+`PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_WEB_PASSWORD`.
+`PAPERFACTS_CONFIG` points at a different configuration file altogether.
 
 Three settings are file-only, because a single environment variable is the wrong shape for them:
 `fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.
