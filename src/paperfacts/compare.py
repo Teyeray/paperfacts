@@ -75,7 +75,11 @@ class ComparisonCounts(BaseModel):
     matching_failed: bool = False
     unattributed_by_backend: dict[str, int] = Field(
         default_factory=dict,
-        description="per lane, values extracted but not placed on a sample; they take part in no comparison",
+        description="per lane, values extracted but not placed on a sample; the ones neither lane could "
+        "place are paired and compared (see unattributed_compared), the rest take part in no comparison",
+    )
+    unattributed_compared: int = Field(
+        default=0, description="unattributed values both lanes extracted, paired and given a verdict"
     )
 
 
@@ -164,6 +168,21 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
                 one_sided=one_sided,
                 one_sided_detail=reason,
             )
+    # Unattributed values are extracted by both lanes yet placed on no sample. Where both lanes hold the
+    # same unplaced value, agreement is real evidence about the parsers and disagreement a real signal;
+    # both were invisible while unattributed values took part in no comparison at all. Only pairs are
+    # reported: a value one lane could not place may sit on a sample in the other lane (already reported
+    # there), so a one-sided row here would double-count the same fact as MISSING.
+    comparisons += _compare_records(
+        "unattributed",
+        lane_a.unattributed,
+        lane_b.unattributed,
+        SAMPLE_FIELDS,
+        a_name,
+        b_name,
+        emit_one_sided=False,
+        detail_prefix="unattributed in both lanes; ",
+    )
 
     return ComparisonReport(
         document_id=lane_a.document_id,
@@ -211,9 +230,15 @@ def _compare_records(
     match_confidence: float | None = None,
     one_sided: FactStatus = "missing",
     one_sided_detail: str | None = None,
+    emit_one_sided: bool = True,
+    detail_prefix: str = "",
 ) -> list[FieldComparison]:
     """Pair up both sides' values field by field and compare them. When ``fields_b`` is empty this
-    naturally degenerates to "everything is only in lane a"."""
+    naturally degenerates to "everything is only in lane a".
+
+    ``emit_one_sided=False`` suppresses the one-sided rows, for values whose other half may exist under a
+    different scope (the unattributed comparison): pairing machinery is shared, reporting is not.
+    """
     spec_by_name = {spec.name: spec for spec in specs}
     names = sorted({f.field for f in (*fields_a, *fields_b)} & spec_by_name.keys())
     out: list[FieldComparison] = []
@@ -223,6 +248,8 @@ def _compare_records(
         values_b = [f for f in fields_b if f.field == name]
         for a, b in _pair_values(values_a, values_b, spec):
             if a is None or b is None:
+                if not emit_one_sided:
+                    continue
                 present = a if a is not None else b
                 assert present is not None
                 missing_in = backend_a if a is None else backend_b
@@ -257,7 +284,7 @@ def _compare_records(
                     match_confidence=match_confidence,
                     a=a,
                     b=b,
-                    detail=detail,
+                    detail=detail_prefix + detail,
                 )
             )
     return out
@@ -350,4 +377,5 @@ def _count(
         low_confidence_matches=sum(1 for p in matching.pairs if p.confidence < AMBIGUOUS_MATCH_CONFIDENCE),
         matching_failed=matching.failed,
         unattributed_by_backend={lane.backend: len(lane.unattributed) for lane in lanes if lane.unattributed},
+        unattributed_compared=sum(1 for c in comparisons if c.scope == "unattributed"),
     )

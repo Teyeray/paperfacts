@@ -468,7 +468,95 @@ def test_the_counts_have_every_key_even_when_zero():
         "low_confidence_matches",
         "matching_failed",
         "unattributed_by_backend",
+        "unattributed_compared",
     }
+
+
+# ---- Unattributed values: compared when both lanes hold them ----------------------------------
+
+
+def test_the_same_unattributed_value_in_both_lanes_agrees():
+    # Both lanes read a paper-level claim neither could place on a sample; agreeing on it is real
+    # evidence about the parsers, previously invisible because unattributed values were never compared.
+    lane_a = make_lane(
+        backend="mineru",
+        unattributed=[make_field("transmittance", "above 80", unit_raw="%", condition="500-2500 nm")],
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        unattributed=[make_field("transmittance", "81", unit_raw="%", condition="500-2500 nm")],
+    )
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching())
+
+    assert statuses(report) == [("transmittance", "agree")]
+    assert report.comparisons[0].scope == "unattributed"
+    assert "unattributed in both lanes" in report.comparisons[0].detail
+    assert report.counts.unattributed_compared == 1
+    assert report.counts.agree == 1 and report.counts.total == 1
+    assert report.counts.unattributed_by_backend == {"mineru": 1, "paddleocr_vl": 1}
+
+
+def test_conflicting_unattributed_values_conflict():
+    lane_a = make_lane(backend="mineru", unattributed=[make_field("transmittance", "80", unit_raw="%")])
+    lane_b = make_lane(backend="paddleocr_vl", unattributed=[make_field("transmittance", "95", unit_raw="%")])
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching())
+
+    assert statuses(report) == [("transmittance", "conflict")]
+    assert report.counts.unattributed_compared == 1
+
+
+def test_a_value_unattributed_in_one_lane_only_stays_uncompared():
+    # The other lane may hold the same value placed on a sample, where it is already reported; a
+    # one-sided row here would double-count the same fact as MISSING.
+    lane_a = make_lane(backend="mineru", unattributed=[make_field("transmittance", "80", unit_raw="%")])
+    lane_b = make_lane(backend="paddleocr_vl")
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching())
+
+    assert report.comparisons == ()
+    assert report.counts.total == 0 and report.counts.unattributed_compared == 0
+    assert report.counts.unattributed_by_backend == {"mineru": 1}
+
+
+def test_unattributed_values_pair_by_condition_then_proximity_like_sample_values():
+    lane_a = make_lane(
+        backend="mineru",
+        unattributed=[
+            make_field("transmittance", "80", unit_raw="%", condition="at 550 nm"),
+            make_field("transmittance", "75", unit_raw="%", condition="spectrum average"),
+        ],
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        unattributed=[
+            make_field("transmittance", "80.5", unit_raw="%", condition="550 nm"),
+            make_field("transmittance", "50", unit_raw="%", condition="spectrum average"),
+        ],
+    )
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching())
+
+    # 80 ≈ 80.5 pair under (differently worded) 550 nm conditions; 75 vs 50 pair under the same condition.
+    assert sorted(statuses(report)) == [("transmittance", "agree"), ("transmittance", "conflict")]
+    assert report.counts.unattributed_compared == 2
+
+
+def test_unattributed_condition_mismatch_downgrades_conflict_to_ambiguous():
+    # The same protection sample values get: a proximity pair whose conditions differ cannot be judged
+    # a conflict, because the two readings may describe two different measurements.
+    lane_a = make_lane(
+        backend="mineru", unattributed=[make_field("transmittance", "80", unit_raw="%", condition="visible range")]
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl", unattributed=[make_field("transmittance", "95", unit_raw="%", condition="IR range")]
+    )
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching())
+
+    assert statuses(report) == [("transmittance", "ambiguous")]
+    assert "condition texts differ" in report.comparisons[0].detail
 
 
 # ---- Preconditions and cache key ---------------------------------------------------------------
