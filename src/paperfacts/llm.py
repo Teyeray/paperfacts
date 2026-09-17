@@ -30,6 +30,7 @@ from paperfacts.config import (
     DEFAULT_TEMPERATURE,
 )
 from paperfacts.errors import LlmError, LlmResponseError
+from paperfacts.storage import write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,7 @@ class OpenAICompatibleClient:
         url = f"{self.base_url}/chat/completions"
         for attempt in range(1, self.retry_attempts + 1):
             error: LlmError
+            retry_after: float | None = None
             try:
                 response = self.client.post(url, json=payload, headers=headers, timeout=self.timeout_s)
             except httpx.HTTPError as exc:
@@ -161,9 +163,14 @@ class OpenAICompatibleClient:
                 error = LlmError(f"HTTP {response.status_code}: {response.text[:300]}")
                 if response.status_code not in RETRY_STATUS:
                     raise error
+                retry_after = _retry_after(response)
             if attempt == self.retry_attempts:
                 raise error
             delay = self.retry_backoff_s * 2 ** (attempt - 1)
+            if retry_after is not None:
+                # A 429 that says "try again in 30 s" is a promise, not a suggestion: backing off less
+                # than the server asked just spends another attempt of the same fixed budget.
+                delay = max(delay, retry_after)
             logger.warning("llm retry %d/%d in %.0fs: %s", attempt, self.retry_attempts, delay, error)
             self._sleep(delay)
         raise AssertionError("unreachable")  # the loop always returns or raises
@@ -186,11 +193,28 @@ class OpenAICompatibleClient:
         path = self._cache_path(key)
         if path is None:
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"model": self.model, "text": result.text, "usage": result.usage}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        payload = json.dumps(
+            {"model": self.model, "text": result.text, "usage": result.usage}, ensure_ascii=False, indent=2
         )
+        # Atomic like every other on-disk write: a crash mid-write must not leave a torn entry. The
+        # reader would tolerate one, but never creating it is cheaper than healing it.
+        write_text_atomic(path, payload)
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds the server asked us to wait, when it said so as a plain number.
+
+    The HTTP-date form is rare in practice and the exponential backoff already errs long, so an
+    unparseable header is simply ignored rather than interpreted.
+    """
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    return seconds if seconds > 0 else None
 
 
 def complete_validated[M: BaseModel](

@@ -195,6 +195,45 @@ def test_the_backoff_grows_exponentially_between_attempts():
     assert sleep.delays == [RETRY_BACKOFF_S * 2**i for i in range(RETRY_ATTEMPTS - 1)]
 
 
+def test_a_numeric_retry_after_header_extends_the_backoff():
+    # A rate limit that names its own deadline is a promise: waiting less just spends another attempt
+    # of the same fixed budget on a request the server already refused.
+    sleep = FakeSleep()
+    llm = make_llm(lambda request: httpx.Response(429, text="rate limited", headers={"Retry-After": "30"}), sleep=sleep)
+
+    with pytest.raises(LlmError, match="429"):
+        llm.complete_json(system="S", user="U")
+
+    assert sleep.delays == [30.0] * (RETRY_ATTEMPTS - 1)
+
+
+def test_a_retry_after_shorter_than_the_backoff_does_not_shorten_it():
+    sleep = FakeSleep()
+    llm = make_llm(
+        lambda request: httpx.Response(429, text="rate limited", headers={"Retry-After": "0.5"}), sleep=sleep
+    )
+
+    with pytest.raises(LlmError, match="429"):
+        llm.complete_json(system="S", user="U")
+
+    assert sleep.delays == [RETRY_BACKOFF_S * 2**i for i in range(RETRY_ATTEMPTS - 1)]
+
+
+def test_a_non_numeric_retry_after_header_is_ignored():
+    # The HTTP-date form is rare; interpreting it wrongly would be worse than the exponential backoff
+    # that already errs long.
+    sleep = FakeSleep()
+    llm = make_llm(
+        lambda request: httpx.Response(503, text="down", headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
+        sleep=sleep,
+    )
+
+    with pytest.raises(LlmError, match="503"):
+        llm.complete_json(system="S", user="U")
+
+    assert sleep.delays == [RETRY_BACKOFF_S * 2**i for i in range(RETRY_ATTEMPTS - 1)]
+
+
 def test_every_attempt_is_actually_sent():
     requests: list[httpx.Request] = []
 
@@ -441,6 +480,18 @@ def test_the_cache_entry_records_the_model_alongside_the_text(tmp_path: Path):
 
     assert entry["model"] == "deepseek-chat"
     assert entry["text"] == '{"samples": []}'
+
+
+def test_the_cache_directory_holds_no_temp_files_after_a_write(tmp_path: Path):
+    # The entry is written atomically (unique temp file + replace), so a crash mid-write can never leave
+    # a torn entry behind -- only the finished one is ever visible, and no temp name survives.
+    cache_dir = tmp_path / "llm_cache"
+    llm = make_llm(cache_dir=cache_dir)
+
+    llm.complete_json(system="S", user="U")
+
+    names = sorted(path.name for path in cache_dir.iterdir())
+    assert names == [f"{cache_key_of(llm, 'S', 'U')}.json"]
 
 
 def test_without_a_cache_directory_nothing_is_written(tmp_path: Path):
