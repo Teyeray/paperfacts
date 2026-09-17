@@ -41,7 +41,7 @@ from paperfacts.config import (
 )
 from paperfacts.errors import ContextBudgetError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
-from paperfacts.grounding import ground_lane, grounding_key
+from paperfacts.grounding import block_adjacency, ground_lane, grounding_key
 from paperfacts.keys import extractor_key, schema_fingerprint
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
@@ -204,7 +204,7 @@ def extract_lane(
         usage=usage,
         raw_response=raw_response,
     )
-    lane = ground_lane(lane, {block.source_id: block.content for block in blocks})
+    lane = ground_lane(lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks))
     _log_outcome(lane)
     return lane
 

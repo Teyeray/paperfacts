@@ -21,7 +21,7 @@ from paperfacts.config import Settings
 from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset
 from paperfacts.errors import ConfigError, PaperFactsError
 from paperfacts.extract import build_extraction_document, extract_lane
-from paperfacts.grounding import ground_lane
+from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.llm import LlmClient, OpenAICompatibleClient
 from paperfacts.matching import match_samples
@@ -188,7 +188,7 @@ def read_lane(
     if artifact is None and artifact_path.is_file():
         artifact = ParsedArtifact.read(artifact_path)
     if artifact is not None:
-        lane = ground_lane(lane, build_extraction_document(artifact).blocks)
+        lane = ground_lane(lane, build_extraction_document(artifact).blocks, adjacency=block_adjacency(artifact.blocks))
     return normalize_lane(lane)
 
 
