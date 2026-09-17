@@ -25,11 +25,15 @@ from support.factories import make_block
 from support.llm import FakeLlmClient
 
 # One block naming a sample and its deposition condition, one stating a measurement. Retrieval gives
-# `sheet_resistance` exactly one candidate (the second block) and every other field none, so a lane built
-# from these makes precisely two calls -- which is what makes the call-count assertions below readable.
+# `sheet_resistance` exactly one keyword candidate (the second block); the "100 sccm" in the first block
+# additionally qualifies the three flow-rate fields by unit alone (a unit is a weak signal by design), so
+# a lane built from these makes precisely five calls -- which is what makes the call-count assertions
+# below readable.
 SAMPLE_BLOCK = "Sample A was grown at 100 sccm."
 VALUE_BLOCK = "The sheet resistance of Sample A was 12.5 ohm/sq."
-# The only field these blocks mention, and the id of the block that mentions it.
+# The fields these blocks put in a prompt: the one named by a keyword, plus the three the unit qualifies.
+ASKED_FIELDS = {"ar_flow_rate", "o2_flow_rate", "h2_flow_rate", "sheet_resistance"}
+# The one field a keyword names, and the id of the block that mentions it.
 ASKED_FIELD = "sheet_resistance"
 
 
@@ -52,7 +56,7 @@ def values_json(*values: dict) -> str:
 
 def field_of(user: str) -> str:
     """The field a question is about, read back out of the rendered field table line."""
-    match = re.search(r"^- `([a-z_]+)`", user, re.MULTILINE)
+    match = re.search(r"^- `([a-z0-9_]+)`", user, re.MULTILINE)
     return match.group(1) if match else ""
 
 
@@ -93,15 +97,15 @@ def extract(client: FakeLlmClient, *, backend: str = "mineru", passes: int = 1):
 
 
 def test_the_inventory_is_asked_once_and_then_only_about_fields_a_block_mentions():
-    # The whole point of the mode: nine fields in the schema, but only the one this paper mentions costs
+    # The whole point of the mode: twenty fields in the schema, but only the ones this paper mentions cost
     # a call. Asking about the rest would be paying to be told "not stated".
     client = FakeLlmClient(responder())
 
     extract(client)
 
-    assert client.call_count == 2
-    assert client.systems == [inventory_system_prompt(), field_system_prompt()]
-    assert field_of(client.users[1]) == ASKED_FIELD
+    assert client.call_count == 5
+    assert client.systems == [inventory_system_prompt()] + [field_system_prompt()] * 4
+    assert {field_of(user) for user in client.users[1:]} == ASKED_FIELDS
 
 
 def test_a_field_no_block_mentions_is_never_asked_about_and_the_lane_says_why():
@@ -113,8 +117,8 @@ def test_a_field_no_block_mentions_is_never_asked_about_and_the_lane_says_why():
 
     assert any("thickness: no block in this lane mentions it" in entry for entry in lane.dropped)
     assert not any(entry.startswith(f"{ASKED_FIELD}: no block") for entry in lane.dropped)
-    # Eight of the nine fields go unasked, which is why only one field call was made.
-    assert sum(1 for entry in lane.dropped if "was not asked about" in entry) == 8
+    # Sixteen of the twenty fields go unasked, which is why only four field calls were made.
+    assert sum(1 for entry in lane.dropped if "was not asked about" in entry) == 16
 
 
 def test_both_lanes_get_a_byte_identical_inventory_question():
@@ -140,13 +144,14 @@ def test_both_lanes_get_a_byte_identical_field_question_system_prompt():
 
 def test_the_field_question_carries_that_fields_own_description():
     # The model is told which field it is being asked about in the question, not the system prompt, so the
-    # instructions can stay one constant across all nine fields.
+    # instructions can stay one constant across all twenty fields.
     client = FakeLlmClient(responder())
 
     extract(client)
 
-    assert "`sheet_resistance`" in client.users[1]
-    assert "Sheet resistance of the film" in client.users[1]
+    question = next(user for user in client.users[1:] if field_of(user) == ASKED_FIELD)
+    assert "`sheet_resistance`" in question
+    assert "Sheet resistance of the film" in question
 
 
 def test_the_field_question_carries_the_sample_list_with_labels_and_conditions():
@@ -334,7 +339,7 @@ def test_three_passes_run_the_whole_flow_three_times():
 
     lane = extract(client, passes=3)
 
-    assert client.call_count == 6  # (1 inventory + 1 field) x 3
+    assert client.call_count == 15  # (1 inventory + 4 fields) x 3
     assert lane.passes == 3
 
 
@@ -345,7 +350,7 @@ def test_each_pass_after_the_first_carries_its_own_cache_salt():
 
     extract(client, passes=3)
 
-    assert [call.cache_salt for call in client.calls] == ["", "", "pass-1", "pass-1", "pass-2", "pass-2"]
+    assert [call.cache_salt for call in client.calls] == [""] * 5 + ["pass-1"] * 5 + ["pass-2"] * 5
 
 
 def test_a_value_only_one_pass_of_three_produced_is_dropped():

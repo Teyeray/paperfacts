@@ -121,14 +121,15 @@
       "name": "inch",
       "group": "target",
       "kind": "numeric",
-      "description": "Size (diameter or length) of the sputtering target.",
+      "description": "Size of the sputtering target: diameter, or length and width for a rectangular or rotary target.",
       "keywords": [
         "inch",
         "target size",
         "diameter",
         "target",
         "magnetron",
-        "cathode"
+        "cathode",
+        "length and width"
       ],
       "canonical_unit": "inch",
       "rel_tol": 0.01,
@@ -146,11 +147,205 @@
         "deposition time",
         "duration",
         "deposited for",
-        "sputtered for"
+        "sputtered for",
+        "sputtering duration",
+        "deposition duration",
+        "growth time",
+        "sputtering period"
       ],
       "canonical_unit": "min",
       "rel_tol": 0.02,
       "abs_tol": 1.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sputtering_power",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Electrical power applied to the sputtering target to generate and sustain the plasma (W).",
+      "keywords": [
+        "sputtering power",
+        "sputter power",
+        "applied power",
+        "power density",
+        "DC power",
+        "RF power",
+        "pulsed DC power"
+      ],
+      "canonical_unit": "W",
+      "rel_tol": 0.02,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "mode",
+      "group": "process",
+      "kind": "text",
+      "description": "Operational regime of the sputtering process: DC, RF or pulsed DC.",
+      "keywords": [
+        "DC",
+        "RF",
+        "pulsed DC",
+        "sputtering mode",
+        "power mode"
+      ],
+      "canonical_unit": null,
+      "rel_tol": 0.0,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "ar_flow_rate",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Argon flow rate introduced into the vacuum chamber (sccm).",
+      "keywords": [
+        "Ar flow rate",
+        "argon flow rate",
+        "Ar flow"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "o2_flow_rate",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Oxygen flow rate introduced into the vacuum chamber (sccm).",
+      "keywords": [
+        "O2 flow rate",
+        "oxygen flow rate",
+        "O2 flow"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "h2_flow_rate",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Hydrogen flow rate introduced into the vacuum chamber (sccm).",
+      "keywords": [
+        "H2 flow rate",
+        "hydrogen flow rate",
+        "H2 flow"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "target_substrate_distance",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Spatial gap between the sputtering target and the substrate holder (cm).",
+      "keywords": [
+        "target to substrate distance",
+        "target-substrate distance",
+        "target to holder distance",
+        "target-substrate separation"
+      ],
+      "canonical_unit": "cm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "substrate_axis_distance",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Distance between the substrate surface and the holder center, i.e. the off-axis offset (cm).",
+      "keywords": [
+        "off-axis distance",
+        "offset",
+        "substrate-to-axis distance",
+        "substrate to holder center distance"
+      ],
+      "canonical_unit": "cm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "substrate_temperature",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Substrate/holder temperature during the sputtering deposition (°C).",
+      "keywords": [
+        "substrate temperature",
+        "holder temperature",
+        "stage temperature",
+        "deposition temperature"
+      ],
+      "canonical_unit": "℃",
+      "rel_tol": 0.02,
+      "abs_tol": 2.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "annealing_temperature",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Temperature of the thermal treatment performed after deposition is complete (°C).",
+      "keywords": [
+        "post-annealing temperature",
+        "annealing temperature",
+        "post-deposition annealing",
+        "PDA",
+        "heat treatment"
+      ],
+      "canonical_unit": "℃",
+      "rel_tol": 0.02,
+      "abs_tol": 2.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "annealing_time",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Duration of the thermal treatment performed after deposition is complete (min).",
+      "keywords": [
+        "post-annealing duration",
+        "annealing time",
+        "post-deposition annealing duration",
+        "annealed for"
+      ],
+      "canonical_unit": "min",
+      "rel_tol": 0.02,
+      "abs_tol": 1.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "rotation_speed",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Rotation speed of the substrate holder during film deposition (rpm).",
+      "keywords": [
+        "rotation speed",
+        "rotational speed",
+        "substrate rotation rate",
+        "holder rotation",
+        "rpm"
+      ],
+      "canonical_unit": "rpm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.5,
       "condition_hint": null,
       "bare_number": "reject"
     },

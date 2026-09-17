@@ -92,6 +92,7 @@ address. The key is read from `PAPERFACTS_LLM_API_KEY`, then `DEEPSEEK_API_KEY`,
 uv run paperfacts run paper.pdf            # parse both lanes, extract both, compare
 uv run paperfacts batch template_files --output data/exports/template_files.xlsx
 uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
+uv run paperfacts fields                   # list the field table loaded from config.json
 ```
 
 `run` is the whole pipeline; the individual stages are available separately and share the same caches:
@@ -116,7 +117,7 @@ The workbook contains five sheets:
 
 | Sheet | Contents |
 |---|---|
-| 论文数据 | One row per unique PDF, one value per field; the nine field names are stable column names |
+| 论文数据 | One row per unique PDF, one value per field; the twenty field names are stable column names |
 | 样品数据 | All samples after merging the two parser sources, one row per sample |
 | 字段说明 | Field definitions and canonical units |
 | 数据质量 | Final field decisions, measurement conditions, merged citations and reasons for blank cells |
@@ -179,7 +180,7 @@ uploaded ones carry their PDF and can be re-rendered on another machine. The API
 
 ### How the model is asked
 
-Handing a fifteen-thousand-token paper to a model and asking for nine fields and every sample at once makes
+Handing a fifteen-thousand-token paper to a model and asking for twenty fields and every sample at once makes
 it lose its place: it cites a block that merely discusses the number, and it never mentions fields the paper
 states only in passing. So by default the question is split up.
 
@@ -205,11 +206,13 @@ On the three papers in this repository, against whole-document mode:
 The conflicts did not disappear into silence: both lanes now read the same evidence, so where one lane's
 text garbled a number the other lane simply does not have it, and it is reported as MISSING with both
 readings visible rather than as a single conflicting pair. The cost is roughly three times the prompt
-tokens, because nine questions share overlapping context.
+tokens, because the field questions share overlapping context.
 
 A value the model cannot place on any sample -- a paper-level claim such as "transmittance above 80% from
-500 to 2500 nm" -- is kept and shown as **unattributed** rather than attached to a plausible sample. It
-takes part in no comparison; an unplaced value is visible, a misplaced one is not.
+500 to 2500 nm" -- is kept and shown as **unattributed** rather than attached to a plausible sample. When
+both lanes hold the same unplaced value it is paired and compared like any other (scope `unattributed`);
+a value only one lane could not place stays out of the comparison, because the other lane may hold it on
+a sample where it is already reported. An unplaced value is visible; a misplaced one is not.
 
 ### Repeated extraction
 
@@ -315,8 +318,9 @@ to count as the same fact:
 ```
 
 Adding a field is one entry. A `canonical_unit` must be one the converters know
-(`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`) or startup fails rather than guessing. Editing the table changes
-`extractor_key`, so affected papers are re-extracted and nothing stale is served.
+(`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`, `W`, `sccm`, `rpm`) or startup fails rather than guessing.
+`paperfacts fields` lists the table the package actually loaded. Editing the table changes `extractor_key`, so
+affected papers are re-extracted and nothing stale is served.
 
 ## Data layout## Data layout
 
@@ -380,9 +384,9 @@ disagree; text recognition, table structure, and how far the model is willing to
 The disagreements were informative rather than noisy, and every guardrail earned its place on real input:
 
 - **Grounding caught a cross-block quote.** The model reported a target composition of
-  `95% SnO2 and 5% Sb2O3` citing one block — but the sentence straddles two blocks, and only the second
-  was cited. The value is real; the citation was not complete, and it is flagged rather than presented as
-  traceable.
+  `95% SnO2 and 5% Sb2O3` citing one block — but the sentence straddles two adjacent blocks, and only the
+  second was cited. The value is real, so a quote crossing the junction between the cited block and its
+  same-page neighbour counts as grounded; a quote lying entirely inside the neighbour still does not.
 - **Scope enforcement caught a mislabelled measurement.** One lane reported a film's Ta dopant
   concentration (`0.74 at.%`) as the sputtering target's `component`. Four such values were dropped with
   an audited reason.
@@ -402,9 +406,10 @@ The disagreements were informative rather than noisy, and every guardrail earned
 - **The two lanes share one extractor**, so a mistake made by the language model itself — attributing a
   value to the wrong sample — correlates across lanes and AGREE will not catch it. Parser error and
   extractor error have to be counted separately when evaluating.
-- **Attribution disagreements are reported as two MISSINGs**, one per lane, rather than as a single
-  labelled conflict.
-- The field schema is currently nine fields aimed at sputtered TCO films (`src/paperfacts/fields.py`).
+- **Attribution disagreements** where both lanes extracted the value but neither could place it on a
+  sample are compared under the `unattributed` scope; the remaining case — placed in one lane,
+  unattributed in the other — is still reported as a MISSING on the placed side.
+- The field schema is currently twenty fields aimed at sputtered TCO films (`src/paperfacts/fields.py`).
   Adding a field is one table entry; the prompt, normalisation and tolerances follow from it.
 
 ## Development
