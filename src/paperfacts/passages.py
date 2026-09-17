@@ -70,14 +70,29 @@ UNIT_PATTERNS: dict[str, re.Pattern[str]] = {
     # "4 in." and "2 inch" are target sizes; a bare "in" is the English word, so a digit must precede it.
     "inch": re.compile(r"\d\s*(?:inch|inches|in\.|\")"),
     "nm": re.compile(r"\d\s*(?:nm|µm|μm|um)\b"),
-    "min": re.compile(r"\d\s*(?:min|mins|minutes?|h|hr|hrs|hours?)\b"),
+    "min": re.compile(r"\d\s*(?:min|mins|minutes?|h|hr|hrs|hours?|s|sec|secs|seconds?)\b"),
     "%": re.compile(r"\d\s*%"),
+    # K is admitted as a retrieval signal even though the converter refuses it: a block saying "annealed
+    # at 573 K" belongs in the prompt, and the honest ambiguous verdict is the comparison's job, not
+    # retrieval's.
+    "℃": re.compile(r"\d\s*(?:°\s*[CcK]\b|℃|[Cc]\b|K\b)"),
+    "cm": re.compile(r"\d\s*(?:cm|mm|m|µm|μm|um)\b"),
+    "W": re.compile(r"\d\s*[kKMm]?W\b"),
+    "sccm": re.compile(r"\d\s*(?:sccm|slm)\b"),
+    "rpm": re.compile(r"\d\s*(?:rpm|r/min)\b"),
 }
 
 # A deposition condition stated as a number with its unit. This is what distinguishes one sample from
 # another ("100 sccm", "150 W", "300 °C"), so a block carrying one belongs in the inventory question even
 # when it uses none of the condition words.
-CONDITION_UNIT = re.compile(r"\d\s*(?:sccm|W\b|°C|℃|K\b|Pa\b|mtorr|torr|mbar|kv\b|ma\b|rpm|min\b|h\b)", re.IGNORECASE)
+# A bare "%" is deliberately absent: it appears in every results paragraph (transmittance, ratios),
+# so it would flood the inventory selection with prose. Only explicit composition ratios count here.
+# "\d\s*s\b" does not match "2 samples": \b requires a non-word character after the "s", and the "a" of
+# "amples" is a word character, so the boundary fails and the block stays out of the inventory.
+CONDITION_UNIT = re.compile(
+    r"\d\s*(?:sccm|W\b|°C|℃|K\b|Pa\b|mtorr|torr|mbar|kv\b|ma\b|rpm|min\b|h\b|s\b|(?:vol|at)\.?\s*%)",
+    re.IGNORECASE,
+)
 
 # Compiled on first use and kept: the keyword tables are small and fixed at import time.
 _PATTERN_CACHE: dict[str, re.Pattern[str]] = {}

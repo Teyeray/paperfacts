@@ -88,6 +88,9 @@ _SCI = re.compile(
     rf"|(?P<e2m>{_NUM})[eE](?P<e2>[-+]?\d+)"
 )
 _RANGE = re.compile(rf"^(?P<a>{_NUM})\s*(?:-|to|~)\s*(?P<b>{_NUM})$")
+# A unit token at the very end of a value: letters, Ω, μ, % with optional "." or "/" inside ("vol.%").
+# A digit, "-" or "x" anywhere disqualifies it, so "1.2 x 10^-4" and "40 x 10 cm" can never be stripped.
+_TRAILING_UNIT = re.compile(r"[a-zA-ZΩμ%]+(?:[./][a-zA-ZΩμ%]+)*$")
 _PLUS_MINUS = re.compile(rf"^(?P<a>{_NUM})\s*(?:\+/-|±|\+-)\s*{_NUM}")
 _NUMBER = re.compile(_NUM)
 # Multi-character qualifiers first, or "<=" is swallowed by the lone "<" in the character class.
@@ -153,6 +156,20 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
             notes.append(f"range {a:g}-{b:g} → midpoint")
             return (a + b) / 2, _join(notes)
 
+    # "15.6 to 16.3 nm": the trailing unit made the anchored range match fail. Strip exactly one trailing
+    # unit token and try again; the token restrictions above keep the scientific-notation and
+    # multi-number spellings on their existing paths.
+    stripped = _TRAILING_UNIT.sub("", text, count=1).rstrip()
+    if stripped != text:
+        rng = _RANGE.match(stripped)
+        if rng:
+            a, b = float(_plain(rng.group("a"))), float(_plain(rng.group("b")))
+            if a < b:
+                token = text[len(stripped) :].strip()
+                notes.append(f"trailing unit {token!r} in value ignored")
+                notes.append(f"range {a:g}-{b:g} → midpoint")
+                return (a + b) / 2, _join(notes)
+
     numbers = _NUMBER.findall(text)
     if not numbers:
         notes.append("no number found")
@@ -179,7 +196,9 @@ def _join(notes: list[str]) -> str | None:
 _PREFIX = {"": 1.0, "k": 1e3, "K": 1e3, "M": 1e6, "m": 1e-3, "μ": 1e-6, "n": 1e-9}
 _OHM = r"(?:Ω|(?i:ohms?))"
 _PER_SQUARE = re.compile(rf"^(?P<p>[kKMmμn]?){_OHM}\s*(?:/|per)?\s*(?i:sq|square|□)\.?(?:\^?-1)?$")
-_RESISTIVITY = re.compile(rf"^(?P<p>[kKMmμn]?){_OHM}\s*[.x*]?\s*(?i:cm)$")
+# The separator class needs "-" because "Ω-cm" / "ohm-cm" is at least as common in papers as the dotted
+# spellings; the hyphen survives where "·" and "⋅" are folded to "." by normalize_text.
+_RESISTIVITY = re.compile(rf"^(?P<p>[kKMmμn]?){_OHM}\s*[.x*-]?\s*(?i:cm)$")
 _LENGTH = {"nm": 1.0, "μm": 1e3, "um": 1e3, "mm": 1e6, "cm": 1e7, "å": 0.1, "angstrom": 0.1}
 _TIME = {
     "min": 1.0,
@@ -197,6 +216,18 @@ _TIME = {
 }
 _SIZE = {"inch": 1.0, "inches": 1.0, "in": 1.0, '"': 1.0, "mm": 1 / 25.4, "cm": 1 / 2.54}
 _PERCENT = {"%": 1.0, "percent": 1.0}
+# NFKC folds ℃ (U+2103) to "°C" before the table's lowercased lookup, so one key catches all three
+# spellings. Kelvin is deliberately absent: K → ℃ needs an offset (−273.15), not a factor, and this
+# interface is a factor -- an unknown unit is reported as ambiguous rather than converted wrongly.
+_TEMPERATURE = {"°c": 1.0, "c": 1.0}
+# Distances in a deposition chamber; nm is left out on purpose: no target-holder gap is written in
+# nanometres, and admitting it would misread every film thickness as a candidate distance.
+_DISTANCE = {"cm": 1.0, "mm": 0.1, "m": 100.0, "μm": 1e-4, "um": 1e-4, "inch": 2.54, "in": 2.54, '"': 2.54}
+# sccm is defined as cm³/min at standard conditions, so the two spellings are the same unit.
+_FLOW = {"sccm": 1.0, "cm3/min": 1.0}
+_ROTATION = {"rpm": 1.0, "r/min": 1.0, "rev/min": 1.0}
+# Power prefixes are case-sensitive (mW ≠ MW), so the table's lowercasing cannot be used here.
+_POWER = re.compile(r"^(?P<p>[kKMmμn]?)[Ww]$")
 
 Converter = Callable[[str], float | None]
 
@@ -224,6 +255,11 @@ CONVERTERS: dict[str, Converter] = {
     "min": _by_table(_TIME),
     "inch": _by_table(_SIZE),
     "%": _by_table(_PERCENT),
+    "℃": _by_table(_TEMPERATURE),
+    "cm": _by_table(_DISTANCE),
+    "sccm": _by_table(_FLOW),
+    "rpm": _by_table(_ROTATION),
+    "W": _by_pattern(_POWER),
 }
 
 # Fail at import time rather than with a KeyError buried in normalisation, field by field.
@@ -291,4 +327,7 @@ def normalize_lane(lane: LaneExtraction) -> LaneExtraction:
     if lane.target is not None:
         target = lane.target.model_copy(update={"fields": _normalize_fields(lane.target.fields)})
     samples = tuple(sample.model_copy(update={"fields": _normalize_fields(sample.fields)}) for sample in lane.samples)
-    return lane.model_copy(update={"target": target, "samples": samples})
+    # Unattributed values are compared now, so they need canonical values like every other; leaving them
+    # raw would silently turn every such comparison into "unparsed" and bury real agreements.
+    unattributed = _normalize_fields(lane.unattributed)
+    return lane.model_copy(update={"target": target, "samples": samples, "unattributed": unattributed})

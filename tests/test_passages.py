@@ -174,6 +174,26 @@ def test_prose_that_states_a_numeric_condition_is_in_the_inventory():
     assert ids(inventory_blocks([flow, power])) == [flow.source_id, power.source_id]
 
 
+def test_prose_that_states_a_duration_in_seconds_is_in_the_inventory():
+    block = text(0, "The films were deposited for 300 s at room temperature.")
+
+    assert ids(inventory_blocks([block])) == [block.source_id]
+
+
+def test_the_word_samples_after_a_number_is_not_a_seconds_unit():
+    # "\d\s*s\b" must not fire here: after the "s" of "samples" comes the "a" of "amples", both word
+    # characters, so \b fails and the prose stays out of the inventory.
+    block = text(0, "2 samples were prepared by the same route.")
+
+    assert inventory_blocks([block]) == []
+
+
+def test_prose_that_states_a_composition_ratio_is_in_the_inventory():
+    block = text(0, "The gas mix contained O2 at 3 vol.% of the total flow.")
+
+    assert ids(inventory_blocks([block])) == [block.source_id]
+
+
 def test_prose_without_a_number_is_left_out_of_the_inventory():
     # "the deposition process" appears in every discussion paragraph; on its own it says nothing about
     # which samples exist.

@@ -53,17 +53,34 @@ def test_prefix_case_distinguishes_milli_from_mega():
 # ---- Resistivity Ω·cm -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("unit", ["Ω·cm", "Ω cm", "ohm cm", "Ω.cm", "Ωcm", "Ωxcm"])
+@pytest.mark.parametrize("unit", ["Ω·cm", "Ω cm", "ohm cm", "Ω.cm", "Ωcm", "Ωxcm", "Ω-cm", "ohm-cm"])
 def test_every_spelling_of_ohm_centimetre_is_the_canonical_unit_itself(unit):
     assert convert("resistance", 0.3, unit) == (0.3, "Ω·cm", None)
 
 
-@pytest.mark.parametrize(("unit", "expected"), [("mΩ·cm", 2e-3), ("μΩ cm", 2e-6), ("µΩ·cm", 2e-6), ("kΩ·cm", 2e3)])
+@pytest.mark.parametrize(
+    ("unit", "expected"),
+    [("mΩ·cm", 2e-3), ("μΩ cm", 2e-6), ("µΩ·cm", 2e-6), ("kΩ·cm", 2e3), ("mΩ-cm", 2e-3)],
+)
 def test_si_prefixes_on_resistivity_scale_the_value(unit, expected):
     value, unit_out, note = convert("resistance", 2.0, unit)
 
     assert value == pytest.approx(expected)
     assert (unit_out, note) == ("Ω·cm", None)
+
+
+def test_a_hyphenated_resistivity_with_a_trailing_period_is_recognised():
+    # Sentence-final "Ω-cm." keeps its period; clean_unit strips it before the recogniser sees it.
+    assert convert("resistance", 0.3, "Ω-cm.") == (0.3, "Ω·cm", None)
+
+
+def test_a_resistivity_per_centimetre_is_not_a_resistivity():
+    # "Ω/cm" is a different quantity; recognising it would silently corrupt every comparison.
+    value, unit_out, note = convert("resistance", 0.3, "Ω/cm")
+
+    assert value is None
+    assert unit_out is None
+    assert "unknown unit" in note
 
 
 # ---- Length nm -----------------------------------------------------------------------
@@ -235,3 +252,61 @@ def test_every_canonical_unit_in_the_field_table_has_a_converter():
     canonical = {spec.canonical_unit for spec in FIELD_BY_NAME.values() if spec.canonical_unit}
 
     assert canonical <= CONVERTERS.keys()
+
+
+# ---- The process-field units: ℃, cm, W, sccm, rpm -------------------------------------------------
+
+
+@pytest.mark.parametrize("unit", ["℃", "°C", "°c"])
+def test_celsius_spellings_all_convert_to_the_canonical_degree(unit):
+    # NFKC folds ℃ (U+2103) to "°C", so one table key has to catch the sign, the folded form and a
+    # lowercase typo.
+    assert convert("substrate_temperature", 250.0, unit) == (250.0, "℃", None)
+
+
+def test_kelvin_is_refused_rather_than_converted():
+    # K → ℃ needs an offset, not a factor; the converter interface is a factor, so an honest ambiguous
+    # beats a confidently wrong number.
+    value, unit_out, note = convert("substrate_temperature", 523.0, "K")
+
+    assert (value, unit_out) == (None, None)
+    assert "unknown unit" in note
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected"), [("cm", 5.0), ("mm", 0.5), ("m", 500.0), ("μm", 5e-4), ("inch", 12.7), ('"', 12.7)]
+)
+def test_chamber_distances_convert_to_centimetres(unit, expected):
+    assert convert("target_substrate_distance", 5.0, unit) == (pytest.approx(expected), "cm", None)
+
+
+def test_nanometres_are_not_a_chamber_distance(unit=None):
+    # Admitting nm would misread every film thickness in the paper as a candidate target-substrate gap.
+    value, unit_out, _ = convert("target_substrate_distance", 5.0, "nm")
+
+    assert (value, unit_out) == (None, None)
+
+
+@pytest.mark.parametrize(("unit", "expected"), [("W", 150.0), ("kW", 150000.0), ("mW", 0.15), ("MW", 1.5e8)])
+def test_power_prefixes_stay_case_sensitive(unit, expected):
+    # mW and MW differ by nine orders of magnitude; a lowercasing table would fold them together.
+    assert convert("sputtering_power", 150.0, unit) == (pytest.approx(expected), "W", None)
+
+
+@pytest.mark.parametrize("unit", ["sccm", "cm3/min"])
+def test_flow_rates_convert_to_sccm(unit):
+    # cm³/min at standard conditions *is* the definition of sccm.
+    assert convert("ar_flow_rate", 30.0, unit) == (30.0, "sccm", None)
+
+
+def test_slm_is_refused_rather_than_scaled():
+    # slm is a thousand sccm only at exactly the standard condition it names; converting it silently
+    # would invent precision the paper did not state.
+    value, unit_out, _ = convert("ar_flow_rate", 30.0, "slm")
+
+    assert (value, unit_out) == (None, None)
+
+
+@pytest.mark.parametrize("unit", ["rpm", "r/min", "rev/min"])
+def test_rotation_speed_spellings_convert_to_rpm(unit):
+    assert convert("rotation_speed", 20.0, unit) == (20.0, "rpm", None)

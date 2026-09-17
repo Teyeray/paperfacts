@@ -99,6 +99,39 @@ def test_a_range_collapses_to_its_midpoint_with_a_note():
     assert "range" in note
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected", "token"),
+    [
+        ("15.6 to 16.3 nm", 15.95, "nm"),
+        ("15.6-16.3nm", 15.95, "nm"),
+        ("5-10 percent", 7.5, "percent"),
+        ("1.2-1.5%", 1.35, "%"),
+    ],
+)
+def test_a_range_with_a_trailing_unit_still_collapses_to_its_midpoint(raw, expected, token):
+    # Papers write "15.6 to 16.3 nm" with the unit inside the value; the README promises the midpoint, not
+    # the first bound with a "2 numbers" note.
+    value, note = parse_number(raw)
+
+    assert value == pytest.approx(expected)
+    assert f"trailing unit {token!r} in value ignored" in note
+    assert "range" in note
+
+
+def test_a_qualified_range_with_a_trailing_unit_records_both_readings():
+    value, note = parse_number("~15.6-16.3 nm")
+
+    assert value == pytest.approx(15.95)
+    assert "qualifier '~' dropped" in note
+    assert "trailing unit 'nm' in value ignored" in note
+
+
+def test_a_multi_number_value_with_x_keeps_the_first_number_path():
+    # "40 x 10 cm" ends in a unit, but the "x" in front of it disqualifies stripping: the multiplier
+    # reading must survive untouched.
+    assert parse_number("40 x 10 cm") == (40.0, "2 numbers found, first used")
+
+
 @pytest.mark.parametrize("raw", ["10-20", "10 to 20", "10~20"])
 def test_every_range_separator_is_recognised(raw):
     value, note = parse_number(raw)
