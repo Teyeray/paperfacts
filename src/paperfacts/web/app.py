@@ -203,10 +203,8 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         job = manager.submit(key, force=force)
         return UploadAccepted(document=library.summary(key), job=job)
 
-    # Registration order matters: this literal route must stay above the ``/api/documents/{document_id}``
-    # routes, or "run-all" is matched as a document_id and answered with a 404.
-    # Registered before the {document_id} routes on purpose: FastAPI matches in order, and "run-all" would
-    # otherwise be read as a document id.
+    # Registration order matters: FastAPI matches in order, so this literal route must stay above the
+    # ``/api/documents/{document_id}`` routes, or "run-all" is read as a document id and answered with 404.
     @app.post("/api/documents/run-all", status_code=202)
     def run_all(force: Annotated[bool, Query()] = False) -> RunAllAccepted:
         """Queue every document that is not finished yet (or every document at all, with force).

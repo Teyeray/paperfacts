@@ -139,17 +139,21 @@ class ConfigDocument:
             raise ConfigError(f"{self.path}: {dotted} must be {kind.__name__}, got {node!r}")
         return cast(T, node)
 
+    def has(self, dotted: str) -> bool:
+        """Whether the file carries this key at all. Absent means "use the built-in baseline"."""
+        try:
+            self._node(dotted)
+        except ConfigError:
+            return False
+        return True
+
     def get_or[T](self, dotted: str, kind: type[T], default: T) -> T:
         """A setting whose key a configuration file written before it existed does not carry yet.
 
         Absent means "use the built-in baseline". Present still has to be the right type, so a typo is
         an error naming the key rather than a silent fallback.
         """
-        try:
-            self._node(dotted)
-        except ConfigError:
-            return default
-        return self.get(dotted, kind)
+        return self.get(dotted, kind) if self.has(dotted) else default
 
     def text_or_none(self, dotted: str) -> str | None:
         """A string setting that may be ``null``, which is how "not configured" is written for a URL."""
@@ -161,13 +165,9 @@ class ConfigDocument:
         return value.strip() or None
 
     def text_or_none_if_absent(self, dotted: str) -> str | None:
-        """Like :meth:`text_or_none`, but a key a file written before this setting existed does not carry
-        yet reads as ``null`` rather than as an error. Same contract as :meth:`get_or`."""
-        try:
-            self._node(dotted)
-        except ConfigError:
-            return None
-        return self.text_or_none(dotted)
+        """:meth:`text_or_none` for a key a file written before this setting existed may not carry:
+        absent reads as ``null`` rather than as an error, the same contract as :meth:`get_or`."""
+        return self.text_or_none(dotted) if self.has(dotted) else None
 
     def entries(self, dotted: str) -> list[Any]:
         value = self._node(dotted)

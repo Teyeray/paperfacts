@@ -153,9 +153,10 @@ export function fieldPicker(fields, onChange) {
   // the choice stays what the reader saw. Only unchecking everything leaves an empty table by request.
   const actions = document.createElement("div");
   actions.className = "picker-actions";
-  const all_link = linkButton("全选", () => commit(new Set(all.map((field) => field.name))));
-  const none_link = linkButton("清空", () => commit(new Set()));
-  actions.append(all_link, none_link);
+  actions.append(
+    linkButton("全选", () => commit(new Set(all.map((field) => field.name)))),
+    linkButton("清空", () => commit(new Set())),
+  );
   pop.append(actions);
 
   for (const scope of SCOPE_ORDER) {
@@ -177,8 +178,8 @@ export function fieldPicker(fields, onChange) {
     input.checked = on;
     input.value = field.name;
     input.addEventListener("change", () => {
-      const next = new Set(pop.querySelectorAll("input[type=checkbox]"));
-      commit(new Set([...next].filter((box) => box.checked).map((box) => box.value)));
+      const boxes = [...pop.querySelectorAll("input[type=checkbox]")];
+      commit(new Set(boxes.filter((box) => box.checked).map((box) => box.value)));
     });
     const text = document.createElement("span");
     text.textContent = field.unit ? `${field.name}（${field.unit}）` : field.name;
@@ -365,10 +366,6 @@ const tsvCell = (value) => {
   return text.replace(/[\t\r\n]+/g, " ");
 };
 
-export function buildTsv(header, rows) {
-  return [header, ...rows].map((row) => row.map(tsvCell).join("\t")).join("\n");
-}
-
 // execCommand is deprecated but is the only copy path left in an insecure context (plain http on a lab
 // machine), which is exactly where this server usually runs.
 function legacyCopy(text) {
@@ -388,7 +385,7 @@ function legacyCopy(text) {
 }
 
 export async function copyTable(header, rows) {
-  const text = buildTsv(header, rows);
+  const text = [header, ...rows].map((row) => row.map(tsvCell).join("\t")).join("\n");
   try {
     await navigator.clipboard.writeText(text);
   } catch {
