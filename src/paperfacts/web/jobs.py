@@ -96,6 +96,13 @@ class JobManager:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def all_jobs(self) -> list[Job]:
+        """Every job this process knows about, newest first. The dict is small (one entry per
+        submission since start-up), so the frontend can learn which documents are busy with one
+        request instead of one per row."""
+        with self._lock:
+            return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+
     def for_document(self, document_id: str) -> list[Job]:
         with self._lock:
             return sorted((j for j in self._jobs.values() if j.document_id == document_id), key=lambda j: j.created_at)

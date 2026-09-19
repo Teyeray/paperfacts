@@ -8,11 +8,12 @@
 import { api } from "./api.js";
 import { showDocument, showEmpty } from "./document.js";
 import { toast } from "./html.js";
-import { loadLibrary, setupUpload } from "./library.js";
+import { loadLibrary, setupRunAll, setupUpload } from "./library.js";
 import { installRouter, route } from "./router.js";
 
 document.addEventListener("DOMContentLoaded", async () => {
   setupUpload();
+  setupRunAll();
   document.getElementById("refresh-library").addEventListener("click", loadLibrary);
   installRouter({ onDocument: showDocument, onEmpty: showEmpty });
   try {

@@ -8,6 +8,8 @@ Endpoints (all under ``/api``, JSON)::
     GET  /api/dataset                              corpus results table (one paper_row per document)
     GET  /api/dataset.xlsx                         the whole library as one Excel workbook
     POST /api/documents  (multipart file, ?force)  upload a PDF and queue it -> {document, job}
+    POST /api/documents/run-all?force=             queue every unfinished document (or all, with
+                                                    force) -> {submitted, skipped}
     POST /api/documents/{id}/run?force=            reprocess an existing document (reuses the
                                                     running job if the same document is active)
     GET  /api/documents/{id}                       single document summary
@@ -18,6 +20,7 @@ Endpoints (all under ``/api``, JSON)::
     GET  /api/documents/{id}/dataset.xlsx          the same data as the Excel workbook
     GET  /api/documents/{id}/pages/{page}.png?dpi= rendered page image (cached)
     GET  /api/documents/{id}/jobs                  this document's job list
+    GET  /api/jobs                                 every job of this process, newest first
     GET  /api/jobs/{job_id}                        job snapshot (stages, log)
 
 All business logic lives in :mod:`paperfacts.workflow` (the job body is ``run_document``); this
@@ -65,6 +68,23 @@ class UploadAccepted(BaseModel):
 
     document: DocumentSummary
     job: Job
+
+
+class SkippedDocument(BaseModel):
+    """One document the bulk run did not queue, and why."""
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str
+    name: str
+    reason: str
+
+
+class RunAllAccepted(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    submitted: list[Job]
+    skipped: list[SkippedDocument]
 
 
 def pipeline_runner(settings: Settings, library: Library) -> JobRunner:
@@ -183,6 +203,39 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         job = manager.submit(key, force=force)
         return UploadAccepted(document=library.summary(key), job=job)
 
+    # Registration order matters: this literal route must stay above the ``/api/documents/{document_id}``
+    # routes, or "run-all" is matched as a document_id and answered with a 404.
+    # Registered before the {document_id} routes on purpose: FastAPI matches in order, and "run-all" would
+    # otherwise be read as a document id.
+    @app.post("/api/documents/run-all", status_code=202)
+    def run_all(force: Annotated[bool, Query()] = False) -> RunAllAccepted:
+        """Queue every document that is not finished yet (or every document at all, with force).
+
+        Same submission path as ``run_existing``, once per document in library order: a document
+        already queued or running simply gets its existing job back, so pressing the button twice
+        costs nothing.
+        """
+        submitted: list[Job] = []
+        skipped: list[SkippedDocument] = []
+        for summary in library.list():
+            if library.pdf_path(summary.document_id) is None:
+                skipped.append(
+                    SkippedDocument(
+                        document_id=summary.document_id, name=summary.name, reason="No available PDF to process"
+                    )
+                )
+                continue
+            if summary.compared and not force:
+                skipped.append(
+                    SkippedDocument(
+                        document_id=summary.document_id, name=summary.name, reason="Already processed under these keys"
+                    )
+                )
+                continue
+            submitted.append(manager.submit(summary.document_id, force=force))
+        logger.info("run-all force=%s submitted=%d skipped=%d", force, len(submitted), len(skipped))
+        return RunAllAccepted(submitted=submitted, skipped=skipped)
+
     @app.post("/api/documents/{document_id}/run", status_code=202)
     def run_existing(document_id: str, force: Annotated[bool, Query()] = False) -> Job:
         require_document(document_id)
@@ -264,6 +317,12 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     def list_jobs(document_id: str) -> list[Job]:
         require_document(document_id)
         return manager.for_document(document_id)
+
+    @app.get("/api/jobs")
+    def list_all_jobs() -> list[Job]:
+        """Every job of this process, newest first: one request tells the library list which
+        documents are busy."""
+        return manager.all_jobs()
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> Job:

@@ -16,6 +16,7 @@ const ACTIVE_JOB_STATUS = new Set(["queued", "running"]);
 
 export const state = {
   docs: [],        // document library list (DocumentSummary[])
+  activeDocs: new Set(), // document_ids with a queued or running job (from GET /api/jobs)
   current: null,   // the open document_id (16 chars)
   summary: null,   // the current document's DocumentSummary
   report: null,    // ComparisonReport | null

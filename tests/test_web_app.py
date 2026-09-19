@@ -590,6 +590,101 @@ def test_an_unknown_job_is_not_found(client: TestClient):
     assert "deadbeef" in response.json()["detail"]
 
 
+# ---- running the whole library ----------------------------------------------------------------
+
+
+@pytest.fixture
+def second_pdf_bytes(tmp_path: Path) -> bytes:
+    """A second, different PDF: a different page size is enough to give it another sha256."""
+    return make_blank_pdf(tmp_path / "other.pdf", [(200.0, 300.0)]).read_bytes()
+
+
+@pytest.fixture
+def two_idle_documents(
+    client: TestClient, jobs: JobManager, runner: RecordingRunner, pdf_bytes: bytes, second_pdf_bytes: bytes
+) -> list[str]:
+    """Two uploaded documents whose upload jobs have finished, so a bulk run starts from a quiet
+    manager rather than merging into whatever is still active."""
+    ids = [
+        upload(client, pdf_bytes)["document"]["document_id"],
+        upload(client, second_pdf_bytes, name="other.pdf")["document"]["document_id"],
+    ]
+    for document_id in ids:
+        wait_for_status(jobs, jobs.for_document(document_id)[0].job_id, "done", "failed")
+    return ids
+
+
+def mark_compared(library: Library, document_id: str) -> None:
+    identity = library.identity(document_id)
+    assert identity is not None
+    seed_report(library, document_sha=identity.sha256)
+
+
+def test_running_everything_skips_what_is_already_compared(
+    client: TestClient, library: Library, two_idle_documents: list[str]
+):
+    done, todo = two_idle_documents
+    mark_compared(library, done)
+
+    response = client.post("/api/documents/run-all")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert [job["document_id"] for job in body["submitted"]] == [todo]
+    assert [row["document_id"] for row in body["skipped"]] == [done]
+    assert body["skipped"][0]["reason"]
+
+
+def test_forcing_a_run_of_everything_queues_the_finished_document_too(
+    client: TestClient, library: Library, two_idle_documents: list[str]
+):
+    mark_compared(library, two_idle_documents[0])
+
+    body = client.post("/api/documents/run-all?force=true").json()
+
+    assert {job["document_id"] for job in body["submitted"]} == set(two_idle_documents)
+    assert body["skipped"] == []
+    assert all(job["force"] for job in body["submitted"])
+
+
+def test_a_document_without_a_pdf_is_skipped_with_a_reason(client: TestClient, parsed_only: str):
+    """The same situation ``run`` answers with a 409: a bulk run cannot fail over one such document,
+    so it reports it instead."""
+    body = client.post("/api/documents/run-all").json()
+
+    assert body["submitted"] == []
+    assert [row["document_id"] for row in body["skipped"]] == [parsed_only]
+    assert "PDF" in body["skipped"][0]["reason"]
+
+
+def test_running_everything_twice_while_the_jobs_are_active_reuses_them(
+    settings: Settings, pdf_bytes: bytes, second_pdf_bytes: bytes
+):
+    # the button is pressed twice: the second press must not pay for a second pass over the library
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = JobManager(runner, stage_names())
+    try:
+        with TestClient(create_app(settings, jobs=manager)) as client:
+            upload(client, pdf_bytes)
+            upload(client, second_pdf_bytes, name="other.pdf")
+
+            first = client.post("/api/documents/run-all").json()
+            second = client.post("/api/documents/run-all").json()
+
+            assert len(first["submitted"]) == 2
+            assert [job["job_id"] for job in second["submitted"]] == [job["job_id"] for job in first["submitted"]]
+    finally:
+        gate.set()
+
+
+def test_every_job_of_the_process_is_listed_newest_first(client: TestClient, two_idle_documents: list[str]):
+    body = client.get("/api/jobs").json()
+
+    assert {job["document_id"] for job in body} == set(two_idle_documents)
+    assert [job["created_at"] for job in body] == sorted((job["created_at"] for job in body), reverse=True)
+
+
 # ---- static frontend ----------------------------------------------------------------------
 
 
