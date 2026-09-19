@@ -129,6 +129,13 @@ def test_a_missing_usage_block_is_not_an_error():
     assert llm.complete_json(system="S", user="U").usage == {}
 
 
+def test_reasoning_tokens_are_lifted_out_of_the_details_block():
+    usage = {"total_tokens": 50, "completion_tokens_details": {"reasoning_tokens": 40, "text_tokens": 8}}
+    llm = make_llm(lambda request: httpx.Response(200, json=chat_response(usage=usage)))
+
+    assert llm.complete_json(system="S", user="U").usage == {"total_tokens": 50, "reasoning_tokens": 40}
+
+
 def test_non_numeric_usage_entries_are_skipped():
     llm = make_llm(lambda request: httpx.Response(200, json=chat_response(usage={"total_tokens": 5, "model": "x"})))
 

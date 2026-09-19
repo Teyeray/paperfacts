@@ -11,7 +11,8 @@ export function renderLanes(root) {
 function laneNode(lane, data) {
   const box = document.createElement("div");
   box.className = "lane";
-  const meta = data ? `${data.samples.length} 样品 · ${data.usage?.total_tokens ?? "?"} tokens · key ${data.extractor_key}` : "";
+  const reasoning = data?.usage?.reasoning_tokens ? `（推理 ${data.usage.reasoning_tokens}）` : "";
+  const meta = data ? `${data.samples.length} 样品 · ${data.usage?.total_tokens ?? "?"} tokens${reasoning} · key ${data.extractor_key}` : "";
   box.innerHTML = `<div class="lane-head ${lane === "mineru" ? "a" : "b"}"><span>${LANE_LABEL[lane]}</span><span class="meta">${escapeHtml(meta)}</span></div>`;
   if (!data) { box.append(note("还没有抽取结果。")); return box; }
   if (data.target) box.append(sampleNode({ sample_id: "靶材", label: "论文级", conditions: {}, fields: data.target.fields }));

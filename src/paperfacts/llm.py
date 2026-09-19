@@ -118,8 +118,7 @@ class OpenAICompatibleClient:
             raise LlmError(f"response has no choices[0].message.content: {str(data)[:300]}") from exc
         if not text or not text.strip():
             raise LlmError("the model returned empty content (usually max_tokens truncation in JSON mode)")
-        usage = {k: int(v) for k, v in (data.get("usage") or {}).items() if isinstance(v, int | float)}
-        result = LlmResult(text=text, usage=usage, cached=False)
+        result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
         self._write_cache(key, result)
         return result
 
@@ -208,6 +207,24 @@ class OpenAICompatibleClient:
         # Atomic like every other on-disk write: a crash mid-write must not leave a torn entry. The
         # reader would tolerate one, but never creating it is cheaper than healing it.
         write_text_atomic(path, payload)
+
+
+def _flat_usage(usage: Any) -> dict[str, int]:
+    """The response's usage block as flat integers.
+
+    Reasoning endpoints report the hidden reasoning tokens one level down, in
+    ``completion_tokens_details.reasoning_tokens``; that number is most of what a slow question costs, so
+    it is lifted to the top level as ``reasoning_tokens`` where the lane log and the page can show it.
+    """
+    flat: dict[str, int] = {}
+    for key, value in (usage or {}).items():
+        if isinstance(value, int | float):
+            flat[key] = int(value)
+        elif key == "completion_tokens_details" and isinstance(value, dict):
+            reasoning = value.get("reasoning_tokens")
+            if isinstance(reasoning, int | float):
+                flat["reasoning_tokens"] = int(reasoning)
+    return flat
 
 
 def _retry_after(response: httpx.Response) -> float | None:
