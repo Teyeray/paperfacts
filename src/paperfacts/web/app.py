@@ -272,8 +272,23 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
             raise HTTPException(status_code=404, detail=f"No job {job_id}")
         return job
 
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    app.mount("/", _RevalidatedStaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    """Static files that browsers must revalidate on every load.
+
+    There is no build step and no hashed filenames, so after a deploy the only thing standing between a
+    user and last week's modules is the browser's heuristic freshness on a Last-Modified header -- which
+    was observed serving a stale index.html for minutes. ``no-cache`` still allows caching; it only forces
+    the conditional request, which the ETag answers with a 304.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["cache-control"] = "no-cache"
+        return response
 
 
 async def _read_limited(file: UploadFile, limit: int) -> bytes:

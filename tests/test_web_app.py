@@ -593,6 +593,12 @@ def test_an_unknown_job_is_not_found(client: TestClient):
 # ---- static frontend ----------------------------------------------------------------------
 
 
+def test_static_files_must_be_revalidated_by_the_browser(client: TestClient):
+    # No build step, no hashed names: a deploy changes app.js in place, so the browser has to ask again.
+    for path in ("/", "/app.js", "/app.css"):
+        assert client.get(path).headers["cache-control"] == "no-cache", path
+
+
 def test_the_index_page_is_served_at_the_root(client: TestClient):
     response = client.get("/")
 
