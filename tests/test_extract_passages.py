@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 
 import pytest
 
@@ -97,8 +99,14 @@ def passage_responder(inventory: str, per_pass: list[dict[str, str]]):
     return respond
 
 
-def extract(client: FakeLlmClient, *, backend: str = "mineru", passes: int = 1):
-    return extract_lane(make_artifact(make_blocks(backend), backend=backend), client, mode="passage", passes=passes)
+def extract(client: FakeLlmClient, *, backend: str = "mineru", passes: int = 1, concurrency: int = 1):
+    return extract_lane(
+        make_artifact(make_blocks(backend), backend=backend),
+        client,
+        mode="passage",
+        passes=passes,
+        concurrency=concurrency,
+    )
 
 
 # ---- how many questions, and about what -------------------------------------------------------
@@ -528,3 +536,88 @@ def test_a_sample_with_a_blank_id_is_dropped_with_a_reason():
 
     assert lane.samples == ()
     assert any("no usable id" in entry for entry in lane.dropped)
+
+
+# ---- the field questions overlap ----------------------------------------------------------------
+# `concurrency` is a scheduling knob and nothing else: the same questions, the same answers, the same
+# records. These cases pin that down, because a shared dict mutated from a worker thread would show up
+# here as a usage total that drifts between runs rather than as an exception.
+
+
+class SlowResponder:
+    """A responder that sleeps inside every field question and records how many overlapped."""
+
+    def __init__(self, delay: float = 0.05) -> None:
+        self._delay = delay
+        self._lock = threading.Lock()
+        self._in_flight = 0
+        self.peak = 0
+
+    def __call__(self, system: str, user: str) -> str:
+        if system == inventory_system_prompt():
+            return inventory_json()
+        with self._lock:
+            self._in_flight += 1
+            self.peak = max(self.peak, self._in_flight)
+        time.sleep(self._delay)
+        with self._lock:
+            self._in_flight -= 1
+        return values_json({"sample_id": "A", "value_raw": "12.5", "unit_raw": "ohm/sq", "source_ids": []})
+
+
+def test_several_field_questions_are_in_flight_at_once():
+    slow = SlowResponder()
+
+    extract(FakeLlmClient(slow), concurrency=4)
+
+    # This paper asks four field questions; all four should be waiting on the endpoint together.
+    assert slow.peak == 4
+
+
+def test_concurrency_of_one_sends_the_questions_strictly_one_after_another():
+    slow = SlowResponder()
+
+    extract(FakeLlmClient(slow), concurrency=1)
+
+    assert slow.peak == 1
+
+
+def test_a_concurrent_run_produces_the_same_records_and_the_same_usage_as_a_sequential_one():
+    answers = responder(
+        sheet_resistance=values_json({"sample_id": "A", "value_raw": "12.5", "unit_raw": "ohm/sq"}),
+        ar_flow_rate=values_json({"sample_id": "A", "value_raw": "100", "unit_raw": "sccm"}),
+    )
+
+    sequential = extract(FakeLlmClient(answers), concurrency=1)
+    concurrent = extract(FakeLlmClient(answers), concurrency=4)
+
+    assert concurrent.usage == sequential.usage
+    assert concurrent.model_dump(exclude={"created_at"}) == sequential.model_dump(exclude={"created_at"})
+
+
+def test_the_raw_response_keeps_the_field_order_whatever_the_concurrency():
+    """The stored transcript is read by a human, so its sections stay in FIELD_SPECS order."""
+    sequential = extract(FakeLlmClient(responder()), concurrency=1)
+    concurrent = extract(FakeLlmClient(responder()), concurrency=4)
+
+    assert concurrent.raw_response == sequential.raw_response
+    assert re.findall(r"^# (\S+)$", concurrent.raw_response, re.MULTILINE)[0] == "inventory"
+
+
+def test_a_field_question_that_fails_propagates_instead_of_being_swallowed():
+    def explode(system: str, user: str) -> str:
+        if system == inventory_system_prompt():
+            return inventory_json()
+        raise RuntimeError("the endpoint refused the field question")
+
+    with pytest.raises(RuntimeError, match="refused the field question"):
+        extract(FakeLlmClient(explode), concurrency=4)
+
+
+def test_a_concurrency_below_one_is_rejected_before_any_call_is_made():
+    client = FakeLlmClient([])
+
+    with pytest.raises(ValueError, match="concurrency must be at least 1"):
+        extract(client, concurrency=0)
+
+    assert client.call_count == 0

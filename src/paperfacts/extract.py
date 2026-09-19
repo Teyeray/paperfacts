@@ -29,12 +29,14 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 
 from paperfacts.adapters import render_markdown
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
+    DEFAULT_LLM_CONCURRENCY,
     DEFAULT_LLM_CONTEXT_TOKENS,
     EXTRACTION_MODES,
     ExtractionMode,
@@ -145,11 +147,18 @@ def extract_lane(
     passes: int = 1,
     context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
+    concurrency: int = DEFAULT_LLM_CONCURRENCY,
     refresh: bool = False,
 ) -> LaneExtraction:
-    """Extract one parser lane, whole-document or question by question."""
+    """Extract one parser lane, whole-document or question by question.
+
+    ``concurrency`` only decides how many of passage mode's field questions wait on the network at once.
+    Every request is the one the sequential loop would have sent, so it stays out of ``extractor_key``.
+    """
     if passes < 1:
         raise ValueError(f"passes must be at least 1, got {passes}")
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be at least 1, got {concurrency}")
     if mode not in EXTRACTION_MODES:
         raise ValueError(f"unknown extraction mode: {mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
     blocks = _informative_blocks(artifact.blocks)
@@ -173,6 +182,7 @@ def extract_lane(
                 backend=artifact.backend,
                 context_tokens=context_tokens,
                 candidate_limit=candidate_limit,
+                concurrency=concurrency,
                 refresh=refresh,
                 cache_salt=cache_salt,
             )
@@ -254,6 +264,7 @@ def _extract_passages(
     backend: Backend,
     context_tokens: int,
     candidate_limit: int,
+    concurrency: int,
     refresh: bool,
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
@@ -276,9 +287,12 @@ def _extract_passages(
 
     sample_list = _render_sample_list(inventory.samples)
     field_system = field_system_prompt()
-    harvests: list[FieldHarvest] = []
+
+    # Which fields get asked, and with which blocks, is decided here in FIELD_SPECS order and nowhere else.
+    # Retrieval and the budget check stay on this thread, so the questions -- and the "never asked" reasons
+    # recorded beside them -- are the same bytes in the same order whatever `concurrency` is.
+    questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
-    raw_parts = [f"# inventory\n{raw_text}"]
     for spec in FIELD_SPECS:
         candidates = fit_budget(candidate_blocks(spec, blocks, limit=candidate_limit), budget_chars=budget_chars)
         if not candidates:
@@ -288,6 +302,11 @@ def _extract_passages(
             continue
         field_user = field_user_prompt(spec, sample_list, render_markdown(candidates))
         _check_context_budget(field_system, field_user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+        questions.append((spec, tuple(candidates), field_user))
+
+    def ask(question: tuple[FieldSpec, tuple[SourceBlock, ...], str]) -> tuple[FieldHarvest, str, dict[str, int]]:
+        """One field question. Returns everything it produced; it shares no mutable state with its peers."""
+        spec, candidates, field_user = question
         response, text, field_usage = complete_validated(
             client,
             FieldResponse,
@@ -298,14 +317,32 @@ def _extract_passages(
             refresh=refresh,
             cache_salt=cache_salt,
         )
-        harvests.append(
-            FieldHarvest(
-                spec=spec,
-                values=tuple(response.values),
-                known_ids=frozenset(block.source_id for block in candidates),
-            )
+        harvest = FieldHarvest(
+            spec=spec,
+            values=tuple(response.values),
+            known_ids=frozenset(block.source_id for block in candidates),
         )
-        raw_parts.append(f"# {spec.name}\n{text}")
+        return harvest, text, field_usage
+
+    # The questions are independent and the wait is the network, so they overlap. `complete_validated` is a
+    # pure function of its arguments and `OpenAICompatibleClient` keeps nothing mutable on `self` -- the
+    # httpx.Client underneath is safe for concurrent requests, and cache entries land through
+    # `write_text_atomic`, whose temp names are unique. `pool.map` hands the answers back in submission
+    # order and re-raises the earliest failure in that order, so the first failure wins exactly as the
+    # sequential loop's would, and every usage dict is merged here on one thread rather than by the workers.
+    if concurrency == 1 or len(questions) <= 1:
+        answers = [ask(question) for question in questions]
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(concurrency, len(questions)), thread_name_prefix="paperfacts-field"
+        ) as pool:
+            answers = list(pool.map(ask, questions))
+
+    harvests: list[FieldHarvest] = []
+    raw_parts = [f"# inventory\n{raw_text}"]
+    for harvest, text, field_usage in answers:
+        harvests.append(harvest)
+        raw_parts.append(f"# {harvest.spec.name}\n{text}")
         for key, value in field_usage.items():
             usage[key] = usage.get(key, 0) + value
 

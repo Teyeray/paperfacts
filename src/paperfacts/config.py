@@ -73,6 +73,10 @@ DEFAULT_LLM_REASONING_EFFORT: str | None = None
 REASONING_EFFORTS: tuple[str, ...] = ("none", "low", "medium", "high")
 DEFAULT_RETRY_ATTEMPTS = 4
 DEFAULT_RETRY_BACKOFF_S = 2.0
+# How many of one lane's per-field questions may be in flight at once. Purely a scheduling knob: every
+# request is byte-identical to the one the sequential loop would have sent, so it is deliberately absent
+# from extractor_key and comparison_key. 1 restores the strictly sequential behaviour.
+DEFAULT_LLM_CONCURRENCY = 4
 DEFAULT_CANDIDATE_LIMIT = 8
 DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8000
@@ -129,6 +133,18 @@ class ConfigDocument:
         if type(node) is not kind:
             raise ConfigError(f"{self.path}: {dotted} must be {kind.__name__}, got {node!r}")
         return cast(T, node)
+
+    def get_or[T](self, dotted: str, kind: type[T], default: T) -> T:
+        """A setting whose key a configuration file written before it existed does not carry yet.
+
+        Absent means "use the built-in baseline". Present still has to be the right type, so a typo is
+        an error naming the key rather than a silent fallback.
+        """
+        try:
+            self._node(dotted)
+        except ConfigError:
+            return default
+        return self.get(dotted, kind)
 
     def text_or_none(self, dotted: str) -> str | None:
         """A string setting that may be ``null``, which is how "not configured" is written for a URL."""
@@ -222,6 +238,9 @@ class Settings:
     # None leaves `reasoning_effort` out of the request; a value asks the endpoint for that much hidden
     # reasoning before the answer.
     llm_reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT
+    # Per-field questions in flight per lane. The two lanes themselves always run as a pair, so the peak
+    # number of open requests is twice this. It changes nothing about what is asked, only when.
+    llm_concurrency: int = DEFAULT_LLM_CONCURRENCY
     llm_retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
     llm_retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S
     # Extract each lane this many times and keep what a majority of passes agree on. Costs one LLM call
@@ -286,6 +305,11 @@ class Settings:
             llm_max_tokens=number("LLM_MAX_TOKENS", file.get("llm.max_tokens", int), int),
             llm_reasoning_effort=_parse_reasoning_effort(
                 get("LLM_REASONING_EFFORT") or file.text_or_none("llm.reasoning_effort"), file.path
+            ),
+            llm_concurrency=_positive(
+                number("LLM_CONCURRENCY", file.get_or("llm.concurrency", int, DEFAULT_LLM_CONCURRENCY), int),
+                "llm.concurrency",
+                file.path,
             ),
             llm_retry_attempts=_positive(
                 number("LLM_RETRY_ATTEMPTS", file.get("llm.retry_attempts", int), int), "llm.retry_attempts", file.path

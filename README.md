@@ -296,7 +296,8 @@ which is how one machine points at its own services without editing the shared f
 `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`, `PAPERFACTS_LLM_TIMEOUT_S`,
 `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`, `PAPERFACTS_LLM_MAX_TOKENS`,
 `PAPERFACTS_LLM_REASONING_EFFORT`,
-`PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_EXTRACTION_MODE`,
+`PAPERFACTS_LLM_CONCURRENCY`, `PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`,
+`PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
@@ -310,6 +311,12 @@ recall: on the same twelve-page paper it found 77 values and 7 samples where the
 8 samples (`.omc/research/reasoning-effort.md`). Set it to `"none"` for a quick first pass over a large
 batch, and leave it unset for the numbers you keep. It changes what the model is asked, so changing it
 writes a new `extractor_key` and re-extracts.
+
+`llm.concurrency` is how many of one lane's per-field questions wait on the endpoint at once (default 4);
+the two lanes themselves always run as a pair, so at most twice that many requests are open. It is the one
+knob here that changes only *when* requests are sent, never what they contain, so it stays out of both
+`extractor_key` and `comparison_key`: raising or lowering it never re-extracts and never re-compares. Set it
+to 1 to send every question strictly one after another, which is what the pipeline did before it existed.
 
 Three settings are file-only, because a single environment variable is the wrong shape for them:
 `fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.

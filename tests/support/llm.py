@@ -11,6 +11,7 @@ previous error, that a matching prompt contained the sample conditions -- instea
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -60,6 +61,10 @@ class FakeLlmClient:
         self.reasoning_effort = reasoning_effort
         self.calls: list[LlmCall] = []
         self.closed = False
+        # Passage mode may ask several field questions at once, so the recorder itself has to survive
+        # concurrent callers. The lock covers only the bookkeeping; the responder runs outside it, which is
+        # what lets a test's responder sleep and actually overlap.
+        self._lock = threading.Lock()
         self._usage = dict(DEFAULT_USAGE if usage is None else usage)
         self._responder: Responder | None = responses if callable(responses) else None
         self._queue: list[Response] = [] if callable(responses) else list(responses)
@@ -67,10 +72,13 @@ class FakeLlmClient:
     # ---- LlmClient protocol ----------------------------------------------------------
 
     def complete_json(self, *, system: str, user: str, refresh: bool = False, cache_salt: str = "") -> LlmResult:
-        self.calls.append(LlmCall(system=system, user=user, refresh=refresh, cache_salt=cache_salt))
+        with self._lock:
+            self.calls.append(LlmCall(system=system, user=user, refresh=refresh, cache_salt=cache_salt))
+            index = len(self.calls) - 1
         if self._responder is not None:
             return self._as_result(self._responder(system, user))
-        index = len(self.calls) - 1
+        # A queue is answered by position, so it is only meaningful when calls are made one at a time --
+        # which is why the concurrency tests below use a responder keyed on the prompt instead.
         if index >= len(self._queue):
             raise AssertionError(f"FakeLlmClient got call {index + 1} but only {len(self._queue)} responses queued")
         return self._as_result(self._queue[index])
