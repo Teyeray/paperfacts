@@ -24,6 +24,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from paperfacts.config import (
+    DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_S,
@@ -56,6 +57,7 @@ class LlmClient(Protocol):
     model: str
     temperature: float
     max_tokens: int
+    reasoning_effort: str | None
 
     def complete_json(self, *, system: str, user: str, refresh: bool = False, cache_salt: str = "") -> LlmResult: ...
 
@@ -74,6 +76,7 @@ class OpenAICompatibleClient:
         client: httpx.Client | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
         retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
         sleep: Callable[[float], None] = time.sleep,
@@ -86,6 +89,7 @@ class OpenAICompatibleClient:
         self.client = client or httpx.Client()
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
         self.retry_attempts = retry_attempts
         self.retry_backoff_s = retry_backoff_s
         self._sleep = sleep  # injectable so tests do not actually sleep
@@ -121,7 +125,7 @@ class OpenAICompatibleClient:
 
     def payload(self, *, system: str, user: str) -> dict[str, Any]:
         """The complete request body. The cache key hashes this, so no parameter can escape the key."""
-        return {
+        body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": self.temperature,
@@ -130,6 +134,11 @@ class OpenAICompatibleClient:
             # in the prompt for this to be accepted; prompts.py guarantees that.
             "response_format": {"type": "json_object"},
         }
+        # Omitted rather than sent as null when unset: the bytes on the wire stay what they were before this
+        # parameter existed, so every cached answer still resolves.
+        if self.reasoning_effort is not None:
+            body["reasoning_effort"] = self.reasoning_effort
+        return body
 
     def cache_key(self, payload: dict[str, Any], *, cache_salt: str = "") -> str:
         """Key for this request.

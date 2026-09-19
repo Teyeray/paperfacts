@@ -66,6 +66,11 @@ DEFAULT_TEMPERATURE = 0.0
 # Room for the reasoning plus the JSON answer it precedes: 8192 was enough for a non-reasoning model and
 # is not for this one.
 DEFAULT_MAX_TOKENS = 65536
+# Reasoning effort, as the OpenAI-shaped `reasoning_effort` request parameter. The baseline is None, which
+# means the parameter is omitted entirely: that is what every request looked like before this setting
+# existed, so an unedited checkout keeps its cache keys. See _parse_reasoning_effort for the accepted values.
+DEFAULT_LLM_REASONING_EFFORT: str | None = None
+REASONING_EFFORTS: tuple[str, ...] = ("none", "low", "medium", "high")
 DEFAULT_RETRY_ATTEMPTS = 4
 DEFAULT_RETRY_BACKOFF_S = 2.0
 DEFAULT_CANDIDATE_LIMIT = 8
@@ -214,6 +219,9 @@ class Settings:
     llm_context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS
     llm_temperature: float = DEFAULT_TEMPERATURE
     llm_max_tokens: int = DEFAULT_MAX_TOKENS
+    # None leaves `reasoning_effort` out of the request; a value asks the endpoint for that much hidden
+    # reasoning before the answer.
+    llm_reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT
     llm_retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
     llm_retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S
     # Extract each lane this many times and keep what a majority of passes agree on. Costs one LLM call
@@ -276,6 +284,9 @@ class Settings:
             llm_context_tokens=number("LLM_CONTEXT_TOKENS", file.get("llm.context_tokens", int), int),
             llm_temperature=number("LLM_TEMPERATURE", file.get("llm.temperature", float), float),
             llm_max_tokens=number("LLM_MAX_TOKENS", file.get("llm.max_tokens", int), int),
+            llm_reasoning_effort=_parse_reasoning_effort(
+                get("LLM_REASONING_EFFORT") or file.text_or_none("llm.reasoning_effort"), file.path
+            ),
             llm_retry_attempts=_positive(
                 number("LLM_RETRY_ATTEMPTS", file.get("llm.retry_attempts", int), int), "llm.retry_attempts", file.path
             ),
@@ -334,6 +345,20 @@ def _parse_mode(raw: str, source: Path) -> ExtractionMode:
             f"extraction mode is {raw!r}, expected one of {modes} (set in {source} or {ENV_PREFIX}EXTRACTION_MODE)"
         )
     return cast(ExtractionMode, raw)
+
+
+def _parse_reasoning_effort(raw: str | None, source: Path) -> str | None:
+    """``null`` (or an unset variable) means "omit the parameter"; anything else must be one we know the
+    endpoint accepts, named here rather than discovered as a 400 halfway through a paper."""
+    if raw is None:
+        return None
+    if raw not in REASONING_EFFORTS:
+        efforts = ", ".join(REASONING_EFFORTS)
+        raise ConfigError(
+            f"llm.reasoning_effort is {raw!r}, expected null or one of {efforts} "
+            f"(set in {source} or {ENV_PREFIX}LLM_REASONING_EFFORT)"
+        )
+    return raw
 
 
 def _parse_number[T: (int, float)](name: str, raw: str | None, default: T, kind: type[T]) -> T:

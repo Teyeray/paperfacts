@@ -23,6 +23,7 @@ from pathlib import Path
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONTEXT_TOKENS,
+    DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
     ExtractionMode,
@@ -108,6 +109,7 @@ def extractor_key(
     mode: ExtractionMode = "document",
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
     context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
 ) -> str:
@@ -130,6 +132,8 @@ def extractor_key(
         material["temperature"] = temperature
     if max_tokens != DEFAULT_MAX_TOKENS:
         material["max_tokens"] = max_tokens
+    if reasoning_effort != DEFAULT_LLM_REASONING_EFFORT:
+        material["reasoning_effort"] = reasoning_effort
     # Pinned to "document" rather than to the configured default: whole-document mode sends exactly the
     # request it always sent, so its keys must stay as they were, and changing the default in config.json
     # must never rename anybody's stored facts.
@@ -155,6 +159,7 @@ def extractor_key_for(settings: Settings, model: str | None = None) -> str:
         mode=settings.extraction_mode,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
+        reasoning_effort=settings.llm_reasoning_effort,
         candidate_limit=settings.candidate_limit,
         context_tokens=settings.llm_context_tokens,
     )

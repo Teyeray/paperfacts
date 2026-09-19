@@ -191,6 +191,7 @@ def extract_lane(
             mode=mode,
             temperature=client.temperature,
             max_tokens=client.max_tokens,
+            reasoning_effort=client.reasoning_effort,
             candidate_limit=candidate_limit,
         ),
         model=client.model,

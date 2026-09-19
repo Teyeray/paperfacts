@@ -21,6 +21,7 @@ import pytest
 
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
+    DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_OVERLAY_DPI,
     DEFAULT_RETRY_ATTEMPTS,
@@ -307,6 +308,43 @@ def test_the_sampling_settings_come_from_the_file(tmp_path: Path):
     assert settings.llm_retry_backoff_s == 0.5
 
 
+def test_the_reasoning_effort_comes_from_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "low"})
+
+    assert Settings.from_env(env_for(path)).llm_reasoning_effort == "low"
+
+
+def test_a_null_reasoning_effort_leaves_the_parameter_out(tmp_path: Path):
+    # null is how the file says "send no reasoning_effort at all", which is the built-in baseline.
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": None})
+
+    assert Settings.from_env(env_for(path)).llm_reasoning_effort is DEFAULT_LLM_REASONING_EFFORT
+
+
+def test_an_unknown_reasoning_effort_names_the_ones_that_exist(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "maximum"})
+
+    with pytest.raises(ConfigError, match=re.escape("llm.reasoning_effort is 'maximum'")) as caught:
+        Settings.from_env(env_for(path))
+    assert "none, low, medium, high" in str(caught.value)
+
+
+def test_the_environment_overrides_the_reasoning_effort(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "none"})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_REASONING_EFFORT="high"))
+
+    assert settings.llm_reasoning_effort == "high"
+
+
+def test_an_empty_reasoning_effort_variable_leaves_the_file_alone(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "low"})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_REASONING_EFFORT=""))
+
+    assert settings.llm_reasoning_effort == "low"
+
+
 def test_a_missing_setting_in_the_file_fails_loudly(tmp_path: Path):
     # Not a silent fallback: a file that has lost a key is a file someone edited by hand, and the value
     # they deleted is more likely to be wrong than absent.
@@ -454,6 +492,11 @@ def test_the_shipped_configuration_mirrors_the_built_in_baselines():
 
     assert data["llm"]["temperature"] == DEFAULT_TEMPERATURE
     assert data["llm"]["max_tokens"] == DEFAULT_MAX_TOKENS
+    # The one deliberate exception: the baseline omits `reasoning_effort` (what the code shipped with
+    # before the parameter existed), while the file turns reasoning off, because the extraction task is
+    # quote-and-cite and the hidden reasoning costs minutes per field question.
+    assert data["llm"]["reasoning_effort"] == "none"
+    assert DEFAULT_LLM_REASONING_EFFORT is None
     assert data["llm"]["retry_attempts"] == DEFAULT_RETRY_ATTEMPTS
     assert data["llm"]["retry_backoff_s"] == DEFAULT_RETRY_BACKOFF_S
     assert data["extraction"]["candidate_limit"] == DEFAULT_CANDIDATE_LIMIT
@@ -465,12 +508,15 @@ def test_the_shipped_configuration_agrees_with_the_dataclass_defaults():
     # that reading the constants in config.py tells the truth about an unedited checkout.
     baseline = Settings()
     configured = Settings.from_env({})
+    assert configured.llm_reasoning_effort == "none"
 
     fed_by_the_file = [
         name
         for name in (field.name for field in dataclasses.fields(Settings))
         # repo_root follows the checkout and the two key fields are environment-only, by design.
-        if name not in {"repo_root", "llm_api_key", "llm_api_key_file"}
+        # llm_reasoning_effort is the deliberate exception above: the file turns reasoning off, the
+        # built-in baseline leaves the parameter out.
+        if name not in {"repo_root", "llm_api_key", "llm_api_key_file", "llm_reasoning_effort"}
     ]
     assert [getattr(configured, name) for name in fed_by_the_file] == [
         getattr(baseline, name) for name in fed_by_the_file

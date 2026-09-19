@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from paperfacts.config import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
+from paperfacts.config import DEFAULT_LLM_REASONING_EFFORT, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
 from paperfacts.llm import LlmResult
 
 # Fake token counts. The numbers mean nothing; they only prove usage is recorded and summed.
@@ -50,12 +50,14 @@ class FakeLlmClient:
         usage: dict[str, int] | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT,
     ) -> None:
         self.model = model
         # Part of the LlmClient protocol: what the real client would send, and therefore what the cache key
         # for an extraction records. The defaults match an unedited config.json.
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
         self.calls: list[LlmCall] = []
         self.closed = False
         self._usage = dict(DEFAULT_USAGE if usage is None else usage)

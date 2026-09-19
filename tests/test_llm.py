@@ -352,6 +352,24 @@ def test_the_cache_key_covers_the_whole_payload_not_just_the_prompts():
     assert cache_key_of(base, "S", "U") != cache_key_of(longer, "S", "U")
 
 
+def test_the_payload_omits_the_reasoning_effort_when_it_is_unset():
+    # Unset means "send what was sent before this parameter existed", so every cached answer still resolves.
+    assert "reasoning_effort" not in make_llm().payload(system="S", user="U")
+
+
+def test_the_payload_carries_the_reasoning_effort_when_it_is_set():
+    llm = OpenAICompatibleClient(BASE_URL, API_KEY, "deepseek-chat", timeout_s=30.0, reasoning_effort="none")
+
+    assert llm.payload(system="S", user="U")["reasoning_effort"] == "none"
+
+
+def test_the_cache_key_covers_the_reasoning_effort():
+    base = make_llm()
+    quiet = OpenAICompatibleClient(BASE_URL, API_KEY, base.model, timeout_s=30.0, reasoning_effort="none")
+
+    assert cache_key_of(base, "S", "U") != cache_key_of(quiet, "S", "U")
+
+
 def test_the_cache_key_covers_the_base_url():
     # The same prompt sent to a different service is a different request; sharing a cache would pass off
     # service A's answer as service B's.

@@ -74,6 +74,20 @@ def test_a_document_mode_key_ignores_everything_only_passage_mode_depends_on(mon
     assert extractor_key("deepseek-chat", mode="passage") != before_passage
 
 
+def test_extractor_key_is_unaffected_by_the_baseline_reasoning_effort():
+    # None is the baseline: the parameter is left out of the request, exactly as before it existed, so a
+    # checkout that never touched the setting keeps the filenames it already has.
+    assert extractor_key("deepseek-chat") == extractor_key("deepseek-chat", reasoning_effort=None)
+
+
+def test_extractor_key_changes_with_the_reasoning_effort():
+    # How much the model thinks before answering changes the answer, so it changes the stored extraction.
+    assert extractor_key("deepseek-chat") != extractor_key("deepseek-chat", reasoning_effort="none")
+    assert extractor_key("deepseek-chat", reasoning_effort="low") != extractor_key(
+        "deepseek-chat", reasoning_effort="high"
+    )
+
+
 def test_extractor_key_is_short_enough_to_live_in_a_filename():
     key = extractor_key("deepseek-chat")
 

@@ -21,6 +21,7 @@
     "context_tokens": 200000,
     "temperature": 0.0,
     "max_tokens": 65536,
+    "reasoning_effort": "none",
     "retry_attempts": 4,
     "retry_backoff_s": 2.0
   },
