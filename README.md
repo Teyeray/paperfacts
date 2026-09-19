@@ -342,6 +342,14 @@ to count as the same fact:
 }
 ```
 
+A `text` field may add `"categories"`, the closed set of answers it accepts, written the way the output
+should spell them: `"categories": ["DC", "RF", "pulsed DC", "DC+RF", "HiPIMS"]` on `mode`. A quoted value is
+reduced to the tokens those names contain, so "DC and RF magnetron co-sputtering" and "DC and RF" both
+resolve to `DC+RF` and stop being judged two different modes, while "DC" and "RF" stay apart. A value naming
+no category is compared as ordinary text, never rounded to the nearest one. `categories` changes only
+verdicts, so it is folded into `comparison_key` and leaves `extractor_key` alone: adding one re-compares the
+stored facts instead of re-extracting them.
+
 Adding a field is one entry. A `canonical_unit` must be one the converters know
 (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`, `W`, `sccm`, `rpm`) or startup fails rather than guessing.
 `paperfacts fields` lists the table the package actually loaded. Editing the table changes `extractor_key`, so

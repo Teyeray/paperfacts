@@ -28,7 +28,7 @@ from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, SAMPLE_FIELDS, TARGET_
 from paperfacts.keys import comparison_key
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
-from paperfacts.normalize import clean_unit, normalize_key, normalize_lane
+from paperfacts.normalize import canonical_category, clean_unit, normalize_key, normalize_lane, text_key
 from paperfacts.records import FieldValue, LaneExtraction
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]
@@ -199,8 +199,9 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
 def compare_values(a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
     """Decide the outcome when both sides have a value."""
     if spec.kind != "numeric":
-        if normalize_key(a.value_raw) == normalize_key(b.value_raw):
-            return "agree", "identical after text normalization"
+        if text_key(spec, a.value_raw) == text_key(spec, b.value_raw):
+            category = canonical_category(spec.categories, a.value_raw)
+            return "agree", f"both name {category}" if category else "identical after text normalization"
         return "conflict", f"{a.value_raw!r} vs {b.value_raw!r}"
 
     if a.value is None or b.value is None:

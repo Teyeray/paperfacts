@@ -12,7 +12,8 @@ import unicodedata
 
 import pytest
 
-from paperfacts.normalize import normalize_key, normalize_text
+from paperfacts.fields import FIELD_BY_NAME
+from paperfacts.normalize import canonical_category, normalize_key, normalize_text, text_key
 
 # ---- Superscripts: must be handled before NFKC ------------------------------------------------------
 
@@ -172,3 +173,53 @@ def test_normalize_key_is_idempotent():
     once = normalize_key("550 nm (average)")
 
     assert normalize_key(once) == once
+
+
+# ---- Closed category sets ---------------------------------------------------------------------------
+
+MODE = ("DC", "RF", "pulsed DC", "DC+RF", "HiPIMS")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # The three spellings one paper used for one mode, which used to read as three different answers.
+        ("DC and RF", "DC+RF"),
+        ("DC and RF co-sputtering", "DC+RF"),
+        ("DC and RF magnetron co-sputtering", "DC+RF"),
+        ("RF/DC", "DC+RF"),
+        ("DC", "DC"),
+        ("DC magnetron sputtering", "DC"),
+        ("rf sputtering", "RF"),
+        ("pulsed DC", "pulsed DC"),
+        ("pulsed-DC magnetron", "pulsed DC"),
+        ("HiPIMS", "HiPIMS"),
+    ],
+)
+def test_canonical_category_reduces_a_mode_to_the_tokens_it_names(raw, expected):
+    assert canonical_category(MODE, raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["magnetron sputtering", "reactive sputtering", "", None])
+def test_a_value_naming_no_category_is_never_guessed_into_one(raw):
+    # Refusing to resolve is the safe answer: the value then falls back to ordinary text comparison.
+    assert canonical_category(MODE, raw) is None
+
+
+def test_a_token_combination_no_category_names_stays_unresolved():
+    assert canonical_category(MODE, "pulsed DC and RF") is None
+
+
+def test_text_key_keeps_the_distinct_modes_apart():
+    spec = FIELD_BY_NAME["mode"]
+
+    assert text_key(spec, "DC and RF") == text_key(spec, "DC and RF magnetron co-sputtering")
+    assert text_key(spec, "DC") != text_key(spec, "RF")
+    assert text_key(spec, "DC") != text_key(spec, "DC and RF")
+    assert text_key(spec, "pulsed DC") != text_key(spec, "DC")
+
+
+def test_text_key_of_a_field_without_categories_is_the_plain_text_key():
+    spec = FIELD_BY_NAME["component"]
+
+    assert text_key(spec, "SnO2:Ta") == normalize_key("SnO2 : ta")

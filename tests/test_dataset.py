@@ -165,6 +165,45 @@ def test_one_lane_with_two_conditions_is_still_refused():
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
 
 
+def test_one_mode_quoted_two_ways_is_one_answer_not_a_refusal():
+    """A closed category set is judged on the category, so the paper's phrasing cannot manufacture a
+    multiple_values refusal out of a single co-sputtering run."""
+    result = paired(
+        [value("mode", "DC and RF")],
+        [value("mode", "DC and RF magnetron co-sputtering", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "mode")["decision"] == "agree"
+    assert result.paper_row["mode"] in {"DC and RF", "DC and RF magnetron co-sputtering"}
+
+
+def test_two_genuinely_different_modes_are_still_refused():
+    result = paired([value("mode", "DC")], [value("mode", "RF", backend="paddleocr_vl")])
+
+    assert result.paper_row["mode"] is None
+    assert decision(result, "mode")["decision"] == "conflict"
+
+
+def test_one_lane_quoting_two_spellings_of_one_mode_is_not_multiple_values():
+    result = paired(
+        [value("mode", "DC and RF"), value("mode", "DC and RF co-sputtering")],
+        [value("mode", "DC and RF", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "mode")["decision"] != "multiple_values"
+    assert result.paper_row["mode"] is not None
+
+
+def test_one_lane_quoting_two_different_modes_stays_refused():
+    result = paired(
+        [value("mode", "DC"), value("mode", "RF")],
+        [value("mode", "DC", backend="paddleocr_vl")],
+    )
+
+    assert result.paper_row["mode"] is None
+    assert decision(result, "mode")["decision"] in {"conflict", "multiple_values"}
+
+
 def test_different_target_compositions_cannot_be_picked_or_joined():
     result = dataset(make_lane(target=TargetRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
     assert result.paper_row["component"] is None

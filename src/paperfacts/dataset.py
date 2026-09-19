@@ -25,7 +25,15 @@ from openpyxl.worksheet.worksheet import Worksheet
 from paperfacts.compare import ComparisonReport, FieldComparison
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_SPECS, SAMPLE_FIELDS, TARGET_FIELDS, FieldSpec
 from paperfacts.models import BACKENDS, Backend, DocumentInput
-from paperfacts.normalize import clean_unit, convert_to_canonical, delatex, normalize_lane, normalize_text, parse_number
+from paperfacts.normalize import (
+    clean_unit,
+    convert_to_canonical,
+    delatex,
+    normalize_lane,
+    normalize_text,
+    parse_number,
+    text_key,
+)
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
@@ -182,10 +190,17 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     return canonical, _joined(notes) or None
 
 
-def _same_value(a: CellValue, b: CellValue) -> bool:
+def _same_value(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+    """Whether two candidate cells state the same thing. Text fields with a closed category set are judged
+    on the category, so "DC and RF" and "DC and RF magnetron co-sputtering" are one answer rather than a
+    refusal; a field without one falls back to folded-text equality."""
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         return math.isclose(a, b, rel_tol=1e-12, abs_tol=0.0)
-    return isinstance(a, str) and isinstance(b, str) and normalize_text(a) == normalize_text(b)
+    if not (isinstance(a, str) and isinstance(b, str)):
+        return False
+    if spec.categories:
+        return text_key(spec, a) == text_key(spec, b)
+    return normalize_text(a) == normalize_text(b)
 
 
 def _decide(
@@ -238,13 +253,13 @@ def _decide(
     # here so two different same-condition values cannot disappear behind that first one.
     for backend in BACKENDS:
         same_lane = [scalar for lane, _, scalar in parsed if lane == backend]
-        if same_lane and any(not _same_value(same_lane[0], scalar) for scalar in same_lane[1:]):
+        if same_lane and any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
     chosen_backend, chosen_field, chosen = min(
         parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw)
     )
     agreed = any(c.status == "agree" for c in comparisons) and len({backend for backend, _, _ in parsed}) == 2
-    if not agreed and any(not _same_value(chosen, scalar) for _, _, scalar in parsed):
+    if not agreed and any(not _same_value(chosen, scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
     if spec.name == "transmittance" and not conditions:
         details.append("原文提取结果未注明透光率波长或波段")

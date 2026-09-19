@@ -40,6 +40,8 @@ from paperfacts.prompts import (
 # Long enough that a collision is not a practical concern, short enough to read in a filename.
 FINGERPRINT_LENGTH = 12
 _PACKAGE_DIR = Path(__file__).parent
+# Cells that change a verdict or retrieval but never what the model is asked; each has its own fingerprint.
+_SCHEMA_EXCLUDED = {"keywords", "categories"}
 
 
 def content_fingerprint(material: str) -> str:
@@ -58,10 +60,23 @@ def schema_fingerprint() -> str:
     ``keywords`` is deliberately left out. It steers passage-mode retrieval and nothing else -- never a
     prompt, never a tolerance -- so folding it in here would invalidate document-mode extractions and every
     stored comparison each time a synonym is added. :func:`retrieval_fingerprint` covers it instead.
+
+    ``categories`` is left out for the same reason in the other direction: it renames nothing the model is
+    asked and only decides whether two quoted spellings count as the same answer, which is a verdict.
+    :func:`category_fingerprint` folds it into ``comparison_key`` alone.
     """
     table = [
-        {name: value for name, value in dataclasses.asdict(spec).items() if name != "keywords"} for spec in FIELD_SPECS
+        {name: value for name, value in dataclasses.asdict(spec).items() if name not in _SCHEMA_EXCLUDED}
+        for spec in FIELD_SPECS
     ]
+    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+
+
+@cache
+def category_fingerprint() -> str:
+    """The closed answer sets of text fields, empty for a table that declares none -- so a checkout without
+    any keeps the comparison keys it already has."""
+    table = {spec.name: list(spec.categories) for spec in FIELD_SPECS if spec.categories}
     return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
 
 
@@ -166,15 +181,20 @@ def extractor_key_for(settings: Settings, model: str | None = None) -> str:
 
 
 def comparison_key() -> str:
+    material = {
+        "schema": schema_fingerprint(),
+        "ambiguous_confidence": AMBIGUOUS_MATCH_CONFIDENCE,
+        "normalization": normalization_fingerprint(),
+        "code": comparison_code_fingerprint(),
+        "matching_system": matching_system_prompt(),
+    }
+    # Only present when a field declares categories: a table without any keeps the filenames it had before
+    # the concept existed, the same way every other baseline stays out of the material.
+    if any(spec.categories for spec in FIELD_SPECS):
+        material["categories"] = category_fingerprint()
     return content_fingerprint(
         json.dumps(
-            {
-                "schema": schema_fingerprint(),
-                "ambiguous_confidence": AMBIGUOUS_MATCH_CONFIDENCE,
-                "normalization": normalization_fingerprint(),
-                "code": comparison_code_fingerprint(),
-                "matching_system": matching_system_prompt(),
-            },
+            material,
             ensure_ascii=False,
             sort_keys=True,
         )

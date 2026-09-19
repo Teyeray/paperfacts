@@ -51,6 +51,10 @@ class FieldSpec:
     abs_tol: float = 0.0
     condition_hint: str | None = None
     bare_number: BareNumberPolicy = "reject"
+    # A closed set of canonical answers for a text field, e.g. ("DC", "RF", "DC+RF"). When a field has one,
+    # comparison goes through paperfacts.normalize.canonical_category instead of raw text equality, so
+    # "DC and RF magnetron co-sputtering" and "DC and RF" stop reading as two different modes.
+    categories: tuple[str, ...] = ()
 
     @property
     def is_sample_level(self) -> bool:
@@ -97,6 +101,12 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
     if not isinstance(description, str) or not description.strip():
         raise ConfigError(f"{where} needs a non-empty 'description'; it is what the model is told to look for")
 
+    categories = entry.get("categories", [])
+    if not isinstance(categories, list) or not all(isinstance(word, str) and word.strip() for word in categories):
+        raise ConfigError(f"{where}: categories must be a list of non-empty strings")
+    if categories and entry.get("kind") != "text":
+        raise ConfigError(f"{where}: categories is only meaningful for a text field, not a {entry.get('kind')!r} one")
+
     return FieldSpec(
         name=name,
         group=choice("group", get_args(FieldGroup)),  # type: ignore[arg-type]
@@ -108,6 +118,7 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         abs_tol=number("abs_tol", 0.0),
         condition_hint=text_or_none("condition_hint"),
         bare_number=choice("bare_number", get_args(BareNumberPolicy)) if "bare_number" in entry else "reject",  # type: ignore[arg-type]
+        categories=tuple(categories),
     )
 
 

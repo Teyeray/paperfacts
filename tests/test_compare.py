@@ -148,6 +148,48 @@ def test_text_values_that_differ_conflict_and_quote_both_sides():
     assert "SnO2:Ta" in detail and "ITO" in detail
 
 
+@pytest.mark.parametrize(
+    ("a_raw", "b_raw"),
+    [
+        # Measured on a real paper: one co-sputtering run, quoted three ways, refused as three modes.
+        ("DC and RF", "DC and RF co-sputtering"),
+        ("DC and RF", "DC and RF magnetron co-sputtering"),
+        ("DC magnetron sputtering", "DC sputtering"),
+    ],
+)
+def test_a_closed_category_field_agrees_across_the_paper_wording(a_raw, b_raw):
+    a, b = make_field("mode", a_raw), make_field("mode", b_raw)
+
+    status, detail = compare_values(a, b, FIELD_BY_NAME["mode"])
+
+    assert status == "agree"
+    assert "name" in detail
+
+
+def test_a_closed_category_field_still_separates_two_different_modes():
+    a, b = make_field("mode", "DC"), make_field("mode", "RF magnetron sputtering")
+
+    status, detail = compare_values(a, b, FIELD_BY_NAME["mode"])
+
+    assert status == "conflict"
+    assert "DC" in detail and "RF magnetron sputtering" in detail
+
+
+def test_one_mode_is_not_collapsed_into_a_combination_of_two():
+    # The whole point of the token-set rule: DC alone is not the DC+RF co-sputtering run.
+    a, b = make_field("mode", "DC"), make_field("mode", "DC and RF")
+
+    assert compare_values(a, b, FIELD_BY_NAME["mode"])[0] == "conflict"
+
+
+def test_a_mode_naming_no_category_falls_back_to_plain_text_comparison():
+    spec = FIELD_BY_NAME["mode"]
+    unresolvable = ("mode", "magnetron sputtering")
+
+    assert compare_values(make_field(*unresolvable), make_field(*unresolvable), spec)[0] == "agree"
+    assert compare_values(make_field(*unresolvable), make_field("mode", "DC"), spec)[0] == "conflict"
+
+
 # ---- compare_lanes: scope levels -------------------------------------------------------------
 
 

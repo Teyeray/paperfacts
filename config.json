@@ -196,7 +196,14 @@
       "rel_tol": 0.0,
       "abs_tol": 0.0,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "categories": [
+        "DC",
+        "RF",
+        "pulsed DC",
+        "DC+RF",
+        "HiPIMS"
+      ]
     },
     {
       "name": "ar_flow_rate",

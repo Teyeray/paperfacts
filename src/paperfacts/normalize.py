@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Callable
+from functools import cache
 
 from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FieldSpec
 from paperfacts.records import FieldValue, LaneExtraction, TargetRecord
@@ -74,6 +75,49 @@ def normalize_key(text: str | None) -> str:
         return ""
     # .lower() turns Ω into ω; put it back before the whitelist filter or Ω would be stripped.
     return _NON_KEY.sub("", normalize_text(text).lower().replace("ω", "Ω"))
+
+
+# ---- Closed category sets --------------------------------------------------------------------------------
+# A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
+# "DC and RF", "DC and RF co-sputtering", "DC and RF magnetron co-sputtering" -- and raw text equality reads
+# those as three different modes, so the two lanes CONFLICT over a difference that is only phrasing.
+#
+# A category is identified by the tokens its own name contains: "pulsed DC" is {pulsed, dc}, "DC+RF" is
+# {dc, rf}, "DC" is {dc}. A raw value is reduced to whichever of those tokens it mentions, everything else
+# ("magnetron", "co-sputtering", "and") being vocabulary the set does not define, and matches the category
+# whose token set it reproduces exactly. So "DC and RF magnetron co-sputtering" is {dc, rf} -> "DC+RF",
+# while "DC" stays {dc} -> "DC" and can never equal "RF". A value mentioning no token at all, or a
+# combination no category names, resolves to None and is compared as ordinary text -- never guessed into
+# the nearest category.
+
+_CATEGORY_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+@cache
+def _category_index(categories: tuple[str, ...]) -> dict[frozenset[str], str]:
+    """Token set -> canonical spelling. The first category claiming a token set keeps it."""
+    index: dict[frozenset[str], str] = {}
+    for category in categories:
+        index.setdefault(frozenset(_CATEGORY_TOKEN.findall(category.lower())), category)
+    return index
+
+
+def canonical_category(categories: tuple[str, ...], raw: str | None) -> str | None:
+    """The canonical spelling ``raw`` names, or None when it names none of them."""
+    if not categories or not raw:
+        return None
+    index = _category_index(categories)
+    vocabulary = frozenset().union(*index.keys())
+    present = frozenset(token for token in _CATEGORY_TOKEN.findall(normalize_text(raw).lower()) if token in vocabulary)
+    return index.get(present)
+
+
+def text_key(spec: FieldSpec, raw: str | None) -> str:
+    """The key deciding whether two text values are the same fact: the canonical category when the field has
+    a closed set and the value names one of them, the folded text otherwise. The NUL prefix keeps a category
+    from ever colliding with a value whose folded text happens to spell it."""
+    category = canonical_category(spec.categories, raw)
+    return f"\0category:{category}" if category is not None else normalize_key(raw)
 
 
 # ---- Numbers ------------------------------------------------------------------------------------------------
