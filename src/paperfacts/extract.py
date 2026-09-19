@@ -378,7 +378,8 @@ def passage_records(
     Attribution is by normalised sample id -- the same key that pairs samples across lanes -- so the model
     only has to repeat an id it was given. A sample-level value naming no sample, or one the inventory does
     not have, is kept in ``unattributed`` rather than attached to a plausible neighbour: an unplaced value
-    is visible in the report, a misplaced one is indistinguishable from a real measurement.
+    is visible in the report, a misplaced one is indistinguishable from a real measurement. The one
+    exception is a paper with a single sample, where a value naming no sample has only one possible owner.
     """
     cleaning = ResponseCleaning()
     cleaning.dropped.extend(dropped)
@@ -411,6 +412,7 @@ def passage_records(
     target_fields: list[FieldValue] = []
     target_ids: list[str] = []
     unattributed: list[FieldValue] = []
+    single_sample_attributed = 0
     for harvest in harvests:
         for item in harvest.values:
             value = cleaning.value(
@@ -431,10 +433,23 @@ def passage_records(
                 target_ids.extend(value.source_ids)
                 continue
             index = index_by_key.get(normalize_key(item.sample_id)) if item.sample_id else None
+            if index is None and not item.sample_id and len(samples) == 1:
+                # The prompt allows a null sample_id when the excerpts do not say which sample a value
+                # belongs to. With exactly one sample in the inventory there is nothing to say: the lone
+                # sample is not a plausible neighbour, it is the only possible owner.
+                index = 0
+                single_sample_attributed += 1
             if index is None:
                 unattributed.append(value)
                 continue
             sample_fields[index].append(value)
+
+    if single_sample_attributed:
+        logger.info(
+            "attributed %d value(s) with no sample_id to the paper's only sample %r",
+            single_sample_attributed,
+            samples[0].sample_id,
+        )
 
     return ExtractedRecords(
         target=(

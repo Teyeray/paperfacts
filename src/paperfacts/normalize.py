@@ -31,6 +31,9 @@ _REPLACEMENTS = {
     "−": "-",  # minus sign U+2212
     "–": "-",  # en dash
     "—": "-",  # em dash
+    "‐": "-",  # hyphen U+2010 (NFKC also folds the non-breaking hyphen U+2011 to it)
+    "‒": "-",  # figure dash
+    "―": "-",  # horizontal bar
     "×": "x",  # multiplication sign
     "⋅": ".",  # dot operator U+22C5
     "·": ".",  # middle dot U+00B7

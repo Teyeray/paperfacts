@@ -50,6 +50,14 @@ def inventory_json(samples: list[dict] | None = None) -> str:
     return json.dumps({"samples": samples})
 
 
+# Two samples, for the cases that need a null sample_id to stay genuinely unplaceable: with a single
+# sample in the inventory there is only one possible owner, and `passage_records` attributes it.
+TWO_SAMPLES = [
+    {"sample_id": "A", "label": "O2 100 sccm", "conditions": {"flow": "100 sccm"}},
+    {"sample_id": "B", "label": "O2 200 sccm", "conditions": {"flow": "200 sccm"}},
+]
+
+
 def values_json(*values: dict) -> str:
     return json.dumps({"values": list(values)})
 
@@ -247,13 +255,31 @@ def test_attribution_survives_a_difference_in_case_and_spacing():
 
 def test_a_value_naming_no_sample_is_kept_unattributed_rather_than_guessed_onto_one():
     # Guessing would be invisible in the report; an unplaced value is visible, and a misplaced one is
-    # indistinguishable from a real measurement.
-    client = FakeLlmClient(responder(sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"})))
+    # indistinguishable from a real measurement. Two samples, so there is a real choice to refuse.
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(TWO_SAMPLES),
+            sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"}),
+        )
+    )
 
     lane = extract(client)
 
     assert [field.value_raw for field in lane.unattributed] == ["12.5"]
-    assert lane.samples[0].fields == ()
+    assert [sample.fields for sample in lane.samples] == [(), ()]
+
+
+def test_a_value_naming_no_sample_goes_to_the_only_sample_of_a_single_sample_paper():
+    # The prompt allows a null sample_id when the excerpts do not say which sample a value belongs to.
+    # With one sample in the inventory there is nothing to say: it is not a plausible neighbour, it is the
+    # only possible owner, and leaving the value unattributed would compare it with nothing.
+    client = FakeLlmClient(responder(sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"})))
+
+    lane = extract(client)
+
+    assert len(lane.samples) == 1
+    assert [field.value_raw for field in lane.samples[0].fields] == ["12.5"]
+    assert lane.unattributed == ()
 
 
 def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattributed():
@@ -267,7 +293,12 @@ def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattribute
 
 def test_an_unattributed_value_still_counts_as_a_value_of_the_lane():
     # Leaving it out of values() would understate what the lane found and hide an ungrounded one.
-    client = FakeLlmClient(responder(sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"})))
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(TWO_SAMPLES),
+            sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"}),
+        )
+    )
 
     lane = extract(client)
 
@@ -310,7 +341,10 @@ def test_an_unattributed_value_is_grounded_like_any_other():
     # escape the check that it was really read where it says it was.
     shown = make_blocks()[1].source_id
     client = FakeLlmClient(
-        responder(sheet_resistance=values_json({"sample_id": None, "value_raw": "99.9", "source_ids": [shown]}))
+        responder(
+            inventory=inventory_json(TWO_SAMPLES),
+            sheet_resistance=values_json({"sample_id": None, "value_raw": "99.9", "source_ids": [shown]}),
+        )
     )
 
     lane = extract(client)
@@ -322,7 +356,10 @@ def test_an_unattributed_value_is_grounded_like_any_other():
 def test_an_unattributed_value_found_in_the_block_it_cites_is_grounded():
     shown = make_blocks()[1].source_id
     client = FakeLlmClient(
-        responder(sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5", "source_ids": [shown]}))
+        responder(
+            inventory=inventory_json(TWO_SAMPLES),
+            sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5", "source_ids": [shown]}),
+        )
     )
 
     lane = extract(client)
@@ -376,7 +413,7 @@ def test_a_value_only_one_pass_of_three_produced_is_dropped():
 def test_an_unattributed_value_a_majority_of_passes_produced_survives_voting():
     # Agreeing three times that a value cannot be placed is still agreement about the value itself, so
     # voting has to reach the unplaced ones too -- otherwise they would vanish whenever passes > 1.
-    inventory = inventory_json()
+    inventory = inventory_json(TWO_SAMPLES)
     unplaced = {"sample_id": None, "value_raw": "12.5"}
     client = FakeLlmClient(passage_responder(inventory, [{ASKED_FIELD: values_json(unplaced)} for _ in range(3)]))
 

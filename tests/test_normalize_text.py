@@ -54,10 +54,11 @@ def test_subscript_digits_become_plain_digits():
 # ---- Unifying Unicode variants ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("dash", ["−", "–", "—"])
+@pytest.mark.parametrize("dash", ["−", "–", "—", "‐", "‑", "‒", "―"])
 def test_every_dash_variant_becomes_an_ascii_hyphen(dash):
     # The minus sign / en dash / em dash all show up in papers; without unifying them, "−5" would fail to
-    # parse its negative sign.
+    # parse its negative sign. The hyphen family (U+2010 and friends) is what the two parsers disagree
+    # about when they transcribe the same sample label.
     assert normalize_text(f"{dash}5") == "-5"
 
 
@@ -145,6 +146,26 @@ def test_normalize_key_runs_the_full_text_normalization_first():
 def test_normalize_key_maps_missing_text_to_an_empty_string(blank):
     # A field with a blank condition must key to the same value as a field with no condition at all.
     assert normalize_key(blank) == ""
+
+
+@pytest.mark.parametrize("dash", ["‐", "‑", "‒", "–", "—", "―", "−"])
+def test_normalize_key_keys_every_hyphen_variant_of_a_sample_id_identically(dash):
+    # The two lanes' parsers emit different Unicode for the same label, and the hyphen is where they
+    # differ most; keying them apart would split one sample into two that are never compared.
+    assert normalize_key(f"Sample{dash}A") == normalize_key("Sample-A") == "sample-a"
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("O\u2082-100", "O2-100"),  # subscript digit
+        ("O\u00b2-100", "O2-100"),  # superscript digit
+        ("\uff33\uff41\uff4d\uff50\uff4c\uff45\uff11", "Sample1"),  # full-width letters and digit
+        ("sample a", "SAMPLE\tA"),  # whitespace and case
+    ],
+)
+def test_normalize_key_folds_the_spellings_the_two_parsers_disagree_about(a, b):
+    assert normalize_key(a) == normalize_key(b)
 
 
 def test_normalize_key_is_idempotent():
