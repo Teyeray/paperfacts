@@ -274,6 +274,7 @@ be edited:
                   "model": "deepseek-v4.1-flash",     // any OpenAI-compatible endpoint and model
                   "timeout_s": 600, "context_tokens": 60000, "temperature": 0.0, "max_tokens": 16384,
                   "reasoning_effort": null,                    // null | none | low | medium | high
+                  "inventory_reasoning_effort": null,          // null = inherit reasoning_effort
                   "retry_attempts": 4, "retry_backoff_s": 2.0 },
   "extraction": { "mode": "passage", "passes": 1, "candidate_limit": 8 },
   "comparison": { "ambiguous_match_confidence": 0.6 },
@@ -302,7 +303,7 @@ which is how one machine points at its own services without editing the shared f
 `PAPERFACTS_PADDLE_VL_BACKEND`, `PAPERFACTS_PADDLE_VL_SERVER_URL`, `PAPERFACTS_PADDLE_VL_MODEL_NAME`,
 `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`, `PAPERFACTS_LLM_TIMEOUT_S`,
 `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`, `PAPERFACTS_LLM_MAX_TOKENS`,
-`PAPERFACTS_LLM_REASONING_EFFORT`,
+`PAPERFACTS_LLM_REASONING_EFFORT`, `PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`,
 `PAPERFACTS_LLM_CONCURRENCY`, `PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`,
 `PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
@@ -317,7 +318,12 @@ default. On this endpoint's `deepseek-v4.1-flash`, `"none"` makes a paper about 
 recall: on the same twelve-page paper it found 77 values and 7 samples where the default found 112 values and
 8 samples (`.omc/research/reasoning-effort.md`). Set it to `"none"` for a quick first pass over a large
 batch, and leave it unset for the numbers you keep. It changes what the model is asked, so changing it
-writes a new `extractor_key` and re-extracts.
+writes a new `extractor_key` and re-extracts. `llm.inventory_reasoning_effort` gives passage mode's one
+inventory question its own effort, inheriting `llm.reasoning_effort` when left `null`: that question alone
+spends 11k-17k hidden reasoning tokens per lane, about 70% of a run's completion tokens, while the field
+questions after it reason in tens to hundreds, so turning it down is most of the wall-clock for one
+question's worth of recall risk. Both lanes always get the same value, and it too writes a new
+`extractor_key` (in passage mode only, since document mode never asks the question).
 
 `llm.concurrency` is how many of one lane's per-field questions wait on the endpoint at once (default 4);
 the two lanes themselves always run as a pair, so at most twice that many requests are open. It is the one

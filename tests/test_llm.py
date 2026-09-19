@@ -370,6 +370,22 @@ def test_the_payload_carries_the_reasoning_effort_when_it_is_set():
     assert llm.payload(system="S", user="U")["reasoning_effort"] == "none"
 
 
+def test_a_request_can_override_the_clients_reasoning_effort():
+    # One question that reasons far longer than its neighbours can be given its own effort without
+    # touching what any other request sends.
+    llm = OpenAICompatibleClient(BASE_URL, API_KEY, "deepseek-chat", timeout_s=30.0, reasoning_effort="high")
+
+    assert llm.payload(system="S", user="U", reasoning_effort="none")["reasoning_effort"] == "none"
+    assert llm.payload(system="S", user="U")["reasoning_effort"] == "high"
+
+
+def test_an_override_can_add_the_parameter_to_a_client_that_omits_it():
+    llm = make_llm()
+
+    assert "reasoning_effort" not in llm.payload(system="S", user="U")
+    assert llm.payload(system="S", user="U", reasoning_effort="none")["reasoning_effort"] == "none"
+
+
 def test_the_cache_key_covers_the_reasoning_effort():
     base = make_llm()
     quiet = OpenAICompatibleClient(BASE_URL, API_KEY, base.model, timeout_s=30.0, reasoning_effort="none")

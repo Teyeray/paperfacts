@@ -38,6 +38,7 @@ from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONCURRENCY,
     DEFAULT_LLM_CONTEXT_TOKENS,
+    DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     EXTRACTION_MODES,
     ExtractionMode,
 )
@@ -148,12 +149,18 @@ def extract_lane(
     context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
     concurrency: int = DEFAULT_LLM_CONCURRENCY,
+    inventory_reasoning_effort: str | None = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     refresh: bool = False,
 ) -> LaneExtraction:
     """Extract one parser lane, whole-document or question by question.
 
     ``concurrency`` only decides how many of passage mode's field questions wait on the network at once.
     Every request is the one the sequential loop would have sent, so it stays out of ``extractor_key``.
+
+    ``inventory_reasoning_effort`` overrides the client's effort for passage mode's inventory question
+    alone -- the one question that reasons for far longer than the field questions after it. It does change
+    what is sent, so it is in ``extractor_key``. Both lanes get the same value, so the disagreement signal
+    stays a comparison of two identically-asked lanes.
     """
     if passes < 1:
         raise ValueError(f"passes must be at least 1, got {passes}")
@@ -183,6 +190,7 @@ def extract_lane(
                 context_tokens=context_tokens,
                 candidate_limit=candidate_limit,
                 concurrency=concurrency,
+                inventory_reasoning_effort=inventory_reasoning_effort,
                 refresh=refresh,
                 cache_salt=cache_salt,
             )
@@ -202,6 +210,7 @@ def extract_lane(
             temperature=client.temperature,
             max_tokens=client.max_tokens,
             reasoning_effort=client.reasoning_effort,
+            inventory_reasoning_effort=inventory_reasoning_effort,
             candidate_limit=candidate_limit,
         ),
         model=client.model,
@@ -265,6 +274,7 @@ def _extract_passages(
     context_tokens: int,
     candidate_limit: int,
     concurrency: int,
+    inventory_reasoning_effort: str | None,
     refresh: bool,
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
@@ -282,6 +292,7 @@ def _extract_passages(
         repair=lambda previous, error: repair_prompt(user, previous, error),
         refresh=refresh,
         cache_salt=cache_salt,
+        reasoning_effort=inventory_reasoning_effort,
     )
     logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(inventory.samples), len(selection))
 

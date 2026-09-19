@@ -224,6 +224,7 @@ def extract_document(
         context_tokens=settings.llm_context_tokens,
         candidate_limit=settings.candidate_limit,
         concurrency=settings.llm_concurrency,
+        inventory_reasoning_effort=settings.llm_inventory_reasoning_effort,
         refresh=force,
     )
     lane.write(layout.extraction_path(document.document_id, backend, key))

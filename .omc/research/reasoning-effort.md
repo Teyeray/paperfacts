@@ -39,3 +39,18 @@ The forty field questions together reason less than the two inventories; most an
 reasoning tokens. The inventory is therefore the lever, and it is the one question where reasoning may
 matter (it decides how many samples exist). Next: a per-stage effort setting for the inventory alone,
 measured on sample count and conditions before it ships.
+
+## Inventory-only effort (2026-09-20)
+
+`llm.inventory_reasoning_effort` applied to the coatings paper, everything else unchanged:
+
+| inventory effort | MinerU samples | PaddleOCR samples | matched | agree / missing | wall-clock |
+|---|---|---|---|---|---|
+| unset | 10 | 10 | 10 | 30 / 26 | 2 min 39 s |
+| low | 6 | 8 | 4 (6 unmatched) | 15 / 42 | 1 min 58 s |
+| none | 6 | 6 | 6 | 20 / 21 | 1 min 02 s |
+
+Less reasoning makes the inventory merge the as-deposited and 480 °C-annealed films into one sample per
+O2 flow, and at "low" the two lanes disagree on which set exists, so matching falls apart. The inventory
+is the one question where the hidden reasoning is doing the work. The setting stays unset; the remaining
+wall-clock is model generation, not a code path.

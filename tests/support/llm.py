@@ -34,6 +34,8 @@ class LlmCall:
     user: str
     refresh: bool = False
     cache_salt: str = ""
+    # The per-request effort override, as the caller passed it: None means "inherit the client's".
+    reasoning_effort: str | None = None
 
 
 class FakeLlmClient:
@@ -71,9 +73,25 @@ class FakeLlmClient:
 
     # ---- LlmClient protocol ----------------------------------------------------------
 
-    def complete_json(self, *, system: str, user: str, refresh: bool = False, cache_salt: str = "") -> LlmResult:
+    def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        refresh: bool = False,
+        cache_salt: str = "",
+        reasoning_effort: str | None = None,
+    ) -> LlmResult:
         with self._lock:
-            self.calls.append(LlmCall(system=system, user=user, refresh=refresh, cache_salt=cache_salt))
+            self.calls.append(
+                LlmCall(
+                    system=system,
+                    user=user,
+                    refresh=refresh,
+                    cache_salt=cache_salt,
+                    reasoning_effort=reasoning_effort,
+                )
+            )
             index = len(self.calls) - 1
         if self._responder is not None:
             return self._as_result(self._responder(system, user))

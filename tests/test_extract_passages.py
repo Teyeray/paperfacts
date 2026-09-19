@@ -99,13 +99,21 @@ def passage_responder(inventory: str, per_pass: list[dict[str, str]]):
     return respond
 
 
-def extract(client: FakeLlmClient, *, backend: str = "mineru", passes: int = 1, concurrency: int = 1):
+def extract(
+    client: FakeLlmClient,
+    *,
+    backend: str = "mineru",
+    passes: int = 1,
+    concurrency: int = 1,
+    inventory_reasoning_effort: str | None = None,
+):
     return extract_lane(
         make_artifact(make_blocks(backend), backend=backend),
         client,
         mode="passage",
         passes=passes,
         concurrency=concurrency,
+        inventory_reasoning_effort=inventory_reasoning_effort,
     )
 
 
@@ -429,6 +437,39 @@ def test_an_unattributed_value_a_majority_of_passes_produced_survives_voting():
 
     assert [field.value_raw for field in lane.unattributed] == ["12.5"]
     assert lane.unattributed[0].agreement == 1.0
+
+
+# ---- the inventory question's own reasoning effort --------------------------------------------------
+
+
+def test_the_inventory_effort_reaches_the_inventory_question_and_nothing_else():
+    # The inventory question reasons an order of magnitude longer than the field questions after it, so it
+    # is the one worth turning down. Turning the others down too would change what they answer.
+    client = FakeLlmClient(responder())
+
+    extract(client, inventory_reasoning_effort="none")
+
+    inventory = [call for call in client.calls if call.system == inventory_system_prompt()]
+    fields = [call for call in client.calls if call.system != inventory_system_prompt()]
+    assert [call.reasoning_effort for call in inventory] == ["none"]
+    assert fields and all(call.reasoning_effort is None for call in fields)
+
+
+def test_without_the_setting_every_question_inherits_the_clients_effort():
+    client = FakeLlmClient(responder())
+
+    extract(client)
+
+    assert all(call.reasoning_effort is None for call in client.calls)
+
+
+def test_the_inventory_effort_is_stored_in_the_extractor_key():
+    client = FakeLlmClient(responder())
+
+    lane = extract(client, inventory_reasoning_effort="none")
+
+    assert lane.extractor_key == extractor_key(client.model, mode="passage", inventory_reasoning_effort="none")
+    assert lane.extractor_key != extractor_key(client.model, mode="passage")
 
 
 # ---- the mode itself ------------------------------------------------------------------------------

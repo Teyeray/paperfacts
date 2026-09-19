@@ -59,7 +59,15 @@ class LlmClient(Protocol):
     max_tokens: int
     reasoning_effort: str | None
 
-    def complete_json(self, *, system: str, user: str, refresh: bool = False, cache_salt: str = "") -> LlmResult: ...
+    def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        refresh: bool = False,
+        cache_salt: str = "",
+        reasoning_effort: str | None = None,
+    ) -> LlmResult: ...
 
 
 class OpenAICompatibleClient:
@@ -103,8 +111,16 @@ class OpenAICompatibleClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def complete_json(self, *, system: str, user: str, refresh: bool = False, cache_salt: str = "") -> LlmResult:
-        payload = self.payload(system=system, user=user)
+    def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        refresh: bool = False,
+        cache_salt: str = "",
+        reasoning_effort: str | None = None,
+    ) -> LlmResult:
+        payload = self.payload(system=system, user=user, reasoning_effort=reasoning_effort)
         key = self.cache_key(payload, cache_salt=cache_salt)
         if not refresh:
             cached = self._read_cache(key)
@@ -122,8 +138,13 @@ class OpenAICompatibleClient:
         self._write_cache(key, result)
         return result
 
-    def payload(self, *, system: str, user: str) -> dict[str, Any]:
-        """The complete request body. The cache key hashes this, so no parameter can escape the key."""
+    def payload(self, *, system: str, user: str, reasoning_effort: str | None = None) -> dict[str, Any]:
+        """The complete request body. The cache key hashes this, so no parameter can escape the key.
+
+        ``reasoning_effort`` overrides the client's own setting for this one request; ``None`` inherits it.
+        A question that reasons far longer than its neighbours can therefore be given its own effort
+        without changing any other request's bytes, and so without invalidating their cached answers.
+        """
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -135,8 +156,9 @@ class OpenAICompatibleClient:
         }
         # Omitted rather than sent as null when unset: the bytes on the wire stay what they were before this
         # parameter existed, so every cached answer still resolves.
-        if self.reasoning_effort is not None:
-            body["reasoning_effort"] = self.reasoning_effort
+        effort = self.reasoning_effort if reasoning_effort is None else reasoning_effort
+        if effort is not None:
+            body["reasoning_effort"] = effort
         return body
 
     def cache_key(self, payload: dict[str, Any], *, cache_salt: str = "") -> str:
@@ -252,6 +274,7 @@ def complete_validated[M: BaseModel](
     repair: Callable[[str, str], str],
     refresh: bool = False,
     cache_salt: str = "",
+    reasoning_effort: str | None = None,
 ) -> tuple[M, str, dict[str, int]]:
     """Ask for JSON that validates against ``model_cls``, giving the model one chance to fix itself.
 
@@ -259,14 +282,24 @@ def complete_validated[M: BaseModel](
     caller supplies ``repair(previous_text, error)`` to build the follow-up prompt. Returns the parsed
     model, the raw text, and the summed token usage of both calls.
     """
-    first = client.complete_json(system=system, user=user, refresh=refresh, cache_salt=cache_salt)
+    first = client.complete_json(
+        system=system, user=user, refresh=refresh, cache_salt=cache_salt, reasoning_effort=reasoning_effort
+    )
     usage = dict(first.usage)
     try:
         return model_cls.model_validate_json(first.text), first.text, usage
     except ValidationError as exc:
         error = str(exc)
     logger.warning("%s response invalid, asking for a repair: %s", model_cls.__name__, error[:300])
-    second = client.complete_json(system=system, user=repair(first.text, error), refresh=refresh, cache_salt=cache_salt)
+    # The repair asks the same question again, so it gets the same effort: a retry must not silently
+    # become a more expensive request than the one it is fixing.
+    second = client.complete_json(
+        system=system,
+        user=repair(first.text, error),
+        refresh=refresh,
+        cache_salt=cache_salt,
+        reasoning_effort=reasoning_effort,
+    )
     for key, value in second.usage.items():
         usage[key] = usage.get(key, 0) + value
     try:

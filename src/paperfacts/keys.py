@@ -23,6 +23,7 @@ from pathlib import Path
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONTEXT_TOKENS,
+    DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
@@ -125,6 +126,7 @@ def extractor_key(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT,
+    inventory_reasoning_effort: str | None = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
     context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
 ) -> str:
@@ -157,6 +159,10 @@ def extractor_key(
         material["inventory_system"] = inventory_system_prompt()
         material["field_system"] = field_system_prompt()
         material["retrieval"] = retrieval_fingerprint()
+        # Passage mode only: it overrides the effort of the inventory question, which document mode never
+        # asks. Out of the material at its baseline, like every other unedited setting.
+        if inventory_reasoning_effort != DEFAULT_LLM_INVENTORY_REASONING_EFFORT:
+            material["inventory_reasoning_effort"] = inventory_reasoning_effort
         if candidate_limit != DEFAULT_CANDIDATE_LIMIT:
             material["candidate_limit"] = candidate_limit  # how many blocks each question saw
         if context_tokens != DEFAULT_LLM_CONTEXT_TOKENS:
@@ -175,6 +181,7 @@ def extractor_key_for(settings: Settings, model: str | None = None) -> str:
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         reasoning_effort=settings.llm_reasoning_effort,
+        inventory_reasoning_effort=settings.llm_inventory_reasoning_effort,
         candidate_limit=settings.candidate_limit,
         context_tokens=settings.llm_context_tokens,
     )

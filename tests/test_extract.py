@@ -88,6 +88,26 @@ def test_extractor_key_changes_with_the_reasoning_effort():
     )
 
 
+def test_extractor_key_ignores_the_inventory_effort_at_its_baseline():
+    assert extractor_key("deepseek-chat", mode="passage") == extractor_key(
+        "deepseek-chat", mode="passage", inventory_reasoning_effort=None
+    )
+
+
+def test_extractor_key_changes_with_the_inventory_effort_in_passage_mode():
+    assert extractor_key("deepseek-chat", mode="passage") != extractor_key(
+        "deepseek-chat", mode="passage", inventory_reasoning_effort="none"
+    )
+
+
+def test_extractor_key_ignores_the_inventory_effort_in_document_mode():
+    # Document mode never asks an inventory question, so the setting changes nothing it sends and must
+    # not rename its stored facts.
+    assert extractor_key("deepseek-chat", mode="document") == extractor_key(
+        "deepseek-chat", mode="document", inventory_reasoning_effort="none"
+    )
+
+
 def test_extractor_key_is_short_enough_to_live_in_a_filename():
     key = extractor_key("deepseek-chat")
 

@@ -22,6 +22,7 @@ import pytest
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONCURRENCY,
+    DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_OVERLAY_DPI,
@@ -346,6 +347,49 @@ def test_an_empty_reasoning_effort_variable_leaves_the_file_alone(tmp_path: Path
     assert settings.llm_reasoning_effort == "low"
 
 
+def test_the_inventory_reasoning_effort_comes_from_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": "none"})
+
+    assert Settings.from_env(env_for(path)).llm_inventory_reasoning_effort == "none"
+
+
+def test_a_null_inventory_reasoning_effort_inherits_the_general_one(tmp_path: Path):
+    # null is the baseline: the inventory question is sent with whatever llm.reasoning_effort says.
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": None})
+
+    settings = Settings.from_env(env_for(path))
+
+    assert settings.llm_inventory_reasoning_effort is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is None
+
+
+def test_a_file_written_before_the_inventory_effort_existed_still_loads(tmp_path: Path):
+    # The key is younger than some checkouts' config.json, so its absence reads as the baseline rather
+    # than as the hand-edited-file error every other missing key raises.
+    path = write_config(tmp_path / "config.json", {})
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["llm"]["inventory_reasoning_effort"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert Settings.from_env(env_for(path)).llm_inventory_reasoning_effort is None
+
+
+def test_an_unknown_inventory_reasoning_effort_names_its_own_key(tmp_path: Path):
+    # The error has to name the key that is wrong, not the neighbouring one that shares the parser.
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": "maximum"})
+
+    with pytest.raises(ConfigError, match=re.escape("llm.inventory_reasoning_effort is 'maximum'")) as caught:
+        Settings.from_env(env_for(path))
+    assert "PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT" in str(caught.value)
+
+
+def test_the_environment_overrides_the_inventory_reasoning_effort(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": None})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT="low"))
+
+    assert settings.llm_inventory_reasoning_effort == "low"
+
+
 def test_a_missing_setting_in_the_file_fails_loudly(tmp_path: Path):
     # Not a silent fallback: a file that has lost a key is a file someone edited by hand, and the value
     # they deleted is more likely to be wrong than absent.
@@ -496,6 +540,8 @@ def test_the_shipped_configuration_mirrors_the_built_in_baselines():
     # Shipped unset on purpose: turning reasoning off was measured to lose a third of the extracted values
     # (.omc/research/reasoning-effort.md), and an unedited checkout must keep its cache keys.
     assert data["llm"]["reasoning_effort"] is DEFAULT_LLM_REASONING_EFFORT is None
+    # Shipped unset too: the inventory question inherits the general effort until somebody asks otherwise.
+    assert data["llm"]["inventory_reasoning_effort"] is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is None
     assert data["llm"]["retry_attempts"] == DEFAULT_RETRY_ATTEMPTS
     assert data["llm"]["retry_backoff_s"] == DEFAULT_RETRY_BACKOFF_S
     assert data["extraction"]["candidate_limit"] == DEFAULT_CANDIDATE_LIMIT

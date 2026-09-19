@@ -70,6 +70,11 @@ DEFAULT_MAX_TOKENS = 65536
 # means the parameter is omitted entirely: that is what every request looked like before this setting
 # existed, so an unedited checkout keeps its cache keys. See _parse_reasoning_effort for the accepted values.
 DEFAULT_LLM_REASONING_EFFORT: str | None = None
+# Passage mode's inventory question ("which samples does this paper have?") reasons an order of magnitude
+# longer than the per-field questions that follow it -- measured at 11k-17k hidden tokens per lane, about
+# 70% of a run's completion tokens. This gives that one request its own effort. The baseline is None, which
+# means "inherit llm.reasoning_effort", i.e. exactly what every request looked like before this setting.
+DEFAULT_LLM_INVENTORY_REASONING_EFFORT: str | None = None
 REASONING_EFFORTS: tuple[str, ...] = ("none", "low", "medium", "high")
 DEFAULT_RETRY_ATTEMPTS = 4
 DEFAULT_RETRY_BACKOFF_S = 2.0
@@ -155,6 +160,15 @@ class ConfigDocument:
             raise ConfigError(f"{self.path}: {dotted} must be a string or null, got {value!r}")
         return value.strip() or None
 
+    def text_or_none_if_absent(self, dotted: str) -> str | None:
+        """Like :meth:`text_or_none`, but a key a file written before this setting existed does not carry
+        yet reads as ``null`` rather than as an error. Same contract as :meth:`get_or`."""
+        try:
+            self._node(dotted)
+        except ConfigError:
+            return None
+        return self.text_or_none(dotted)
+
     def entries(self, dotted: str) -> list[Any]:
         value = self._node(dotted)
         if not isinstance(value, list):
@@ -238,6 +252,8 @@ class Settings:
     # None leaves `reasoning_effort` out of the request; a value asks the endpoint for that much hidden
     # reasoning before the answer.
     llm_reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT
+    # None inherits llm_reasoning_effort; a value overrides it for passage mode's inventory question only.
+    llm_inventory_reasoning_effort: str | None = DEFAULT_LLM_INVENTORY_REASONING_EFFORT
     # Per-field questions in flight per lane. The two lanes themselves always run as a pair, so the peak
     # number of open requests is twice this. It changes nothing about what is asked, only when.
     llm_concurrency: int = DEFAULT_LLM_CONCURRENCY
@@ -306,6 +322,12 @@ class Settings:
             llm_reasoning_effort=_parse_reasoning_effort(
                 get("LLM_REASONING_EFFORT") or file.text_or_none("llm.reasoning_effort"), file.path
             ),
+            llm_inventory_reasoning_effort=_parse_reasoning_effort(
+                get("LLM_INVENTORY_REASONING_EFFORT") or file.text_or_none_if_absent("llm.inventory_reasoning_effort"),
+                file.path,
+                dotted="llm.inventory_reasoning_effort",
+                variable="LLM_INVENTORY_REASONING_EFFORT",
+            ),
             llm_concurrency=_positive(
                 number("LLM_CONCURRENCY", file.get_or("llm.concurrency", int, DEFAULT_LLM_CONCURRENCY), int),
                 "llm.concurrency",
@@ -371,7 +393,13 @@ def _parse_mode(raw: str, source: Path) -> ExtractionMode:
     return cast(ExtractionMode, raw)
 
 
-def _parse_reasoning_effort(raw: str | None, source: Path) -> str | None:
+def _parse_reasoning_effort(
+    raw: str | None,
+    source: Path,
+    *,
+    dotted: str = "llm.reasoning_effort",
+    variable: str = "LLM_REASONING_EFFORT",
+) -> str | None:
     """``null`` (or an unset variable) means "omit the parameter"; anything else must be one we know the
     endpoint accepts, named here rather than discovered as a 400 halfway through a paper."""
     if raw is None:
@@ -379,8 +407,7 @@ def _parse_reasoning_effort(raw: str | None, source: Path) -> str | None:
     if raw not in REASONING_EFFORTS:
         efforts = ", ".join(REASONING_EFFORTS)
         raise ConfigError(
-            f"llm.reasoning_effort is {raw!r}, expected null or one of {efforts} "
-            f"(set in {source} or {ENV_PREFIX}LLM_REASONING_EFFORT)"
+            f"{dotted} is {raw!r}, expected null or one of {efforts} (set in {source} or {ENV_PREFIX}{variable})"
         )
     return raw
 
