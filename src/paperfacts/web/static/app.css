@@ -260,3 +260,24 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .empty p { color: var(--ink-2); line-height: 1.7; }
 .toast { position: fixed; right: 20px; bottom: 20px; background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px; z-index: 10; max-width: 420px; }
 .toast.error { background: var(--bad); color: #fff; }
+
+/* ---------- results table: sticky frame ----------
+   Twenty field columns scroll horizontally inside .table-wrap (bounded at 70vh, so it scrolls
+   vertically too). The header row and the identifying first column (样品 / 论文) stay put while the
+   values move under them. Both need an opaque token background — a transparent sticky cell would show
+   the scrolling cells through itself — and the shared `inset` shadows stand in for the collapsed
+   borders, which browsers drop on sticky cells. */
+.results-table th:first-child,
+.results-table td:first-child {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--paper);
+  box-shadow: inset -1px 0 0 var(--line), inset 0 -1px 0 var(--line), 3px 0 6px -3px rgb(0 0 0 / 18%);
+}
+.results-table th:first-child { z-index: 3; background: var(--paper-2); }
+.results-table th { z-index: 2; }
+/* Row states have to be repainted on the sticky cell: it carries its own opaque background, so the
+   row's hover and the paper row's tint never reach it. */
+.results-table tbody tr:hover > td:first-child { background: color-mix(in oklab, var(--accent) 6%, var(--paper)); }
+.results-table tr.paper-row > td:first-child { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
+.results-table tr.paper-row:hover > td:first-child { background: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
+.results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
