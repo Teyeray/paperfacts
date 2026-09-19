@@ -188,13 +188,22 @@ def _dense_neighbours(chosen: set[int], blocks: Sequence[SourceBlock]) -> set[in
     One fact is routinely split across two blocks: the number is in the table and the wavelength it was
     measured at is in the caption beside it. Whichever half matched, the other half has to come too, and it
     arrives outside the ranking so it never costs another block its place.
+
+    A page break does not break that pair: a table at the foot of one page and its caption at the head of
+    the next are adjacent in reading order, so a neighbour one page away still qualifies — but only for a
+    table/caption pair, never two tables or a figure, which across a break are merely consecutive.
     """
     extra: set[int] = set()
     for index in chosen:
         for neighbour in (index - 1, index + 1):
             if not 0 <= neighbour < len(blocks) or neighbour in chosen:
                 continue
-            if blocks[neighbour].type in DENSE_TYPES and blocks[neighbour].page == blocks[index].page:
+            if blocks[neighbour].type not in DENSE_TYPES:
+                continue
+            page_gap = abs(blocks[neighbour].page - blocks[index].page)
+            if page_gap == 0:
+                extra.add(neighbour)
+            elif page_gap == 1 and {blocks[index].type, blocks[neighbour].type} == DENSE_TYPES:
                 extra.add(neighbour)
     return extra
 
