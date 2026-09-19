@@ -21,6 +21,7 @@ import pytest
 
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
+    DEFAULT_LLM_CONCURRENCY,
     DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_OVERLAY_DPI,
@@ -521,3 +522,45 @@ def test_the_shipped_configuration_agrees_with_the_dataclass_defaults():
     assert [getattr(configured, name) for name in fed_by_the_file] == [
         getattr(baseline, name) for name in fed_by_the_file
     ]
+
+
+# ---- llm.concurrency: how many questions wait at once, never what they say ----------------
+
+
+def test_the_concurrency_comes_from_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": 9})
+
+    assert Settings.from_env(env_for(path)).llm_concurrency == 9
+
+
+def test_the_concurrency_environment_variable_wins_over_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": 9})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_CONCURRENCY="2"))
+
+    assert settings.llm_concurrency == 2
+
+
+def test_a_concurrency_below_one_names_the_key_and_the_file(tmp_path: Path):
+    # Zero questions in flight would hang forever inside the pool rather than fail here.
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": 0})
+
+    with pytest.raises(ConfigError, match=r"llm\.concurrency must be at least 1"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_file_without_a_concurrency_key_falls_back_to_the_baseline(tmp_path: Path):
+    """The knob changes no cache key, so a configuration file written before it existed stays valid."""
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": None})
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["llm"]["concurrency"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert Settings.from_env(env_for(path)).llm_concurrency == DEFAULT_LLM_CONCURRENCY
+
+
+def test_a_non_integer_concurrency_still_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": "four"})
+
+    with pytest.raises(ConfigError, match=r"llm\.concurrency must be int"):
+        Settings.from_env(env_for(path))
