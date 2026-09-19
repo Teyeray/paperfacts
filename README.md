@@ -362,7 +362,7 @@ Adding a field is one entry. A `canonical_unit` must be one the converters know
 `paperfacts fields` lists the table the package actually loaded. Editing the table changes `extractor_key`, so
 affected papers are re-extracted and nothing stale is served.
 
-## Data layout## Data layout
+## Data layout
 
 One directory per document, holding every intermediate state:
 
