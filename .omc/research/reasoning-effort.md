@@ -30,3 +30,12 @@ bug. The values come from Table 3, whose rows are devices ("#1 (0.0 sccm)"), and
 the inventory (as-deposited and annealed at 480 °C), so no single sample owns them; the model's condition
 text says exactly that. `transmittance 'over 80 %'` is a paper-wide sentence. Both belong where they are.
 Do not add a rule that attaches a value to a sample whose name contains the number.
+
+## Where the time goes (2026-09-20, reasoning_tokens now recorded)
+
+coatings-12-00203 again, concurrent pipeline, reasoning unset, 42 live calls, 2 min 39 s wall-clock.
+Inventory calls: MinerU 14.4k completion tokens of which 11.5k reasoning; PaddleOCR 20.2k of which 17.0k.
+The forty field questions together reason less than the two inventories; most answer with under 300
+reasoning tokens. The inventory is therefore the lever, and it is the one question where reasoning may
+matter (it decides how many samples exist). Next: a per-stage effort setting for the inventory alone,
+measured on sample count and conditions before it ships.
