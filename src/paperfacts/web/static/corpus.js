@@ -9,7 +9,7 @@ import { api } from "./api.js";
 import { escapeHtml, toast } from "./html.js";
 import { documentHash } from "./router.js";
 import { state } from "./state.js";
-import { copyButton, copyTable, headRow, shownValue, toggleChip, tsvHeader, visibleFields } from "./table.js";
+import { chosenFields, copyButton, copyTable, fieldPicker, headRow, shownValue, toggleChip, tsvHeader, visibleFields } from "./table.js";
 
 let showAllFields = false;
 
@@ -29,14 +29,18 @@ export function renderCorpus(root) {
   if (!rows.length) return;
 
   const paperRows = rows.map((row) => row.paper_row ?? {});
-  const fields = visibleFields(data.fields, paperRows, showAllFields);
+  const chosen = chosenFields(data.fields);
+  const fields = visibleFields(chosen, paperRows, showAllFields);
 
   const head = document.createElement("div");
   head.className = "results-head";
   head.innerHTML = `<h2>结果总表（按论文）</h2>`;
   const chips = document.createElement("div");
   chips.className = "chips";
-  chips.append(toggleChip(data.fields, showAllFields, () => { showAllFields = !showAllFields; renderCorpus(root); }));
+  chips.append(
+    toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; renderCorpus(root); }),
+    fieldPicker(data.fields, () => renderCorpus(root)),
+  );
   head.append(chips);
   const leading = ["论文", "样品", "可用/一致"];
   head.append(copyButton(() => copyTable(tsvHeader(leading, fields), rows.map((row) => rowValues(row, fields)))));
