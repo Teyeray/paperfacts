@@ -301,8 +301,11 @@ def test_artifact_json_is_the_last_of_the_three_files_to_be_written(
     original_write_text = Path.write_text
 
     def record(self, data, *args, **kwargs):
-        if self in tracked:
-            order.append(tracked[self])
+        # The artifact is written atomically, so its content lands in a `.<name>.<hex>.tmp`
+        # sibling; resolve that back to the file it becomes.
+        target = self if self in tracked else self.with_name(".".join(self.name.split(".")[1:-2]))
+        if target in tracked:
+            order.append(tracked[target])
         return original_write_text(self, data, *args, **kwargs)
 
     monkeypatch.setattr(Path, "write_text", record)

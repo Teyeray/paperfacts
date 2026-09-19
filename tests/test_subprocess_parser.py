@@ -8,13 +8,19 @@ guessed from a mock's call count.
 
 from __future__ import annotations
 
+import os
+import shutil
 import stat
+import subprocess
 import sys
+import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
-from paperfacts.models import META_FILENAME, DocumentInput
+from paperfacts import parsers
+from paperfacts.models import META_FILENAME, DocumentInput, RawParseOutput
 from paperfacts.parsers import (
     DEFAULT_COMMAND_PREFIX,
     RUNNER_SCRIPTS,
@@ -27,7 +33,7 @@ from paperfacts.parsers import (
 # Fake runner: follows the same contract as runners/*.py (--pdf / --out, writes meta.json last).
 # Extra debug switches let the same script act out three kinds of failure: "fail / skip meta / timeout".
 FAKE_RUNNER = """
-import argparse, hashlib, json, os, pathlib, sys, time
+import argparse, hashlib, json, os, pathlib, signal, subprocess, sys, time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--pdf", required=True, type=pathlib.Path)
@@ -38,7 +44,16 @@ parser.add_argument("--parser-name", default="mineru")
 parser.add_argument("--fail", action="store_true")
 parser.add_argument("--no-meta", action="store_true")
 parser.add_argument("--sleep", type=float, default=0.0)
+parser.add_argument("--ignore-sigterm", action="store_true")
+parser.add_argument("--spawn-child", type=pathlib.Path)
 args = parser.parse_args()
+
+if args.ignore_sigterm:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if args.spawn_child:
+    # A grandchild in the same process group, like the real parser under `uv run`.
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    args.spawn_child.write_text(str(child.pid), encoding="utf-8")
 
 with args.counter.open("a", encoding="utf-8") as fh:
     fh.write("run\\n")
@@ -375,3 +390,201 @@ def test_stderr_tail_replaces_undecodable_bytes_instead_of_raising():
     from paperfacts.parsers import _tail
 
     assert "\ufffd" in _tail(b"\xff\xfe not utf-8")
+
+
+# ---- Runner process lifetime ---------------------------------------------------------------
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+def test_a_timed_out_runner_and_its_children_are_killed_even_if_it_ignores_sigterm(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    # The defect this guards: killing the server left `uv run` and its multi-gigabyte python child
+    # running for a quarter of an hour. Only a group kill reaches the grandchild.
+    child_pid_file = tmp_path / "child.pid"
+    parser = make_parser(
+        fake_runner,
+        counter,
+        "--ignore-sigterm",
+        "--spawn-child",
+        str(child_pid_file),
+        "--sleep",
+        "60",
+        timeout_s=1.0,
+    )
+
+    with pytest.raises(ParserError) as excinfo:
+        parser.parse(document, tmp_path / "raw")
+
+    assert excinfo.value.stage == "timeout"
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 10
+    while _alive(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _alive(child_pid), "the runner's child outlived the timeout"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+def test_the_runner_is_launched_in_its_own_session(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    # Without a session of its own the group kill would reach nothing but the direct child.
+    seen: list[dict] = []
+    real_popen = subprocess.Popen
+
+    def record(*args, **kwargs):
+        seen.append(kwargs)
+        return real_popen(*args, **kwargs)
+
+    with mock.patch.object(parsers.subprocess, "Popen", record):
+        make_parser(fake_runner, counter).parse(document, tmp_path / "raw")
+
+    assert seen and seen[0]["start_new_session"] is True
+
+
+# ---- Forced rerun keeps the previous output until the new one is complete ---------------------
+
+
+def test_a_failed_forced_rerun_leaves_the_previous_output_intact(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    # The defect this guards: force wiped the output directory before running, so a forced run that
+    # died left the document with no parse at all.
+    out_dir = tmp_path / "raw"
+    good = make_parser(fake_runner, counter).parse(document, out_dir)
+    (out_dir / "native.txt").write_text("the good output", encoding="utf-8")
+
+    failing = make_parser(fake_runner, counter, "--fail")
+    with pytest.raises(ParserError) as excinfo:
+        failing.parse(document, out_dir, force=True)
+
+    assert excinfo.value.stage == "run"
+    assert (out_dir / "native.txt").read_text(encoding="utf-8") == "the good output"
+    assert RawParseOutput.load(out_dir, "mineru").meta == good.meta
+
+
+def test_a_forced_rerun_that_writes_no_meta_leaves_the_previous_output_intact(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    # Exit code 0 but incomplete output must not count either: validation happens in the staging
+    # directory, before anything is swapped in.
+    out_dir = tmp_path / "raw"
+    make_parser(fake_runner, counter).parse(document, out_dir)
+
+    with pytest.raises(ParserError) as excinfo:
+        make_parser(fake_runner, counter, "--no-meta").parse(document, out_dir, force=True)
+
+    assert excinfo.value.stage == "output"
+    assert (out_dir / META_FILENAME).is_file()
+
+
+def test_a_killed_forced_rerun_leaves_the_previous_output_intact(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    out_dir = tmp_path / "raw"
+    make_parser(fake_runner, counter).parse(document, out_dir)
+
+    with pytest.raises(ParserError):
+        make_parser(fake_runner, counter, "--sleep", "30", timeout_s=0.5).parse(document, out_dir, force=True)
+
+    assert RawParseOutput.load(out_dir, "mineru").meta.parser_version == "fake-9.9"
+
+
+def test_a_successful_run_leaves_no_staging_directories_behind(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    out_dir = tmp_path / "raw"
+    parser = make_parser(fake_runner, counter)
+    parser.parse(document, out_dir)
+    parser.parse(document, out_dir, force=True)
+
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".raw")] == []
+
+
+def test_a_failed_run_leaves_no_staging_directories_behind(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    with pytest.raises(ParserError):
+        make_parser(fake_runner, counter, "--fail").parse(document, tmp_path / "raw")
+
+    assert list(tmp_path.glob(".raw*")) == []
+
+
+# ---- Recovery from a crash inside the swap ---------------------------------------------------
+
+
+def test_output_stranded_by_an_interrupted_swap_is_recovered_and_serves_as_a_cache_hit(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    # _swap_into_place renames the old directory aside and then renames the new one in. Dying between
+    # the two leaves the parse on disk under its `.old.` name and nothing at out_dir; re-parsing a
+    # paper that is sitting right there is exactly the loss this whole change is about.
+    out_dir = tmp_path / "raw"
+    parser = make_parser(fake_runner, counter)
+    first = parser.parse(document, out_dir)
+    stranded = out_dir.with_name(f".{out_dir.name}.old.deadbeef")
+    os.replace(out_dir, stranded)
+
+    recovered = parser.parse(document, out_dir)
+
+    assert recovered.cache_hit is True
+    assert recovered.meta == first.meta
+    assert run_count(counter) == 1
+    assert not stranded.exists()
+
+
+def test_the_newest_stranded_output_wins_and_the_rest_are_deleted(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    out_dir = tmp_path / "raw"
+    make_parser(fake_runner, counter).parse(document, out_dir)
+    older = out_dir.with_name(f".{out_dir.name}.old.older")
+    shutil.copytree(out_dir, older)
+    os.utime(older, (1, 1))
+    newer = out_dir.with_name(f".{out_dir.name}.old.newer")
+    os.replace(out_dir, newer)
+    (newer / "native.txt").write_text("the newest output", encoding="utf-8")
+
+    make_parser(fake_runner, counter).parse(document, out_dir)
+
+    assert (out_dir / "native.txt").read_text(encoding="utf-8") == "the newest output"
+    assert list(tmp_path.glob(".raw.old.*")) == []
+
+
+def test_a_staging_directory_from_a_crashed_run_is_deleted(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    out_dir = tmp_path / "raw"
+    abandoned = out_dir.with_name(f".{out_dir.name}.new.crashed")
+    abandoned.mkdir(parents=True)
+    (abandoned / "half_written.json").write_text("{", encoding="utf-8")
+
+    make_parser(fake_runner, counter).parse(document, out_dir)
+
+    assert not abandoned.exists()
+    assert (out_dir / META_FILENAME).is_file()
+
+
+def test_recovery_leaves_a_directory_that_is_already_in_place_alone(
+    tmp_path: Path, document: DocumentInput, fake_runner: Path, counter: Path
+):
+    # A `.old.` directory next to a perfectly good out_dir is debris from a swap that did finish:
+    # it must never be renamed over the live output.
+    out_dir = tmp_path / "raw"
+    make_parser(fake_runner, counter).parse(document, out_dir)
+    (out_dir / "native.txt").write_text("the live output", encoding="utf-8")
+    debris = out_dir.with_name(f".{out_dir.name}.old.debris")
+    shutil.copytree(out_dir, debris)
+    (debris / "native.txt").write_text("stale", encoding="utf-8")
+
+    make_parser(fake_runner, counter).parse(document, out_dir)
+
+    assert (out_dir / "native.txt").read_text(encoding="utf-8") == "the live output"

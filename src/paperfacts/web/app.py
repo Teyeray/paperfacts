@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.models import Backend, ParsedArtifact
+from paperfacts.parsers import install_runner_cleanup
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.web.documents import DocumentSummary, Library
@@ -95,6 +96,9 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Jobs run on a worker thread, where signal handlers cannot be installed: arm the runner cleanup
+        # here, on the main thread, so a SIGTERM to the server takes the parser subprocesses with it.
+        install_runner_cleanup()
         yield
         manager.shutdown()  # stop accepting new jobs on shutdown; a job already running ends with the process
 

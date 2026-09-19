@@ -26,6 +26,7 @@ from paperfacts.errors import PaperFactsError, ParserError
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
+from paperfacts.parsers import install_runner_cleanup
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import (
@@ -43,6 +44,13 @@ app = typer.Typer(
     help="Extract traceable sample-level facts from scientific PDFs using two independent parsers.",
     no_args_is_help=True,
 )
+
+
+@app.callback()
+def main() -> None:
+    # This process owns the parser subprocesses: make sure Ctrl-C or a kill takes them with it, rather
+    # than leaving a multi-gigabyte runner behind.
+    install_runner_cleanup()
 
 
 class BackendOption(StrEnum):

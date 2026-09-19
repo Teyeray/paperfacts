@@ -10,21 +10,27 @@ tell them apart:
 - :class:`MinerUHttpParser` and :class:`PaddleHttpParser` call the long-running services on a GPU server
   and write the response into the runner's layout, then write ``meta.json`` themselves.
 
-Both share the :class:`Parser` template: cache check, clean directory, produce, validate.
+Both share the :class:`Parser` template: cache check, produce into a staging directory, validate,
+swap in. A run that fails or is killed never touches the previous output.
 """
 
 from __future__ import annotations
 
+import atexit
 import base64
 import json
 import logging
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Mapping, Sequence
+import uuid
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -55,6 +61,9 @@ RUNNER_SCRIPTS: dict[Backend, str] = {
 }
 STDERR_TAIL_LINES = 40
 DEFAULT_TIMEOUT_S = 900.0
+# How long a runner gets between SIGTERM and SIGKILL. A runner holding ~10 GB has nothing to flush, so
+# this only has to cover the signal round-trip.
+RUNNER_KILL_GRACE_S = 5.0
 DEFAULT_RENDER_DPI = 200
 
 # ---- The runners' native layout, replicated here because the HTTP parsers must write the same files. A
@@ -92,6 +101,51 @@ def write_meta(out_dir: Path, meta: ParserMeta) -> None:
     (out_dir / META_FILENAME).write_text(meta.model_dump_json(indent=2, by_alias=True), encoding="utf-8")
 
 
+def _swap_into_place(staging: Path, out_dir: Path) -> None:
+    """Replace ``out_dir`` with ``staging``: move any previous output aside, rename, then delete it.
+
+    ``os.replace`` refuses a non-empty directory as the target, so the previous output has to be renamed
+    out of the way first. The window in which neither directory is at ``out_dir`` is one rename long; if
+    the process dies inside it the previous output is still on disk under its ``.old.`` name.
+    """
+    previous = out_dir.with_name(f".{out_dir.name}.old.{uuid.uuid4().hex}") if out_dir.exists() else None
+    if previous is not None:
+        os.replace(out_dir, previous)
+    try:
+        os.replace(staging, out_dir)
+    except OSError:
+        if previous is not None:
+            os.replace(previous, out_dir)
+        raise
+    if previous is not None:
+        shutil.rmtree(previous, ignore_errors=True)
+
+
+def _recover_leftovers(out_dir: Path) -> None:
+    """Undo what a crash inside :func:`_swap_into_place` can leave behind.
+
+    Dying between the two renames leaves the previous output under its ``.old.`` name and nothing at
+    ``out_dir``; putting the newest one back is the difference between a cache hit and re-parsing a
+    paper from scratch. Staging directories from a crashed run are just garbage, so they go.
+    """
+    if not out_dir.parent.is_dir():
+        return
+    if not out_dir.exists():
+        stranded = sorted(out_dir.parent.glob(f".{out_dir.name}.old.*"), key=lambda p: p.stat().st_mtime)
+        if stranded:
+            recovered = stranded[-1]
+            logger.warning("recovering output stranded by an interrupted swap: %s -> %s", recovered, out_dir)
+            os.replace(recovered, out_dir)
+            stranded.pop()
+        for leftover in stranded:
+            shutil.rmtree(leftover, ignore_errors=True)
+    with _active_lock:
+        in_use = set(_active_staging)
+    for staging in out_dir.parent.glob(f".{out_dir.name}.new.*"):
+        if staging not in in_use:  # a run happening right now in another thread owns its own directory
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 def default_runner_script(repo_root: Path, backend: Backend) -> Path:
     return repo_root / RUNNER_SCRIPTS[backend]
 
@@ -100,7 +154,7 @@ def default_runner_script(repo_root: Path, backend: Backend) -> Path:
 
 
 class Parser:
-    """Cache check, clean directory, produce, write meta.json, validate.
+    """Cache check, produce into a staging directory, write meta.json, validate, swap into place.
 
     Subclasses implement :meth:`_produce`; returning a :class:`ParserMeta` makes this class write
     ``meta.json``, returning ``None`` means the producer already wrote it (the runner subprocess does).
@@ -109,6 +163,7 @@ class Parser:
     backend: Backend
 
     def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
+        _recover_leftovers(out_dir)
         if not force and (out_dir / META_FILENAME).is_file():
             logger.info("cache_hit backend=%s doc=%s", self.backend, document.document_id[:16])
             try:
@@ -120,20 +175,32 @@ class Parser:
         # Cheap pre-flight before anything destructive: a missing runner script must not destroy a previous
         # good output.
         self._check_ready()
-        # A cache miss always starts from a clean directory, so leftovers from a half-finished run can never
-        # be mistaken for this run's result.
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         clock = time.monotonic()
-        meta = self._produce(document, out_dir)
-        if meta is not None:
-            write_meta(out_dir, meta)
+        # The run produces into a fresh directory beside the target and is swapped in only once it has
+        # validated: a run that fails, times out or is killed leaves the previous output exactly as it was.
+        # The staging directory is a sibling so the swap is a rename within one filesystem.
+        staging = out_dir.with_name(f".{out_dir.name}.new.{uuid.uuid4().hex}")
+        staging.mkdir(parents=True)
+        with _active_lock:
+            _active_staging.add(staging)
         try:
-            output = RawParseOutput.load(out_dir, self.backend)
-        except (FileNotFoundError, ValueError) as exc:
-            raise ParserError(self.backend, "output", str(exc)) from exc
+            meta = self._produce(document, staging)
+            if meta is not None:
+                write_meta(staging, meta)
+            try:
+                RawParseOutput.load(staging, self.backend)
+            except (FileNotFoundError, ValueError) as exc:
+                raise ParserError(self.backend, "output", str(exc)) from exc
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        finally:
+            with _active_lock:
+                _active_staging.discard(staging)
+        _swap_into_place(staging, out_dir)
+        # Reload so the handle points at the final location rather than the staging directory.
+        output = RawParseOutput.load(out_dir, self.backend)
 
         logger.info(
             "done backend=%s doc=%s version=%s runtime_s=%.1f parsed_pages=%d",
@@ -196,16 +263,140 @@ class SubprocessParser(Parser):
         logger.info("run backend=%s doc=%s cmd=%s", self.backend, document.document_id[:16], cmd)
         try:
             # The command is built by this module from settings and paths; no user-controlled shell content.
-            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout_s, env=merged_env)
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=merged_env,
+                # `uv run` spawns the real parser as a grandchild, so killing the direct child alone leaves
+                # a multi-gigabyte python process behind. Its own session makes the whole tree killable as
+                # one group. POSIX only; on Windows there is no session and the group kill is skipped.
+                start_new_session=_POSIX,
+            )
         except FileNotFoundError as exc:
             raise ParserError(self.backend, "launch", f"executable not found: {exc}") from exc
-        except subprocess.TimeoutExpired as exc:
-            detail = f"did not finish within {self.timeout_s}s: {_tail(exc.stderr)}"
-            raise ParserError(self.backend, "timeout", detail) from exc
-        if completed.returncode != 0:
-            raise ParserError(
-                self.backend, "run", f"exit code {completed.returncode}, stderr tail:\n{_tail(completed.stderr)}"
-            )
+
+        with _tracked(process) as pgid:
+            try:
+                _, stderr = process.communicate(timeout=self.timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                _terminate_tree(process, pgid)
+                _, stderr = process.communicate()
+                detail = f"did not finish within {self.timeout_s}s: {_tail(stderr)}"
+                raise ParserError(self.backend, "timeout", detail) from exc
+            except BaseException:
+                # Anything else that stops us waiting -- KeyboardInterrupt, a cancelled worker -- must not
+                # leave the runner alive holding the GPU and its memory.
+                _terminate_tree(process, pgid)
+                raise
+        if process.returncode != 0:
+            raise ParserError(self.backend, "run", f"exit code {process.returncode}, stderr tail:\n{_tail(stderr)}")
+
+
+# ---- Runner process lifetime ---------------------------------------------------------------------
+#
+# A runner outliving the process that started it is not a tidiness problem: the PaddleOCR-VL runner holds
+# about 10 GB and a GPU, so an orphan starves the machine until someone notices. Every path that stops
+# waiting for a runner therefore kills its whole process group, including the parent's own death.
+
+_POSIX = os.name == "posix"
+_active_lock = threading.Lock()
+# Staging directories a run is using right now, so leftover cleanup cannot delete a live sibling run's.
+_active_staging: set[Path] = set()
+# pid -> (process, its process-group id). The group is read once at launch: by kill time the pid may
+# have been reaped, and a reused pid would hand us a stranger's process group to signal.
+_active: dict[int, tuple[subprocess.Popen[str], int | None]] = {}
+_cleanup_installed = False
+
+
+def install_runner_cleanup() -> None:
+    """Arrange for running runners to be killed when this process exits. Idempotent.
+
+    Called by the entry points that own a process -- the CLI and the web app's startup -- rather than
+    from the launch path: registering an ``atexit`` hook and a signal handler is the process owner's
+    decision, and ``signal.signal`` only works on the main thread anyway.
+    """
+    global _cleanup_installed
+    with _active_lock:
+        if _cleanup_installed:
+            return
+        _cleanup_installed = True
+    atexit.register(_terminate_all)
+    if not _POSIX:
+        return
+    try:
+        previous = signal.getsignal(signal.SIGTERM)
+
+        def on_sigterm(signum: int, frame: Any) -> None:
+            _terminate_all()
+            if callable(previous):
+                previous(signum, frame)
+                return
+            # Default disposition: die from the signal we were sent, now that the runners are gone.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        signal.signal(signal.SIGTERM, on_sigterm)
+    except ValueError:
+        # Not the main thread; atexit still covers a normal interpreter exit.
+        logger.debug("SIGTERM handler not installed: not on the main thread")
+
+
+@contextmanager
+def _tracked(process: subprocess.Popen[str]) -> Iterator[int | None]:
+    pgid = _process_group(process)
+    with _active_lock:
+        _active[process.pid] = (process, pgid)
+    try:
+        yield pgid
+    finally:
+        with _active_lock:
+            _active.pop(process.pid, None)
+
+
+def _process_group(process: subprocess.Popen[str]) -> int | None:
+    """The runner's group id, read while it is certainly alive. ``None`` means signal the child alone."""
+    if not _POSIX:
+        return None
+    try:
+        return os.getpgid(process.pid)
+    except OSError:  # pragma: no cover - only if the runner died between Popen and this call
+        return None
+
+
+def _terminate_tree(process: subprocess.Popen[str], pgid: int | None) -> None:
+    """SIGTERM the runner's whole process group, then SIGKILL whatever is still there."""
+    if process.poll() is not None:
+        return
+    _signal_group(process, pgid, signal.SIGTERM)
+    try:
+        process.wait(timeout=RUNNER_KILL_GRACE_S)
+        return
+    except subprocess.TimeoutExpired:
+        logger.warning("runner pid=%s ignored SIGTERM, killing", process.pid)
+    _signal_group(process, pgid, signal.SIGKILL)
+    try:
+        process.wait(timeout=RUNNER_KILL_GRACE_S)
+    except subprocess.TimeoutExpired:  # pragma: no cover - a SIGKILLed group does not survive this
+        logger.error("runner pid=%s survived SIGKILL", process.pid)
+
+
+def _signal_group(process: subprocess.Popen[str], pgid: int | None, sig: int) -> None:
+    try:
+        if pgid is None:  # pragma: no cover - Windows, or a runner that died before we read its group
+            process.send_signal(sig)
+        else:
+            os.killpg(pgid, sig)
+    except (OSError, ValueError):
+        pass  # already gone, or reaped between the poll and the signal
+
+
+def _terminate_all() -> None:
+    with _active_lock:
+        tracked = list(_active.values())
+    for process, pgid in tracked:
+        _terminate_tree(process, pgid)
 
 
 def _tail(text: str | bytes | None, lines: int = STDERR_TAIL_LINES) -> str:
