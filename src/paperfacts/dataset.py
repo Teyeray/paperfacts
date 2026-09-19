@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -126,6 +127,27 @@ class DocumentDataset:
             "sample_rows": [dict(row) for row in self.sample_rows],
             "quality_rows": [dict(row) for row in self.quality_rows],
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> DocumentDataset:
+        """The exact inverse of :meth:`as_dict`, so a dataset read back from disk can be exported again
+        without re-running the pipeline. The field list is not stored: it is derived from FIELD_SPECS on
+        the way out, and a payload written under a different field table lives under a different
+        extractor_key and is never read next to this one.
+        """
+
+        def rows(key: str) -> tuple[Row, ...]:
+            return tuple(MappingProxyType(dict(row)) for row in payload.get(key) or ())
+
+        return cls(
+            document_id=str(payload.get("document_id", "")),
+            filename=str(payload.get("filename", "")),
+            paper_row=MappingProxyType(dict(payload.get("paper_row") or {})),
+            sample_rows=rows("sample_rows"),
+            quality_rows=rows("quality_rows"),
+            extractor_key=str(payload.get("extractor_key", "")),
+            comparison_key=str(payload.get("comparison_key", "")),
+        )
 
 
 def write_dataset_json(dataset: DocumentDataset, path: Path) -> None:

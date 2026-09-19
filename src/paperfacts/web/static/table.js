@@ -36,9 +36,9 @@ export function renderResults(root) {
   slot("results-empty").classList.toggle("hidden", hasData);
   if (!hasData) return;
 
-  const fields = visibleFields(data);
-  slot("results-chips").append(toggleChip(root, data));
-  slot("results-head").append(headRow(fields));
+  const fields = visibleFields(data.fields, [data.paper_row, ...(data.sample_rows ?? [])], showAllFields);
+  slot("results-chips").append(toggleChip(data.fields, showAllFields, () => { showAllFields = !showAllFields; renderResults(root); }));
+  slot("results-head").append(headRow(["样品", "标签", "条件", "可用/一致"], fields));
   const quality = qualityIndex(data.quality_rows ?? []);
   const paperSampleId = data.paper_row?.sample_id ?? "";
   const rows = slot("results-rows");
@@ -47,24 +47,22 @@ export function renderResults(root) {
 }
 
 // A field earns a column when at least one row put a value in it; the toggle brings the rest back so the
-// full table stays inspectable without making the default view mostly blank.
-function visibleFields(data) {
-  const fields = data.fields ?? [];
-  if (showAllFields) return fields;
-  const rows = [data.paper_row, ...(data.sample_rows ?? [])].filter(Boolean);
-  return fields.filter((field) => rows.some((row) => row[field.name] != null));
+// full table stays inspectable without making the default view mostly blank. Shared with the corpus table,
+// which applies the same rule across papers instead of across samples.
+export function visibleFields(fields, rows, showAll) {
+  const all = fields ?? [];
+  if (showAll) return all;
+  const present = (rows ?? []).filter(Boolean);
+  return all.filter((field) => present.some((row) => row[field.name] != null));
 }
 
-function toggleChip(root, data) {
+export function toggleChip(fields, showAll, onToggle) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "chip" + (showAllFields ? " on" : "");
-  button.setAttribute("aria-pressed", String(showAllFields));
-  button.innerHTML = `显示空字段<span class="n">${(data.fields ?? []).length}</span>`;
-  button.addEventListener("click", () => {
-    showAllFields = !showAllFields;
-    renderResults(root);
-  });
+  button.className = "chip" + (showAll ? " on" : "");
+  button.setAttribute("aria-pressed", String(showAll));
+  button.innerHTML = `显示空字段<span class="n">${(fields ?? []).length}</span>`;
+  button.addEventListener("click", onToggle);
   return button;
 }
 
@@ -74,9 +72,10 @@ function qualityIndex(rows) {
   return index;
 }
 
-function headRow(fields) {
+// `leading` are the identity columns each table brings of its own; the field columns are identical.
+export function headRow(leading, fields) {
   const tr = document.createElement("tr");
-  const cells = ["样品", "标签", "条件", "可用/一致"].map((label) => `<th>${escapeHtml(label)}</th>`);
+  const cells = leading.map((label) => `<th>${escapeHtml(label)}</th>`);
   for (const field of fields) {
     const unit = field.unit ? `<small>${escapeHtml(field.unit)}</small>` : "";
     cells.push(`<th class="fcol">${escapeHtml(field.name)}${unit}</th>`);
@@ -117,13 +116,16 @@ function sampleRow(row, fields, quality, paperSampleId) {
   return tr;
 }
 
+// How a committed value is written out: numbers through `fmt`, everything else as its own text.
+export const shownValue = (value) => (typeof value === "number" ? fmt(value) : String(value));
+
 function cell(value, quality, sampleId, field) {
   const decision = quality.get(`${sampleId}${KEY_SEPARATOR}${field.name}`);
   const detail = decision?.detail ?? "";
   // An empty cell is a refusal with a reason, not a gap: the reason is one hover away.
   if (value == null) return `<td class="cell empty" title="${escapeHtml(detail)}">—</td>`;
   const status = decision?.decision ?? "";
-  const shown = typeof value === "number" ? fmt(value) : String(value);
+  const shown = shownValue(value);
   const badge = CELL_BADGE[status] ?? "";
   const sources = decision?.source_ids ?? "";
   return (

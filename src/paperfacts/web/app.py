@@ -5,6 +5,8 @@ Endpoints (all under ``/api``, JSON)::
 
     GET  /api/health
     GET  /api/documents                            document list (stage reached, counts)
+    GET  /api/dataset                              corpus results table (one paper_row per document)
+    GET  /api/dataset.xlsx                         the whole library as one Excel workbook
     POST /api/documents  (multipart file, ?force)  upload a PDF and queue it -> {document, job}
     POST /api/documents/{id}/run?force=            reprocess an existing document (reuses the
                                                     running job if the same document is active)
@@ -28,6 +30,7 @@ import base64
 import binascii
 import logging
 import secrets
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -41,6 +44,7 @@ from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
+from paperfacts.dataset import write_dataset
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.records import LaneExtraction
@@ -140,6 +144,29 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     @app.get("/api/documents")
     def list_documents() -> list[DocumentSummary]:
         return library.list()
+
+    @app.get("/api/dataset")
+    def get_corpus() -> dict[str, Any]:
+        """The home view's table: every document that has a dataset under the current keys. Reading N small
+        JSON files is cheap enough that a cache would only be a way to serve a stale table."""
+        return library.corpus()
+
+    @app.get("/api/dataset.xlsx")
+    def get_corpus_excel() -> Response:
+        """The same corpus, rebuilt into one workbook. It is built on demand rather than read from disk:
+        the per-document workbooks are not key-stamped, so only the datasets are a trustworthy source."""
+        datasets = library.corpus_datasets()
+        if not datasets:
+            raise HTTPException(status_code=404, detail="No consolidated dataset yet")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "paperfacts.xlsx"
+            write_dataset(datasets, path)
+            content = path.read_bytes()
+        return Response(
+            content=content,
+            media_type=EXCEL_MEDIA_TYPE,
+            headers={"content-disposition": 'attachment; filename="paperfacts-corpus.xlsx"'},
+        )
 
     @app.post("/api/documents", status_code=202)
     async def upload_document(

@@ -7,7 +7,7 @@ import pytest
 from openpyxl import load_workbook
 
 from paperfacts.compare import compare_lanes
-from paperfacts.dataset import consolidate_document, write_dataset, write_dataset_json
+from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
@@ -342,6 +342,16 @@ def test_the_json_view_survives_a_round_trip(tmp_path):
     assert loaded["quality_rows"] == [dict(row) for row in result.quality_rows]
     assert loaded["sample_rows"][0]["thickness"] == 300
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_from_dict_reverses_as_dict_exactly():
+    # The corpus export rebuilds datasets from their JSON, so the inverse has to be lossless.
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])
+
+    restored = DocumentDataset.from_dict(json.loads(json.dumps(result.as_dict())))
+
+    assert restored == result
+    assert restored.as_dict() == result.as_dict()
 
 
 def test_the_json_field_list_carries_the_unit_and_the_scope():

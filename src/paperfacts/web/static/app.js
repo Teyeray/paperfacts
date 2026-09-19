@@ -2,7 +2,8 @@
 // open whatever document the URL points at.
 // No build step; module breakdown: state (state & shared constants), api, html (small utilities),
 // router, library (left rail), document (document view), facts (fact comparison), samples
-// (sample records), job (job progress), viewer (page-level provenance).
+// (sample records), job (job progress), viewer (page-level provenance), corpus (the home view's
+// library-wide results table).
 
 import { api } from "./api.js";
 import { showDocument, showEmpty } from "./document.js";

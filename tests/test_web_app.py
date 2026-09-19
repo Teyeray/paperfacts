@@ -377,6 +377,119 @@ def test_the_excel_export_is_served_as_a_download(client: TestClient, library: L
     assert f'filename="paperfacts-{parsed_only}.xlsx"' in response.headers["content-disposition"]
 
 
+# ---- the corpus table --------------------------------------------------------------------------
+
+
+def corpus_payload(document_id: str, *, name: str = "paper.pdf", samples: int = 2) -> dict:
+    """A dataset payload shaped like ``DocumentDataset.as_dict``, trimmed to what the corpus reads."""
+    return {
+        "document_id": document_id,
+        "filename": name,
+        "fields": [{"name": "thickness", "unit": "nm", "scope": "sample"}],
+        "paper_row": {"sample_id": "S1", "available_fields": 1, "agree_fields": 1, "thickness": 300},
+        "sample_rows": [{"sample_id": f"S{i}", "thickness": 300} for i in range(1, samples + 1)],
+        "quality_rows": [],
+    }
+
+
+def test_the_corpus_is_empty_until_a_document_has_a_dataset(client: TestClient, parsed_only: str):
+    body = client.get("/api/dataset").json()
+
+    assert body == {"fields": [], "rows": []}
+
+
+def test_the_corpus_carries_one_row_per_document_with_a_dataset(
+    client: TestClient, library: Library, parsed_only: str, uploaded: str
+):
+    # `uploaded` is a second document, deliberately left without a dataset: it must simply be absent.
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only))
+
+    body = client.get("/api/dataset").json()
+
+    assert [row["document_id"] for row in body["rows"]] == [parsed_only]
+    assert body["fields"] == [{"name": "thickness", "unit": "nm", "scope": "sample"}]
+    row = body["rows"][0]
+    assert row["paper_row"]["thickness"] == 300
+    assert row["sample_count"] == 2
+    assert row["name"]
+    assert "fields" not in row  # the field list travels once, at the top level
+
+
+def test_a_dataset_under_a_stale_key_is_left_out_of_the_corpus(client: TestClient, library: Library, parsed_only: str):
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps(corpus_payload(parsed_only)), encoding="utf-8")
+
+    assert client.get("/api/dataset").json() == {"fields": [], "rows": []}
+
+
+def test_a_stale_dataset_does_not_displace_the_current_one(client: TestClient, library: Library, parsed_only: str):
+    # Both keys present at once: the row must come from the current key, not from whichever file sorts first.
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps(corpus_payload(parsed_only, samples=9)), encoding="utf-8")
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only, samples=2))
+
+    rows = client.get("/api/dataset").json()["rows"]
+
+    assert [row["sample_count"] for row in rows] == [2]
+
+
+def test_only_the_current_key_document_appears_when_another_is_stale(
+    client: TestClient, library: Library, parsed_only: str, uploaded: str
+):
+    # Two different documents, one mined under the current keys and one left behind by an older run:
+    # the corpus is the current table, so only the first is a row.
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps(corpus_payload(parsed_only)), encoding="utf-8")
+    seed_dataset(library, uploaded, corpus_payload(uploaded))
+
+    rows = client.get("/api/dataset").json()["rows"]
+
+    assert [row["document_id"] for row in rows] == [uploaded]
+
+
+def test_a_corrupt_dataset_json_is_skipped_in_the_corpus(
+    client: TestClient, library: Library, parsed_only: str, uploaded: str
+):
+    # One unusable file costs exactly its own row: the corpus is library-wide, so it must not 500 as a whole.
+    seed_dataset(library, uploaded, corpus_payload(uploaded))
+    corrupt = library.layout.dataset_json_path(parsed_only, library.extractor_key, library.comparison_key)
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_text("{not json", encoding="utf-8")
+
+    body = client.get("/api/dataset").json()
+
+    assert [row["document_id"] for row in body["rows"]] == [uploaded]
+    assert client.get("/api/dataset.xlsx").status_code == 200
+
+
+def test_a_dataset_in_the_wrong_shape_is_skipped_in_the_corpus(client: TestClient, library: Library, parsed_only: str):
+    # Valid JSON, wrong shape: still one dropped row rather than a broken endpoint.
+    path = library.layout.dataset_json_path(parsed_only, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert client.get("/api/dataset").json() == {"fields": [], "rows": []}
+    assert client.get("/api/dataset.xlsx").status_code == 404
+
+
+def test_the_corpus_workbook_is_not_found_while_nothing_is_mined(client: TestClient, parsed_only: str):
+    assert client.get("/api/dataset.xlsx").status_code == 404
+
+
+def test_the_corpus_workbook_is_rebuilt_from_the_datasets(client: TestClient, library: Library, parsed_only: str):
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only))
+
+    response = client.get("/api/dataset.xlsx")
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK")  # a real xlsx (a zip), built on demand rather than read from disk
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert 'filename="paperfacts-corpus.xlsx"' in response.headers["content-disposition"]
+
+
 # ---- page images -----------------------------------------------------------------------------
 
 

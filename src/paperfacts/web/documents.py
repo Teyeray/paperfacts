@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
+from paperfacts.dataset import DocumentDataset
 from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
@@ -123,6 +124,65 @@ class Library:
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def corpus(self) -> dict[str, Any]:
+        """The library-wide results table: one row per document that has a dataset under the current keys.
+
+        The field list travels once at the top level rather than on every row -- it is the same list for
+        every document, because a dataset written under a different field table lives under a different
+        extractor_key and is simply not read here. A document without a dataset is absent, not an empty
+        row: the home view shows what has been mined, not what is missing.
+        """
+        fields: list[Any] = []
+        rows: list[dict[str, Any]] = []
+        for summary in self.list():
+            dataset = self._readable_dataset(summary.document_id)
+            if dataset is None:
+                continue
+            if not fields:
+                fields = dataset.get("fields") or []
+            rows.append(
+                {
+                    "document_id": summary.document_id,
+                    "name": summary.name,
+                    "paper_row": dataset.get("paper_row") or {},
+                    "sample_count": len(dataset.get("sample_rows") or []),
+                }
+            )
+        return {"fields": fields, "rows": rows}
+
+    def corpus_datasets(self) -> list[DocumentDataset]:
+        """The same documents as :meth:`corpus`, rebuilt as datasets so the whole library can be exported
+        as one workbook."""
+        datasets = []
+        for summary in self.list():
+            dataset = self._readable_dataset(summary.document_id)
+            if dataset is None:
+                continue
+            try:
+                datasets.append(DocumentDataset.from_dict(dataset))
+            except (AttributeError, TypeError, ValueError):
+                # Valid JSON in the wrong shape (hand-edited, or written by an older layout): the same
+                # rule as an unreadable file -- this document drops out, the export still happens.
+                logger.warning("ignoring unusable dataset for doc=%s in the corpus export", summary.document_id)
+        return datasets
+
+    def _readable_dataset(self, document_id: str) -> dict[str, Any] | None:
+        """One document's dataset for a library-wide read, or ``None`` if it cannot be used.
+
+        The corpus spans every document, so one corrupt or unreadable file must cost exactly that one
+        row -- never the whole table. A single-document read still raises, because there the caller
+        asked for *that* file and deserves the error.
+        """
+        try:
+            dataset = self.dataset(document_id)
+        except (OSError, json.JSONDecodeError):
+            logger.warning("ignoring unreadable dataset for doc=%s in the corpus listing", document_id)
+            return None
+        if dataset is not None and not isinstance(dataset, dict):
+            logger.warning("ignoring dataset for doc=%s: expected a JSON object", document_id)
+            return None
+        return dataset
 
     def dataset_excel(self, document_id: str) -> Path | None:
         """The workbook ``run`` wrote for this document. Unlike the JSON it is not key-stamped, so it is

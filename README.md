@@ -158,6 +158,9 @@ uv run paperfacts serve                    # local
 uv run paperfacts serve --host 0.0.0.0     # reachable from other machines
 ```
 
+The home page is the corpus table: one row per processed paper, its selected sample across the field
+columns, with a link into each document and a 「下载全部 Excel」 button for the whole library.
+
 Published on the internet — a cloudflared tunnel, a shared server — it needs a password:
 
 ```bash
