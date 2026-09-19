@@ -493,11 +493,9 @@ def test_the_shipped_configuration_mirrors_the_built_in_baselines():
 
     assert data["llm"]["temperature"] == DEFAULT_TEMPERATURE
     assert data["llm"]["max_tokens"] == DEFAULT_MAX_TOKENS
-    # The one deliberate exception: the baseline omits `reasoning_effort` (what the code shipped with
-    # before the parameter existed), while the file turns reasoning off, because the extraction task is
-    # quote-and-cite and the hidden reasoning costs minutes per field question.
-    assert data["llm"]["reasoning_effort"] == "none"
-    assert DEFAULT_LLM_REASONING_EFFORT is None
+    # Shipped unset on purpose: turning reasoning off was measured to lose a third of the extracted values
+    # (.omc/research/reasoning-effort.md), and an unedited checkout must keep its cache keys.
+    assert data["llm"]["reasoning_effort"] is DEFAULT_LLM_REASONING_EFFORT is None
     assert data["llm"]["retry_attempts"] == DEFAULT_RETRY_ATTEMPTS
     assert data["llm"]["retry_backoff_s"] == DEFAULT_RETRY_BACKOFF_S
     assert data["extraction"]["candidate_limit"] == DEFAULT_CANDIDATE_LIMIT
@@ -509,7 +507,7 @@ def test_the_shipped_configuration_agrees_with_the_dataclass_defaults():
     # that reading the constants in config.py tells the truth about an unedited checkout.
     baseline = Settings()
     configured = Settings.from_env({})
-    assert configured.llm_reasoning_effort == "none"
+    assert configured.llm_reasoning_effort is DEFAULT_LLM_REASONING_EFFORT
 
     fed_by_the_file = [
         name
