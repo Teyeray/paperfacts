@@ -9,7 +9,7 @@ import { api } from "./api.js";
 import { escapeHtml, toast } from "./html.js";
 import { documentHash } from "./router.js";
 import { state } from "./state.js";
-import { headRow, shownValue, toggleChip, visibleFields } from "./table.js";
+import { copyButton, copyTable, headRow, shownValue, toggleChip, tsvHeader, visibleFields } from "./table.js";
 
 let showAllFields = false;
 
@@ -38,6 +38,8 @@ export function renderCorpus(root) {
   chips.className = "chips";
   chips.append(toggleChip(data.fields, showAllFields, () => { showAllFields = !showAllFields; renderCorpus(root); }));
   head.append(chips);
+  const leading = ["论文", "样品", "可用/一致"];
+  head.append(copyButton(() => copyTable(tsvHeader(leading, fields), rows.map((row) => rowValues(row, fields)))));
   const download = document.createElement("a");
   download.className = "download";
   download.href = "/api/dataset.xlsx";
@@ -52,7 +54,7 @@ export function renderCorpus(root) {
   const table = document.createElement("table");
   table.className = "facts-table results-table";
   const thead = document.createElement("thead");
-  thead.append(headRow(["论文", "样品", "可用/一致"], fields));
+  thead.append(headRow(leading, fields));
   const tbody = document.createElement("tbody");
   for (const row of rows) tbody.append(paperRow(row, fields));
   table.append(thead, tbody);
@@ -80,6 +82,18 @@ function paperRow(row, fields) {
     `<td class="mono">${escapeHtml(paper.available_fields ?? 0)} / ${escapeHtml(paper.agree_fields ?? 0)}</td>` +
     cells.join("");
   return tr;
+}
+
+// The same three identity columns and the same field values the rendered row shows, without the link,
+// the sample count or the empty-cell dash.
+function rowValues(row, fields) {
+  const paper = row.paper_row ?? {};
+  return [
+    row.name ?? row.document_id ?? "",
+    paper.sample_id ?? "",
+    `${paper.available_fields ?? 0} / ${paper.agree_fields ?? 0}`,
+    ...fields.map((field) => paper[field.name]),
+  ];
 }
 
 function valueCell(value) {

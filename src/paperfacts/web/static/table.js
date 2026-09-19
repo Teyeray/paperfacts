@@ -1,11 +1,13 @@
 // Results table: the consolidated dataset (one row per sample, one column per field) that the pipeline
 // exports. This is the deliverable; the comparison workbench below it explains how each cell got there.
 
-import { escapeHtml, fmt } from "./html.js";
+import { escapeHtml, fmt, toast } from "./html.js";
 import { state } from "./state.js";
 
 const TARGET_ROW_ID = "target";
 const TARGET_LABEL = "靶材（论文级）";
+// The identity columns of the per-sample results table, shared by its header and its clipboard copy.
+const LEADING = ["样品", "标签", "条件", "可用/一致"];
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
 // two decisions that produce one; every other decision deliberately leaves the cell empty.
 const CELL_CLASS = { agree: "ok", single_source: "warn" };
@@ -22,8 +24,10 @@ export function renderResults(root) {
   const data = state.dataset;
   const slot = (name) => root.querySelector(`[data-slot="${name}"]`);
   const download = slot("dataset-download");
+  const copy = slot("dataset-copy");
   const hasData = Boolean(data && (data.sample_rows?.length || data.paper_row));
   download.classList.toggle("hidden", !hasData);
+  copy.classList.toggle("hidden", !hasData);
   if (hasData) download.href = `/api/documents/${state.current}/dataset.xlsx`;
   if (toggleOwner !== state.current) {
     toggleOwner = state.current;
@@ -38,12 +42,17 @@ export function renderResults(root) {
 
   const fields = visibleFields(data.fields, [data.paper_row, ...(data.sample_rows ?? [])], showAllFields);
   slot("results-chips").append(toggleChip(data.fields, showAllFields, () => { showAllFields = !showAllFields; renderResults(root); }));
-  slot("results-head").append(headRow(["样品", "标签", "条件", "可用/一致"], fields));
+  slot("results-head").append(headRow(LEADING, fields));
   const quality = qualityIndex(data.quality_rows ?? []);
   const paperSampleId = data.paper_row?.sample_id ?? "";
   const rows = slot("results-rows");
   rows.append(targetRow(data, fields, quality));
   for (const row of data.sample_rows ?? []) rows.append(sampleRow(row, fields, quality, paperSampleId));
+
+  // The clipboard copy is built from the same `fields` and rows the renderer just used, so what lands in
+  // the spreadsheet is exactly what is on screen -- and never the badges or tooltips wrapped around it.
+  const values = [targetValues(data, fields), ...(data.sample_rows ?? []).map((row) => sampleValues(row, fields))];
+  copy.onclick = () => copyTable(tsvHeader(LEADING, fields), values);
 }
 
 // A field earns a column when at least one row put a value in it; the toggle brings the rest back so the
@@ -143,4 +152,84 @@ function bindCells(tr) {
       state.viewer?.highlight(td.dataset.sources.split("; ").filter(Boolean));
     });
   }
+}
+
+// ---------- clipboard: the visible table as tab-separated text ----------
+//
+// Built from rows and fields, never from the DOM: the cells carry badges, markers and tooltips that must
+// not reach a spreadsheet. A row is a flat array of raw values, identity columns first, in column order.
+
+// Target values live on the target row alone, exactly as the rendered table places them.
+function targetValues(data, fields) {
+  const paper = data.paper_row ?? {};
+  const cells = fields.map((field) => (field.scope === "target" ? paper[field.name] : null));
+  return [TARGET_LABEL, "", "", ...cells];
+}
+
+function sampleValues(row, fields) {
+  const cells = fields.map((field) => (field.scope === "target" ? null : row[field.name]));
+  return [
+    row.sample_id ?? "",
+    row.sample_label ?? "",
+    row.conditions ?? "",
+    `${row.available_fields ?? 0} / ${row.agree_fields ?? 0}`,
+    ...cells,
+  ];
+}
+
+// A field column is labelled `name (unit)` when the field has a unit, so the numbers stay readable once
+// they leave the page that showed the unit in the header's second line.
+export function tsvHeader(leading, fields) {
+  return [...leading, ...fields.map((field) => (field.unit ? `${field.name} (${field.unit})` : field.name))];
+}
+
+// Tabs and newlines inside a value would invent columns and rows, so they collapse to a space.
+const tsvCell = (value) => {
+  if (value == null) return "";
+  const text = typeof value === "number" ? fmt(value) : String(value);
+  return text.replace(/[\t\r\n]+/g, " ");
+};
+
+export function buildTsv(header, rows) {
+  return [header, ...rows].map((row) => row.map(tsvCell).join("\t")).join("\n");
+}
+
+// execCommand is deprecated but is the only copy path left in an insecure context (plain http on a lab
+// machine), which is exactly where this server usually runs.
+function legacyCopy(text) {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0";
+  document.body.append(area);
+  area.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+  }
+}
+
+export async function copyTable(header, rows) {
+  const text = buildTsv(header, rows);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    if (!legacyCopy(text)) {
+      toast("复制失败，请手动选择表格复制", true);
+      return;
+    }
+  }
+  toast(`已复制 ${rows.length} 行`);
+}
+
+export function copyButton(onCopy) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "download copy-table";
+  button.textContent = "复制表格";
+  button.addEventListener("click", onCopy);
+  return button;
 }
