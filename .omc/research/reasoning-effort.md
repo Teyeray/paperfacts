@@ -22,3 +22,11 @@ unset, `llm.concurrency` 4, CLI `paperfacts run`: **3 min 42 s** wall-clock for 
 inventory question is now the long pole (about 2 minutes per lane, both lanes overlapping); the twenty field
 questions of a lane finish within a minute after it. Not the same paper as the 10 min 30 s baseline, so
 read it as "a third of the time", not a precise ratio.
+
+## Unattributed values that are correct (2026-09-20)
+
+coatings-12-00203, PaddleOCR lane: `o2_flow_rate` 0.0/0.2/0.4/0.6 sccm went to `unattributed`. Not a
+bug. The values come from Table 3, whose rows are devices ("#1 (0.0 sccm)"), and each film exists twice in
+the inventory (as-deposited and annealed at 480 °C), so no single sample owns them; the model's condition
+text says exactly that. `transmittance 'over 80 %'` is a paper-wide sentence. Both belong where they are.
+Do not add a rule that attaches a value to a sample whose name contains the number.
