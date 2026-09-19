@@ -266,7 +266,7 @@ be edited:
   "llm":        { "base_url": "https://<workspace>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
                   "model": "deepseek-v4.1-flash",     // any OpenAI-compatible endpoint and model
                   "timeout_s": 600, "context_tokens": 60000, "temperature": 0.0, "max_tokens": 16384,
-                  "reasoning_effort": "none",                  // null | none | low | medium | high
+                  "reasoning_effort": null,                    // null | none | low | medium | high
                   "retry_attempts": 4, "retry_backoff_s": 2.0 },
   "extraction": { "mode": "passage", "passes": 1, "candidate_limit": 8 },
   "comparison": { "ambiguous_match_confidence": 0.6 },
@@ -304,12 +304,12 @@ which is how one machine points at its own services without editing the shared f
 `PAPERFACTS_CONFIG` points at a different configuration file altogether.
 
 `llm.reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
-OpenAI-shaped `reasoning_effort` parameter; `null` omits the parameter entirely. It ships as `"none"`
-because extraction is a quote-and-cite task -- the model copies a sentence and names the block it came from,
-which reasoning does not make more accurate, while on this endpoint's `deepseek-v4.1-flash` it costs minutes
-of hidden tokens per field question. Raise it to `"low"` or higher if a harder field table starts needing
-inference rather than transcription, and expect each run to take correspondingly longer. It changes what the
-model is asked, so changing it writes a new `extractor_key` and re-extracts.
+OpenAI-shaped `reasoning_effort` parameter; `null` omits the parameter entirely, which is the shipped
+default. On this endpoint's `deepseek-v4.1-flash`, `"none"` makes a paper about six times faster but loses
+recall: on the same twelve-page paper it found 77 values and 7 samples where the default found 112 values and
+8 samples (`.omc/research/reasoning-effort.md`). Set it to `"none"` for a quick first pass over a large
+batch, and leave it unset for the numbers you keep. It changes what the model is asked, so changing it
+writes a new `extractor_key` and re-extracts.
 
 Three settings are file-only, because a single environment variable is the wrong shape for them:
 `fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.
