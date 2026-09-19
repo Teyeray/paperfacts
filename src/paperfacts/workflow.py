@@ -298,15 +298,9 @@ def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
     pass
 
 
-def _drain_abandoned_lanes(futures: dict[Backend, Future[LaneExtraction]], collected: set[Backend]) -> None:
-    """Wait out the lanes nobody is collecting any more and say what they did, instead of discarding it.
-
-    ``collected`` is every lane already read, the one that raised included: its error is the one being
-    propagated, so repeating it as a warning would only be noise.
-    """
+def _drain_abandoned_lanes(futures: dict[Backend, Future[LaneExtraction]]) -> None:
+    """Wait out the lanes nobody is collecting any more and say what they did, instead of discarding it."""
     for backend, future in futures.items():
-        if backend in collected:
-            continue
         future.cancel()  # a no-op once it is running, which with one worker per lane it already is
         try:
             future.result()
@@ -348,10 +342,11 @@ def run_document(
                 backend: pool.submit(extract_document, document, backend, settings, client, force=force)
                 for backend in BACKENDS
             }
-            collected: set[Backend] = set()
+            # Whatever is still in here when a lane raises is the half nobody will read.
+            abandoned = dict(futures)
             try:
                 for backend, future in futures.items():
-                    collected.add(backend)
+                    del abandoned[backend]
                     lane = future.result()  # in BACKENDS order, so the first lane's failure wins as before
                     lanes[backend] = lane
                     ungrounded = len(lane.ungrounded())
@@ -361,7 +356,7 @@ def run_document(
                 # One lane raised; the failure propagates as it always did. Leaving the `with` waits for
                 # the other lane, and its outcome is read here so an exception nobody asked for is logged
                 # rather than dropped by the garbage collector.
-                _drain_abandoned_lanes(futures, collected)
+                _drain_abandoned_lanes(abandoned)
                 raise
         on_stage("compare", "running", "")
         report = compare_document(document, settings, client, force=force)

@@ -133,10 +133,9 @@ def _recover_leftovers(out_dir: Path) -> None:
     if not out_dir.exists():
         stranded = sorted(out_dir.parent.glob(f".{out_dir.name}.old.*"), key=lambda p: p.stat().st_mtime)
         if stranded:
-            recovered = stranded[-1]
+            recovered = stranded.pop()  # the newest is the one the interrupted swap was replacing
             logger.warning("recovering output stranded by an interrupted swap: %s -> %s", recovered, out_dir)
             os.replace(recovered, out_dir)
-            stranded.pop()
         for leftover in stranded:
             shutil.rmtree(leftover, ignore_errors=True)
     with _active_lock:
@@ -345,7 +344,12 @@ def install_runner_cleanup() -> None:
 
 @contextmanager
 def _tracked(process: subprocess.Popen[str]) -> Iterator[int | None]:
-    pgid = _process_group(process)
+    """Register the runner for the exit hooks, yielding its process-group id (``None`` means signal the
+    child alone). The group is read here, while the runner is certainly alive."""
+    try:
+        pgid = os.getpgid(process.pid) if _POSIX else None
+    except OSError:  # pragma: no cover - only if the runner died between Popen and this call
+        pgid = None
     with _active_lock:
         _active[process.pid] = (process, pgid)
     try:
@@ -353,16 +357,6 @@ def _tracked(process: subprocess.Popen[str]) -> Iterator[int | None]:
     finally:
         with _active_lock:
             _active.pop(process.pid, None)
-
-
-def _process_group(process: subprocess.Popen[str]) -> int | None:
-    """The runner's group id, read while it is certainly alive. ``None`` means signal the child alone."""
-    if not _POSIX:
-        return None
-    try:
-        return os.getpgid(process.pid)
-    except OSError:  # pragma: no cover - only if the runner died between Popen and this call
-        return None
 
 
 def _terminate_tree(process: subprocess.Popen[str], pgid: int | None) -> None:

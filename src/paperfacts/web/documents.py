@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -135,10 +136,7 @@ class Library:
         """
         fields: list[Any] = []
         rows: list[dict[str, Any]] = []
-        for summary in self.list():
-            dataset = self._readable_dataset(summary.document_id)
-            if dataset is None:
-                continue
+        for summary, dataset in self._corpus_entries():
             if not fields:
                 fields = dataset.get("fields") or []
             rows.append(
@@ -155,10 +153,7 @@ class Library:
         """The same documents as :meth:`corpus`, rebuilt as datasets so the whole library can be exported
         as one workbook."""
         datasets = []
-        for summary in self.list():
-            dataset = self._readable_dataset(summary.document_id)
-            if dataset is None:
-                continue
+        for summary, dataset in self._corpus_entries():
             try:
                 datasets.append(DocumentDataset.from_dict(dataset))
             except (AttributeError, TypeError, ValueError):
@@ -167,22 +162,25 @@ class Library:
                 logger.warning("ignoring unusable dataset for doc=%s in the corpus export", summary.document_id)
         return datasets
 
-    def _readable_dataset(self, document_id: str) -> dict[str, Any] | None:
-        """One document's dataset for a library-wide read, or ``None`` if it cannot be used.
+    def _corpus_entries(self) -> Iterator[tuple[DocumentSummary, dict[str, Any]]]:
+        """Every document that has a usable dataset under the current keys, in library order.
 
         The corpus spans every document, so one corrupt or unreadable file must cost exactly that one
         row -- never the whole table. A single-document read still raises, because there the caller
         asked for *that* file and deserves the error.
         """
-        try:
-            dataset = self.dataset(document_id)
-        except (OSError, json.JSONDecodeError):
-            logger.warning("ignoring unreadable dataset for doc=%s in the corpus listing", document_id)
-            return None
-        if dataset is not None and not isinstance(dataset, dict):
-            logger.warning("ignoring dataset for doc=%s: expected a JSON object", document_id)
-            return None
-        return dataset
+        for summary in self.list():
+            try:
+                dataset = self.dataset(summary.document_id)
+            except (OSError, json.JSONDecodeError):
+                logger.warning("ignoring unreadable dataset for doc=%s in the corpus listing", summary.document_id)
+                continue
+            if dataset is None:
+                continue
+            if not isinstance(dataset, dict):
+                logger.warning("ignoring dataset for doc=%s: expected a JSON object", summary.document_id)
+                continue
+            yield summary, dataset
 
     def dataset_excel(self, document_id: str) -> Path | None:
         """The workbook ``run`` wrote for this document. Unlike the JSON it is not key-stamped, so it is
