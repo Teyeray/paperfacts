@@ -1,7 +1,9 @@
 """Conservative, one-value-per-field datasets and an atomic Excel export.
 
 The paper table selects a complete sample row. It must never manufacture a sample by
-combining the best measurement of each field from different experimental conditions.
+combining the best measurement of each field from different experimental conditions. "Different
+conditions" is judged within a lane: the two lanes paraphrase the same condition differently, so
+comparing their wording across lanes would refuse values the comparison report already agreed on.
 """
 
 from __future__ import annotations
@@ -217,8 +219,13 @@ def _decide(
         return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
     if len(trusted) != len(evidence):
         details.append("已排除未定位到原文或缺少有效引用的候选")
-    if len({_condition_key(value.condition) for _, value in trusted}) > 1:
-        return reject("multiple_conditions", "同字段存在多种测量条件，无法唯一确定")
+    # Per lane only: the two lanes word the same condition differently ("after sputtering" vs
+    # "after deposition"), and compare.py has already judged whether their values and conditions
+    # correspond. Several distinct conditions inside one lane really are several measurements.
+    if any(
+        len({_condition_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
+    ):
+        return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
     parsed: list[tuple[Backend, FieldValue, CellValue]] = []
     for backend, value in trusted:
         scalar, note = _scalar(value, spec)

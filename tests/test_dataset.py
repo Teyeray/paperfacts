@@ -141,6 +141,30 @@ def test_multiple_conditions_are_not_collapsed_even_with_identical_numbers():
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
 
 
+def test_differently_worded_conditions_across_lanes_still_agree():
+    """The lanes paraphrase one condition; only a lane's own evidence may signal several conditions."""
+    result = paired(
+        [value("transmittance", "85", "%", condition="ITO monolayer thickness")],
+        [value("transmittance", "85", "%", condition="ITO monolayer film thickness", backend="paddleocr_vl")],
+    )
+    assert result.paper_row["transmittance"] == 85
+    assert decision(result, "transmittance")["decision"] == "agree"
+    row = decision(result, "transmittance")
+    assert "ITO monolayer thickness" in row["conditions"] and "ITO monolayer film thickness" in row["conditions"]
+
+
+def test_one_lane_with_two_conditions_is_still_refused():
+    result = paired(
+        [
+            value("transmittance", "85", "%", condition="550 nm"),
+            value("transmittance", "85", "%", condition="600 nm"),
+        ],
+        [value("transmittance", "85", "%", condition="550 nm", backend="paddleocr_vl")],
+    )
+    assert result.paper_row["transmittance"] is None
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
 def test_different_target_compositions_cannot_be_picked_or_joined():
     result = dataset(make_lane(target=TargetRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
     assert result.paper_row["component"] is None
