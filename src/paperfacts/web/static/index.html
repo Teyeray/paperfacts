@@ -90,10 +90,10 @@
     </section>
     <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
   </div>
-  <section class="samples" aria-label="样品记录">
-    <div class="samples-head"><h2>样品记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></div>
+  <details class="samples" aria-label="样品记录">
+    <summary class="samples-head"><h2>样品记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
     <div class="lanes" data-slot="lanes"></div>
-  </section>
+  </details>
   <details class="joblog" data-slot="joblog">
     <summary>处理日志 <span class="muted" data-slot="job-status"></span></summary>
     <pre data-slot="log"></pre>

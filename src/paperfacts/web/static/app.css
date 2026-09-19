@@ -247,6 +247,12 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 
 /* ---------- sample records ---------- */
 .samples { margin-top: 26px; }
+/* Closed by default: the results table above is the deliverable, and these per-lane records are the
+   evidence trail behind it, which a reader opens when a cell needs explaining. */
+.samples > summary { cursor: pointer; list-style: none; }
+.samples > summary::-webkit-details-marker { display: none; }
+.samples > summary h2::before { content: "▸ "; color: var(--ink-3); }
+.samples[open] > summary h2::before { content: "▾ "; }
 .lanes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 960px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
 .lane { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: hidden; }
