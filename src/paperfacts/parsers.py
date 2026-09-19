@@ -161,9 +161,18 @@ class Parser:
 
     backend: Backend
 
-    def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
+    def is_cached(self, out_dir: Path) -> bool:
+        """Would :meth:`parse` return the stored output instead of running?
+
+        ``meta.json`` is written last, so its presence is what marks the directory complete. Recovering
+        leftovers first is part of the answer: an interrupted swap hides an output that is still usable.
+        """
         _recover_leftovers(out_dir)
-        if not force and (out_dir / META_FILENAME).is_file():
+        return (out_dir / META_FILENAME).is_file()
+
+    def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
+        cached = self.is_cached(out_dir)
+        if not force and cached:
             logger.info("cache_hit backend=%s doc=%s", self.backend, document.document_id[:16])
             try:
                 return RawParseOutput.load(out_dir, self.backend, cache_hit=True)

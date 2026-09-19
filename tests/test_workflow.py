@@ -115,6 +115,9 @@ class FakeParser:
         self.cache_hit = cache_hit
         self.calls: list[tuple[Path, bool]] = []
 
+    def is_cached(self, out_dir: Path) -> bool:
+        return (out_dir / "meta.json").is_file()
+
     def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
         import shutil
 
@@ -228,6 +231,95 @@ def test_parse_document_lets_parser_errors_surface(monkeypatch, document: Docume
 
     with pytest.raises(ParserError):
         parse_document(document, "mineru", settings)
+
+
+# ---- falling back to the stored artifact when the raw output is gone -----------------
+
+
+def _drop_raw_output(settings: Settings, document: DocumentInput, backend: Backend = "mineru") -> None:
+    import shutil
+
+    shutil.rmtree(DataLayout(settings.data_root).raw_dir(document.document_id, backend))
+
+
+def test_parse_document_uses_the_stored_artifact_when_the_raw_output_is_gone(
+    monkeypatch, caplog, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
+):
+    parser = install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
+    first, _ = parse_document(document, "mineru", settings)
+    _drop_raw_output(settings, document)
+    parser.calls.clear()
+
+    with caplog.at_level("WARNING"):
+        artifact, report = parse_document(document, "mineru", settings)
+
+    assert parser.calls == []  # a re-parse would cost GPU minutes for output we already have
+    assert artifact == first
+    assert report.cache_hit is True
+    assert report.from_artifact is True
+    assert report.runtime_s == 0.0
+    assert "mineru" in caplog.text and "--force" in caplog.text
+
+
+def test_parse_document_rerenders_the_markdown_when_only_the_artifact_survives(
+    monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
+):
+    install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
+    artifact, _ = parse_document(document, "mineru", settings)
+    markdown_path = DataLayout(settings.data_root).markdown_path(document.document_id, "mineru")
+    markdown_path.unlink()
+    _drop_raw_output(settings, document)
+
+    parse_document(document, "mineru", settings)
+
+    assert markdown_path.read_text(encoding="utf-8") == render_markdown(artifact.blocks)
+
+
+def test_parse_document_parses_when_both_the_raw_output_and_the_artifact_are_gone(
+    monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
+):
+    parser = install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
+    parse_document(document, "mineru", settings)
+    layout = DataLayout(settings.data_root)
+    layout.artifact_path(document.document_id, "mineru").unlink()
+    _drop_raw_output(settings, document)
+    parser.calls.clear()
+
+    _, report = parse_document(document, "mineru", settings)
+
+    assert parser.calls == [(layout.raw_dir(document.document_id, "mineru"), False)]
+    assert report.from_artifact is False
+
+
+def test_parse_document_still_re_adapts_when_the_raw_output_is_present(
+    monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
+):
+    # The whole point of keeping raw output: an adapter change must be re-applied from it.
+    parser = install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir, cache_hit=True))
+    parse_document(document, "mineru", settings)
+    layout = DataLayout(settings.data_root)
+    layout.artifact_path(document.document_id, "mineru").write_text("{}", encoding="utf-8")
+    parser.calls.clear()
+
+    artifact, report = parse_document(document, "mineru", settings)
+
+    assert parser.calls == [(layout.raw_dir(document.document_id, "mineru"), False)]
+    assert report.from_artifact is False
+    assert ParsedArtifact.read(layout.artifact_path(document.document_id, "mineru")) == artifact
+
+
+def test_parse_document_force_re_parses_even_with_a_stored_artifact(
+    monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
+):
+    parser = install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
+    parse_document(document, "mineru", settings)
+    _drop_raw_output(settings, document)
+    parser.calls.clear()
+
+    _, report = parse_document(document, "mineru", settings, force=True)
+
+    assert parser.calls == [(DataLayout(settings.data_root).raw_dir(document.document_id, "mineru"), True)]
+    assert report.from_artifact is False
 
 
 def test_parse_document_works_for_the_paddle_backend(

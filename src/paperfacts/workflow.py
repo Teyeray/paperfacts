@@ -106,6 +106,38 @@ class ParseReport:
     type_counts: dict[str, int]
     artifact_path: Path
     markdown_path: Path
+    # The raw parser output was gone and the stored artifact stood in for it, so no adapter ran this time.
+    from_artifact: bool = False
+
+
+def _artifact_standing_in_for_missing_raw(
+    parser: Parser,
+    document: DocumentInput,
+    backend: Backend,
+    artifact_path: Path,
+    raw_dir: Path,
+    *,
+    force: bool,
+) -> ParsedArtifact | None:
+    """The stored artifact when the raw output it came from is gone, otherwise ``None``.
+
+    Raw output is bulky and gets pruned or moved; the artifact is the small file worth keeping. Re-parsing
+    a paper costs GPU minutes, so when only the raw output is missing the artifact stands in for it. The
+    cost is that adapter changes are not re-applied — hence the warning and ``--force``.
+    """
+    if force or not artifact_path.is_file() or parser.is_cached(raw_dir):
+        return None
+    try:
+        artifact = ParsedArtifact.read(artifact_path)
+    except (OSError, ValueError) as exc:
+        logger.warning("stored %s artifact at %s is unreadable (%s); re-parsing", backend, artifact_path, exc)
+        return None
+    logger.warning(
+        "raw parser output missing for backend=%s doc=%s; using the stored artifact — run with --force to re-parse",
+        backend,
+        document.document_id[:16],
+    )
+    return artifact
 
 
 def parse_document(
@@ -120,13 +152,36 @@ def parse_document(
     ensure_identity(layout, document)  # written the moment the directory exists; readers only read it
     parser = build_parser(backend, settings)
 
+    markdown_path = layout.markdown_path(document.document_id, backend)
+    artifact_path = layout.artifact_path(document.document_id, backend)
+    raw_dir = layout.raw_dir(document.document_id, backend)
+
+    stored = _artifact_standing_in_for_missing_raw(parser, document, backend, artifact_path, raw_dir, force=force)
+    if stored is not None:
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        if not markdown_path.is_file():
+            # The artifact alone is not a complete document directory; re-render rather than leave a hole.
+            markdown_path.write_text(render_markdown(stored.blocks), encoding="utf-8")
+        report = ParseReport(
+            backend=backend,
+            backend_version=stored.backend_version,
+            cache_hit=True,
+            runtime_s=0.0,
+            page_count=stored.page_count,
+            block_count=len(stored.blocks),
+            type_counts=stored.type_counts(),
+            artifact_path=artifact_path,
+            markdown_path=markdown_path,
+            from_artifact=True,
+        )
+        logger.info("parsed %s", report)
+        return stored, report
+
     clock = time.monotonic()
-    raw = parser.parse(document, layout.raw_dir(document.document_id, backend), force=force)
+    raw = parser.parse(document, raw_dir, force=force)
     artifact = convert(raw, document, read_geometry(document.pdf_path))
     runtime_s = time.monotonic() - clock
 
-    markdown_path = layout.markdown_path(document.document_id, backend)
-    artifact_path = layout.artifact_path(document.document_id, backend)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
     artifact.write(artifact_path)  # last: its existence means parsed/ is complete
