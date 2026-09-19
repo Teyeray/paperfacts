@@ -14,3 +14,11 @@ queue to export; the parsers were cache hits.
 fragmented, lost half its values. "low" was slower than unset on this endpoint and no better. Decision: leave the
 parameter unset; get speed from concurrency (lanes and field questions in parallel), which does not change
 what the model is asked.
+
+## Concurrency (2026-09-20, after the lanes and field questions were made concurrent)
+
+Different paper (coatings-12-00203, 10 samples, both parses cached, model cache empty for it), reasoning
+unset, `llm.concurrency` 4, CLI `paperfacts run`: **3 min 42 s** wall-clock for 42 live model calls. The
+inventory question is now the long pole (about 2 minutes per lane, both lanes overlapping); the twenty field
+questions of a lane finish within a minute after it. Not the same paper as the 10 min 30 s baseline, so
+read it as "a third of the time", not a precise ratio.
