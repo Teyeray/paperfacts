@@ -100,7 +100,7 @@ this file is the part that is easy to get wrong.
 ## Web interface
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
-  offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `facts`, `samples`, `job`,
+  offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `table`, `facts`, `samples`, `job`,
   `viewer`; `app.js` is only the entry point.
 - Background jobs are a single worker. A `Job` is a frozen value in a lock-guarded dict, replaced whole on
   every transition, so a poller never sees a half-applied state. Submitting the same document twice while

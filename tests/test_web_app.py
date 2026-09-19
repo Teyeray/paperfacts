@@ -16,6 +16,7 @@ so the tests here watch "is the mapping right", not the business outcome:
 from __future__ import annotations
 
 import dataclasses
+import json
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -313,6 +314,67 @@ def test_the_artifact_carries_the_blocks_and_the_page_geometry(client: TestClien
     assert artifact.backend == "mineru"
     assert artifact.blocks and artifact.pages
     assert artifact.blocks[0].bbox.x1 >= 0.0  # the normalized bbox used for provenance goes to the frontend as-is
+
+
+# ---- the consolidated dataset ------------------------------------------------------------------
+
+
+def seed_dataset(library: Library, document_id: str, payload: dict) -> Path:
+    """Write the consolidated table under the library's current keys, the way the export stage does."""
+    path = library.layout.dataset_json_path(document_id, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_the_dataset_is_not_found_before_the_export_ran(client: TestClient, parsed_only: str):
+    response = client.get(f"/api/documents/{parsed_only}/dataset")
+
+    assert response.status_code == 404
+    assert "dataset" in response.json()["detail"]
+
+
+def test_the_dataset_of_an_unknown_document_is_not_found(client: TestClient):
+    assert client.get(f"/api/documents/{UNKNOWN_ID}/dataset").status_code == 404
+
+
+def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library: Library, parsed_only: str):
+    payload = {"document_id": parsed_only, "sample_rows": [{"sample_id": "A", "thickness": 300}]}
+    seed_dataset(library, parsed_only, payload)
+
+    body = client.get(f"/api/documents/{parsed_only}/dataset").json()
+
+    assert body == payload
+
+
+def test_a_dataset_written_under_other_keys_is_not_served(client: TestClient, library: Library, parsed_only: str):
+    # The same rule as the comparison report: a table built by a different model or field table is stale.
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("{}", encoding="utf-8")
+
+    assert client.get(f"/api/documents/{parsed_only}/dataset").status_code == 404
+
+
+def test_the_excel_export_is_not_found_before_it_is_written(client: TestClient, parsed_only: str):
+    response = client.get(f"/api/documents/{parsed_only}/dataset.xlsx")
+
+    assert response.status_code == 404
+    assert "Excel" in response.json()["detail"]
+
+
+def test_the_excel_export_is_served_as_a_download(client: TestClient, library: Library, parsed_only: str):
+    path = library.layout.dataset_path(parsed_only)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"PK\x03\x04 workbook")
+
+    response = client.get(f"/api/documents/{parsed_only}/dataset.xlsx")
+
+    assert response.status_code == 200
+    assert response.content == b"PK\x03\x04 workbook"
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert "attachment" in response.headers["content-disposition"]
+    assert f'filename="paperfacts-{parsed_only}.xlsx"' in response.headers["content-disposition"]
 
 
 # ---- page images -----------------------------------------------------------------------------

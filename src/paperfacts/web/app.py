@@ -12,6 +12,8 @@ Endpoints (all under ``/api``, JSON)::
     GET  /api/documents/{id}/report                ComparisonReport
     GET  /api/documents/{id}/extraction/{backend}  normalized LaneExtraction
     GET  /api/documents/{id}/artifact/{backend}    ParsedArtifact (blocks + Markdown + page geometry)
+    GET  /api/documents/{id}/dataset               consolidated per-sample table (rows + field list)
+    GET  /api/documents/{id}/dataset.xlsx          the same data as the Excel workbook
     GET  /api/documents/{id}/pages/{page}.png?dpi= rendered page image (cached)
     GET  /api/documents/{id}/jobs                  this document's job list
     GET  /api/jobs/{job_id}                        job snapshot (stages, log)
@@ -29,7 +31,7 @@ import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -50,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_CHUNK_BYTES = 1 << 20
+EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class UploadAccepted(BaseModel):
@@ -185,6 +188,27 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         if artifact is None:
             raise HTTPException(status_code=404, detail=f"No parsed artifact yet for {backend}")
         return artifact
+
+    @app.get("/api/documents/{document_id}/dataset")
+    def get_dataset(document_id: str) -> dict[str, Any]:
+        require_document(document_id)
+        dataset = library.dataset(document_id)
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="No consolidated dataset yet")
+        return dataset
+
+    @app.get("/api/documents/{document_id}/dataset.xlsx")
+    def get_dataset_excel(document_id: str) -> FileResponse:
+        summary = require_document(document_id)
+        path = library.dataset_excel(document_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="No Excel export yet")
+        return FileResponse(
+            path,
+            media_type=EXCEL_MEDIA_TYPE,
+            # The upload name is user input; the id is the safe, stable download name.
+            filename=f"paperfacts-{summary.document_id}.xlsx",
+        )
 
     @app.get("/api/documents/{document_id}/pages/{page}.png")
     def get_page_image(

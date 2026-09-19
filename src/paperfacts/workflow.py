@@ -18,7 +18,7 @@ from typing import Literal
 from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
-from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset
+from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
 from paperfacts.errors import ConfigError, PaperFactsError
 from paperfacts.extract import build_extraction_document, extract_lane
 from paperfacts.grounding import block_adjacency, ground_lane
@@ -165,6 +165,7 @@ def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
         cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
+        reasoning_effort=settings.llm_reasoning_effort,
         retry_attempts=settings.llm_retry_attempts,
         retry_backoff_s=settings.llm_retry_backoff_s,
     )
@@ -277,6 +278,18 @@ class PipelineResult:
     report: ComparisonReport
     dataset: DocumentDataset
     excel_path: Path
+    dataset_json_path: Path
+
+
+def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
+    """The web UI reads the consolidated table from disk, so every path that produces one writes it.
+
+    The dataset carries the keys it was built under, which is what the JSON file is named after: an
+    export made with different settings lands beside the old one instead of overwriting it.
+    """
+    path = layout.dataset_json_path(dataset.document_id, dataset.extractor_key, dataset.comparison_key)
+    write_dataset_json(dataset, path)
+    return path
 
 
 def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
@@ -318,11 +331,18 @@ def run_document(
     )
     on_stage("export", "running", "")
     dataset = consolidate_document(document, lanes, report)
-    excel_path = DataLayout(settings.data_root).dataset_path(document.document_id)
+    layout = DataLayout(settings.data_root)
+    excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path)
+    dataset_json_path = _store_dataset(layout, dataset)
     on_stage("export", "done", str(excel_path))
     return PipelineResult(
-        parse_reports=parse_reports, lanes=lanes, report=report, dataset=dataset, excel_path=excel_path
+        parse_reports=parse_reports,
+        lanes=lanes,
+        report=report,
+        dataset=dataset,
+        excel_path=excel_path,
+        dataset_json_path=dataset_json_path,
     )
 
 
@@ -366,7 +386,10 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
         lanes[backend] = lane
     # Grounding is rechecked on read, so comparison must use those same refreshed values.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
-    return consolidate_document(document, lanes, report)
+    dataset = consolidate_document(document, lanes, report)
+    # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
+    _store_dataset(layout, dataset)
+    return dataset
 
 
 def run_batch(

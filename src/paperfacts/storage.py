@@ -14,6 +14,7 @@ one shows every intermediate state of one paper:
     ├── parsed/<backend>.artifact.json   the complete ParsedArtifact
     ├── facts/<backend>.<extractor_key>.json           one lane's extraction, the model's own wording
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
+    ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated per-sample table, for the web UI
     ├── overlays/<backend>/page_000.png                bbox overlays
     └── pages/<dpi>dpi/page_000.png                    page renders for the web viewer
 
@@ -98,6 +99,11 @@ class DataLayout:
 
     def dataset_path(self, document_id: str) -> Path:
         return self.doc_dir(document_id) / "dataset.xlsx"
+
+    def dataset_json_path(self, document_id: str, extractor_key: str, comparison_key: str) -> Path:
+        # Keyed like comparison_path: a dataset built with another model or field table is a different
+        # file, so the browser can never be served a consolidated table the current settings disown.
+        return self.doc_dir(document_id) / "datasets" / f"{extractor_key}.{comparison_key}.json"
 
     def batch_dataset_path(self) -> Path:
         return self.root / "exports" / "paperfacts.xlsx"

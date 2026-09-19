@@ -6,6 +6,7 @@ combining the best measurement of each field from different experimental conditi
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -89,6 +90,38 @@ class DocumentDataset:
     quality_rows: tuple[Row, ...]
     extractor_key: str = ""
     comparison_key: str = ""
+
+    def as_dict(self) -> dict[str, object]:
+        """A JSON-serialisable view for the web UI.
+
+        Rows are ``MappingProxyType`` so nothing downstream can mutate a consolidated row; ``json`` cannot
+        dump one, so copy each into a plain dict here rather than weakening the model. The field list
+        travels with the data because the rows carry values only: the browser needs the canonical unit and
+        the paper/sample scope to build a header it can trust.
+        """
+        return {
+            "document_id": self.document_id,
+            "filename": self.filename,
+            "extractor_key": self.extractor_key,
+            "comparison_key": self.comparison_key,
+            "fields": [
+                {
+                    "name": spec.name,
+                    "unit": spec.canonical_unit,
+                    "scope": "sample" if spec.is_sample_level else "target",
+                }
+                for spec in FIELD_SPECS
+            ],
+            "paper_row": dict(self.paper_row),
+            "sample_rows": [dict(row) for row in self.sample_rows],
+            "quality_rows": [dict(row) for row in self.quality_rows],
+        }
+
+
+def write_dataset_json(dataset: DocumentDataset, path: Path) -> None:
+    """Write one document's consolidated dataset for the web UI, atomically like every other artifact."""
+    payload = json.dumps(dataset.as_dict(), ensure_ascii=False, indent=2)
+    write_atomic(path, lambda tmp: tmp.write_text(payload, encoding="utf-8"))
 
 
 @dataclass(frozen=True)

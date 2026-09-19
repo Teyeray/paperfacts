@@ -9,8 +9,10 @@ document directory's ``identity.json``.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -114,6 +116,19 @@ class Library:
     def extraction(self, document_id: str, backend: Backend) -> LaneExtraction | None:
         # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.
         return read_lane(self.layout, document_id, backend, self.extractor_key)
+
+    def dataset(self, document_id: str) -> dict[str, Any] | None:
+        """The consolidated per-sample table, or ``None`` until the export ran under the current keys."""
+        path = self.layout.dataset_json_path(document_id, self.extractor_key, self.comparison_key)
+        if not path.is_file():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def dataset_excel(self, document_id: str) -> Path | None:
+        """The workbook ``run`` wrote for this document. Unlike the JSON it is not key-stamped, so it is
+        whatever the last run produced -- good enough for a download, never for the table on screen."""
+        path = self.layout.dataset_path(document_id)
+        return path if path.is_file() else None
 
     def artifact(self, document_id: str, backend: Backend) -> ParsedArtifact | None:
         path = self.layout.artifact_path(document_id, backend)

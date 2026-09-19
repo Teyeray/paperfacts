@@ -54,6 +54,21 @@
   </header>
   <ol class="stages" data-slot="stages"></ol>
   <div class="kpis" data-slot="kpis"></div>
+  <section class="results" aria-label="结果表">
+    <div class="results-head">
+      <h2>结果表（按样品）</h2>
+      <div class="chips" data-slot="results-chips"></div>
+      <a class="download hidden" data-slot="dataset-download" download>下载 Excel</a>
+    </div>
+    <p class="results-note muted">每一行是合并两路解析后的一个样品；空白单元格是流水线拒绝猜测的取值，不是 0。</p>
+    <div class="table-wrap">
+      <table class="facts-table results-table">
+        <thead data-slot="results-head"></thead>
+        <tbody data-slot="results-rows"></tbody>
+      </table>
+      <div class="table-empty hidden" data-slot="results-empty">还没有结果表，处理完成后会出现在这里。</div>
+    </div>
+  </section>
   <div class="workbench">
     <section class="facts" aria-label="事实对照">
       <div class="facts-head">

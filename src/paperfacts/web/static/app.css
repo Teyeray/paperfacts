@@ -168,6 +168,30 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .flag.warn { color: var(--warn); }
 .table-empty { padding: 30px; text-align: center; color: var(--ink-3); }
 
+/* ---------- results table: the consolidated per-sample deliverable, above the workbench ---------- */
+.results { margin: 0 0 22px; }
+.results-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.results-head h2 { font-family: var(--font-display); font-size: 17px; margin: 0; }
+.results-note { font-size: 12px; margin: 0 0 8px; }
+.download {
+  margin-left: auto; border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 10px;
+  font-size: 12px; text-decoration: none; background: var(--paper); color: var(--ink-2);
+}
+.download:hover { border-color: var(--ink); color: var(--ink); }
+.results-table tr { cursor: default; }  /* rows are not selectable here; individual cells are */
+.results-table th.fcol small { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+.results-table td.cell { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; cursor: pointer; }
+/* The colour is a second signal only: every decided cell also carries its 双路 / 单路 badge. */
+.results-table td.cell small { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
+.results-table td.cell.ok { box-shadow: inset 3px 0 0 var(--ok); color: var(--ok); }
+.results-table td.cell.warn { box-shadow: inset 3px 0 0 var(--warn); color: var(--warn); }
+.results-table td.cell.empty { color: var(--ink-3); cursor: default; }
+.results-table td.cell.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+.results-table td.cond { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results-table tr.paper-row { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
+.results-table tr.target-row td { color: var(--ink-2); }
+.paper-mark { margin-left: 6px; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); white-space: nowrap; }
+
 /* ---------- page viewer ---------- */
 .viewer { position: sticky; top: 70px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .viewer-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--paper-2); font-size: 12px; flex-wrap: wrap; }

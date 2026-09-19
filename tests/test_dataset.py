@@ -1,12 +1,13 @@
 """An ML row must describe one actual sample and contain only defensible scalar values."""
 
+import json
 from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
 
 from paperfacts.compare import compare_lanes
-from paperfacts.dataset import consolidate_document, write_dataset
+from paperfacts.dataset import consolidate_document, write_dataset, write_dataset_json
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
@@ -258,3 +259,31 @@ def test_mismatched_document_ids_are_rejected():
     document = DocumentInput(document_id="b" * 64, sha256="b" * 64, pdf_path=Path("other.pdf"))
     with pytest.raises(ValueError, match="same PDF"):
         consolidate_document(document, {a.backend: a, b.backend: b}, report)
+
+
+def test_the_json_view_survives_a_round_trip(tmp_path):
+    # Rows are MappingProxyType, which json refuses; the web UI reads this file, so the copy must be real.
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])
+
+    path = tmp_path / "dataset.json"
+    write_dataset_json(result, path)
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+
+    assert loaded["document_id"] == result.document_id
+    assert loaded["filename"] == "paper.pdf"
+    assert loaded["extractor_key"] == result.extractor_key
+    assert loaded["comparison_key"] == result.comparison_key
+    assert [field["name"] for field in loaded["fields"]] == [spec.name for spec in FIELD_SPECS]
+    assert loaded["paper_row"] == dict(result.paper_row)
+    assert loaded["sample_rows"] == [dict(row) for row in result.sample_rows]
+    assert loaded["quality_rows"] == [dict(row) for row in result.quality_rows]
+    assert loaded["sample_rows"][0]["thickness"] == 300
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_the_json_field_list_carries_the_unit_and_the_scope():
+    fields = {field["name"]: field for field in dataset(make_lane()).as_dict()["fields"]}
+
+    assert fields["thickness"]["scope"] == "sample"
+    assert fields["component"]["scope"] == "target"
+    assert fields["thickness"]["unit"] == "nm"

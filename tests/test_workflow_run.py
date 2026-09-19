@@ -164,6 +164,9 @@ def test_the_result_carries_every_intermediate_product(monkeypatch, document: Do
     assert {backend: len(lane.samples) for backend, lane in result.lanes.items()} == {b: 3 for b in BACKENDS}
     assert result.report.counts.agree == 3
     assert result.excel_path.is_file()
+    # The web UI reads the consolidated table from this file, so the run must leave one behind.
+    assert result.dataset_json_path.is_file()
+    assert result.dataset_json_path.name == f"{result.dataset.extractor_key}.{result.dataset.comparison_key}.json"
     assert result.dataset.document_id == document.document_id
 
 

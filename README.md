@@ -178,6 +178,14 @@ block it came from. Papers processed from the command line appear in the library
 uploaded ones carry their PDF and can be re-rendered on another machine. The API is documented at
 `/api/docs`.
 
+Above the comparison sits the results table: one row per sample after both lanes are merged, one column
+per field, plus a first row for the paper-level target values. A green cell was confirmed by both lanes and
+an amber one by a single lane — each says so in words as well as in colour — and a blank cell is a value
+the pipeline refused to guess, with the reason on hover. Clicking a cell lights up the blocks it was merged
+from. Two endpoints serve it: `GET /api/documents/<id>/dataset` returns the table as JSON, stamped with the
+current extractor and comparison keys so a stale one is never shown, and `GET /api/documents/<id>/dataset.xlsx`
+downloads the workbook behind the 「下载 Excel」 button.
+
 ### How the model is asked
 
 Handing a fifteen-thousand-token paper to a model and asking for twenty fields and every sample at once makes
@@ -258,6 +266,7 @@ be edited:
   "llm":        { "base_url": "https://<workspace>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
                   "model": "deepseek-v4.1-flash",     // any OpenAI-compatible endpoint and model
                   "timeout_s": 600, "context_tokens": 60000, "temperature": 0.0, "max_tokens": 16384,
+                  "reasoning_effort": "none",                  // null | none | low | medium | high
                   "retry_attempts": 4, "retry_backoff_s": 2.0 },
   "extraction": { "mode": "passage", "passes": 1, "candidate_limit": 8 },
   "comparison": { "ambiguous_match_confidence": 0.6 },
@@ -286,12 +295,21 @@ which is how one machine points at its own services without editing the shared f
 `PAPERFACTS_PADDLE_VL_BACKEND`, `PAPERFACTS_PADDLE_VL_SERVER_URL`, `PAPERFACTS_PADDLE_VL_MODEL_NAME`,
 `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`, `PAPERFACTS_LLM_TIMEOUT_S`,
 `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`, `PAPERFACTS_LLM_MAX_TOKENS`,
+`PAPERFACTS_LLM_REASONING_EFFORT`,
 `PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
 `PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_WEB_PASSWORD`.
 `PAPERFACTS_CONFIG` points at a different configuration file altogether.
+
+`llm.reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
+OpenAI-shaped `reasoning_effort` parameter; `null` omits the parameter entirely. It ships as `"none"`
+because extraction is a quote-and-cite task -- the model copies a sentence and names the block it came from,
+which reasoning does not make more accurate, while on this endpoint's `deepseek-v4.1-flash` it costs minutes
+of hidden tokens per field question. Raise it to `"low"` or higher if a harder field table starts needing
+inference rather than transcription, and expect each run to take correspondingly longer. It changes what the
+model is asked, so changing it writes a new `extractor_key` and re-extracts.
 
 Three settings are file-only, because a single environment variable is the wrong shape for them:
 `fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.
@@ -336,6 +354,7 @@ data/docs/<first 16 hex of sha256>/
 ├── parsed/<backend>.artifact.json  the complete artifact: blocks with page + bbox, page geometry
 ├── facts/<backend>.<key>.json      one lane's sample-level extraction
 ├── comparisons/<key>.<key>.json    the two-lane comparison report
+├── datasets/<key>.<key>.json       the consolidated per-sample table the web UI reads
 ├── dataset.xlsx                   consolidated paper/sample tables, written automatically by run
 ├── overlays/<backend>/page_*.png   bbox overlays
 └── pages/<dpi>dpi/                 page renders for the web viewer
