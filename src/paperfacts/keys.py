@@ -114,8 +114,10 @@ def normalization_fingerprint() -> str:
 def comparison_code_fingerprint() -> str:
     """The rules that pair samples and values and decide a verdict. Recomputing a comparison is free -- it
     re-reads two stored extractions -- so a change here must never be served from a file written by the old
-    rules. ``matching.py`` is in here because which samples were paired decides every verdict below them."""
-    return source_fingerprint("compare.py", "matching.py")
+    rules. ``matching.py`` is in here because which samples were paired decides every verdict below them, and
+    ``dataset.py`` because the consolidated table it writes is stored under this key and is itself a set of
+    verdicts (which cells are committed, which are refused)."""
+    return source_fingerprint("compare.py", "matching.py", "dataset.py")
 
 
 def extractor_key(

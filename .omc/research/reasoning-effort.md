@@ -54,3 +54,10 @@ Less reasoning makes the inventory merge the as-deposited and 480 °C-annealed f
 O2 flow, and at "low" the two lanes disagree on which set exists, so matching falls apart. The inventory
 is the one question where the hidden reasoning is doing the work. The setting stays unset; the remaining
 wall-clock is model generation, not a code path.
+
+## Condition paraphrase in one lane: not fixable lexically (2026-09-20)
+
+A numeric-signature condition key ("at 550 nm" == "550 nm wavelength") was built, reviewed and reverted:
+"550 nm" and "550 nm, annealed" share the signature, and optical values before and after annealing at one
+wavelength are routine. No word-level rule tells a paraphrase from a qualifier. The within-lane
+multiple_conditions refusal stays as it is; the cost is a handful of blank cells per paper.
