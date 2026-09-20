@@ -75,7 +75,7 @@ On Apple silicon, hand PaddleOCR-VL's vision stage to MLX — in-process CPU inf
 paper, MLX takes a minute or two:
 
 ```bash
-uvx --python 3.13 --from "mlx-vlm>=0.3.11" mlx_vlm.server --port 8111   # leave running
+uvx --python 3.13 --from "mlx-vlm>=0.3.11" mlx_vlm.server --port 8111   # leave running; scripts/dev_up.sh does all of this
 export PAPERFACTS_PADDLE_VL_BACKEND=mlx-vlm-server
 export PAPERFACTS_PADDLE_VL_SERVER_URL=http://localhost:8111/
 export PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6
