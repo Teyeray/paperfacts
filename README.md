@@ -241,8 +241,11 @@ uv run paperfacts run paper.pdf --passes 3    # 3x the LLM calls, 3x the cost
 ```
 
 Off by default. Each surviving value records the fraction of passes that produced it, so a 2/3 value stays
-visibly weaker than a 3/3 one. In passage mode a pass repeats the whole sequence of questions, so the cost
-multiplies from a higher base.
+visibly weaker than a 3/3 one. In passage mode the sample inventory is asked once and only the field
+questions repeat, so every pass sees the same sample ids; the vote is on the number and unit, never on the
+wording of the measurement condition, and a paper that reports the same number under two conditions keeps
+both. Measured on three papers: a second pass reproduces 75–90 % of a first pass's values, so two passes are
+a reproducibility filter at twice the model cost, not a way to find more (`.omc/research/reasoning-effort.md`).
 
 ## Caching
 
