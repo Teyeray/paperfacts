@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -282,12 +282,17 @@ def compare_document(
     client: LlmClient,
     *,
     force: bool = False,
+    lanes: Mapping[Backend, LaneExtraction] | None = None,
 ) -> ComparisonReport:
-    """Extract both lanes, match samples with the model, compare fields by rule, store the report.
+    """Match samples with the model, compare fields by rule, store the report.
 
     The report path carries both keys, so changing a tolerance recomputes the comparison without paying for
     extraction again and cannot serve a stale verdict. ``force`` redoes matching and comparison only;
     extraction has its own cache and its own force.
+
+    ``lanes`` lets a caller that already holds both extractions hand them over instead of having them
+    loaded again; without it the lanes are read through :func:`extract_document`, whose cached path
+    rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader.
     """
     layout = DataLayout(settings.data_root)
     path = layout.comparison_path(
@@ -299,8 +304,9 @@ def compare_document(
         logger.info("comparison cache_hit doc=%s", document.document_id[:16])
         return ComparisonReport.read(path)
 
-    lane_a = extract_document(document, BACKEND_A, settings, client)
-    lane_b = extract_document(document, BACKEND_B, settings, client)
+    if lanes is None:
+        lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
+    lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
     matching = match_samples(lane_a, lane_b, client, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching)
     report.write(path)
@@ -344,17 +350,6 @@ def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
     pass
 
 
-def _drain_abandoned_lanes(futures: dict[Backend, Future[LaneExtraction]]) -> None:
-    """Wait out the lanes nobody is collecting any more and say what they did, instead of discarding it."""
-    for backend, future in futures.items():
-        future.cancel()  # a no-op once it is running, which with one worker per lane it already is
-        try:
-            future.result()
-        except BaseException as exc:
-            # The run has already failed on another lane; this is only an explanation, never a new error.
-            logger.warning("extraction lane %s ended with %s while another lane's error was propagating", backend, exc)
-
-
 def run_document(
     document: DocumentInput,
     settings: Settings,
@@ -388,24 +383,29 @@ def run_document(
                 backend: pool.submit(extract_document, document, backend, settings, client, force=force)
                 for backend in BACKENDS
             }
-            # Whatever is still in here when a lane raises is the half nobody will read.
-            abandoned = dict(futures)
-            try:
-                for backend, future in futures.items():
-                    del abandoned[backend]
-                    lane = future.result()  # in BACKENDS order, so the first lane's failure wins as before
-                    lanes[backend] = lane
-                    ungrounded = len(lane.ungrounded())
-                    detail = f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
-                    on_stage(f"extract:{backend}", "done", detail)
-            except BaseException:
-                # One lane raised; the failure propagates as it always did. Leaving the `with` waits for
-                # the other lane, and its outcome is read here so an exception nobody asked for is logged
-                # rather than dropped by the garbage collector.
-                _drain_abandoned_lanes(abandoned)
-                raise
+            # Every lane's outcome is collected before any of them is acted on, so an exception nobody
+            # asked for is logged rather than dropped by the garbage collector. A BaseException (a
+            # KeyboardInterrupt, say) still propagates straight out, as it always did; leaving the `with`
+            # then waits for the other lane.
+            extracted: dict[Backend, LaneExtraction] = {}
+            failures: list[tuple[Backend, Exception]] = []
+            for backend in BACKENDS:
+                try:
+                    extracted[backend] = futures[backend].result()
+                except Exception as exc:
+                    failures.append((backend, exc))
+            if failures:
+                # In BACKENDS order, so the first lane's failure wins as before; the rest are explanations.
+                for backend, exc in failures[1:]:
+                    logger.warning("extraction lane %s also failed with %s", backend, exc)
+                raise failures[0][1]
+            for backend, lane in extracted.items():
+                lanes[backend] = lane
+                ungrounded = len(lane.ungrounded())
+                detail = f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
+                on_stage(f"extract:{backend}", "done", detail)
         on_stage("compare", "running", "")
-        report = compare_document(document, settings, client, force=force)
+        report = compare_document(document, settings, client, force=force, lanes=lanes)
     counts = report.counts
     on_stage(
         "compare",

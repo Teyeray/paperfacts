@@ -347,8 +347,8 @@ def test_only_one_parsed_lane_is_still_not_enough_without_a_pdf(library: Library
 
 
 def test_both_parsed_lanes_make_a_document_runnable_without_its_pdf(library: Library, tmp_path: Path):
-    """Processed on another machine: the recorded path is carried so the export keeps its filename,
-    even though nothing will open it."""
+    """Processed on another machine: the path points where this document's PDF would live, never at an
+    invented one, and the export still keeps the filename because that comes from the display name."""
     original = tmp_path / "elsewhere" / "ito-films.pdf"
     seed_cli_document(library, original)
     for backend in BACKENDS:
@@ -358,8 +358,9 @@ def test_both_parsed_lanes_make_a_document_runnable_without_its_pdf(library: Lib
     assert library.runnable(DOC_KEY) is True
     document = library.document(DOC_KEY)
     assert document.sha256 == DOC_SHA
-    assert document.pdf_path == original
+    assert document.pdf_path == library.layout.source_pdf(DOC_SHA)
     assert document.pdf_path.exists() is False
+    assert document.display_filename == original.name
 
 
 def test_asking_for_a_document_without_an_identity_says_so(library: Library):

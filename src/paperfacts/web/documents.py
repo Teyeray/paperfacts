@@ -239,9 +239,9 @@ class Library:
                     f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
                 )
             # Both artifacts are stored, so nothing downstream opens the file. A path is carried anyway,
-            # pointing where the PDF was first seen, because the export names its workbook after it.
-            origin = Path(identity.source_path) if identity.source_path else self.layout.source_pdf(identity.sha256)
-            pdf = origin.parent / identity.name
+            # pointing at where this document's PDF would live if it had one: the export names its
+            # workbook from ``display_name`` (set below), so no path has to be invented to name it.
+            pdf = self.layout.source_pdf(identity.sha256)
         return DocumentInput(
             document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name
         )

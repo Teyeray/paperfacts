@@ -9,8 +9,10 @@ client is shared and then closed.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +38,8 @@ class PipelineSpy:
     compare: list[bool] = field(default_factory=list)
     clients: list[object] = field(default_factory=list)
     client: FakeLlmClient = field(default_factory=lambda: FakeLlmClient([]))
+    # The lanes each compare_document call was handed, so a test can prove they are the extracted ones.
+    compare_lanes: list[Mapping[Backend, LaneExtraction] | None] = field(default_factory=list)
     # Both lanes record themselves from their own thread, so the recorder needs a lock of its own.
     lock: threading.Lock = field(default_factory=threading.Lock)
     # How many lanes were inside the fake extract at once: 2 proves they really overlapped.
@@ -88,10 +92,16 @@ def install_fake_pipeline(
         )
 
     def fake_compare(
-        document: DocumentInput, settings: Settings, client: object, *, force: bool = False
+        document: DocumentInput,
+        settings: Settings,
+        client: object,
+        *,
+        force: bool = False,
+        lanes: Mapping[Backend, LaneExtraction] | None = None,
     ) -> ComparisonReport:
         spy.compare.append(force)
         spy.clients.append(client)
+        spy.compare_lanes.append(lanes)
         return ComparisonReport(
             document_id=document.document_id,
             extractor_key="0123456789ab",
@@ -302,3 +312,59 @@ def test_the_client_is_closed_even_when_a_lane_fails(monkeypatch, document: Docu
         run_document(document, settings)
 
     assert spy.client.closed is True
+
+
+def test_the_report_is_built_from_the_lanes_that_were_extracted(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    """The comparison must not re-load what the run already holds: one extraction per backend per run,
+    and the very objects it produced are the ones compare_document is handed."""
+    spy = install_fake_pipeline(monkeypatch)
+
+    result = run_document(document, settings)
+
+    assert [backend for backend, _ in spy.extract] == list(BACKENDS)  # exactly one extraction per lane
+    assert spy.compare_lanes == [result.lanes]
+    for backend in BACKENDS:
+        assert spy.compare_lanes[0][backend] is result.lanes[backend]
+
+
+def test_the_first_lane_in_backends_order_wins_when_both_fail(
+    monkeypatch, document: DocumentInput, settings: Settings, caplog
+):
+    """Both lanes are collected before either is acted on: the first in BACKENDS order is raised and the
+    other one's exception is logged rather than dropped."""
+    install_fake_pipeline(monkeypatch)
+
+    def failing_extract(document, backend, settings, client, *, force: bool = False):
+        raise RuntimeError(f"{backend} lane exploded")
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
+
+    with caplog.at_level(logging.WARNING, logger="paperfacts.workflow"):
+        with pytest.raises(RuntimeError, match=f"{BACKENDS[0]} lane exploded"):
+            run_document(document, settings)
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"{BACKENDS[1]} lane exploded" in logged
+    assert f"{BACKENDS[0]} lane exploded" not in logged  # the one that was raised is not also logged
+
+
+def test_a_surviving_lane_is_not_reported_as_a_failure(
+    monkeypatch, document: DocumentInput, settings: Settings, caplog
+):
+    """Only the lane that raised is explained; the one that succeeded has nothing to say."""
+    install_fake_pipeline(monkeypatch)
+
+    def failing_extract(document, backend, settings, client, *, force: bool = False):
+        if backend == BACKENDS[0]:
+            raise RuntimeError("mineru lane exploded")
+        return make_lane(backend=backend, samples=(make_sample("A"),))
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
+
+    with caplog.at_level(logging.WARNING, logger="paperfacts.workflow"):
+        with pytest.raises(RuntimeError, match="mineru lane exploded"):
+            run_document(document, settings)
+
+    assert [record for record in caplog.records if "also failed" in record.getMessage()] == []
