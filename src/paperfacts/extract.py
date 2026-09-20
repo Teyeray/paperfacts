@@ -30,7 +30,7 @@ import re
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from paperfacts.adapters import render_markdown
@@ -140,6 +140,12 @@ def _informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
 # ---- Extraction ---------------------------------------------------------------------------------------------
 
 
+def _add_usage(total: dict[str, int], part: Mapping[str, int]) -> None:
+    """Accumulate one call's token counts into the lane's total."""
+    for key, value in part.items():
+        total[key] = total.get(key, 0) + value
+
+
 def extract_lane(
     artifact: ParsedArtifact,
     client: LlmClient,
@@ -197,8 +203,7 @@ def extract_lane(
     )
     if inventory is not None:
         # One call, counted once: charging it to every pass would misreport what the lane cost.
-        for key, value in inventory.usage.items():
-            usage[key] = usage.get(key, 0) + value
+        _add_usage(usage, inventory.usage)
 
     for index in range(passes):
         # Every pass asks exactly the same question; only the cache key differs, so a repeat costs a call
@@ -221,8 +226,7 @@ def extract_lane(
             )
         results.append(records)
         raw_response = raw_response or text
-        for key, value in pass_usage.items():
-            usage[key] = usage.get(key, 0) + value
+        _add_usage(usage, pass_usage)
 
     records = _deduplicate(merge_passes(results))
     lane = LaneExtraction(
@@ -416,8 +420,7 @@ def _extract_passages(
     for harvest, text, field_usage in answers:
         harvests.append(harvest)
         raw_parts.append(f"# {harvest.spec.name}\n{text}")
-        for key, value in field_usage.items():
-            usage[key] = usage.get(key, 0) + value
+        _add_usage(usage, field_usage)
 
     records = passage_records(
         inventory.response,
@@ -692,6 +695,16 @@ type VoteKey = tuple[str, str, str]
 type VoteSlot = tuple[ScopeKey, VoteKey, int]
 
 
+@dataclass
+class _Tally:
+    """Everything one voted slot accumulates: how many passes produced it, the wording kept, and every
+    pass's (identity, citations) so the guarded union below can decide which citations it may absorb."""
+
+    exemplar: FieldValue
+    votes: int = 0
+    supporters: list[tuple[ValueKey, tuple[str, ...]]] = field(default_factory=list)
+
+
 def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
     """Keep the values a majority of ``results`` agree on, annotated with their agreement.
 
@@ -715,34 +728,32 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
     passes = len(results)
     majority = passes // 2 + 1
 
-    counts: Counter[VoteSlot] = Counter()
-    entries: dict[VoteSlot, FieldValue] = {}
-    # Every pass's entry for each slot, kept aside until all passes are in: whether its citations may be
-    # merged into the exemplar depends on how many conditions the identity turned out to have.
-    supporters: list[tuple[VoteSlot, ValueKey, tuple[str, ...]]] = []
-    conditions: Counter[tuple[ScopeKey, VoteKey]] = Counter()
+    slots: dict[VoteSlot, _Tally] = {}
+    # How many entries the most generous pass gave each voted identity; it decides below whether a
+    # supporter's citations may be merged into a rank that kept someone else's wording.
+    entry_counts: Counter[tuple[ScopeKey, VoteKey]] = Counter()
     sample_counts: Counter[str] = Counter()
     samples: dict[str, SampleRecord] = {}
     target_ids: tuple[str, ...] = ()
     for records in results:
-        slots: dict[tuple[ScopeKey, ValueKey], VoteSlot] = {}
+        slot_of: dict[tuple[ScopeKey, ValueKey], VoteSlot] = {}
         ranks: Counter[tuple[ScopeKey, VoteKey]] = Counter()
-        citations: dict[VoteSlot, tuple[str, ...]] = {}
+        cited: dict[VoteSlot, tuple[str, ...]] = {}
         for scope, value in _values(records):
-            full = (scope, _value_key(value))
-            slot = slots.get(full)
+            identity = (scope, _value_key(value))
+            slot = slot_of.get(identity)
             if slot is None:
                 vote = (scope, _vote_key(value))
                 ranks[vote] += 1
                 slot = (*vote, ranks[vote])
-                slots[full] = slot
-                counts[slot] += 1
-                conditions[vote] = max(conditions[vote], ranks[vote])
-                entries.setdefault(slot, value)
-                citations[slot] = value.source_ids
+                slot_of[identity] = slot
+                entry_counts[vote] = max(entry_counts[vote], ranks[vote])
+                slots.setdefault(slot, _Tally(exemplar=value)).votes += 1
+                cited[slot] = value.source_ids
             else:
-                citations[slot] = (*citations[slot], *value.source_ids)
-        supporters.extend((slot, full[1], citations[slot]) for full, slot in slots.items())
+                cited[slot] = (*cited[slot], *value.source_ids)
+        for identity, slot in slot_of.items():
+            slots[slot].supporters.append((identity[1], cited[slot]))
         for scope in {normalize_key(sample.sample_id) for sample in records.samples}:
             sample_counts[scope] += 1
         for sample in records.samples:
@@ -755,22 +766,25 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
     # though, because rank matching pairs entries by position, and two passes may list the same number's
     # conditions in opposite orders. Merge only when the identity has a single entry everywhere -- there is
     # then no other condition the citation could belong to -- or when the two conditions normalise alike.
-    for slot, value_key, source_ids in supporters:
-        exemplar = entries[slot]
-        if conditions[(slot[0], slot[1])] > 1 and _value_key(exemplar)[1] != value_key[1]:
-            continue
-        merged = tuple(dict.fromkeys((*exemplar.source_ids, *source_ids)))
-        if merged != exemplar.source_ids:
-            entries[slot] = exemplar.model_copy(update={"source_ids": merged})
+    for (scope, vote, _rank), tally in slots.items():
+        condition = _value_key(tally.exemplar)[1]
+        unambiguous = entry_counts[(scope, vote)] == 1
+        cited = list(tally.exemplar.source_ids)
+        for value_key, source_ids in tally.supporters:
+            if unambiguous or condition == value_key[1]:
+                cited.extend(source_ids)
+        merged = tuple(dict.fromkeys(cited))
+        if merged != tally.exemplar.source_ids:
+            tally.exemplar = tally.exemplar.model_copy(update={"source_ids": merged})
 
     kept: dict[ScopeKey, list[FieldValue]] = {}
     dropped = [entry for records in results for entry in records.dropped]
-    for slot, value in entries.items():
-        scope, count = slot[0], counts[slot]
-        if count < majority:
-            dropped.append(f"{value.field}: only {count}/{passes} passes produced {value.value_raw!r}")
+    for (scope, _vote, _rank), tally in slots.items():
+        value, votes = tally.exemplar, tally.votes
+        if votes < majority:
+            dropped.append(f"{value.field}: only {votes}/{passes} passes produced {value.value_raw!r}")
             continue
-        kept.setdefault(scope, []).append(value.model_copy(update={"agreement": count / passes}))
+        kept.setdefault(scope, []).append(value.model_copy(update={"agreement": votes / passes}))
 
     # Sample identity is voted on separately from its values: "this sample exists, under these conditions"
     # is itself a finding, kept even when none of its measurements survived.
