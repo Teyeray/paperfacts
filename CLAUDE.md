@@ -30,6 +30,8 @@ this file is the part that is easy to get wrong.
   the only sub-package. Do not add re-exporting `__init__` files or nest packages; import from the module
   that defines a name.
 - Every exception class is in `errors.py`.
+- `validate.py` is the only stage that looks at pixels. It imports `pdf.py` for the crop and `grounding.py`
+  for the verdict, and nothing imports it but `dataset.py`, `workflow.py`, `report.py` and `web/`.
 
 ## Configuration
 
@@ -42,9 +44,13 @@ this file is the part that is easy to get wrong.
   the API key. `config.json` has nowhere to put a key, which is the point.
 - A new setting means: a key in `config.json`, a field on `Settings`, a `PAPERFACTS_*` override, and a line
   in the README. If it changes what the model is asked, it also goes into `extractor_key`; if it changes a
-  verdict, into `comparison_key`. The three exceptions with no override (`fields`, `condition_keywords`,
+  verdict, into `comparison_key`; if it changes what the vision model is shown or how its reading is judged,
+  into `validation_key`. The three exceptions with no override (`fields`, `condition_keywords`,
   `comparison.ambiguous_match_confidence`) are listed in the README as file-only; do not add a fourth
   without saying why.
+- `vlm.enabled` is the one setting whose shipped value (true) differs from its built-in baseline (false), on
+  purpose: a checkout that never configured a VLM keeps every filename it has. The exception is pinned in
+  `test_config_file.py`; do not add another without the same test.
 
 ## Code conventions
 
@@ -94,9 +100,37 @@ this file is the part that is easy to get wrong.
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
   re-derives records for free as long as the rendered document and prompts stay byte-identical.
 
+## Visual validation
+
+- The VLM **transcribes; the code adjudicates**. It is never told the value under check and never asked
+  "is this right?". The verdict is `grounding.is_grounded` run against its transcription, so the matcher
+  that judges parser text judges the model's text -- same leniency, same strictness. Do not add a
+  yes/no question to the prompt, and do not add a second matcher.
+- Which values are checked is a lane-blind rule in `validate.select_targets`, never a model call, and the
+  prompt, model, DPI and padding are identical for both lanes. Asymmetry here contaminates the same
+  disagreement signal the extraction rules protect.
+- The validate stage always appears in `stage_names()`; disabled, it is marked `skipped` with the reason.
+  Enabled, it opens its own `OpenAICompatibleClient` through `build_vlm_client` -- the extractor's client
+  is never reused for images, and `VisionClient` is typed apart from `LlmClient` so the two cannot be
+  swapped by accident.
+- Verdicts are kept apart: `confirmed`, `contradicted`, `illegible`, `not_checked`, `error`. A value nobody
+  could check must never look like one that was checked and passed.
+- `dataset.py` consults verdicts in exactly three places (contradicted set aside first; one-sided
+  confirmation resolves a conflict; a confirmed value counts as trusted despite failing grounding). A verdict
+  never invents a value and never promotes a cell the two-lane rules refuse for another reason. Adding a
+  fourth place needs a test in `test_dataset_validation.py` that shows the shape it does *not* apply to.
+- The vision cache key stands the image in by its sha256; the base64 is never hashed and never written to
+  the cache entry. Crops live under `crops/`, named by page, box and DPI, so two values cited from one table
+  share one render.
+- Every crop goes through `pdf.render_region`, behind the pdfium lock, with the viewer's own pixel mapping.
+- `validation_key` is its own key. It must never be folded into `extractor_key` or `comparison_key`: a
+  prompt tweak re-asks the VLM and nothing else. The dataset is stored under a three-key name only when
+  verdicts were consulted.
+
 ## Testing
 
-- `uv run pytest` — no models, no network, no real papers. Temporary PDFs are generated with pypdfium2.
+- `uv run pytest` — no models, no network, no real papers. Temporary PDFs are generated with pypdfium2; the
+  vision model is `support.llm.FakeVisionClient`, and the crops it is shown are rendered from those PDFs.
 - `uv run pytest --run-parser` — integration; needs both parser environments and their weights.
 - Coverage target ≥ 80% (`--cov=paperfacts`).
 
@@ -109,12 +143,14 @@ this file is the part that is easy to get wrong.
   every transition, so a poller never sees a half-applied state. Submitting the same document twice while
   it is active returns the same job.
 - Lane colours are fixed: blue for MinerU, orange for PaddleOCR-VL. Status colours always accompany text,
-  never carry meaning alone.
+  never carry meaning alone. A VLM verdict is a `.flag` badge beside the value with the transcription in
+  its tooltip; `facts.js` rebuilds `validate.value_key` from a comparison row, so the key's field order is
+  a contract between the two files.
 - The UI copy is Chinese; code comments are English.
 - The selected fact is in the URL (`#/doc/<id>/fact/<n>`) so a link survives a reload.
 
 ## Deployment
 
-`deploy/` targets a Linux GPU server and is restricted to **GPUs 4–7**; do not widen that. Development
-happens on macOS, is pushed to GitHub, and pulled on the server — do not try to operate the server over
-ssh from here.
+`deploy/` targets a Linux GPU server and is restricted to **GPUs 4–7**; do not widen that. GPU 7 is the
+validation model's (`qwen-vlm-server`, optional). Development happens on macOS, is pushed to GitHub, and
+pulled on the server — do not try to operate the server over ssh from here.
