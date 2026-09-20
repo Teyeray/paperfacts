@@ -404,3 +404,45 @@ def test_an_approximate_value_spaced_out_by_latex_still_exports():
     )
 
     assert result.paper_row["thickness"] == pytest.approx(8.4)
+
+
+def test_a_value_stated_only_for_the_whole_series_is_marked_series_level():
+    result = paired(
+        [value("thickness", "300", "nm", series=True)],
+        [value("thickness", "300", "nm", backend="paddleocr_vl", series=True)],
+    )
+
+    assert decision(result, "thickness")["decision"] == "agree"
+    assert decision(result, "thickness")["series"] is True
+
+
+def test_one_sample_specific_side_keeps_the_value_off_the_series_mark():
+    result = paired(
+        [value("thickness", "300", "nm", series=True)],
+        [value("thickness", "300", "nm", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "thickness")["decision"] == "agree"
+    assert decision(result, "thickness")["series"] is False
+
+
+def test_a_single_source_series_value_is_still_marked_series_level():
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "300", "nm", series=True)])]))
+
+    assert decision(result, "thickness")["decision"] == "single_source"
+    assert decision(result, "thickness")["series"] is True
+
+
+def test_the_series_mark_reaches_the_quality_sheet(tmp_path):
+    result = paired(
+        [value("thickness", "300", "nm", series=True)],
+        [value("thickness", "300", "nm", backend="paddleocr_vl", series=True)],
+    )
+    output = tmp_path / "dataset.xlsx"
+    write_dataset([result], output)
+
+    sheet = load_workbook(output)["数据质量"]
+    columns = {cell.value: cell.column for cell in sheet[1]}
+    rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
+    assert sheet.cell(rows["thickness"], columns["系列级"]).value is True
+    assert sheet.cell(rows["resistivity"], columns["系列级"]).value is False

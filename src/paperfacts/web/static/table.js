@@ -322,9 +322,13 @@ function cell(value, quality, sampleId, field) {
   const shown = shownValue(value);
   const badge = CELL_BADGE[status] ?? "";
   const sources = decision?.source_ids ?? "";
+  // The accepted evidence was stated for the whole sample series, not for this sample on its own.
+  const series = decision?.series
+    ? `<small title="论文对整个样品系列只写了一次，这里是按系列写到该样品上的">系列</small>`
+    : "";
   return (
     `<td class="cell ${CELL_CLASS[status] ?? ""}" title="${escapeHtml(detail)}" data-sources="${escapeHtml(sources)}">` +
-    `${escapeHtml(shown)}<small>${escapeHtml(badge)}</small></td>`
+    `${escapeHtml(shown)}<small>${escapeHtml(badge)}</small>${series}</td>`
   );
 }
 

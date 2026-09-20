@@ -38,7 +38,7 @@ from paperfacts.normalize import (
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
-CellValue = str | float | int | None
+CellValue = str | float | int | bool | None
 Row = Mapping[str, CellValue]
 
 _NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
@@ -89,6 +89,7 @@ _QUALITY_COLUMNS = (
     ("unit", "标准单位"),
     ("conditions", "条件"),
     ("source_ids", "合并证据来源"),
+    ("series", "系列级"),
     ("detail", "说明"),
 )
 
@@ -174,6 +175,9 @@ class _Decision:
     conditions: str
     sources: str
     detail: str
+    # The committed value rests entirely on evidence the paper stated for the whole sample series,
+    # never for this sample on its own. False for a rejected decision, which commits to nothing.
+    series: bool = False
 
 
 def _condition_key(value: str | None) -> str:
@@ -287,7 +291,10 @@ def _decide(
     if spec.name == "transmittance" and not conditions:
         details.append("原文提取结果未注明透光率波长或波段")
     details.append(f"采用 {chosen_backend}；抽取重复一致率 {chosen_field.agreement:g}；合并重复证据")
-    return _Decision(chosen, "agree" if agreed else "single_source", conditions, sources, _joined(details))
+    series = all(value.series for _, value, _ in parsed)
+    return _Decision(
+        chosen, "agree" if agreed else "single_source", conditions, sources, _joined(details), series=series
+    )
 
 
 def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> tuple[_Scope, ...]:
@@ -355,6 +362,7 @@ def consolidate_document(
                     "unit": spec.canonical_unit,
                     "conditions": decision.conditions,
                     "source_ids": decision.sources,
+                    "series": decision.series,
                     "detail": decision.detail,
                 }
             )
@@ -488,7 +496,10 @@ def _worksheet(
         sheet.column_dimensions[get_column_letter(column)].width = width
         for cells in sheet.iter_rows(min_row=2, min_col=column, max_col=column):
             cell = cells[0]
-            if isinstance(cell.value, str):
+            if isinstance(cell.value, bool):
+                # openpyxl writes a bool as Excel TRUE/FALSE; a number format would be misleading.
+                pass
+            elif isinstance(cell.value, str):
                 cell.value = _CONTROL.sub("", cell.value)
                 # PDF-derived strings are data even when their first character is '='.
                 cell.data_type = "s"
