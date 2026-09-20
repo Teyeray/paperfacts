@@ -109,3 +109,11 @@ Four defects read off the refusal list (scale factor written into the unit, Mine
 | ambiguous | 11 | 8 |
 
 29 more committed cells; the remaining non_scalar cells are genuine ("40 × 10 cm", "over 80 %").
+
+## The 48 multiple_conditions refusals are correct (2026-09-20)
+
+Read one by one: per-layer versus total thickness in bilayer and graded films (tsta, crystals,
+materials-13), two targets and their two modes and diameters (ae1c02771, crystals, ao2c00830), and
+transmittance quoted for two wavelength bands. No lexical rule separates these from a paraphrase, and each
+would be a manufactured value if merged. Leave the rule as it is; the table's blank cell with its reason on
+hover is the right output for them.
