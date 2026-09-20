@@ -10,24 +10,37 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# .env first, so a value set there wins over the defaults below (the app itself never overrides an
+# existing environment variable, so anything exported here would otherwise beat .env).
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
 MLX_PORT="${PAPERFACTS_MLX_PORT:-8111}"
 MLX_LOG="${PAPERFACTS_MLX_LOG:-data/mlx_vlm_server.log}"
+MLX_PID_FILE="${PAPERFACTS_MLX_PID_FILE:-data/mlx_vlm_server.pid}"
 
 "$(dirname "$0")/dev_fix_venv.sh" >/dev/null
 
+# macOS lsof syntax; the Linux deployment under deploy/ has its own scripts.
 if lsof -nP -iTCP:"$MLX_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     echo "mlx-vlm server already listening on :$MLX_PORT"
 else
     mkdir -p "$(dirname "$MLX_LOG")"
     echo "starting mlx-vlm server on :$MLX_PORT (log: $MLX_LOG)"
     nohup uvx --python 3.13 --from "mlx-vlm>=0.3.11" mlx_vlm.server --port "$MLX_PORT" >"$MLX_LOG" 2>&1 &
+    echo $! >"$MLX_PID_FILE"
     for _ in $(seq 1 60); do
         lsof -nP -iTCP:"$MLX_PORT" -sTCP:LISTEN >/dev/null 2>&1 && break
         sleep 1
     done
+    if ! lsof -nP -iTCP:"$MLX_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+        # Starting serve anyway would parse on the CPU for hours without saying so.
+        echo "mlx-vlm server did not come up on :$MLX_PORT within 60 s; see $MLX_LOG" >&2
+        exit 1
+    fi
+    echo "mlx-vlm server pid $(cat "$MLX_PID_FILE"); stop it with scripts/dev_down.sh"
 fi
 
-# .env is loaded by the app itself and wins over these; they only fill in what it leaves unset.
+# Defaults only for what .env left unset.
 export PAPERFACTS_PADDLE_VL_BACKEND="${PAPERFACTS_PADDLE_VL_BACKEND:-mlx-vlm-server}"
 export PAPERFACTS_PADDLE_VL_SERVER_URL="${PAPERFACTS_PADDLE_VL_SERVER_URL:-http://localhost:$MLX_PORT/}"
 export PAPERFACTS_PADDLE_VL_MODEL_NAME="${PAPERFACTS_PADDLE_VL_MODEL_NAME:-PaddlePaddle/PaddleOCR-VL-1.6}"
