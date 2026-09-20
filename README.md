@@ -254,7 +254,7 @@ uv run paperfacts fields                   # list the field table the package ac
 | `export <pdf or dir>` | Rebuild that workbook from cached results, with no parser and no LLM calls |
 | `parse <pdf>` | Parse into Markdown with provenance markers, a block list and the full artifact |
 | `extract <pdf>` | Extract sample-level records from parsed Markdown. Needs `parse` |
-| `compare <pdf>` | Match samples across lanes and compare their fields. Needs `parse` |
+| `compare <pdf>` | Match samples across lanes and compare their fields. Needs `extract` (which implies `parse`) |
 | `overlay <pdf>` | Draw block boxes onto page images, to check provenance by eye. Needs `parse` |
 | `serve` | Serve the web interface |
 | `fields` | Print the loaded field table, so an edit to `config.json` can be checked at a glance |
