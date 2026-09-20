@@ -95,3 +95,17 @@ papers 14, samples 169, sample×field cells 2760
 ```
 
 The outage was 08:56–09:01; the last paper then took 45 s (36 samples, 108 agreements).
+
+## Normaliser fixes measured on the corpus (2026-09-20)
+
+Four defects read off the refusal list (scale factor written into the unit, MinerU's LaTeX-spaced digits,
+"around"/"∼" not read as approximations, Ω·sq⁻¹ and 2'' unknown). Rebuilding all 14 papers took 8 s.
+
+| verdict | before | after |
+|---|---|---|
+| agree | 352 | 369 |
+| single_source | 156 | 168 |
+| non_scalar | 34 | 8 |
+| ambiguous | 11 | 8 |
+
+29 more committed cells; the remaining non_scalar cells are genuine ("40 × 10 cm", "over 80 %").
