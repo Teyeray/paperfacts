@@ -806,3 +806,12 @@ def test_a_series_value_with_no_samples_to_place_it_on_is_unattributed_and_unfla
 
     assert lane.samples == ()
     assert [(field.value_raw, field.series) for field in lane.unattributed] == [("12.5", False)]
+
+
+def test_the_field_question_maps_a_described_sample_onto_its_list_entry():
+    system = field_system_prompt()
+
+    assert "match that description against the label and conditions of each list entry" in system
+    assert "fits exactly one entry, copy that entry's id" in system
+    assert "fits several entries or none, leave `sample_id` null" in system
+    assert "`sample_id` must be copied exactly from the sample list in the question" in system
