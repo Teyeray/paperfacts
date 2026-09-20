@@ -47,12 +47,12 @@ from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.dataset import write_dataset
+from paperfacts.dataset import DatasetPayload, write_dataset
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
-from paperfacts.web.documents import DocumentSummary, Library
+from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobManager, JobRunner
 from paperfacts.workflow import run_document, stage_names
 
@@ -166,7 +166,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         return library.list()
 
     @app.get("/api/dataset")
-    def get_corpus() -> dict[str, Any]:
+    def get_corpus() -> CorpusPayload:
         """The home view's table: every document that has a dataset under the current keys. Reading N small
         JSON files is cheap enough that a cache would only be a way to serve a stale table."""
         return library.corpus()
@@ -273,7 +273,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         return artifact
 
     @app.get("/api/documents/{document_id}/dataset")
-    def get_dataset(document_id: str) -> dict[str, Any]:
+    def get_dataset(document_id: str) -> DatasetPayload:
         require_document(document_id)
         dataset = library.dataset(document_id)
         if dataset is None:

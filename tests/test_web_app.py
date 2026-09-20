@@ -364,7 +364,12 @@ def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library:
 
     body = client.get(f"/api/documents/{parsed_only}/dataset").json()
 
-    assert body == payload
+    # The endpoint publishes the full DatasetPayload: what was written is there, the rest at its default.
+    assert body["document_id"] == parsed_only
+    assert body["sample_rows"] == payload["sample_rows"]
+    assert body["paper_row"] == {}
+    assert body["quality_rows"] == []
+    assert body["fields"] == []
 
 
 def test_a_dataset_written_under_other_keys_is_not_served(client: TestClient, library: Library, parsed_only: str):
@@ -401,11 +406,11 @@ def test_the_excel_export_is_served_as_a_download(client: TestClient, library: L
 
 
 def corpus_payload(document_id: str, *, name: str = "paper.pdf", samples: int = 2) -> dict:
-    """A dataset payload shaped like ``DocumentDataset.as_dict``, trimmed to what the corpus reads."""
+    """A dataset payload shaped like ``DatasetPayload``, trimmed to what the corpus reads."""
     return {
         "document_id": document_id,
         "filename": name,
-        "fields": [{"name": "thickness", "unit": "nm", "scope": "sample"}],
+        "fields": [{"name": "thickness", "label": "厚度", "unit": "nm", "scope": "sample", "description": "膜厚"}],
         "paper_row": {"sample_id": "S1", "available_fields": 1, "agree_fields": 1, "thickness": 300},
         "sample_rows": [{"sample_id": f"S{i}", "thickness": 300} for i in range(1, samples + 1)],
         "quality_rows": [],
@@ -427,7 +432,9 @@ def test_the_corpus_carries_one_row_per_document_with_a_dataset(
     body = client.get("/api/dataset").json()
 
     assert [row["document_id"] for row in body["rows"]] == [parsed_only]
-    assert body["fields"] == [{"name": "thickness", "unit": "nm", "scope": "sample"}]
+    assert body["fields"] == [
+        {"name": "thickness", "label": "厚度", "unit": "nm", "scope": "sample", "description": "膜厚"}
+    ]
     row = body["rows"][0]
     assert row["paper_row"]["thickness"] == 300
     assert row["sample_count"] == 2
@@ -493,6 +500,20 @@ def test_a_dataset_in_the_wrong_shape_is_skipped_in_the_corpus(client: TestClien
 
     assert client.get("/api/dataset").json() == {"fields": [], "rows": []}
     assert client.get("/api/dataset.xlsx").status_code == 404
+
+
+def test_the_dataset_endpoints_publish_their_schemas(client: TestClient):
+    """The dataset crosses the HTTP boundary as a declared model, so the browser's contract is in the
+    schema rather than only in the code that happens to build the dict."""
+    schema = client.get("/openapi.json").json()
+
+    assert {"DatasetPayload", "FieldColumn", "CorpusPayload", "CorpusRow"} <= set(schema["components"]["schemas"])
+
+    def response_ref(path: str) -> str:
+        return schema["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+
+    assert response_ref("/api/dataset").endswith("/CorpusPayload")
+    assert response_ref("/api/documents/{document_id}/dataset").endswith("/DatasetPayload")
 
 
 def test_the_corpus_workbook_is_not_found_while_nothing_is_mined(client: TestClient, parsed_only: str):

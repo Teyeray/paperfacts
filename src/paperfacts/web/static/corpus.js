@@ -9,7 +9,9 @@ import { api } from "./api.js";
 import { escapeHtml, toast } from "./html.js";
 import { documentHash } from "./router.js";
 import { state } from "./state.js";
-import { chosenFields, copyButton, copyTable, fieldPicker, headRow, shownValue, toggleChip, tsvHeader, visibleFields } from "./table.js";
+import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
+import { headRow, shownValue } from "./table.js";
+import { copyButton, copyTable, tsvHeader, tsvRow } from "./tsv.js";
 
 let showAllFields = false;
 
@@ -43,7 +45,7 @@ export function renderCorpus(root) {
   );
   head.append(chips);
   const leading = ["论文", "样品", "可用/一致"];
-  head.append(copyButton(() => copyTable(tsvHeader(leading, fields), rows.map((row) => rowValues(row, fields)))));
+  head.append(copyButton(() => copyTable(tsvHeader(leading, fields), rows.map((row) => rowValues(row, fields, leading)))));
   const download = document.createElement("a");
   download.className = "download";
   download.href = "/api/dataset.xlsx";
@@ -90,14 +92,14 @@ function paperRow(row, fields) {
 
 // The same three identity columns and the same field values the rendered row shows, without the link,
 // the sample count or the empty-cell dash.
-function rowValues(row, fields) {
+function rowValues(row, fields, leading) {
   const paper = row.paper_row ?? {};
-  return [
+  const identity = [
     row.name ?? row.document_id ?? "",
     paper.sample_id ?? "",
     `${paper.available_fields ?? 0} / ${paper.agree_fields ?? 0}`,
-    ...fields.map((field) => paper[field.name]),
   ];
+  return tsvRow(leading, identity, fields, (field) => paper[field.name]);
 }
 
 function valueCell(value) {

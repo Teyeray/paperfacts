@@ -9,17 +9,15 @@ document directory's ``identity.json``.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.dataset import DocumentDataset
+from paperfacts.dataset import CellValue, DatasetPayload, DocumentDataset, FieldColumn
 from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
@@ -52,6 +50,28 @@ class DocumentSummary(BaseModel):
     compared: bool
     counts: ComparisonCounts | None = None
     uploaded_at: str | None = None
+
+
+class CorpusRow(BaseModel):
+    """One paper on the home view's library-wide table: its selected sample row and how many it had."""
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str
+    name: str
+    paper_row: dict[str, CellValue]
+    sample_count: int
+
+
+class CorpusPayload(BaseModel):
+    """The home view's table. The field list travels once at the top level rather than on every row --
+    it is the same list for every document, because a dataset written under a different field table
+    lives under a different extractor_key and is simply not read here."""
+
+    model_config = ConfigDict(frozen=True)
+
+    fields: tuple[FieldColumn, ...] = ()
+    rows: tuple[CorpusRow, ...] = ()
 
 
 class Library:
@@ -119,66 +139,57 @@ class Library:
         # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.
         return read_lane(self.layout, document_id, backend, self.extractor_key)
 
-    def dataset(self, document_id: str) -> dict[str, Any] | None:
-        """The consolidated per-sample table, or ``None`` until the export ran under the current keys."""
+    def dataset(self, document_id: str) -> DatasetPayload | None:
+        """The consolidated per-sample table, or ``None`` until the export ran under the current keys.
+
+        Validation happens here, at the disk boundary: a file in the wrong shape raises
+        ``ValidationError`` rather than travelling on as an untyped dict.
+        """
         path = self.layout.dataset_json_path(document_id, self.extractor_key, self.comparison_key)
         if not path.is_file():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        return DatasetPayload.model_validate_json(path.read_text(encoding="utf-8"))
 
-    def corpus(self) -> dict[str, Any]:
+    def corpus(self) -> CorpusPayload:
         """The library-wide results table: one row per document that has a dataset under the current keys.
 
-        The field list travels once at the top level rather than on every row -- it is the same list for
-        every document, because a dataset written under a different field table lives under a different
-        extractor_key and is simply not read here. A document without a dataset is absent, not an empty
-        row: the home view shows what has been mined, not what is missing.
+        A document without a dataset is absent, not an empty row: the home view shows what has been
+        mined, not what is missing.
         """
-        fields: list[Any] = []
-        rows: list[dict[str, Any]] = []
+        fields: tuple[FieldColumn, ...] = ()
+        rows: list[CorpusRow] = []
         for summary, dataset in self._corpus_entries():
             if not fields:
-                fields = dataset.get("fields") or []
+                fields = dataset.fields
             rows.append(
-                {
-                    "document_id": summary.document_id,
-                    "name": summary.name,
-                    "paper_row": dataset.get("paper_row") or {},
-                    "sample_count": len(dataset.get("sample_rows") or []),
-                }
+                CorpusRow(
+                    document_id=summary.document_id,
+                    name=summary.name,
+                    paper_row=dataset.paper_row,
+                    sample_count=len(dataset.sample_rows),
+                )
             )
-        return {"fields": fields, "rows": rows}
+        return CorpusPayload(fields=fields, rows=tuple(rows))
 
     def corpus_datasets(self) -> list[DocumentDataset]:
         """The same documents as :meth:`corpus`, rebuilt as datasets so the whole library can be exported
         as one workbook."""
-        datasets = []
-        for summary, dataset in self._corpus_entries():
-            try:
-                datasets.append(DocumentDataset.from_dict(dataset))
-            except (AttributeError, TypeError, ValueError):
-                # Valid JSON in the wrong shape (hand-edited, or written by an older layout): the same
-                # rule as an unreadable file -- this document drops out, the export still happens.
-                logger.warning("ignoring unusable dataset for doc=%s in the corpus export", summary.document_id)
-        return datasets
+        return [DocumentDataset.from_payload(dataset) for _, dataset in self._corpus_entries()]
 
-    def _corpus_entries(self) -> Iterator[tuple[DocumentSummary, dict[str, Any]]]:
+    def _corpus_entries(self) -> Iterator[tuple[DocumentSummary, DatasetPayload]]:
         """Every document that has a usable dataset under the current keys, in library order.
 
-        The corpus spans every document, so one corrupt or unreadable file must cost exactly that one
-        row -- never the whole table. A single-document read still raises, because there the caller
-        asked for *that* file and deserves the error.
+        The corpus spans every document, so one corrupt, unreadable or wrongly shaped file must cost
+        exactly that one row -- never the whole table. A single-document read still raises, because
+        there the caller asked for *that* file and deserves the error.
         """
         for summary in self.list():
             try:
                 dataset = self.dataset(summary.document_id)
-            except (OSError, json.JSONDecodeError):
-                logger.warning("ignoring unreadable dataset for doc=%s in the corpus listing", summary.document_id)
+            except (OSError, ValidationError):
+                logger.warning("ignoring unusable dataset for doc=%s in the corpus listing", summary.document_id)
                 continue
             if dataset is None:
-                continue
-            if not isinstance(dataset, dict):
-                logger.warning("ignoring dataset for doc=%s: expected a JSON object", summary.document_id)
                 continue
             yield summary, dataset
 

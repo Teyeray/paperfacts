@@ -8,20 +8,19 @@ comparing their wording across lanes would refuse values the comparison report a
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
+from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport, FieldComparison
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_SPECS, SAMPLE_FIELDS, TARGET_FIELDS, FieldSpec
@@ -73,18 +72,55 @@ _QUALITY_COLUMNS = (
 )
 
 
-def _field_column(spec: FieldSpec) -> dict[str, CellValue]:
+class FieldColumn(BaseModel):
     """What a reader needs to know about one column, built once for both the web UI and the Excel sheet.
 
-    ``label`` and ``description`` are display only and may be empty when ``config.json`` declares neither.
+    ``label`` and ``description`` are display only and may be empty when ``config.json`` declares neither;
+    ``unit`` is absent for a text field.
     """
-    return {
-        "name": spec.name,
-        "label": spec.label,
-        "unit": spec.canonical_unit,
-        "scope": "sample" if spec.is_sample_level else "target",
-        "description": spec.description_zh,
-    }
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    label: str = ""
+    unit: str | None = None
+    scope: str
+    description: str = ""
+
+
+class DatasetPayload(BaseModel):
+    """One document's consolidated dataset as it crosses the disk and HTTP boundaries.
+
+    The same model is written to ``dataset.json``, parsed back from it and returned by the endpoint, so
+    the browser's contract is declared once and FastAPI can publish a schema for it. The field list
+    travels with the data because the rows carry values only: the browser needs the canonical unit and
+    the paper/sample scope to build a header it can trust.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str = ""
+    filename: str = ""
+    extractor_key: str = ""
+    comparison_key: str = ""
+    fields: tuple[FieldColumn, ...] = ()
+    paper_row: dict[str, CellValue] = {}
+    sample_rows: tuple[dict[str, CellValue], ...] = ()
+    quality_rows: tuple[dict[str, CellValue], ...] = ()
+
+
+def field_columns() -> tuple[FieldColumn, ...]:
+    """The field table as columns, in the order the dataset writes them."""
+    return tuple(
+        FieldColumn(
+            name=spec.name,
+            label=spec.label,
+            unit=spec.canonical_unit,
+            scope="sample" if spec.is_sample_level else "target",
+            description=spec.description_zh,
+        )
+        for spec in FIELD_SPECS
+    )
 
 
 @dataclass(frozen=True)
@@ -97,50 +133,47 @@ class DocumentDataset:
     extractor_key: str = ""
     comparison_key: str = ""
 
-    def as_dict(self) -> dict[str, object]:
-        """A JSON-serialisable view for the web UI.
+    def to_payload(self) -> DatasetPayload:
+        """The serialisable view the web UI and ``dataset.json`` share.
 
-        Rows are ``MappingProxyType`` so nothing downstream can mutate a consolidated row; ``json`` cannot
-        dump one, so copy each into a plain dict here rather than weakening the model. The field list
-        travels with the data because the rows carry values only: the browser needs the canonical unit and
-        the paper/sample scope to build a header it can trust.
+        Rows are ``MappingProxyType`` so nothing downstream can mutate a consolidated row; pydantic copies
+        each into a plain dict here rather than weakening the model.
         """
-        return {
-            "document_id": self.document_id,
-            "filename": self.filename,
-            "extractor_key": self.extractor_key,
-            "comparison_key": self.comparison_key,
-            "fields": [_field_column(spec) for spec in FIELD_SPECS],
-            "paper_row": dict(self.paper_row),
-            "sample_rows": [dict(row) for row in self.sample_rows],
-            "quality_rows": [dict(row) for row in self.quality_rows],
-        }
+        return DatasetPayload(
+            document_id=self.document_id,
+            filename=self.filename,
+            extractor_key=self.extractor_key,
+            comparison_key=self.comparison_key,
+            fields=field_columns(),
+            paper_row=dict(self.paper_row),
+            sample_rows=tuple(dict(row) for row in self.sample_rows),
+            quality_rows=tuple(dict(row) for row in self.quality_rows),
+        )
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> DocumentDataset:
-        """The exact inverse of :meth:`as_dict`, so a dataset read back from disk can be exported again
-        without re-running the pipeline. The field list is not stored: it is derived from FIELD_SPECS on
+    def from_payload(cls, payload: DatasetPayload) -> DocumentDataset:
+        """The exact inverse of :meth:`to_payload`, so a dataset read back from disk can be exported again
+        without re-running the pipeline. The field list is not restored: it is derived from FIELD_SPECS on
         the way out, and a payload written under a different field table lives under a different
         extractor_key and is never read next to this one.
+
+        The payload arrives already validated -- a malformed file fails at the disk boundary, where the
+        caller can decide whether to skip that document or raise.
         """
-
-        def rows(key: str) -> tuple[Row, ...]:
-            return tuple(MappingProxyType(dict(row)) for row in payload.get(key) or ())
-
         return cls(
-            document_id=str(payload.get("document_id", "")),
-            filename=str(payload.get("filename", "")),
-            paper_row=MappingProxyType(dict(payload.get("paper_row") or {})),
-            sample_rows=rows("sample_rows"),
-            quality_rows=rows("quality_rows"),
-            extractor_key=str(payload.get("extractor_key", "")),
-            comparison_key=str(payload.get("comparison_key", "")),
+            document_id=payload.document_id,
+            filename=payload.filename,
+            paper_row=MappingProxyType(dict(payload.paper_row)),
+            sample_rows=tuple(MappingProxyType(dict(row)) for row in payload.sample_rows),
+            quality_rows=tuple(MappingProxyType(dict(row)) for row in payload.quality_rows),
+            extractor_key=payload.extractor_key,
+            comparison_key=payload.comparison_key,
         )
 
 
 def write_dataset_json(dataset: DocumentDataset, path: Path) -> None:
     """Write one document's consolidated dataset for the web UI, atomically like every other artifact."""
-    payload = json.dumps(dataset.as_dict(), ensure_ascii=False, indent=2)
+    payload = dataset.to_payload().model_dump_json(indent=2)
     write_atomic(path, lambda tmp: tmp.write_text(payload, encoding="utf-8"))
 
 
@@ -506,15 +539,15 @@ def write_dataset(
     workbook.remove(workbook.active)
     _worksheet(workbook, "论文数据", _DATA_COLUMNS, [doc.paper_row for doc in unique], "Papers")
     _worksheet(workbook, "样品数据", _DATA_COLUMNS, [row for doc in unique for row in doc.sample_rows], "Samples")
-    descriptions = [
-        column
+    descriptions: list[Row] = [
+        column.model_dump()
         | {
             # The sheet says the same things in Chinese, for a reader who opens the workbook alone.
-            "scope": "样品级" if column["scope"] == "sample" else "靶材（论文级）",
-            "unit": column["unit"] or "文本",
+            "scope": "样品级" if column.scope == "sample" else "靶材（论文级）",
+            "unit": column.unit or "文本",
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
-        for column in (_field_column(spec) for spec in FIELD_SPECS)
+        for column in field_columns()
     ]
     _worksheet(
         workbook,

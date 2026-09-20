@@ -5,9 +5,16 @@ from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
+from pydantic import ValidationError
 
 from paperfacts.compare import compare_lanes
-from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
+from paperfacts.dataset import (
+    DatasetPayload,
+    DocumentDataset,
+    consolidate_document,
+    write_dataset,
+    write_dataset_json,
+)
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
@@ -346,9 +353,9 @@ def test_the_json_view_survives_a_round_trip(tmp_path):
 
 def test_the_field_list_carries_the_chinese_description_for_the_header_tooltip():
     result = paired([value("transmittance", "85", "%")], [value("transmittance", "85", "%", backend="paddleocr_vl")])
-    by_name = {field["name"]: field for field in result.as_dict()["fields"]}
-    assert "透光率" in by_name["transmittance"]["description"]
-    assert by_name["transmittance"]["scope"] == "sample"
+    by_name = {field.name: field for field in result.to_payload().fields}
+    assert "透光率" in by_name["transmittance"].description
+    assert by_name["transmittance"].scope == "sample"
 
 
 def test_every_configured_field_has_a_chinese_description():
@@ -359,28 +366,35 @@ def test_every_configured_field_has_a_chinese_description():
 
 def test_the_field_list_carries_the_chinese_label_for_the_column_header():
     # The browser prints this above the column; a field without one falls back to its id, never to blank.
-    by_name = {field["name"]: field for field in dataset(make_lane()).as_dict()["fields"]}
+    by_name = {field.name: field for field in dataset(make_lane()).to_payload().fields}
 
-    assert by_name["transmittance"]["label"] == "透光率"
-    assert by_name["thickness"]["label"] == "厚度"
+    assert by_name["transmittance"].label == "透光率"
+    assert by_name["thickness"].label == "厚度"
 
 
-def test_from_dict_reverses_as_dict_exactly():
-    # The corpus export rebuilds datasets from their JSON, so the inverse has to be lossless.
+def test_from_payload_reverses_to_payload_exactly():
+    # The corpus export rebuilds datasets from their JSON, so the round trip through disk has to be lossless.
     result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])
 
-    restored = DocumentDataset.from_dict(json.loads(json.dumps(result.as_dict())))
+    parsed = DatasetPayload.model_validate_json(result.to_payload().model_dump_json())
+    restored = DocumentDataset.from_payload(parsed)
 
     assert restored == result
-    assert restored.as_dict() == result.as_dict()
+    assert restored.to_payload() == result.to_payload()
+
+
+def test_a_dataset_file_in_the_wrong_shape_fails_at_the_boundary():
+    # Validation is pydantic's job where the JSON is parsed, so a bad file never travels on as a dict.
+    with pytest.raises(ValidationError):
+        DatasetPayload.model_validate_json("[1, 2, 3]")
 
 
 def test_the_json_field_list_carries_the_unit_and_the_scope():
-    fields = {field["name"]: field for field in dataset(make_lane()).as_dict()["fields"]}
+    fields = {field.name: field for field in dataset(make_lane()).to_payload().fields}
 
-    assert fields["thickness"]["scope"] == "sample"
-    assert fields["component"]["scope"] == "target"
-    assert fields["thickness"]["unit"] == "nm"
+    assert fields["thickness"].scope == "sample"
+    assert fields["component"].scope == "target"
+    assert fields["thickness"].unit == "nm"
 
 
 def test_the_display_name_is_the_filename_a_dataset_reports():
