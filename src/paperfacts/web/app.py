@@ -216,10 +216,10 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         submitted: list[Job] = []
         skipped: list[SkippedDocument] = []
         for summary in library.list():
-            if library.pdf_path(summary.document_id) is None:
+            if not library.runnable(summary.document_id):
                 skipped.append(
                     SkippedDocument(
-                        document_id=summary.document_id, name=summary.name, reason="No available PDF to process"
+                        document_id=summary.document_id, name=summary.name, reason="No PDF and no cached parse"
                     )
                 )
                 continue
@@ -237,9 +237,10 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     @app.post("/api/documents/{document_id}/run", status_code=202)
     def run_existing(document_id: str, force: Annotated[bool, Query()] = False) -> Job:
         require_document(document_id)
-        if library.pdf_path(document_id) is None:
+        if not library.runnable(document_id):
+            # A stored parse for both lanes is enough: extraction, comparison and export never open the PDF.
             raise HTTPException(
-                status_code=409, detail="This document has no available PDF to reprocess; please re-upload"
+                status_code=409, detail="No PDF and no cached parse for this document; re-upload it to process it"
             )
         return manager.submit(document_id, force=force)
 

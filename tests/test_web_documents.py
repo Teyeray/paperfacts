@@ -23,7 +23,7 @@ import pytest
 from paperfacts.compare import ComparisonCounts
 from paperfacts.config import Settings
 from paperfacts.keys import extractor_key
-from paperfacts.models import DocumentInput
+from paperfacts.models import BACKENDS, DocumentInput
 from paperfacts.storage import write_text_atomic
 from paperfacts.web.documents import Library
 from support.extraction import make_field, make_sample
@@ -335,6 +335,31 @@ def test_asking_for_a_document_without_a_pdf_says_so(library: Library, tmp_path:
 
     with pytest.raises(FileNotFoundError, match="has no available PDF"):
         library.document(DOC_KEY)
+
+
+def test_only_one_parsed_lane_is_still_not_enough_without_a_pdf(library: Library, tmp_path: Path):
+    seed_cli_document(library, tmp_path / "gone.pdf")
+    seed_artifact(library, "mineru")
+
+    assert library.runnable(DOC_KEY) is False
+    with pytest.raises(FileNotFoundError, match="has no available PDF"):
+        library.document(DOC_KEY)
+
+
+def test_both_parsed_lanes_make_a_document_runnable_without_its_pdf(library: Library, tmp_path: Path):
+    """Processed on another machine: the recorded path is carried so the export keeps its filename,
+    even though nothing will open it."""
+    original = tmp_path / "elsewhere" / "ito-films.pdf"
+    seed_cli_document(library, original)
+    for backend in BACKENDS:
+        seed_artifact(library, backend)
+
+    assert library.has_cached_parse(DOC_KEY) is True
+    assert library.runnable(DOC_KEY) is True
+    document = library.document(DOC_KEY)
+    assert document.sha256 == DOC_SHA
+    assert document.pdf_path == original
+    assert document.pdf_path.exists() is False
 
 
 def test_asking_for_a_document_without_an_identity_says_so(library: Library):

@@ -102,6 +102,15 @@ def parsed_only(library: Library) -> str:
     return DOC_KEY
 
 
+@pytest.fixture
+def parsed_both_lanes(library: Library) -> str:
+    """A document processed on another machine: no PDF here, but both lanes' artifacts are stored, so
+    extraction, comparison and export can still run."""
+    for backend in BACKENDS:
+        seed_artifact(library, backend)
+    return DOC_KEY
+
+
 # ---- health / listing ---------------------------------------------------------------------
 
 
@@ -223,6 +232,17 @@ def test_rerunning_a_document_whose_pdf_is_gone_is_a_conflict(client: TestClient
 
     assert response.status_code == 409
     assert "re-upload" in response.json()["detail"]
+
+
+def test_rerunning_a_document_with_both_parses_and_no_pdf_is_accepted(
+    client: TestClient, parsed_both_lanes: str, runner: RecordingRunner
+):
+    """Nothing after parsing reads the PDF, so a stored parse for both lanes is enough to re-run."""
+    response = client.post(f"/api/documents/{parsed_both_lanes}/run")
+
+    assert response.status_code == 202
+    assert response.json()["document_id"] == parsed_both_lanes
+    wait_until(lambda: runner.call_count == 1, what="the rerun job to start")
 
 
 def test_rerunning_a_document_queues_a_new_job(client: TestClient, uploaded: str, runner: RecordingRunner):
@@ -655,6 +675,13 @@ def test_a_document_without_a_pdf_is_skipped_with_a_reason(client: TestClient, p
     assert body["submitted"] == []
     assert [row["document_id"] for row in body["skipped"]] == [parsed_only]
     assert "PDF" in body["skipped"][0]["reason"]
+
+
+def test_a_document_with_both_parses_and_no_pdf_is_submitted_by_a_bulk_run(client: TestClient, parsed_both_lanes: str):
+    body = client.post("/api/documents/run-all").json()
+
+    assert [job["document_id"] for job in body["submitted"]] == [parsed_both_lanes]
+    assert body["skipped"] == []
 
 
 def test_running_everything_twice_while_the_jobs_are_active_reuses_them(

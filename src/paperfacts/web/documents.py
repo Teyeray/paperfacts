@@ -213,6 +213,19 @@ class Library:
             raise FileNotFoundError("This document has no available PDF to render pages from")
         return render_page_cached(pdf, page, dpi=dpi, cache_dir=self.layout.page_cache_dir(document_id, dpi))
 
+    def has_cached_parse(self, document_id: str) -> bool:
+        """Whether both lanes' artifacts are on disk, so the pipeline can run without ever opening the PDF."""
+        self._require_key(document_id)
+        return all(self.layout.artifact_path(document_id, backend).is_file() for backend in BACKENDS)
+
+    def runnable(self, document_id: str) -> bool:
+        """Whether ``run_document`` can be asked to process this document at all.
+
+        A PDF is only needed for a real parse. A document parsed on another machine arrives here with both
+        artifacts and no PDF, and extraction, comparison and export need nothing else.
+        """
+        return self.pdf_path(document_id) is not None or self.has_cached_parse(document_id)
+
     def document(self, document_id: str) -> DocumentInput:
         identity = self.identity(document_id)
         if identity is None:
@@ -221,10 +234,21 @@ class Library:
             )
         pdf = self.pdf_path(document_id)
         if pdf is None:
-            raise FileNotFoundError(
-                f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
-            )
+            if not self.has_cached_parse(document_id):
+                raise FileNotFoundError(
+                    f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
+                )
+            # Both artifacts are stored, so nothing downstream opens the file; the path is carried anyway
+            # because the export names its workbook after it. Re-parsing raises ParserError instead.
+            pdf = self._recorded_pdf_path(identity)
         return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256)
+
+    def _recorded_pdf_path(self, identity: DocumentIdentity) -> Path:
+        """Where the PDF was when the document was first seen: a path that need not exist, whose name is
+        the recorded display name so the export filename survives the PDF."""
+        if identity.source_path:
+            return Path(identity.source_path).parent / identity.name
+        return self.layout.source_pdf(identity.sha256).parent / identity.name
 
     def register_upload(self, filename: str, data: bytes) -> DocumentInput:
         """Store an uploaded PDF in its document directory (re-uploading the same content is

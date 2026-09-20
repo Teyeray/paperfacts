@@ -20,7 +20,7 @@ from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
 from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
-from paperfacts.errors import ConfigError, PaperFactsError
+from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.extract import build_extraction_document, extract_lane
 from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import comparison_key, extractor_key_for
@@ -176,6 +176,10 @@ def parse_document(
         )
         logger.info("parsed %s", report)
         return stored, report
+
+    if not document.pdf_path.is_file():
+        # Only the real parse path needs the file; say so plainly instead of failing inside the parser.
+        raise ParserError(backend, "input", "PDF not available; re-upload to re-parse")
 
     clock = time.monotonic()
     raw = parser.parse(document, raw_dir, force=force)

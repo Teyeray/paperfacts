@@ -477,3 +477,45 @@ def test_parse_document_writes_the_document_identity_first(
     assert identity.name == document.pdf_path.name
     assert identity.source_path == str(document.pdf_path)
     assert identity.uploaded is False
+
+
+# ---- a document whose PDF is gone ---------------------------------------------------
+
+
+def test_parse_document_serves_the_stored_artifact_without_ever_opening_the_pdf(
+    monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
+):
+    """Parsed on another machine, copied here without the PDF: the artifact is enough."""
+    parser = install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
+    first, _ = parse_document(document, "mineru", settings)
+    _drop_raw_output(settings, document)
+
+    def explode(_path: Path) -> DocumentGeometry:
+        raise AssertionError("the PDF must not be opened when the stored artifact stands in")
+
+    monkeypatch.setattr("paperfacts.workflow.read_geometry", explode)
+    gone = document.model_copy(update={"pdf_path": settings.data_root / "elsewhere" / "gone.pdf"})
+    parser.calls.clear()
+
+    artifact, report = parse_document(gone, "mineru", settings)
+
+    assert artifact == first
+    assert report.from_artifact is True
+    assert parser.calls == []
+
+
+def test_parse_document_without_a_pdf_fails_with_an_honest_parser_error(
+    monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput
+):
+    # Forced (or simply never parsed): a real parse needs the file, so say which one is missing.
+    parser = install_fake_parser(monkeypatch, FakeParser("mineru", fake_mineru_raw.out_dir))
+    parse_document(document, "mineru", settings)
+    _drop_raw_output(settings, document)
+    gone = document.model_copy(update={"pdf_path": settings.data_root / "elsewhere" / "gone.pdf"})
+    parser.calls.clear()
+
+    with pytest.raises(ParserError, match="PDF not available") as caught:
+        parse_document(gone, "mineru", settings, force=True)
+
+    assert caught.value.stage == "input"
+    assert parser.calls == []
