@@ -78,3 +78,20 @@ for 13 papers because every model answer is cached. The 14th paper (s41598-022-1
 from 08:56 every request to the endpoint, even a one-line test, answers HTTP 500 `BalanceError: There are
 no suitable services`. 748 answers were bought today. It is not the paper, the payload, or concurrency —
 all three were bisected. Nothing runs until the account has balance again; the cache makes the resume free.
+
+## Whole corpus (2026-09-20, 14/14 papers, endpoint back at 09:01)
+
+```
+papers 14, samples 169, sample×field cells 2760
+  missing               2149  77.9%
+  agree                  352  12.8%
+  single_source          156   5.7%
+  multiple_conditions     48   1.7%
+  non_scalar              34   1.2%
+  ambiguous               11   0.4%
+  multiple_values          6   0.2%
+  conflict                 2   0.1%
+  ungrounded               2   0.1%
+```
+
+The outage was 08:56–09:01; the last paper then took 45 s (36 samples, 108 agreements).
