@@ -227,6 +227,8 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .results-table th.fcol small { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
 .results-table td.cell { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; cursor: pointer; }
 /* The colour is a second signal only: every decided cell also carries a badge naming its lane(s). */
+/* The canonical unit rides with the value, so the header does not have to repeat it. */
+.results-table td.cell .unit { color: var(--ink-3); font-size: 11px; }
 .results-table td.cell small { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
 .results-table td.cell small.lane-a { color: var(--lane-a); }
 .results-table td.cell small.lane-b { color: var(--lane-b); }

@@ -10,7 +10,7 @@ import { escapeHtml, toast } from "./html.js";
 import { documentHash } from "./router.js";
 import { state } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
-import { headRow, shownValue } from "./table.js";
+import { headRow, valueHtml } from "./table.js";
 import { copyButton, copyTable, tsvHeader, tsvRow } from "./tsv.js";
 
 let showAllFields = false;
@@ -81,7 +81,7 @@ function paperRow(row, fields) {
   const paper = row.paper_row ?? {};
   const name = escapeHtml(row.name ?? row.document_id);
   const sampleId = escapeHtml(paper.sample_id ?? "");
-  const cells = fields.map((field) => valueCell(paper[field.name]));
+  const cells = fields.map((field) => valueCell(paper[field.name], field));
   tr.innerHTML =
     `<td class="label" title="${name}"><a href="${escapeHtml(documentHash(row.document_id))}">${name}</a></td>` +
     `<td class="mono">${sampleId}<small>${escapeHtml(row.sample_count ?? 0)} 个样品</small></td>` +
@@ -102,7 +102,8 @@ function rowValues(row, fields, leading) {
   return tsvRow(leading, identity, fields, (field) => paper[field.name]);
 }
 
-function valueCell(value) {
+// The value carries its own unit, as it does in the per-document table: the header no longer states it.
+function valueCell(value, field) {
   if (value == null) return `<td class="cell empty">—</td>`;
-  return `<td class="cell">${escapeHtml(shownValue(value))}</td>`;
+  return `<td class="cell">${valueHtml(value, field)}</td>`;
 }

@@ -87,10 +87,10 @@ export function headRow(leading, fields) {
   const tr = document.createElement("tr");
   const cells = leading.map((label) => `<th>${escapeHtml(label)}</th>`);
   for (const field of fields) {
-    // With a Chinese label the header reads label over `name unit`, so the column is recognisable at a
-    // glance while the id it exports under stays visible. Without one it is the id over the unit, as before.
+    // With a Chinese label the header reads label over the id it exports under. The unit is not repeated
+    // here: every decided cell carries it next to its value, and saying it twice only adds noise.
     const title = field.label || field.name;
-    const second = [field.label ? field.name : "", field.unit ?? ""].filter(Boolean).join(" ");
+    const second = field.label ? field.name : "";
     const sub = second ? `<small>${escapeHtml(second)}</small>` : "";
     cells.push(`<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`);
   }
@@ -130,8 +130,17 @@ function sampleRow(row, fields, quality, paperSampleId) {
   return tr;
 }
 
-// How a committed value is written out: numbers through `fmt`, everything else as its own text.
-export const shownValue = (value) => (typeof value === "number" ? fmt(value) : String(value));
+// How a committed value is written out: numbers through `fmt`, everything else as its own text. The
+// field is optional so the plain text is still available on its own (the clipboard copy wants it bare).
+const shownValue = (value) => (typeof value === "number" ? fmt(value) : String(value));
+
+// A value as the reader sees it in a cell: the number and the field's canonical unit, e.g. `125 nm`.
+// Text fields have no unit, and a unitless number stays a bare number.
+export function valueHtml(value, field) {
+  const shown = escapeHtml(shownValue(value));
+  const unit = typeof value === "number" && field?.unit ? field.unit : "";
+  return unit ? `${shown} <span class="unit">${escapeHtml(unit)}</span>` : shown;
+}
 
 function cell(value, quality, sampleId, field) {
   const decision = quality.get(`${sampleId}${KEY_SEPARATOR}${field.name}`);
@@ -147,16 +156,14 @@ function cell(value, quality, sampleId, field) {
     );
   }
   const status = decision?.decision ?? "";
-  const shown = shownValue(value);
   const badge = cellBadge(decision);
   const sources = decision?.source_ids ?? "";
-  // The accepted evidence was stated for the whole sample series, not for this sample on its own.
-  const series = decision?.series
-    ? `<small title="论文对整个样品系列只写了一次，这里是按系列写到该样品上的">全系列</small>`
-    : "";
+  // The accepted evidence may have been stated for the whole sample series rather than for this sample.
+  // That belongs in the tooltip, not in a badge: next to a lane name it read as "MinerU 全系列".
+  const hint = decision?.series ? `${detail}${detail ? "；" : ""}论文对整个系列只写了一次` : detail;
   return (
-    `<td class="cell ${CELL_CLASS[status] ?? ""}" title="${escapeHtml(detail)}" data-sources="${escapeHtml(sources)}">` +
-    `${escapeHtml(shown)}<small class="${badge.cls}">${escapeHtml(badge.text)}</small>${series}</td>`
+    `<td class="cell ${CELL_CLASS[status] ?? ""}" title="${escapeHtml(hint)}" data-sources="${escapeHtml(sources)}">` +
+    `${valueHtml(value, field)}<small class="${badge.cls}">${escapeHtml(badge.text)}</small></td>`
   );
 }
 
