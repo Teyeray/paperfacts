@@ -18,6 +18,12 @@ Two extraction prompts, for the two modes:
 
 All prompts are given text carrying ``<!-- source: <id> -->`` markers, and all of them must cite those ids:
 they are how a value is traced back to a page and a bounding box.
+
+The validation prompt is the exception on every count: it is given an *image* -- the page region a value
+was cited from -- and no text at all. It is never told which value is being checked: it is asked to
+transcribe the region, and :mod:`paperfacts.validate` decides afterwards whether the quoted value is in that
+transcription. A model told "is 10^-2 written here?" tends to agree; one asked "what is written here?"
+has no side to take. Its text is hashed into ``validation_key``.
 """
 
 from __future__ import annotations
@@ -210,4 +216,31 @@ def matching_user_prompt(lane_a_name: str, lane_a: str, lane_b_name: str, lane_b
     return (
         f"List A (parser: {lane_a_name}):\n{lane_a}\n\nList B (parser: {lane_b_name}):\n{lane_b}\n\n"
         "Return the JSON object now."
+    )
+
+
+_VALIDATION_SYSTEM = """You are a transcription instrument. You are shown a cropped region of one page of a scientific paper (a paragraph, a table, a caption or a formula) as an image.
+
+Transcribe EXACTLY the text visible in the image. Do not summarise, interpret, correct, convert or complete anything. Copy every number, sign, unit and symbol as printed:
+- keep superscripts and subscripts readable, e.g. write 10^-4 (or 10⁻⁴), SnO2 (or SnO₂), cm^-3;
+- keep ±, ≈, ~, <, > and ranges exactly as printed;
+- transcribe a table cell by cell, row by row, one row per line, cells separated by " | ";
+- transcribe formulas as they read.
+If a part of the image is unreadable, write [illegible] in its place rather than guessing. If the whole image contains no text, return an empty transcription and set legible to false.
+
+Output ONLY a JSON object with this exact shape and nothing else (no prose, no code fences):
+{"transcription": "<the verbatim text>", "legible": <true|false>}"""
+
+
+def validation_system_prompt() -> str:
+    return _VALIDATION_SYSTEM
+
+
+def validation_user_prompt(spec: FieldSpec) -> str:
+    """The user half names the quantity the region was cited for -- so the model knows which small print to
+    take care over -- but never the value or the unit the extractor quoted: those are what is being checked,
+    and stating them would invite the model to see them. The wording is identical for both lanes."""
+    return (
+        f"This region was cited as the source of a value of: {spec.name} ({spec.description}).\n"
+        "Transcribe the whole region exactly as printed. Return the JSON object only."
     )

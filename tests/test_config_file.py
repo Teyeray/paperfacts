@@ -631,13 +631,20 @@ def test_the_shipped_configuration_agrees_with_the_dataclass_defaults():
     configured = Settings.from_env({})
     assert configured.llm_reasoning_effort is DEFAULT_LLM_REASONING_EFFORT
 
+    # The stage is on in the shipped file and off at the built-in baseline, on purpose: an installation that
+    # never wrote a `vlm` block into its config.json must keep every filename it has (a disabled stage stamps
+    # nothing), while this checkout ships with the stage it was built to add.
+    assert configured.vlm_enabled is True
+    assert Settings().vlm_enabled is False
+
     fed_by_the_file = [
         name
         for name in (field.name for field in dataclasses.fields(Settings))
-        # repo_root follows the checkout and the two key fields are environment-only, by design.
-        # llm_reasoning_effort is the deliberate exception above: the file turns reasoning off, the
-        # built-in baseline leaves the parameter out.
-        if name not in {"repo_root", "llm_api_key", "llm_api_key_file", "llm_reasoning_effort"}
+        # repo_root follows the checkout and the key fields are environment-only, by design.
+        # llm_reasoning_effort and vlm_enabled are the deliberate exceptions above: the file turns reasoning
+        # off and validation on, the built-in baselines leave the parameter out and the stage off.
+        if name
+        not in {"repo_root", "llm_api_key", "llm_api_key_file", "llm_reasoning_effort", "vlm_api_key", "vlm_enabled"}
     ]
     assert [getattr(configured, name) for name in fed_by_the_file] == [
         getattr(baseline, name) for name in fed_by_the_file
@@ -685,3 +692,103 @@ def test_a_non_integer_concurrency_still_names_the_key(tmp_path: Path):
 
     with pytest.raises(ConfigError, match=r"llm\.concurrency must be int"):
         Settings.from_env(env_for(path))
+
+
+# ---- vlm: the visual validation stage --------------------------------------------------------
+
+
+def test_the_vlm_block_is_read_from_the_file(tmp_path: Path):
+    path = write_config(
+        tmp_path / "config.json",
+        {
+            "vlm.enabled": False,
+            "vlm.base_url": "http://gpu7:8090/v1/",
+            "vlm.model": "Qwen/Qwen3-VL-8B-Instruct",
+            "vlm.timeout_s": 120,
+            "vlm.temperature": 0.1,
+            "vlm.max_tokens": 2048,
+            "vlm.crop_dpi": 150,
+            "vlm.crop_padding": 0.02,
+            "vlm.crop_max_pixels": 1000000,
+            "vlm.policy": "all",
+            "vlm.concurrency": 2,
+        },
+    )
+
+    settings = Settings.from_env(env_for(path))
+
+    assert settings.vlm_enabled is False
+    assert settings.vlm_base_url == "http://gpu7:8090/v1"  # trailing slash dropped, like llm.base_url
+    assert settings.vlm_model == "Qwen/Qwen3-VL-8B-Instruct"
+    assert settings.vlm_timeout_s == 120.0
+    assert settings.vlm_temperature == 0.1
+    assert settings.vlm_max_tokens == 2048
+    assert settings.vlm_crop_dpi == 150
+    assert settings.vlm_crop_padding == 0.02
+    assert settings.vlm_crop_max_pixels == 1_000_000
+    assert settings.vlm_policy == "all"
+    assert settings.vlm_concurrency == 2
+
+
+def test_every_vlm_setting_has_an_environment_override(tmp_path: Path):
+    path = write_config(tmp_path / "config.json")
+    env = env_for(
+        path,
+        PAPERFACTS_VLM_ENABLED="false",
+        PAPERFACTS_VLM_BASE_URL="http://localhost:8090/v1",
+        PAPERFACTS_VLM_MODEL="m",
+        PAPERFACTS_VLM_API_KEY="sk-vlm",
+        PAPERFACTS_VLM_TIMEOUT_S="7",
+        PAPERFACTS_VLM_TEMPERATURE="0.5",
+        PAPERFACTS_VLM_MAX_TOKENS="99",
+        PAPERFACTS_VLM_CROP_DPI="96",
+        PAPERFACTS_VLM_CROP_PADDING="0.0",
+        PAPERFACTS_VLM_CROP_MAX_PIXELS="123456",
+        PAPERFACTS_VLM_POLICY="all",
+        PAPERFACTS_VLM_CONCURRENCY="1",
+    )
+
+    settings = Settings.from_env(env)
+
+    assert (settings.vlm_enabled, settings.vlm_base_url, settings.vlm_model) == (False, "http://localhost:8090/v1", "m")
+    assert settings.vlm_api_key == "sk-vlm"
+    assert (settings.vlm_timeout_s, settings.vlm_temperature, settings.vlm_max_tokens) == (7.0, 0.5, 99)
+    assert (settings.vlm_crop_dpi, settings.vlm_crop_padding, settings.vlm_crop_max_pixels) == (96, 0.0, 123456)
+    assert (settings.vlm_policy, settings.vlm_concurrency) == ("all", 1)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("true", True), ("1", True), ("YES", True), ("off", False), ("0", False)]
+)
+def test_the_enabled_switch_accepts_the_usual_spellings(tmp_path: Path, raw: str, expected: bool):
+    path = write_config(tmp_path / "config.json", {"vlm.enabled": not expected})
+    assert Settings.from_env(env_for(path, PAPERFACTS_VLM_ENABLED=raw)).vlm_enabled is expected
+
+
+def test_a_misspelled_enabled_switch_names_itself(tmp_path: Path):
+    path = write_config(tmp_path / "config.json")
+    with pytest.raises(ConfigError, match="PAPERFACTS_VLM_ENABLED"):
+        Settings.from_env(env_for(path, PAPERFACTS_VLM_ENABLED="enabled"))
+
+
+def test_an_unknown_policy_names_the_policies_and_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"vlm.policy": "some"})
+    with pytest.raises(ConfigError, match=r"disputed, all.*config\.json"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_non_boolean_enabled_in_the_file_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"vlm.enabled": "yes"})
+    with pytest.raises(ConfigError, match=r"vlm\.enabled must be bool"):
+        Settings.from_env(env_for(path))
+
+
+def test_the_vlm_key_falls_back_to_the_llm_key():
+    # One Model Studio workspace serves both models, so one key is the common case.
+    assert Settings(llm_api_key="sk-llm").require_vlm_api_key() == "sk-llm"
+    assert Settings(llm_api_key="sk-llm", vlm_api_key="sk-vlm").require_vlm_api_key() == "sk-vlm"
+
+
+def test_without_any_key_the_vlm_asks_for_the_llm_key_by_name(tmp_path: Path):
+    with pytest.raises(ConfigError, match="PAPERFACTS_LLM_API_KEY"):
+        Settings(repo_root=tmp_path, llm_api_key_file=tmp_path / "nope").require_vlm_api_key()

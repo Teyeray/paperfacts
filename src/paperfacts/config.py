@@ -122,6 +122,41 @@ type ExtractionMode = Literal["document", "passage"]
 EXTRACTION_MODES: tuple[str, ...] = get_args(ExtractionMode.__value__)
 DEFAULT_EXTRACTION_MODE: ExtractionMode = "passage"
 
+# ---- Visual validation: a vision-language model reads the cited page region back ----------------------
+#
+# Off at the built-in baseline. The shipped config.json turns it on; a checkout that never configured a
+# VLM keeps every filename it has, because a disabled stage writes nothing and stamps nothing.
+DEFAULT_VLM_ENABLED = False
+# The same Model Studio workspace serves Qwen3-VL through the same compatible-mode address, so one key and
+# one endpoint cover both models until a self-hosted vLLM (deploy/, GPU 7) takes over.
+DEFAULT_VLM_BASE_URL = DEFAULT_LLM_BASE_URL
+# An open-weight Qwen3-VL, so the hosted pilot and the self-hosted route can run the *same* weights and
+# their readings stay comparable. Chosen over the OCR specialists on independence, not on leaderboard
+# rank: PaddleOCR-VL is lane B, MinerU's VLM is lane A's family, and GLM-OCR shares PP-DocLayout with
+# lane B. docs/vlm-validation.md has the argument.
+DEFAULT_VLM_MODEL = "qwen3-vl-32b-instruct"
+DEFAULT_VLM_TIMEOUT_S = 300.0
+DEFAULT_VLM_TEMPERATURE = 0.0
+# A transcription of one block or one table; far less than an extraction answer.
+DEFAULT_VLM_MAX_TOKENS = 4096
+# The region is rendered at PaddleOCR-VL's page DPI, so the VLM reads pixels of the same density lane B
+# read, and its bounding boxes line up with the overlays.
+DEFAULT_VLM_CROP_DPI = DEFAULT_RENDER_DPI
+# Page fraction added around the cited blocks: enough to catch a descender or a table rule the parser's
+# box clipped, not enough to pull in a neighbouring paragraph.
+DEFAULT_VLM_CROP_PADDING = 0.01
+# Above this the crop is shrunk before it is sent. Hosted endpoints resize large images anyway; doing it
+# here keeps the decision, and its cost to small digits, visible and testable.
+DEFAULT_VLM_CROP_MAX_PIXELS = 2_000_000
+# Which values are shown to the VLM. "disputed": everything the two lanes could not settle between them --
+# conflicts, ambiguities, one-sided values, and any value grounding could not locate. "all": every value in
+# both lanes, which is what measuring the "both lanes agree and both are wrong" rate needs.
+type ValidationPolicy = Literal["disputed", "all"]
+VALIDATION_POLICIES: tuple[str, ...] = get_args(ValidationPolicy.__value__)
+DEFAULT_VLM_POLICY: ValidationPolicy = "disputed"
+# Vision requests in flight at once. Scheduling only, like llm.concurrency: absent from every key.
+DEFAULT_VLM_CONCURRENCY = 4
+
 
 def config_path(environ: Mapping[str, str] | None = None) -> Path:
     """Where the configuration file lives. Found next to the repository root, not the working directory, so
@@ -276,6 +311,20 @@ class Settings:
     page_dpi_min: int = 50
     page_dpi_max: int = 220
     overlay_dpi: int = DEFAULT_OVERLAY_DPI
+    # The visual validation stage. Disabled, the pipeline is byte-for-byte what it was without it.
+    vlm_enabled: bool = DEFAULT_VLM_ENABLED
+    vlm_base_url: str = DEFAULT_VLM_BASE_URL
+    vlm_model: str = DEFAULT_VLM_MODEL
+    # Its own key when the VLM lives somewhere else; otherwise the LLM key is reused (see require_vlm_api_key).
+    vlm_api_key: str | None = field(default=None, repr=False)
+    vlm_timeout_s: float = DEFAULT_VLM_TIMEOUT_S
+    vlm_temperature: float = DEFAULT_VLM_TEMPERATURE
+    vlm_max_tokens: int = DEFAULT_VLM_MAX_TOKENS
+    vlm_crop_dpi: int = DEFAULT_VLM_CROP_DPI
+    vlm_crop_padding: float = DEFAULT_VLM_CROP_PADDING
+    vlm_crop_max_pixels: int = DEFAULT_VLM_CROP_MAX_PIXELS
+    vlm_policy: ValidationPolicy = DEFAULT_VLM_POLICY
+    vlm_concurrency: int = DEFAULT_VLM_CONCURRENCY
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -353,6 +402,28 @@ class Settings:
             page_dpi_min=number("PAGE_DPI_MIN", file.get("server.page_dpi.min", int), int),
             page_dpi_max=number("PAGE_DPI_MAX", file.get("server.page_dpi.max", int), int),
             overlay_dpi=number("OVERLAY_DPI", file.get("overlay.dpi", int), int),
+            vlm_enabled=_parse_bool(get("VLM_ENABLED"), file.get("vlm.enabled", bool), "VLM_ENABLED"),
+            vlm_base_url=(get("VLM_BASE_URL") or file.get("vlm.base_url", str)).rstrip("/"),
+            vlm_model=get("VLM_MODEL") or file.get("vlm.model", str),
+            vlm_api_key=get("VLM_API_KEY"),
+            vlm_timeout_s=number("VLM_TIMEOUT_S", file.get("vlm.timeout_s", float), float),
+            vlm_temperature=number("VLM_TEMPERATURE", file.get("vlm.temperature", float), float),
+            vlm_max_tokens=_positive(
+                number("VLM_MAX_TOKENS", file.get("vlm.max_tokens", int), int), "vlm.max_tokens", file.path
+            ),
+            vlm_crop_dpi=_positive(
+                number("VLM_CROP_DPI", file.get("vlm.crop_dpi", int), int), "vlm.crop_dpi", file.path
+            ),
+            vlm_crop_padding=number("VLM_CROP_PADDING", file.get("vlm.crop_padding", float), float),
+            vlm_crop_max_pixels=_positive(
+                number("VLM_CROP_MAX_PIXELS", file.get("vlm.crop_max_pixels", int), int),
+                "vlm.crop_max_pixels",
+                file.path,
+            ),
+            vlm_policy=_parse_policy(get("VLM_POLICY") or file.get("vlm.policy", str), file.path),
+            vlm_concurrency=_positive(
+                number("VLM_CONCURRENCY", file.get("vlm.concurrency", int), int), "vlm.concurrency", file.path
+            ),
         )
 
     def require_llm_api_key(self) -> str:
@@ -370,6 +441,16 @@ class Settings:
             f"or write the key to {key_file}. All three are gitignored; config.json cannot hold a key."
         )
 
+    def require_vlm_api_key(self) -> str:
+        """The VLM's key, falling back to the LLM's.
+
+        The shipped configuration points both models at one Model Studio workspace, where one key serves
+        both; a self-hosted vLLM usually wants no key at all but the OpenAI protocol still sends a bearer
+        token, so the fallback is never wrong there either. A VLM behind a different vendor sets
+        ``PAPERFACTS_VLM_API_KEY``.
+        """
+        return self.vlm_api_key or self.require_llm_api_key()
+
 
 def _positive(value: int, dotted: str, source: Path) -> int:
     """A count that must be at least one. Zero passes, zero retries or zero candidate blocks all fail deep
@@ -379,6 +460,32 @@ def _positive(value: int, dotted: str, source: Path) -> int:
             f"{dotted} must be at least 1, got {value} (set in {source} or the matching {ENV_PREFIX} variable)"
         )
     return value
+
+
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
+
+
+def _parse_bool(raw: str | None, default: bool, variable: str) -> bool:
+    """An environment switch. Only the usual spellings are accepted: "enabled" or a typo must not be read as
+    False by accident, which is what ``bool(raw)`` or ``raw == "true"`` would silently do."""
+    if raw is None:
+        return default
+    lowered = raw.strip().lower()
+    if lowered in _TRUE:
+        return True
+    if lowered in _FALSE:
+        return False
+    raise ConfigError(f"environment variable {ENV_PREFIX}{variable} must be true or false, got {raw!r}")
+
+
+def _parse_policy(raw: str, source: Path) -> ValidationPolicy:
+    if raw not in VALIDATION_POLICIES:
+        policies = ", ".join(VALIDATION_POLICIES)
+        raise ConfigError(
+            f"vlm.policy is {raw!r}, expected one of {policies} (set in {source} or {ENV_PREFIX}VLM_POLICY)"
+        )
+    return cast(ValidationPolicy, raw)
 
 
 def _parse_mode(raw: str, source: Path) -> ExtractionMode:

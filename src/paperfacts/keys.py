@@ -8,6 +8,10 @@ Two keys name the files under a document directory:
   so a code-only change re-derives records for free.
 - :func:`comparison_key` covers the tolerances, the normalisation rules and the sample-matching prompt.
   Changing a tolerance recomputes the comparison without paying for extraction again.
+- :func:`validation_key` covers the vision model, its prompt, how the cited region is rendered for it, which
+  values are selected, and the code that turns its reading into a verdict. It is deliberately not folded
+  into the two keys above: a change to the validation prompt must re-ask the VLM, never re-run the far more
+  expensive extraction, and never rename a comparison that did not change.
 
 Module sources are hashed instead of versioned by hand, so nobody has to remember to bump a number.
 """
@@ -27,10 +31,17 @@ from paperfacts.config import (
     DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
+    DEFAULT_VLM_CROP_DPI,
+    DEFAULT_VLM_CROP_MAX_PIXELS,
+    DEFAULT_VLM_CROP_PADDING,
+    DEFAULT_VLM_MAX_TOKENS,
+    DEFAULT_VLM_POLICY,
+    DEFAULT_VLM_TEMPERATURE,
     ExtractionMode,
     InventoryReasoningEffort,
     ReasoningEffort,
     Settings,
+    ValidationPolicy,
 )
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, CONDITION_KEYWORDS, FIELD_SPECS
 from paperfacts.prompts import (
@@ -38,6 +49,7 @@ from paperfacts.prompts import (
     field_system_prompt,
     inventory_system_prompt,
     matching_system_prompt,
+    validation_system_prompt,
 )
 
 # Long enough that a collision is not a practical concern, short enough to read in a filename.
@@ -217,4 +229,61 @@ def comparison_key() -> str:
             ensure_ascii=False,
             sort_keys=True,
         )
+    )
+
+
+@cache
+def validation_code_fingerprint() -> str:
+    """The code between the model's reading and the verdict.
+
+    ``validate.py`` selects the values, cuts the region and adjudicates; ``grounding.py`` and ``normalize.py``
+    are the matcher it adjudicates with, so a more lenient fold there is a different verdict; ``prompts.py``
+    carries the user half of the question (only the system half is hashed by value below). ``pdf.py`` is in
+    because how the region is rendered -- padding of a thin box, the downscale -- is part of what the model
+    saw.
+    """
+    return source_fingerprint("validate.py", "grounding.py", "normalize.py", "prompts.py", "pdf.py")
+
+
+def validation_key(
+    model: str,
+    *,
+    temperature: float = DEFAULT_VLM_TEMPERATURE,
+    max_tokens: int = DEFAULT_VLM_MAX_TOKENS,
+    crop_dpi: int = DEFAULT_VLM_CROP_DPI,
+    crop_padding: float = DEFAULT_VLM_CROP_PADDING,
+    crop_max_pixels: int = DEFAULT_VLM_CROP_MAX_PIXELS,
+    policy: ValidationPolicy = DEFAULT_VLM_POLICY,
+) -> str:
+    """What a stored validation depends on. Same baseline rule as the other two keys: a setting at its
+    built-in value stays out of the material, so tightening one knob renames only the files it affects."""
+    material: dict[str, object] = {
+        "model": model,
+        "validation_system": validation_system_prompt(),
+        "code": validation_code_fingerprint(),
+    }
+    if temperature != DEFAULT_VLM_TEMPERATURE:
+        material["temperature"] = temperature
+    if max_tokens != DEFAULT_VLM_MAX_TOKENS:
+        material["max_tokens"] = max_tokens
+    if crop_dpi != DEFAULT_VLM_CROP_DPI:
+        material["crop_dpi"] = crop_dpi
+    if crop_padding != DEFAULT_VLM_CROP_PADDING:
+        material["crop_padding"] = crop_padding
+    if crop_max_pixels != DEFAULT_VLM_CROP_MAX_PIXELS:
+        material["crop_max_pixels"] = crop_max_pixels
+    if policy != DEFAULT_VLM_POLICY:
+        material["policy"] = policy  # which values were checked is part of what the report says
+    return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
+
+
+def validation_key_for(settings: Settings) -> str:
+    return validation_key(
+        settings.vlm_model,
+        temperature=settings.vlm_temperature,
+        max_tokens=settings.vlm_max_tokens,
+        crop_dpi=settings.vlm_crop_dpi,
+        crop_padding=settings.vlm_crop_padding,
+        crop_max_pixels=settings.vlm_crop_max_pixels,
+        policy=settings.vlm_policy,
     )

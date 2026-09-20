@@ -35,6 +35,19 @@
   "comparison": {
     "ambiguous_match_confidence": 0.6
   },
+  "vlm": {
+    "enabled": true,
+    "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen3-vl-32b-instruct",
+    "timeout_s": 300.0,
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "crop_dpi": 200,
+    "crop_padding": 0.01,
+    "crop_max_pixels": 2000000,
+    "policy": "disputed",
+    "concurrency": 4
+  },
   "parsers": {
     "mineru_url": null,
     "paddle_url": null,
