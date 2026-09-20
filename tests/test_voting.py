@@ -2,7 +2,7 @@
 
 Even at temperature 0 a model is not perfectly deterministic across calls, so a single pass cannot tell a
 genuine parser-level disagreement from ordinary sampling noise. ``merge_passes`` runs the same lane N
-times and keeps only what a majority of passes agree on -- see :func:`paperfacts.extract.merge_passes` for the
+times and keeps only what a majority of passes agree on -- see :func:`paperfacts.voting.merge_passes` for the
 full rationale. This file pins the voting rules themselves: value-level agreement, sample identity, the
 target record, and how the audit trails (``invalid_source_ids``, ``dropped``) from every pass combine.
 """
@@ -13,8 +13,8 @@ from collections.abc import Sequence
 
 import pytest
 
-from paperfacts.extract import Scope, merge_passes
 from paperfacts.records import ExtractedRecords, SampleRecord, TargetRecord
+from paperfacts.voting import Scope, merge_passes
 from support.extraction import make_field, make_sample
 
 

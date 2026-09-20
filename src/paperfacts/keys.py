@@ -103,11 +103,14 @@ def extraction_code_fingerprint() -> str:
 
     ``adapters.py`` renders the bytes the model reads; ``prompts.py`` wraps them (only the system prompts are
     hashed by value, so the user half would otherwise be invisible); ``normalize.py`` and ``grounding.py``
-    fold the text that decides which values are duplicates of each other and which sample a value lands on.
+    fold the text that decides which values are duplicates of each other and which sample a value lands on;
+    ``voting.py`` decides which of the model's repeated claims survive the majority vote.
     Over-invalidation is cheap here: an unchanged request replays from the LLM cache, so re-deriving the
     records costs nothing but a second of CPU.
     """
-    return source_fingerprint("extract.py", "records.py", "adapters.py", "prompts.py", "normalize.py", "grounding.py")
+    return source_fingerprint(
+        "extract.py", "voting.py", "records.py", "adapters.py", "prompts.py", "normalize.py", "grounding.py"
+    )
 
 
 @cache

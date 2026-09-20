@@ -20,8 +20,10 @@ fingerprinted module changes, a corpus rebuild from cache must reproduce the ser
 - J4 `Library.document()` fabricates a PDF path → use `layout.source_pdf(sha)` (where it would be).
 
 ## Phase 2 — vote model + decomposition (extract.py 838 → ~600)
-- J2 citations belong to the full identity, not the rank: accumulate per (scope, ValueKey); delete
-  `_Tally.supporters`, `entry_counts`, the guarded-union loop, the mutable dataclass.
+- J2 citations belong to the full identity, not the rank — REJECTED after implementation: the two accepting
+  cases of the guarded union are one wider than the full key (a lone entry per pass merges across wordings)
+  and one narrower (opposite-order conditions must not merge), so no model keyed on the full identity
+  alone passes both pinned tests. The rank-scoped `_Tally` model stays; the code moved unchanged.
 - M1 move the cross-pass vote (`merge_passes`, `_values`, keys, `_deduplicate`/`_merge_repeats`) to a new
   module `voting.py`; add it to `extraction_code_fingerprint`; CLAUDE.md/`__init__.py` module order.
 
