@@ -10,6 +10,7 @@ from collections.abc import Iterator
 
 from paperfacts.compare import ComparisonReport, FieldComparison
 from paperfacts.records import FieldValue, LaneExtraction
+from paperfacts.validate import ValidationReport
 
 
 def render_lane(lane: LaneExtraction) -> Iterator[str]:
@@ -46,6 +47,29 @@ def render_report(report: ComparisonReport) -> Iterator[str]:
         yield f"  sample matching FAILED: {report.matching.failure}"
     for comparison in report.comparisons:
         yield _comparison_line(comparison)
+
+
+def render_validation(validation: ValidationReport) -> Iterator[str]:
+    """One line per checked value: the verdict, where it came from, what was quoted and what the model read.
+
+    The transcription is cut short here because a table's reading runs to hundreds of characters; the full
+    text is in the stored report and on the web page.
+    """
+    counts = validation.counts
+    yield (
+        f"validation: model={validation.model} policy={validation.policy} key={validation.validation_key} "
+        f"confirmed={counts.confirmed} contradicted={counts.contradicted} illegible={counts.illegible} "
+        f"not_checked={counts.not_checked} error={counts.error} tokens={validation.usage.get('total_tokens', '?')}"
+    )
+    for value in validation.values:
+        where = f"p{value.crop.page} {','.join(value.crop.source_ids)}" if value.crop else "(no region)"
+        quoted = f"{value.value_raw} {value.unit_raw or ''}".strip()
+        read = value.transcription.replace("\n", " ⏎ ")
+        read = read if len(read) <= 100 else read[:97] + "..."
+        yield (
+            f"  {value.verdict:<13} {value.backend:<13} {value.owner} {value.field} [{value.reason}] "
+            f"{quoted!r} @ {where}: {read!r}  {value.detail}"
+        )
 
 
 def _value(field: FieldValue) -> str:

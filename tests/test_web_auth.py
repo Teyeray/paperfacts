@@ -69,7 +69,7 @@ def test_the_api_answers_the_configured_login(client: TestClient):
     response = client.get("/api/health", headers=basic(USERNAME, PASSWORD))
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "model": "fake-model"}
+    assert response.json() == {"status": "ok", "model": "fake-model", "vlm": ""}
 
 
 @pytest.mark.parametrize(

@@ -23,7 +23,7 @@ from paperfacts.models import BACKENDS, Backend, DocumentInput, RawParseOutput
 from paperfacts.storage import DataLayout
 from support.extraction import make_artifact, make_lane
 from support.factories import RawOutputFactory, make_block, paddle_page_entry
-from support.llm import FakeLlmClient
+from support.llm import FakeLlmClient, FakeVisionClient
 
 runner = CliRunner()
 
@@ -67,10 +67,17 @@ def parsed(data_root: Path, document: DocumentInput) -> None:
 def install_fake_llm(monkeypatch, responses: list[str]) -> FakeLlmClient:
     """Replace build_llm_client: ``extract`` / ``compare`` call it directly in cli.py (the name imported
     via ``from ... import``), while ``run`` calls the one in the workflow module through
-    ``workflow.run_document`` -- both need patching, or a real call to DeepSeek would go out."""
+    ``workflow.run_document`` -- both need patching, or a real call to DeepSeek would go out.
+
+    The vision client is replaced the same way: the shipped config.json turns the validate stage on, so
+    ``run`` would otherwise build a real client for it.
+    """
     client = FakeLlmClient(responses)
     monkeypatch.setattr("paperfacts.cli.build_llm_client", lambda settings: client)
     monkeypatch.setattr("paperfacts.workflow.build_llm_client", lambda settings: client)
+    vision = FakeVisionClient(lambda call: '{"transcription": "12.5 Ω/sq", "legible": true}')
+    monkeypatch.setattr("paperfacts.cli.build_vlm_client", lambda settings: vision)
+    monkeypatch.setattr("paperfacts.workflow.build_vlm_client", lambda settings: vision)
     return client
 
 
@@ -393,9 +400,25 @@ def test_run_goes_from_pdf_to_comparison_in_one_command(
     assert "[parse:paddleocr_vl] done" in result.output
     assert "[extract:mineru] done 1 samples" in result.output
     assert "[compare] done agree" in result.output
+    # The shipped config.json turns the VLM on; nothing here is disputed, so the stage ran and checked nothing.
+    assert "[validate] done confirmed 0" in result.output
+    assert "validation: model=fake-vlm" in result.output
     assert "running" not in result.output
     assert "counts:" in result.output
     assert client.call_count == 2
+
+
+def test_run_skips_the_validate_stage_when_the_vlm_is_off(
+    monkeypatch, two_page_pdf: Path, data_root: Path, api_key, fake_parsers
+):
+    install_fake_llm(monkeypatch, [extraction_json(), extraction_json()])
+    monkeypatch.setenv("PAPERFACTS_VLM_ENABLED", "false")
+
+    result = runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), "--mode", "document"])
+
+    assert result.exit_code == 0, result.output
+    assert "[validate] skipped vlm.enabled is false" in result.output
+    assert "validation: model=" not in result.output
 
 
 def test_run_stops_with_code_one_when_a_parser_fails(monkeypatch, two_page_pdf: Path, data_root: Path, api_key):

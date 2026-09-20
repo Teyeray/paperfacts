@@ -14,6 +14,7 @@ Endpoints (all under ``/api``, JSON)::
                                                     running job if the same document is active)
     GET  /api/documents/{id}                       single document summary
     GET  /api/documents/{id}/report                ComparisonReport
+    GET  /api/documents/{id}/validation            ValidationReport (the VLM's readings and verdicts)
     GET  /api/documents/{id}/extraction/{backend}  normalized LaneExtraction
     GET  /api/documents/{id}/artifact/{backend}    ParsedArtifact (blocks + Markdown + page geometry)
     GET  /api/documents/{id}/dataset               consolidated per-sample table (rows + field list)
@@ -52,6 +53,7 @@ from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
+from paperfacts.validate import ValidationReport
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobManager, JobRunner
 from paperfacts.workflow import run_document, stage_names
@@ -159,7 +161,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "model": settings.llm_model}
+        return {"status": "ok", "model": settings.llm_model, "vlm": settings.vlm_model if settings.vlm_enabled else ""}
 
     @app.get("/api/documents")
     def list_documents() -> list[DocumentSummary]:
@@ -255,6 +257,14 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         if report is None:
             raise HTTPException(status_code=404, detail="No comparison report yet")
         return report
+
+    @app.get("/api/documents/{document_id}/validation")
+    def get_validation(document_id: str) -> ValidationReport:
+        require_document(document_id)
+        validation = library.validation(document_id)
+        if validation is None:
+            raise HTTPException(status_code=404, detail="No visual validation yet (or vlm.enabled is false)")
+        return validation
 
     @app.get("/api/documents/{document_id}/extraction/{backend}")
     def get_extraction(document_id: str, backend: Backend) -> LaneExtraction:

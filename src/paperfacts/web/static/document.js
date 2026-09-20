@@ -55,10 +55,11 @@ async function openDocument(id, factIndex) {
 }
 
 async function loadDocumentData(id) {
-  const [summary, report, dataset, ...rest] = await Promise.all([
+  const [summary, report, dataset, validation, ...rest] = await Promise.all([
     api(`/api/documents/${id}`),
     optional(api(`/api/documents/${id}/report`)),
     optional(api(`/api/documents/${id}/dataset`)),
+    optional(api(`/api/documents/${id}/validation`)),
     ...LANES.map((l) => optional(api(`/api/documents/${id}/extraction/${l}`))),
     ...LANES.map((l) => optional(api(`/api/documents/${id}/artifact/${l}`))),
   ]);
@@ -66,6 +67,7 @@ async function loadDocumentData(id) {
     summary,
     report,
     dataset,
+    validation,
     lanes: Object.fromEntries(LANES.map((l, i) => [l, rest[i]])),
     artifacts: Object.fromEntries(LANES.map((l, i) => [l, rest[LANES.length + i]])),
   };

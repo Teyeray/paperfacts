@@ -27,6 +27,7 @@ from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend, DocumentInput, ParsedArtifact, SourceBlock
 from paperfacts.records import LaneExtraction, SampleRecord
 from paperfacts.storage import DocumentIdentity, ensure_identity
+from paperfacts.validate import ValidationReport, ValueValidation
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import Job, JobManager, JobStatus, StageStatus
 from support.extraction import make_artifact, make_lane
@@ -181,6 +182,30 @@ def seed_report(
     )
     report.write(library.layout.comparison_path(document_sha, key, cmp_key))
     return report
+
+
+def seed_validation(
+    library: Library,
+    *,
+    document_sha: str = DOC_SHA,
+    values: Sequence[ValueValidation] = (),
+    validation_key: str | None = None,
+) -> ValidationReport:
+    """Write a ``validations/<extractor_key>.<comparison_key>.<validation_key>.json``; the key defaults to
+    the library's current one, which is ``None`` while the stage is off -- pass one explicitly then."""
+    key = library.validation_key if validation_key is None else validation_key
+    assert key is not None, "seed_validation needs a validation key: enable the VLM in the settings or pass one"
+    validation = ValidationReport(
+        document_id=document_sha,
+        extractor_key=library.extractor_key,
+        comparison_key=library.comparison_key,
+        validation_key=key,
+        model="fake-vlm",
+        policy="disputed",
+        values=tuple(values),
+    )
+    validation.write(library.layout.validation_path(document_sha, library.extractor_key, library.comparison_key, key))
+    return validation
 
 
 def seed_cli_document(library: Library, pdf: Path, *, document_sha: str = DOC_SHA) -> DocumentIdentity:

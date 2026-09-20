@@ -4,13 +4,19 @@ The paper table selects a complete sample row. It must never manufacture a sampl
 combining the best measurement of each field from different experimental conditions. "Different
 conditions" is judged within a lane: the two lanes paraphrase the same condition differently, so
 comparing their wording across lanes would refuse values the comparison report already agreed on.
+
+When a :class:`paperfacts.validate.ValidationReport` is handed in, its verdicts take part in three places
+and nowhere else: a value the VLM contradicted is set aside before anything else is judged; a conflict in
+which exactly the surviving side was confirmed is committed as ``vlm_resolved``; and a value grounding could
+not locate in parser text is trusted when the VLM located it on the page. A verdict never invents a value
+and never promotes a cell the two-lane rules would have refused for any other reason.
 """
 
 from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -20,7 +26,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.compare import ComparisonReport, FieldComparison
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_SPECS, SAMPLE_FIELDS, TARGET_FIELDS, FieldSpec
@@ -37,6 +43,7 @@ from paperfacts.normalize import (
 )
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
+from paperfacts.validate import OWNER_TARGET, ValidationReport, ValueValidation, value_key
 
 CellValue = str | float | int | bool | None
 Row = Mapping[str, CellValue]
@@ -69,6 +76,7 @@ _QUALITY_COLUMNS = (
     ("source_ids", "合并证据来源"),
     ("lanes", "证据来源通道"),
     ("series", "系列级"),
+    ("vlm", "视觉核验"),
     ("detail", "说明"),
 )
 
@@ -104,6 +112,7 @@ class DatasetPayload(BaseModel):
     filename: str = ""
     extractor_key: str = ""
     comparison_key: str = ""
+    validation_key: str = Field(default="", description="empty when no VLM verdicts were consulted")
     fields: tuple[FieldColumn, ...] = ()
     paper_row: dict[str, CellValue] = {}
     sample_rows: tuple[dict[str, CellValue], ...] = ()
@@ -133,6 +142,7 @@ class DocumentDataset:
     quality_rows: tuple[Row, ...]
     extractor_key: str = ""
     comparison_key: str = ""
+    validation_key: str = ""
 
     def to_payload(self) -> DatasetPayload:
         """The serialisable view the web UI and ``dataset.json`` share.
@@ -145,6 +155,7 @@ class DocumentDataset:
             filename=self.filename,
             extractor_key=self.extractor_key,
             comparison_key=self.comparison_key,
+            validation_key=self.validation_key,
             fields=field_columns(),
             paper_row=dict(self.paper_row),
             sample_rows=tuple(dict(row) for row in self.sample_rows),
@@ -169,6 +180,7 @@ class DocumentDataset:
             quality_rows=tuple(MappingProxyType(dict(row)) for row in payload.quality_rows),
             extractor_key=payload.extractor_key,
             comparison_key=payload.comparison_key,
+            validation_key=payload.validation_key,
         )
 
 
@@ -201,10 +213,46 @@ class _Decision:
     # The backends whose trusted, parsed evidence produced the committed value. A reader seeing a
     # single-source cell needs to know which lane it came from; empty for a rejected decision.
     lanes: tuple[Backend, ...] = ()
+    # What the VLM said about the evidence this decision looked at, lane by lane; empty when none was checked.
+    vlm: str = ""
 
 
 def _joined(values: Sequence[str]) -> str:
     return "; ".join(dict.fromkeys(value for value in values if value))
+
+
+VerdictLookup = Callable[[Backend, FieldValue], ValueValidation | None]
+
+
+def _no_verdicts(backend: Backend, value: FieldValue) -> ValueValidation | None:
+    return None
+
+
+def _verdict_lookup(validation: ValidationReport | None, owners: Mapping[Backend, str | None]) -> VerdictLookup:
+    """A lookup bound to one scope: the owner a value has in each lane decides its key.
+
+    A validation report is keyed by :func:`paperfacts.validate.value_key`, which needs the owner
+    (``target`` / ``sample:<id>`` / ``unattributed``). The dataset knows the owner from the scope it is
+    deciding, so the key is rebuilt here rather than searched for.
+    """
+    if validation is None:
+        return _no_verdicts
+    verdicts = validation.verdicts()
+
+    def lookup(backend: Backend, value: FieldValue) -> ValueValidation | None:
+        owner = owners.get(backend)
+        return None if owner is None else verdicts.get(value_key(backend, owner, value))
+
+    return lookup
+
+
+def _vlm_summary(evidence: Sequence[tuple[Backend, FieldValue]], verdict_of: VerdictLookup) -> str:
+    parts = []
+    for backend, value in evidence:
+        checked = verdict_of(backend, value)
+        if checked is not None:
+            parts.append(f"{backend}: {checked.verdict}")
+    return _joined(parts)
 
 
 def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
@@ -273,8 +321,13 @@ def _commit(
     conditions: str,
     sources: str,
     details: list[str],
+    status: str | None = None,
+    vlm: str = "",
 ) -> _Decision:
-    """Nothing refused the evidence: record the value and how it was arrived at."""
+    """Nothing refused the evidence: record the value and how it was arrived at.
+
+    ``status`` names the special way this cell was reached (``vlm_resolved``) when the ordinary two-lane
+    labels would misdescribe it."""
     chosen_backend, chosen_field, value = chosen
     if spec.name == "transmittance" and not conditions:
         details.append("原文提取结果未注明透光率波长或波段")
@@ -282,12 +335,13 @@ def _commit(
     series = all(field.series for _, field, _ in parsed)
     return _Decision(
         value,
-        "agree" if agreed else "single_source",
+        status or ("agree" if agreed else "single_source"),
         conditions,
         sources,
         _joined(details),
         series=series,
         lanes=tuple(dict.fromkeys(backend for backend, _, _ in parsed)),
+        vlm=vlm,
     )
 
 
@@ -297,32 +351,62 @@ def _decide(
     comparisons: Sequence[FieldComparison],
     *,
     scope: _Scope | None = None,
+    verdict_of: VerdictLookup = _no_verdicts,
 ) -> _Decision:
     conditions = _joined([value.condition or "" for _, value in evidence])
     sources = _joined(sorted({source for _, value in evidence for source in value.source_ids}))
     details: list[str] = []
+    vlm = _vlm_summary(evidence, verdict_of)
 
     def reject(status: str, reason: str) -> _Decision:
         raw = _joined([f"{backend}: {value.value_raw} {value.unit_raw or ''}" for backend, value in evidence])
-        return _Decision(None, status, conditions, sources, _joined([reason, raw]))
+        return _Decision(None, status, conditions, sources, _joined([reason, raw]), vlm=vlm)
+
+    def verdict(backend: Backend, value: FieldValue) -> str | None:
+        checked = verdict_of(backend, value)
+        return None if checked is None else checked.verdict
 
     if not evidence:
         return reject("missing", "未提取到该字段；留空，不填 0")
     blocked = _matching_blocked(scope)
     if blocked:
         return reject("ambiguous", blocked)
-    if any(c.status in {"conflict", "ambiguous"} for c in comparisons):
-        status = "conflict" if any(c.status == "conflict" for c in comparisons) else "ambiguous"
-        return reject(status, "双路比较存在冲突或歧义，需人工复核")
+    # The VLM's contradictions come first: a value a third reader could not find in the region it was cited
+    # from is set aside before the two-lane rules judge what is left, whatever those rules would have said.
+    contradicted = [(backend, value) for backend, value in evidence if verdict(backend, value) == "contradicted"]
+    if contradicted:
+        details.append(f"视觉核验否定 {len(contradicted)} 个候选值，已排除")
+        evidence = [(backend, value) for backend, value in evidence if verdict(backend, value) != "contradicted"]
+        if not evidence:
+            return reject("vlm_contradicted", "视觉核验：在引用的页面区域中读不到任何候选值")
+    disputed = any(c.status in {"conflict", "ambiguous"} for c in comparisons)
+    resolved = False
+    if disputed:
+        # A conflict the VLM settled: one side was read off the page, the other was not. Only that exact
+        # shape resolves; a conflict where both sides survive, or where the survivor was never checked, is
+        # still a conflict.
+        resolved = bool(contradicted) and all(verdict(backend, value) == "confirmed" for backend, value in evidence)
+        if not resolved:
+            status = "conflict" if any(c.status == "conflict" for c in comparisons) else "ambiguous"
+            return reject(status, "双路比较存在冲突或歧义，需人工复核")
     if not comparisons:
         return reject("unreviewed", "比较报告没有覆盖该字段")
     if any(c.match_confidence is not None and c.match_confidence < AMBIGUOUS_MATCH_CONFIDENCE for c in comparisons):
         return reject("ambiguous", "样品匹配置信度低于阈值")
-    trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
+    # Trusted: located in the parser's text with a valid citation -- or, failing that, located on the page
+    # by the VLM. Grounding against parser text has false negatives (a quote straddling a block the parser
+    # split oddly); a reading of the pixels is the appeal against exactly that.
+    trusted = [
+        (backend, value)
+        for backend, value in evidence
+        if value.source_ids and (value.grounded or verdict(backend, value) == "confirmed")
+    ]
     if not trusted:
         return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
     if len(trusted) != len(evidence):
         details.append("已排除未定位到原文或缺少有效引用的候选")
+    if any(not value.grounded for _, value in trusted):
+        details.append("含原文定位失败但视觉核验确认的候选")
     # Per lane only: the two lanes word the same condition differently ("after sputtering" vs
     # "after deposition"), so only a lane disagreeing with itself is evidence of several measurements.
     # The key is normalize_key, the same one compare.py and extract.py judge conditions by, so a
@@ -347,9 +431,23 @@ def _decide(
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
     chosen = min(parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw))
     agreed = any(c.status == "agree" for c in comparisons) and len({backend for backend, _, _ in parsed}) == 2
-    if not agreed and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
+    if not agreed and not resolved and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
-    return _commit(spec, chosen, parsed, agreed=agreed, conditions=conditions, sources=sources, details=details)
+    if resolved:
+        details.append("双路冲突由视觉核验裁决：仅保留页面上读到的一侧")
+    elif parsed and all(verdict(backend, value) == "confirmed" for backend, value, _ in parsed):
+        details.append("视觉核验确认")
+    return _commit(
+        spec,
+        chosen,
+        parsed,
+        agreed=agreed,
+        conditions=conditions,
+        sources=sources,
+        details=details,
+        status="vlm_resolved" if resolved else None,
+        vlm=vlm,
+    )
 
 
 def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> tuple[_Scope, ...]:
@@ -392,15 +490,28 @@ def _scope_comparisons(scope: _Scope, report: ComparisonReport) -> tuple[FieldCo
 
 
 def consolidate_document(
-    document: DocumentInput, lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport
+    document: DocumentInput,
+    lanes: Mapping[Backend, LaneExtraction],
+    report: ComparisonReport,
+    validation: ValidationReport | None = None,
 ) -> DocumentDataset:
-    """Collapse source evidence, then select the most complete trustworthy sample row."""
+    """Collapse source evidence, then select the most complete trustworthy sample row.
+
+    ``validation`` is optional and, when given, must have been built over these very lanes and this very
+    report: a verdict about a value from another extraction would be keyed to evidence that is not here.
+    """
     if report.document_id != document.document_id or any(
         lane.document_id != document.document_id for lane in lanes.values()
     ):
         raise ValueError("document, extraction lanes and comparison report must refer to the same PDF")
     if any(lane.extractor_key != report.extractor_key for lane in lanes.values()):
         raise ValueError("extraction lanes and comparison report have different extractor keys")
+    if validation is not None and (
+        validation.document_id != document.document_id
+        or validation.extractor_key != report.extractor_key
+        or validation.comparison_key != report.comparison_key
+    ):
+        raise ValueError("the validation report was built under different keys than the comparison report")
     lanes = {backend: normalize_lane(lane) for backend, lane in lanes.items()}
     metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.display_filename}
     quality: list[Row] = []
@@ -419,12 +530,14 @@ def consolidate_document(
                     "source_ids": decision.sources,
                     "lanes": "; ".join(decision.lanes),
                     "series": decision.series,
+                    "vlm": decision.vlm,
                     "detail": decision.detail,
                 }
             )
         )
 
     target: dict[str, _Decision] = {}
+    target_verdicts = _verdict_lookup(validation, dict.fromkeys(BACKENDS, OWNER_TARGET))
     for spec in TARGET_FIELDS:
         evidence = [
             (backend, field)
@@ -434,7 +547,10 @@ def consolidate_document(
             if field.field == spec.name
         ]
         target[spec.name] = _decide(
-            spec, evidence, [c for c in report.comparisons if c.scope == "target" and c.field == spec.name]
+            spec,
+            evidence,
+            [c for c in report.comparisons if c.scope == "target" and c.field == spec.name],
+            verdict_of=target_verdicts,
         )
     for spec in TARGET_FIELDS:
         record("target", spec, target[spec.name])
@@ -442,6 +558,13 @@ def consolidate_document(
     sample_rows: list[Row] = []
     for scope in _scopes(lanes, report):
         scope_comparisons = _scope_comparisons(scope, report)
+        scope_verdicts = _verdict_lookup(
+            validation,
+            {
+                report.backend_a: None if scope.a is None else f"sample:{scope.a.sample_id}",
+                report.backend_b: None if scope.b is None else f"sample:{scope.b.sample_id}",
+            },
+        )
         decisions = dict(target)
         for spec in SAMPLE_FIELDS:
             evidence = [
@@ -451,7 +574,13 @@ def consolidate_document(
                 for field in sample.fields
                 if field.field == spec.name
             ]
-            decision = _decide(spec, evidence, [c for c in scope_comparisons if c.field == spec.name], scope=scope)
+            decision = _decide(
+                spec,
+                evidence,
+                [c for c in scope_comparisons if c.field == spec.name],
+                scope=scope,
+                verdict_of=scope_verdicts,
+            )
             decisions[spec.name] = decision
             record(scope.sample_id, spec, decision)
         samples = [sample for sample in (scope.a, scope.b) if sample is not None]
@@ -514,6 +643,7 @@ def consolidate_document(
         tuple(quality),
         report.extractor_key,
         report.comparison_key,
+        validation.validation_key if validation is not None else "",
     )
 
 
@@ -608,6 +738,7 @@ def write_dataset(
             "samples": len(doc.sample_rows),
             "extractor_key": doc.extractor_key,
             "comparison_key": doc.comparison_key,
+            "validation_key": doc.validation_key,
             "detail": "论文行采用一个完整样品；空白为缺失或未通过唯一值质量规则。",
         }
         for doc in unique
@@ -631,6 +762,7 @@ def write_dataset(
             ("samples", "合并后样品数"),
             ("extractor_key", "抽取版本"),
             ("comparison_key", "比较版本"),
+            ("validation_key", "视觉核验版本"),
             ("detail", "说明"),
         ),
         runs,

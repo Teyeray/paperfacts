@@ -133,22 +133,25 @@ def run(document: DocumentInput, settings: Settings, *, force: bool = False) -> 
 # ---- Stage names are a public contract --------------------------------------------------
 
 
-def test_the_stage_names_cover_extraction_comparison_and_export():
+def test_the_stage_names_cover_extraction_comparison_validation_and_export():
+    # "validate" is listed even when the VLM is off: the progress bar then shows it skipped, so nobody has
+    # to guess whether a run had a validation step.
     assert stage_names() == (
         "parse:mineru",
         "parse:paddleocr_vl",
         "extract:mineru",
         "extract:paddleocr_vl",
         "compare",
+        "validate",
         "export",
     )
-    assert len(stage_names()) == 2 * len(BACKENDS) + 2
+    assert len(stage_names()) == 2 * len(BACKENDS) + 3
 
 
 # ---- Orchestration ------------------------------------------------------------------------
 
 
-def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: DocumentInput, settings: Settings):
+def test_the_pipeline_walks_the_seven_stages_in_order(monkeypatch, document: DocumentInput, settings: Settings):
     install_fake_pipeline(monkeypatch)
 
     marks, _ = run(document, settings)
@@ -166,10 +169,13 @@ def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: Docum
         ("extract:paddleocr_vl", "done", "2 samples"),
         ("compare", "running", ""),
         ("compare", "done", "agree 3 · conflict 1 · ambiguous 2 · missing 4"),
+        # These settings configure no VLM, so the stage is skipped -- announced, with the reason, never
+        # silently absent -- and the export runs without verdicts.
+        ("validate", "skipped", "vlm.enabled is false"),
         ("export", "running", ""),
         ("export", "done", str(settings.data_root / "docs" / document.document_id[:16] / "dataset.xlsx")),
     ]
-    assert [name for name, status, _ in marks if status == "running"] == list(stage_names())
+    assert [name for name, status, _ in marks if status in {"running", "skipped"}] == list(stage_names())
 
 
 def test_a_cached_parse_says_so_in_the_stage_detail(monkeypatch, document: DocumentInput, settings: Settings):

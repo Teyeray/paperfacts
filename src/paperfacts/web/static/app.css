@@ -136,6 +136,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .stage.done .st { background: var(--ok); }
 .stage.running .st { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
 .stage.failed .st { background: var(--bad); }
+/* A stage the configuration turned off (the VLM with vlm.enabled false): shown, hollow, never green. */
+.stage.skipped .st { background: transparent; border: 1px dashed var(--line-strong); }
+.stage.skipped { color: var(--ink-3); }
 .stage .detail { color: var(--ink-3); }
 @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: .55; } }
 
@@ -157,6 +160,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .kpi.ambiguous { border-left-color: var(--warn); }
 .kpi.missing { border-left-color: var(--neutral); }
 .kpi.unattributed { border-left-color: var(--warn); }
+.kpi.vlm { border-left-color: var(--ok); }
 
 /* ---------- workbench: table + viewer ---------- */
 .workbench { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr); gap: 18px; align-items: start; }
@@ -207,6 +211,8 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .flag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 10.5px; font-family: var(--font-body); white-space: nowrap; border: 1px solid currentColor; }
 .flag.bad { color: var(--bad); }
 .flag.warn { color: var(--warn); }
+.flag.ok { color: var(--ok); }
+.flag.muted { color: var(--ink-3); }
 .flag.series { color: var(--accent); border-color: var(--accent); }
 .table-empty { padding: 30px; text-align: center; color: var(--ink-3); }
 

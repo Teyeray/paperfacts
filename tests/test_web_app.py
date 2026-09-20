@@ -40,6 +40,7 @@ from support.web import (
     seed_artifact,
     seed_extraction,
     seed_report,
+    seed_validation,
     wait_for_status,
     wait_until,
 )
@@ -118,7 +119,8 @@ def test_health_reports_the_model_that_will_be_used(client: TestClient):
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "model": "fake-model"}
+    # "vlm" is empty rather than absent while the stage is off, so a client can rely on the key.
+    assert response.json() == {"status": "ok", "model": "fake-model", "vlm": ""}
 
 
 def test_the_document_list_is_empty_before_anything_is_uploaded(client: TestClient):
@@ -294,6 +296,42 @@ def test_the_report_is_returned_once_it_is_on_disk(client: TestClient, library: 
 
 def test_the_report_of_an_unknown_document_is_not_found(client: TestClient):
     assert client.get(f"/api/documents/{UNKNOWN_ID}/report").status_code == 404
+
+
+# ---- the VLM's verdicts ---------------------------------------------------------------------
+
+
+def test_the_validation_is_not_found_while_the_stage_is_off(client: TestClient, parsed_only: str):
+    # These settings configure no VLM: there is nothing to serve, and the detail says why.
+    response = client.get(f"/api/documents/{parsed_only}/validation")
+
+    assert response.status_code == 404
+    assert "vlm.enabled" in response.json()["detail"]
+
+
+def test_the_validation_is_returned_once_it_is_on_disk(settings: Settings, jobs: JobManager):
+    on = dataclasses.replace(settings, vlm_enabled=True)
+    library = Library(on)
+    seed_artifact(library, "mineru")
+    seed_validation(library)
+    with TestClient(create_app(on, jobs=jobs)) as client:
+        assert client.get(f"/api/documents/{DOC_KEY}/validation").status_code == 200
+        body = client.get(f"/api/documents/{DOC_KEY}/validation").json()
+
+    assert body["validation_key"] == library.validation_key
+    assert body["model"] == "fake-vlm"
+    assert body["values"] == []
+
+
+def test_the_validation_of_an_unknown_document_is_not_found(client: TestClient):
+    assert client.get(f"/api/documents/{UNKNOWN_ID}/validation").status_code == 404
+
+
+def test_health_names_the_vlm_only_when_the_stage_is_on(client: TestClient, settings: Settings, jobs: JobManager):
+    assert client.get("/api/health").json()["vlm"] == ""
+    on = dataclasses.replace(settings, vlm_enabled=True, vlm_model="qwen3-vl-test")
+    with TestClient(create_app(on, jobs=jobs)) as on_client:
+        assert on_client.get("/api/health").json()["vlm"] == "qwen3-vl-test"
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

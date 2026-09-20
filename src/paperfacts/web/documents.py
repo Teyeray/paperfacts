@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import CellValue, DatasetPayload, DocumentDataset, FieldColumn
-from paperfacts.keys import comparison_key, extractor_key_for
+from paperfacts.keys import comparison_key, extractor_key_for, validation_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
 from paperfacts.records import LaneExtraction
@@ -32,7 +32,8 @@ from paperfacts.storage import (
     read_identity,
     write_bytes_atomic,
 )
-from paperfacts.workflow import read_lane
+from paperfacts.validate import ValidationReport
+from paperfacts.workflow import read_lane, read_validation
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,8 @@ class Library:
         # The same key the pipeline writes under, or the browser looks for a file nothing ever wrote.
         self.extractor_key = extractor_key_for(settings)
         self.comparison_key = comparison_key()
+        # None when the stage is off: the dataset then lives under its two-key name, as it always did.
+        self.validation_key = validation_key_for(settings) if settings.vlm_enabled else None
 
     # ---- listing and detail ----------------------------------------------------------------
 
@@ -139,16 +142,32 @@ class Library:
         # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.
         return read_lane(self.layout, document_id, backend, self.extractor_key)
 
+    def validation(self, document_id: str) -> ValidationReport | None:
+        """The VLM's verdicts under the current keys; None when the stage is off or has not run."""
+        return read_validation(self.layout, document_id, self.settings)
+
     def dataset(self, document_id: str) -> DatasetPayload | None:
         """The consolidated per-sample table, or ``None`` until the export ran under the current keys.
 
         Validation happens here, at the disk boundary: a file in the wrong shape raises
         ``ValidationError`` rather than travelling on as an untyped dict.
+
+        With the VLM on, the table is looked for under all three keys first -- the one an export that
+        consulted the verdicts wrote -- and then under the two-key name, so a document whose validation
+        stage has not run yet still shows the table its comparison produced.
         """
-        path = self.layout.dataset_json_path(document_id, self.extractor_key, self.comparison_key)
-        if not path.is_file():
-            return None
-        return DatasetPayload.model_validate_json(path.read_text(encoding="utf-8"))
+        candidates = [self.layout.dataset_json_path(document_id, self.extractor_key, self.comparison_key)]
+        if self.validation_key is not None:
+            candidates.insert(
+                0,
+                self.layout.dataset_json_path(
+                    document_id, self.extractor_key, self.comparison_key, self.validation_key
+                ),
+            )
+        for path in candidates:
+            if path.is_file():
+                return DatasetPayload.model_validate_json(path.read_text(encoding="utf-8"))
+        return None
 
     def corpus(self) -> CorpusPayload:
         """The library-wide results table: one row per document that has a dataset under the current keys.

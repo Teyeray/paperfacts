@@ -15,6 +15,7 @@ own dedicated test case here:
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from pathlib import Path
 
@@ -22,13 +23,22 @@ import pytest
 
 from paperfacts.compare import ComparisonCounts
 from paperfacts.config import Settings
+from paperfacts.dataset import DocumentDataset, write_dataset_json
 from paperfacts.keys import extractor_key
 from paperfacts.models import BACKENDS, DocumentInput
 from paperfacts.storage import write_text_atomic
 from paperfacts.web.documents import Library
 from support.extraction import make_field, make_sample
 from support.factories import make_block
-from support.web import DOC_KEY, DOC_SHA, seed_artifact, seed_cli_document, seed_extraction, seed_report
+from support.web import (
+    DOC_KEY,
+    DOC_SHA,
+    seed_artifact,
+    seed_cli_document,
+    seed_extraction,
+    seed_report,
+    seed_validation,
+)
 
 PDF_BYTES = b"%PDF-1.7\n% fake but well-formed enough for the upload path\n"
 OTHER_PDF_BYTES = b"%PDF-1.7\n% a different document\n"
@@ -533,3 +543,48 @@ def test_a_cli_document_is_displayed_under_the_name_it_was_first_seen_with(libra
     document = library.document(DOC_KEY)
 
     assert document.display_filename == two_page_pdf.name
+
+
+# ---- the VLM's verdicts and the three-key dataset --------------------------------------------------------
+
+
+def test_the_validation_is_none_while_the_stage_is_off(library: Library):
+    seed_artifact(library, "mineru")
+    assert library.validation_key is None
+    assert library.validation(DOC_KEY) is None
+
+
+def test_the_validation_is_read_under_the_current_keys_when_the_stage_is_on(settings: Settings):
+    on = Library(dataclasses.replace(settings, vlm_enabled=True))
+    seed_artifact(on, "mineru")
+    assert on.validation(DOC_KEY) is None
+    seeded = seed_validation(on)
+
+    assert on.validation(DOC_KEY) == seeded
+
+
+def test_a_validation_under_other_settings_is_not_served(settings: Settings):
+    on = Library(dataclasses.replace(settings, vlm_enabled=True))
+    seed_artifact(on, "mineru")
+    seed_validation(on, validation_key="ffffffffffff")
+
+    assert on.validation(DOC_KEY) is None
+
+
+def test_the_dataset_prefers_the_three_key_file_and_falls_back_to_the_two_key_one(settings: Settings):
+    on = Library(dataclasses.replace(settings, vlm_enabled=True))
+    seed_artifact(on, "mineru")
+    two_key = DocumentDataset(DOC_SHA, "two.pdf", {}, (), (), on.extractor_key, on.comparison_key)
+    write_dataset_json(two_key, on.layout.dataset_json_path(DOC_SHA, on.extractor_key, on.comparison_key))
+    assert on.dataset(DOC_KEY).filename == "two.pdf"
+
+    assert on.validation_key is not None
+    three_key = DocumentDataset(
+        DOC_SHA, "three.pdf", {}, (), (), on.extractor_key, on.comparison_key, on.validation_key
+    )
+    write_dataset_json(
+        three_key, on.layout.dataset_json_path(DOC_SHA, on.extractor_key, on.comparison_key, on.validation_key)
+    )
+
+    assert on.dataset(DOC_KEY).filename == "three.pdf"
+    assert on.dataset(DOC_KEY).validation_key == on.validation_key

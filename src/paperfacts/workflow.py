@@ -1,4 +1,4 @@
-"""Orchestration: parser -> adapter -> disk, then extraction, then comparison.
+"""Orchestration: parser -> adapter -> disk, then extraction, comparison, visual validation, export.
 
 This is the only place that decides which parser implementation runs: a configured ``*_url`` means an HTTP
 service (a GPU server), an empty one means the ``runners/`` script as a subprocess (a workstation).
@@ -23,8 +23,8 @@ from paperfacts.dataset import DocumentDataset, consolidate_document, write_data
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.extract import build_extraction_document, extract_lane
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import comparison_key, extractor_key_for
-from paperfacts.llm import LlmClient, OpenAICompatibleClient
+from paperfacts.keys import comparison_key, extractor_key_for, validation_key_for
+from paperfacts.llm import LlmClient, OpenAICompatibleClient, VisionClient
 from paperfacts.matching import match_samples
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
@@ -32,6 +32,7 @@ from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, Subpr
 from paperfacts.pdf import read_geometry
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity
+from paperfacts.validate import ValidationReport, validate_lanes
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +315,84 @@ def compare_document(
     return report
 
 
+# ---- Visual validation -----------------------------------------------------------------------------------------
+
+
+def build_vlm_client(settings: Settings) -> OpenAICompatibleClient:
+    """The vision model's client: the same OpenAI-compatible class, its own endpoint, model and sampling.
+
+    Reusing the class is deliberate -- one retry policy, one cache directory, one place that knows how a
+    request is keyed -- but it is a *separate instance*: extraction and validation must never share a
+    model by accident, and the ``VisionClient`` protocol the stage is typed against keeps the two apart.
+    """
+    return OpenAICompatibleClient(
+        settings.vlm_base_url,
+        settings.require_vlm_api_key(),
+        settings.vlm_model,
+        timeout_s=settings.vlm_timeout_s,
+        cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
+        temperature=settings.vlm_temperature,
+        max_tokens=settings.vlm_max_tokens,
+        reasoning_effort=None,
+        retry_attempts=settings.llm_retry_attempts,
+        retry_backoff_s=settings.llm_retry_backoff_s,
+    )
+
+
+def read_validation(layout: DataLayout, document_id: str, settings: Settings) -> ValidationReport | None:
+    """The stored validation under the current keys, or None. Nothing is re-derived on read: a verdict is a
+    reading of pixels, and there is no cheaper way to re-check it than to ask again."""
+    if not settings.vlm_enabled:
+        return None
+    path = layout.validation_path(
+        document_id, extractor_key_for(settings), comparison_key(), validation_key_for(settings)
+    )
+    return ValidationReport.read(path) if path.is_file() else None
+
+
+def validate_document(
+    document: DocumentInput,
+    settings: Settings,
+    client: VisionClient,
+    *,
+    lanes: Mapping[Backend, LaneExtraction],
+    report: ComparisonReport,
+    force: bool = False,
+) -> ValidationReport:
+    """Show the vision model the regions the disputed values were cited from, and store its verdicts.
+
+    Keyed by all three keys: a different extraction or comparison selects different values, a different
+    validation setting reads them differently. ``force`` re-asks the model; the crops themselves are
+    deterministic renders and are reused.
+    """
+    layout = DataLayout(settings.data_root)
+    path = layout.validation_path(
+        document.document_id, report.extractor_key, report.comparison_key, validation_key_for(settings)
+    )
+    if path.is_file() and not force:
+        logger.info("validation cache_hit doc=%s", document.document_id[:16])
+        return ValidationReport.read(path)
+    artifacts = {backend: load_artifact(document, backend, settings) for backend in BACKENDS}
+    validation = validate_lanes(
+        document_id=document.document_id,
+        pdf_path=document.pdf_path,
+        lanes=lanes,
+        report=report,
+        artifacts=artifacts,
+        client=client,
+        layout=layout,
+        validation_key=validation_key_for(settings),
+        policy=settings.vlm_policy,
+        crop_dpi=settings.vlm_crop_dpi,
+        crop_padding=settings.vlm_crop_padding,
+        crop_max_pixels=settings.vlm_crop_max_pixels,
+        concurrency=settings.vlm_concurrency,
+        refresh=force,
+    )
+    validation.write(path)
+    return validation
+
+
 # ---- The whole pipeline, shared by the CLI and the web job ------------------------------------------------------
 
 StageStatus = Literal["pending", "running", "done", "failed", "skipped"]
@@ -322,7 +401,15 @@ StageCallback = Callable[[str, StageStatus, str], None]
 
 
 def stage_names() -> tuple[str, ...]:
-    return (*(f"parse:{b}" for b in BACKENDS), *(f"extract:{b}" for b in BACKENDS), "compare", "export")
+    """``validate`` is always a stage, even when the VLM is off: the progress bar then shows it skipped, and
+    a reader of a run never has to wonder whether the pipeline had a validation step at all."""
+    return (
+        *(f"parse:{b}" for b in BACKENDS),
+        *(f"extract:{b}" for b in BACKENDS),
+        "compare",
+        "validate",
+        "export",
+    )
 
 
 @dataclass(frozen=True)
@@ -333,6 +420,7 @@ class PipelineResult:
     dataset: DocumentDataset
     excel_path: Path
     dataset_json_path: Path
+    validation: ValidationReport | None = None
 
 
 def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
@@ -341,7 +429,9 @@ def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
     The dataset carries the keys it was built under, which is what the JSON file is named after: an
     export made with different settings lands beside the old one instead of overwriting it.
     """
-    path = layout.dataset_json_path(dataset.document_id, dataset.extractor_key, dataset.comparison_key)
+    path = layout.dataset_json_path(
+        dataset.document_id, dataset.extractor_key, dataset.comparison_key, dataset.validation_key or None
+    )
     write_dataset_json(dataset, path)
     return path
 
@@ -412,8 +502,9 @@ def run_document(
         "done",
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
     )
+    validation = _validate_stage(document, settings, lanes=lanes, report=report, force=force, on_stage=on_stage)
     on_stage("export", "running", "")
-    dataset = consolidate_document(document, lanes, report)
+    dataset = consolidate_document(document, lanes, report, validation)
     layout = DataLayout(settings.data_root)
     excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path)
@@ -426,7 +517,35 @@ def run_document(
         dataset=dataset,
         excel_path=excel_path,
         dataset_json_path=dataset_json_path,
+        validation=validation,
     )
+
+
+def _validate_stage(
+    document: DocumentInput,
+    settings: Settings,
+    *,
+    lanes: Mapping[Backend, LaneExtraction],
+    report: ComparisonReport,
+    force: bool,
+    on_stage: StageCallback,
+) -> ValidationReport | None:
+    """The validate stage of :func:`run_document`: skipped, with the reason in the stage detail, when no VLM
+    is configured; otherwise its own client, opened and closed here, because the vision model is a
+    different model from the extractor and shares nothing with it but the cache directory."""
+    if not settings.vlm_enabled:
+        on_stage("validate", "skipped", "vlm.enabled is false")
+        return None
+    on_stage("validate", "running", "")
+    with build_vlm_client(settings) as client:
+        validation = validate_document(document, settings, client, lanes=lanes, report=report, force=force)
+    counts = validation.counts
+    detail = (
+        f"confirmed {counts.confirmed} · contradicted {counts.contradicted} · illegible {counts.illegible}"
+        f" · not checked {counts.not_checked}" + (f" · errors {counts.error}" if counts.error else "")
+    )
+    on_stage("validate", "done", detail)
+    return validation
 
 
 # ---- Directory batches and offline re-export -------------------------------------------------------
@@ -469,7 +588,10 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
         lanes[backend] = lane
     # Grounding is rechecked on read, so comparison must use those same refreshed values.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
-    dataset = consolidate_document(document, lanes, report)
+    # Offline means no model, the vision one included: a stored validation is used, a missing one is not
+    # manufactured, and the dataset says which it was through its validation_key.
+    validation = read_validation(layout, document.document_id, settings)
+    dataset = consolidate_document(document, lanes, report, validation)
     # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
     _store_dataset(layout, dataset)
     return dataset

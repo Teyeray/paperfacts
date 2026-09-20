@@ -2,7 +2,8 @@
 
     paperfacts parse   paper.pdf --backend both   # both lanes -> data/docs/<sha>/parsed/
     paperfacts overlay paper.pdf --backend both   # bbox overlays -> data/docs/<sha>/overlays/
-    paperfacts run     paper.pdf                  # parse, extract and compare in one go
+    paperfacts run     paper.pdf                  # parse, extract, compare, validate and export in one go
+    paperfacts validate paper.pdf                 # the VLM stage alone, on an already compared paper
     paperfacts serve                              # the web interface
 
 Where the parsers run is decided by the environment (see :mod:`paperfacts.config`): subprocesses from
@@ -21,23 +22,27 @@ from typing import Annotated, NoReturn, assert_never
 
 import typer
 
-from paperfacts.config import EXTRACTION_MODES, Settings
+from paperfacts.config import EXTRACTION_MODES, VALIDATION_POLICIES, Settings
 from paperfacts.errors import PaperFactsError, ParserError
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.report import render_lane, render_report
+from paperfacts.report import render_lane, render_report, render_validation
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import (
+    BACKEND_A,
+    BACKEND_B,
     StageStatus,
     build_llm_client,
+    build_vlm_client,
     compare_document,
     extract_document,
     load_artifact,
     parse_document,
     run_batch,
     run_document,
+    validate_document,
 )
 
 app = typer.Typer(
@@ -86,6 +91,19 @@ if {mode.value for mode in ModeOption} != set(EXTRACTION_MODES):
     raise RuntimeError(f"CLI modes {[m.value for m in ModeOption]} do not match config's {list(EXTRACTION_MODES)}")
 
 
+class PolicyOption(StrEnum):
+    """Which values the VLM is shown, on the command line; mirrors ``config.ValidationPolicy`` the same way."""
+
+    disputed = "disputed"
+    all = "all"
+
+
+if {policy.value for policy in PolicyOption} != set(VALIDATION_POLICIES):
+    raise RuntimeError(
+        f"CLI policies {[p.value for p in PolicyOption]} do not match config's {list(VALIDATION_POLICIES)}"
+    )
+
+
 PdfArg = Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="the paper")]
 SourceArg = Annotated[Path, typer.Argument(exists=True, readable=True, help="PDF or directory (searched recursively)")]
 OutputOpt = Annotated[Path | None, typer.Option("--output", "-o", help="Excel workbook (.xlsx)")]
@@ -110,7 +128,12 @@ ForceOpt = Annotated[
 REPORTABLE_ERRORS = (PaperFactsError, FileNotFoundError)
 
 
-def _settings(data_root: Path | None, passes: int | None = None, mode: ModeOption | None = None) -> Settings:
+def _settings(
+    data_root: Path | None,
+    passes: int | None = None,
+    mode: ModeOption | None = None,
+    policy: PolicyOption | None = None,
+) -> Settings:
     settings = Settings.from_env()
     changes: dict[str, object] = {}
     if data_root is not None:
@@ -119,6 +142,8 @@ def _settings(data_root: Path | None, passes: int | None = None, mode: ModeOptio
         changes["extraction_passes"] = passes
     if mode is not None:
         changes["extraction_mode"] = mode.value
+    if policy is not None:
+        changes["vlm_policy"] = policy.value
     return dataclasses.replace(settings, **changes) if changes else settings
 
 
@@ -235,18 +260,57 @@ def compare(
     _echo_lines(render_report(report))
 
 
+PolicyOpt = Annotated[
+    PolicyOption | None,
+    typer.Option("--policy", help="which values the VLM checks: the disputed ones (default) or all of them"),
+]
+
+
+@app.command()
+def validate(
+    pdf: PdfArg,
+    force: ForceOpt = False,
+    passes: PassesOpt = None,
+    mode: ModeOpt = None,
+    policy: PolicyOpt = None,
+    data_root: DataRootOpt = None,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Show the vision model the page regions the disputed values were cited from. Needs compare.
+
+    Runs regardless of ``vlm.enabled``: asking for the stage by name is the explicit request the switch
+    exists to make implicit. ``--policy all`` checks every value, which is how the rate at which both
+    parsers agree on a wrong reading is measured.
+    """
+    _configure_logging(verbose)
+    settings = _settings(data_root, passes, mode, policy)
+    document = DocumentInput.from_path(pdf)
+    try:
+        with build_llm_client(settings) as client:
+            lanes = {
+                backend: extract_document(document, backend, settings, client) for backend in (BACKEND_A, BACKEND_B)
+            }
+            report = compare_document(document, settings, client, lanes=lanes)
+        with build_vlm_client(settings) as vlm:
+            validation = validate_document(document, settings, vlm, lanes=lanes, report=report, force=force)
+    except REPORTABLE_ERRORS as exc:
+        _fail("validate", exc)
+    _echo_lines(render_validation(validation))
+
+
 @app.command()
 def run(
     pdf: PdfArg,
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    policy: PolicyOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
-    """Parse, extract, compare and automatically save a consolidated Excel workbook."""
+    """Parse, extract, compare, validate with the VLM and save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode)
+    settings = _settings(data_root, passes, mode, policy)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -261,6 +325,8 @@ def run(
     for lane in result.lanes.values():
         _echo_lines(render_lane(lane))
     _echo_lines(render_report(result.report))
+    if result.validation is not None:
+        _echo_lines(render_validation(result.validation))
     typer.echo(f"Excel -> {result.excel_path}")
 
 

@@ -11,7 +11,19 @@ export const STAGE_LABEL = {
   "extract:mineru": "抽取 MinerU",
   "extract:paddleocr_vl": "抽取 PaddleOCR-VL",
   compare: "对齐比较",
+  validate: "视觉核验 (VLM)",
+  export: "导出数据表",
 };
+// The VLM's verdict on one value (ValueValidation.verdict). "not_checked" and "error" are shown too: a
+// value nobody could check must never look like one that was checked and passed.
+export const VERDICT_LABEL = {
+  confirmed: "视觉确认",
+  contradicted: "视觉否定",
+  illegible: "区域不可读",
+  not_checked: "未核验",
+  error: "核验失败",
+};
+export const VERDICT_CLASS = { confirmed: "ok", contradicted: "bad", illegible: "warn", not_checked: "muted", error: "bad" };
 const ACTIVE_JOB_STATUS = new Set(["queued", "running"]);
 
 export const state = {
@@ -20,6 +32,7 @@ export const state = {
   current: null,   // the open document_id (16 chars)
   summary: null,   // the current document's DocumentSummary
   report: null,    // ComparisonReport | null
+  validation: null, // ValidationReport | null (the VLM's readings and verdicts, keyed by value)
   dataset: null,   // the consolidated per-sample table (DocumentDataset.as_dict) | null
   corpus: null,    // the home view's library-wide table ({ fields, rows }) | null
   lanes: {},       // { mineru: LaneExtraction | null, paddleocr_vl: ... }
