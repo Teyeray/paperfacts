@@ -19,6 +19,10 @@ paper.pdf
                    both lanes      values differ    can't decide    one lane only
 ```
 
+This file is the whole manual: installing it on a Mac, deploying it on the GPU server, using the web
+interface, every command, every configuration key, and what a blank cell means. `CLAUDE.md` is internal
+working conventions for people editing the code, and nothing here depends on reading it.
+
 ## Why two parsers
 
 A single PDF parser plus a language model will happily produce a confident, well-formatted table of
@@ -27,36 +31,19 @@ and nothing in the output says which ones. The failure is silent, which is the w
 pipeline can have.
 
 PaperFacts runs two structurally independent parsers over the same paper and extracts from each with an
-identical prompt and model. Where they agree, the number survived two different layout analyses and two
-different OCR passes. Where they disagree, you have a specific, located, reviewable question instead of a
-uniform wall of unearned confidence. Disagreement is the product.
+identical prompt, model and retrieval. Where they agree, the number survived two different layout
+analyses and two different OCR passes. Where they disagree, you have a specific, located, reviewable
+question instead of a uniform wall of unearned confidence. Disagreement is the product.
 
-## Provenance is checked, not asserted
-
-"Every value is traceable" is easy to claim and easy to get wrong. Four mechanisms make it true, and each
-one exists because the failure it catches was observed in a real run:
-
-| Guardrail | What it catches |
-|---|---|
-| **Schema and type cleaning** | Fields outside the target schema; numeric fields holding words like `"minimum"` or `"n.a."` |
-| **Scope enforcement** | A paper-level field attached to one sample, or the reverse — a film's dopant concentration reported as the sputtering target's composition |
-| **Citation validation** | Block ids the model invented, or ids from parts of the document it was never shown |
-| **Grounding** | The quoted text cannot be found in the block it cites — a real id attached to a value that did not come from it |
-
-Grounding is the one that matters most, and the one usually missing. Without it, "traceable to a page and
-a bounding box" only means the model named a real block. Matching tolerates formatting differences — the
-same number reaches the model as `$( 4 0 \times 1 0 \mathrm { c m }$` from one parser and `(40 × 10 cm`
-from the other — while staying strict about digits. Values that fail are kept but flagged, never silently
-dropped.
-
-The model is also constrained structurally rather than by instruction: the JSON schema it must return has
+The model is constrained structurally rather than by instruction: the JSON schema it must return has
 `value_raw` and `unit_raw` and no `value` or `unit` field, so it has nowhere to put a converted number.
 All unit conversion, scientific-notation parsing and tolerance comparison happen in ordinary, testable
-Python.
+Python. The model quotes; the code converts.
 
-## Install
+## Quick start on a Mac
 
-Requires Python 3.13 and [uv](https://docs.astral.sh/uv/).
+Requires Apple silicon, Python 3.13 and [uv](https://docs.astral.sh/uv/). Python is pinned to
+`>=3.13,<3.14`: MinerU caps below 3.14 and paddlepaddle publishes no 3.14 wheels.
 
 ```bash
 uv sync --group dev                        # the main package: pure Python, seconds
@@ -67,295 +54,364 @@ uv sync --script runners/paddle_runner.py  # PaddleOCR-VL environment (paddlepad
 The two parsers live in **separate environments on purpose**: they both ship a `cv2` (opencv-python vs
 opencv-contrib-python) and they pull in torch and paddlepaddle respectively, so they cannot be installed
 together. Each is a [PEP 723](https://peps.python.org/pep-0723/) script under `runners/` with its own
-lockfile, run via `uv run --script`. The main package never imports either one; it only reads the files
-they write. Model weights download on first use; set `MINERU_MODEL_SOURCE=modelscope` on networks where
-Hugging Face is slow.
+committed lockfile, run via `uv run --script`. The main package never imports either one; it only reads
+the files they write. Model weights download on first use; set `MINERU_MODEL_SOURCE=modelscope` on
+networks where Hugging Face is slow.
 
-On Apple silicon, hand PaddleOCR-VL's vision stage to MLX — in-process CPU inference takes hours per
-paper, MLX takes a minute or two:
-
-```bash
-uvx --python 3.13 --from "mlx-vlm>=0.3.11" mlx_vlm.server --port 8111   # leave running; scripts/dev_up.sh does all of this
-export PAPERFACTS_PADDLE_VL_BACKEND=mlx-vlm-server
-export PAPERFACTS_PADDLE_VL_SERVER_URL=http://localhost:8111/
-export PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6
-```
-
-Extraction needs an OpenAI-compatible LLM; any endpoint works, and the default in `config.json` is an
-Alibaba Cloud Model Studio (百炼) workspace serving `deepseek-v4.1-flash` through its `compatible-mode/v1`
-address. The key is read from `PAPERFACTS_LLM_API_KEY`, then `DEEPSEEK_API_KEY`, then
-`PAPERFACTS_LLM_API_KEY_FILE`, then a `deepseek_api_key` file in the repository root (gitignored).
-
-## Use
-
-```bash
-uv run paperfacts run paper.pdf            # parse both lanes, extract both, compare
-uv run paperfacts batch template_files --output data/exports/template_files.xlsx
-uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
-uv run paperfacts fields                   # list the field table loaded from config.json
-```
-
-`run` is the whole pipeline; the individual stages are available separately and share the same caches:
-
-```bash
-uv run paperfacts parse   paper.pdf --backend both -v   # → data/docs/<sha>/parsed/
-uv run paperfacts overlay paper.pdf --backend both      # draw block boxes on page images, to check by eye
-uv run paperfacts extract paper.pdf                     # → data/docs/<sha>/facts/
-uv run paperfacts compare paper.pdf                     # → data/docs/<sha>/comparisons/
-```
-
-### Automated Excel datasets
-
-`run` now finishes by saving `data/docs/<sha>/dataset.xlsx`. To process every PDF in a directory
-(including subdirectories and `.PDF` extensions) and automatically combine the results:
-
-```bash
-uv run paperfacts batch template_files --output data/exports/template_files.xlsx
-```
-
-The workbook contains five sheets:
-
-| Sheet | Contents |
-|---|---|
-| 论文数据 | One row per unique PDF, one value per field; the twenty field names are stable column names |
-| 样品数据 | All samples after merging the two parser sources, one row per sample |
-| 字段说明 | Field definitions and canonical units |
-| 数据质量 | Final field decisions, measurement conditions, merged citations and reasons for blank cells |
-| 运行记录 | Success/failure per paper and the extraction/comparison versions |
-
-The paper row selects the sample with the most usable fields, then the most two-lane agreements,
-then a stable sample-ID tie break. **It never combines different samples' measurements into one row.**
-This chooses the most complete sample, not the paper's highest-performing sample. Other samples remain
-in the sample sheet. Target properties are paper-level and shared only when their extracted value is unique.
-
-Numeric cells use the canonical units in `字段说明`; missing values are empty, never zero. Grounded,
-single-source values are allowed and marked `single_source` in the quality sheet. Conflicts, ambiguous
-sample matches, multiple values or conditions, ranges, bounds and rectangular dimensions stay blank.
-Approximate values and measurements with ± uncertainty retain their center value with a quality note.
-The main tables have no per-source value columns. Use the quality sheet to restrict a training set to
-two-lane agreements if required; completeness alone is not a quality score.
-
-Identical PDF content is processed once. Each completed or failed paper checkpoints the workbook
-atomically; re-running the same command reuses the caches and rebuilds the table without appending
-duplicate rows. Failed papers appear in `运行记录`, processing continues, and the command exits with status 1
-if any paper failed. The table contains extracted values only; values absent from the paper or found only
-in plots remain missing.
-
-To regenerate the Excel workbook from current cached extractions/comparisons, with no parser or LLM calls:
-
-```bash
-uv run paperfacts export template_files --output data/exports/template_files.xlsx
-```
-
-`export` requires caches matching the current model, field schema and comparison rules; it reports outdated
-or absent results as failures. On Apple silicon, start and configure the MLX service described under
-**Install** before `batch` processes uncached PDFs.
-
-### The web interface
-
-```bash
-uv run paperfacts serve                    # local
-uv run paperfacts serve --host 0.0.0.0     # reachable from other machines
-```
-
-The home page is the corpus table: one row per processed paper, its selected sample across the field
-columns, with a link into each document and a 「下载全部 Excel」 button for the whole library.
-
-The document library's 「处理全部未完成」 button queues every document that has a PDF and is not yet
-compared under the current keys, one job each, in library order; a document already being processed
-keeps the job it has.
-
-Published on the internet — a cloudflared tunnel, a shared server — it needs a password:
-
-```bash
-echo 'PAPERFACTS_WEB_PASSWORD=...' >> .env   # the username is web.username in config.json
-```
-
-With `PAPERFACTS_WEB_PASSWORD` set, every route, `/api` included, answers 401 until a browser or a client
-sends HTTP Basic credentials, so an open tunnel cannot upload PDFs or spend tokens. Unset, the app is open,
-which is what running it on a laptop wants. The password is a secret and lives only in `.env`; the username
-is configuration and lives in `config.json`.
-
-Drop a PDF on the left and processing starts, with live per-stage progress. The result is a fact-by-fact
-comparison table, AGREE / CONFLICT / AMBIGUOUS / MISSING counts, and a page viewer: click any fact and
-both lanes' source blocks light up on the rendered page — blue for MinerU, orange for PaddleOCR-VL. The
-selected fact is part of the URL, so a link to one disputed number is shareable. Below the table are each
-lane's raw sample records, from the paper's own wording through to the normalised value and back to the
-block it came from. Papers processed from the command line appear in the library too, though only
-uploaded ones carry their PDF and can be re-rendered on another machine. The API is documented at
-`/api/docs`.
-
-Above the comparison sits the results table: one row per sample after both lanes are merged, one column
-per field, plus a first row for the paper-level target values. A green cell was confirmed by both lanes and
-an amber one by a single lane — each says so in words as well as in colour — and a blank cell is a value
-the pipeline refused to guess, with the reason on hover. Clicking a cell lights up the blocks it was merged
-from. Two endpoints serve it: `GET /api/documents/<id>/dataset` returns the table as JSON, stamped with the
-current extractor and comparison keys so a stale one is never shown, and `GET /api/documents/<id>/dataset.xlsx`
-downloads the workbook behind the 「下载 Excel」 button.
-
-### How the model is asked
-
-Handing a fifteen-thousand-token paper to a model and asking for twenty fields and every sample at once makes
-it lose its place: it cites a block that merely discusses the number, and it never mentions fields the paper
-states only in passing. So by default the question is split up.
-
-**Passage mode** (the default) asks which samples the paper reports, then asks about one field at a time,
-showing only the blocks retrieved for that field. Retrieval is ordinary code, not a model: keyword and unit
-matching, ranked, capped at eight blocks. Both lanes get identical retrieval rules, so the comparison still
-measures the parsers and not the retrieval.
-
-```bash
-uv run paperfacts run paper.pdf --mode document   # the older whole-paper question
-```
-
-On the three papers in this repository, against whole-document mode:
-
-| | document | passage |
-|---|---|---|
-| Values found | 48 | 88 |
-| Agreeing facts | 17 | 35 |
-| Conflicts | 4 | 0 |
-| Values failing grounding | 4.2% | 3.4% |
-| Prompt tokens | 64K | 208K |
-
-The conflicts did not disappear into silence: both lanes now read the same evidence, so where one lane's
-text garbled a number the other lane simply does not have it, and it is reported as MISSING with both
-readings visible rather than as a single conflicting pair. The cost is roughly three times the prompt
-tokens, because the field questions share overlapping context.
-
-A value the model cannot place on any sample -- a paper-level claim such as "transmittance above 80% from
-500 to 2500 nm" -- is kept and shown as **unattributed** rather than attached to a plausible sample. When
-both lanes hold the same unplaced value it is paired and compared like any other (scope `unattributed`);
-a value only one lane could not place stays out of the comparison, because the other lane may hold it on
-a sample where it is already reported. An unplaced value is visible; a misplaced one is not.
-
-### Repeated extraction
-
-Language models are not deterministic even at temperature 0: repeated extractions of the same paper
-occasionally gain or lose a value. With a single pass that noise is indistinguishable from genuine
-parser disagreement, which is the signal this tool exists to measure. Extract each lane several times and
-keep only what a majority of passes agree on:
-
-```bash
-uv run paperfacts run paper.pdf --passes 3    # 3x the LLM calls, 3x the cost
-```
-
-Off by default. Each surviving value records the fraction of passes that produced it, so a 2/3 value stays
-visibly weaker than a 3/3 one. In passage mode the sample inventory is asked once and only the field
-questions repeat, so every pass sees the same sample ids; the vote is on the number and unit, never on the
-wording of the measurement condition, and a paper that reports the same number under two conditions keeps
-both. Measured on three papers: a second pass reproduces 75–90 % of a first pass's values, so two passes are
-a reproducibility filter at twice the model cost, not a way to find more (`.omc/research/reasoning-effort.md`).
-
-## Caching
-
-Nothing is recomputed unless something it depends on changed, and each cache is keyed by a content hash
-of exactly its own inputs:
-
-| Cache | Key | Invalidated by |
-|---|---|---|
-| Parser output | `raw/<backend>/meta.json` exists | `--force` |
-| Extraction | model + prompts + field schema + document rendering | changing any of them |
-| Comparison | field tolerances + normalisation source | changing a tolerance or a rule |
-| LLM requests | the entire request payload | nothing — identical requests are free |
-
-So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and
-cannot serve a stale verdict either. Re-running a finished paper costs nothing.
-
-## Configuration
-
-Two files at the repository root. **`config.json` holds everything that is not a secret**, and is meant to
-be edited:
-
-```jsonc
-{
-  "data_root": "data",
-  "server":     { "host": "127.0.0.1", "port": 8000, "max_upload_mb": 200,
-                  "page_dpi": { "default": 110, "min": 50, "max": 220 } },
-  "web":        { "username": "paperfacts" },          // the password is PAPERFACTS_WEB_PASSWORD in .env
-  "llm":        { "base_url": "https://<workspace>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-                  "model": "deepseek-v4.1-flash",     // any OpenAI-compatible endpoint and model
-                  "timeout_s": 600, "context_tokens": 60000, "temperature": 0.0, "max_tokens": 16384,
-                  "reasoning_effort": null,                    // null | none | low | medium | high
-                  "inventory_reasoning_effort": null,          // null/"inherit" | "omit" | none…high
-                  "retry_attempts": 4, "retry_backoff_s": 2.0 },
-  "extraction": { "mode": "passage", "passes": 1, "candidate_limit": 8 },
-  "comparison": { "ambiguous_match_confidence": 0.6 },
-  "parsers":    { "mineru_url": null, "paddle_url": null, "paddle_render_dpi": 200,
-                  "paddle_vl_backend": null, "paddle_vl_server_url": null, "paddle_vl_model_name": null,
-                  "subprocess_timeout_s": 3600, "http_timeout_s": 900, "uv_bin": "uv" },
-  "overlay":    { "dpi": 150 },
-  "condition_keywords": ["sample", "substrate", "deposition", "..."],
-  "fields":     [ /* the table below */ ]
-}
-```
-
-**`.env` holds the secrets**, and is gitignored. Copy the template and fill in one line:
+Then the API key. Extraction needs an OpenAI-compatible LLM endpoint; the shipped default is an Alibaba
+Cloud Model Studio (百炼) workspace serving `deepseek-v4.1-flash` through its `compatible-mode/v1`
+address:
 
 ```bash
 cp .env.example .env     # then set PAPERFACTS_LLM_API_KEY
 ```
 
 The key is looked for in `PAPERFACTS_LLM_API_KEY`, then `DEEPSEEK_API_KEY`, then the file named by
-`PAPERFACTS_LLM_API_KEY_FILE`, then `deepseek_api_key` in the repository root. It is never read from
-`config.json`, and `config.json` has nowhere to put it.
+`PAPERFACTS_LLM_API_KEY_FILE`, then a `deepseek_api_key` file in the repository root. All of those are
+gitignored, and `config.json` has nowhere to put a key, which is the point.
 
-Every scalar setting in `config.json` also has a `PAPERFACTS_*` environment variable that wins over it,
-which is how one machine points at its own services without editing the shared file: `PAPERFACTS_DATA_ROOT`,
-`PAPERFACTS_MINERU_URL`, `PAPERFACTS_PADDLE_URL`, `PAPERFACTS_PADDLE_RENDER_DPI`,
-`PAPERFACTS_PADDLE_VL_BACKEND`, `PAPERFACTS_PADDLE_VL_SERVER_URL`, `PAPERFACTS_PADDLE_VL_MODEL_NAME`,
-`PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`, `PAPERFACTS_LLM_TIMEOUT_S`,
-`PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`, `PAPERFACTS_LLM_MAX_TOKENS`,
-`PAPERFACTS_LLM_REASONING_EFFORT`, `PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`,
-`PAPERFACTS_LLM_CONCURRENCY`, `PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`,
-`PAPERFACTS_EXTRACTION_MODE`,
+### Starting everything
+
+```bash
+scripts/dev_up.sh                # the usual way to work
+scripts/dev_up.sh --host 0.0.0.0 --port 8765    # arguments are passed to `paperfacts serve`
+```
+
+`dev_up.sh` does three things in order. It clears a hidden flag that keeps appearing on `.venv`; it
+starts an `mlx-vlm` server on port 8111 for PaddleOCR-VL's vision stage unless something already listens
+there, waiting up to 60 seconds and refusing to continue if it never comes up; and it starts
+`paperfacts serve` with `PAPERFACTS_PADDLE_VL_BACKEND`, `PAPERFACTS_PADDLE_VL_SERVER_URL` and
+`PAPERFACTS_PADDLE_VL_MODEL_NAME` filled in for whatever `.env` left unset. The MLX step is not a nicety:
+PaddleOCR-VL's vision model on in-process CPU inference takes hours per paper, and a minute or two
+through MLX.
+
+```bash
+scripts/dev_down.sh              # stops the mlx-vlm server it started
+```
+
+Stop the web server with Ctrl-C in its own terminal; `dev_down.sh` only handles the background process,
+whose pid it reads from `data/mlx_vlm_server.pid`.
+
+On this machine some external tool periodically marks the whole `.venv` as hidden, and Python 3.13 then
+skips its `.pth` files, so `import paperfacts` suddenly raises `ModuleNotFoundError`; `scripts/dev_fix_venv.sh`
+clears the flag without a reinstall, and `dev_up.sh` runs it for you.
+
+To drive the MLX path by hand instead, the three variables are:
+
+```bash
+uvx --python 3.13 --from "mlx-vlm>=0.3.11" mlx_vlm.server --port 8111   # leave running
+export PAPERFACTS_PADDLE_VL_BACKEND=mlx-vlm-server
+export PAPERFACTS_PADDLE_VL_SERVER_URL=http://localhost:8111/
+export PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6
+```
+
+## Deploying on the Linux GPU server
+
+On the server the two parsers run as long-running services and the main package talks to them over HTTP,
+producing byte-identical output to the subprocess path used on a Mac. Everything needed is under
+`deploy/`: `compose.yaml` for the three containers, `mineru.Dockerfile` for the one image that has to be
+built locally, `vllm_config.yaml` for the VLM's memory and concurrency, and `host/*.sh` for the
+bare-metal route when Docker is unavailable. `deploy/README.md` is the long form; this is the shape of it.
+
+**The server has 8 GPUs and PaperFacts may only use 4, 5, 6 and 7.** GPUs 0–3 belong to other projects
+and must never be touched. Do not widen that range.
+
+| GPU | Runs | Port |
+|---|---|---|
+| 4, 5 | `mineru-router`, one `mineru-api` worker per GPU, load balanced | 8002, `POST /file_parse` |
+| 6 | `paddleocr-vl-api` and the `paddleocr-vlm-server` vLLM service it calls, sharing the card | 8080 `POST /layout-parsing`; vLLM on 8118, local only |
+| 7 | unused, free | — |
+
+Docker Compose pins the allocation with `device_ids`; the host scripts pin it with `CUDA_VISIBLE_DEVICES`
+and validate the id in `deploy/host/_common.sh` before anything loads, so a typo exits immediately
+instead of being discovered after a model has grabbed someone else's card. Do not publish port 8118: it
+is the VLM's raw OpenAI-compatible endpoint, meant only for the API layer beside it.
+
+```bash
+cd deploy
+cp .env.example .env
+docker compose build mineru-router   # 20-40 min, pre-downloads MinerU weights into the image; use tmux
+docker compose up -d
+curl http://localhost:8002/health
+curl http://localhost:8080/health
+```
+
+Cold starts are slow by nature — each MinerU worker loads three model sets, and vLLM loads weights and
+compiles a CUDA graph in roughly five minutes — so read `docker compose logs -f` before concluding that
+something is wrong.
+
+### Pointing the orchestrator at the services
+
+The main package needs exactly two variables. Both set means HTTP to the services; neither set means run
+the `runners/` scripts as subprocesses, which is how a Mac works.
+
+```bash
+export PAPERFACTS_MINERU_URL=http://localhost:8002
+export PAPERFACTS_PADDLE_URL=http://localhost:8080
+```
+
+From another machine, replace `localhost` with the server's hostname and open 8002 and 8080 in the
+firewall.
+
+### The web app on the server
+
+`.env` on the server holds two secrets: the LLM API key, and `PAPERFACTS_WEB_PASSWORD`. Set the password
+before binding to anything but localhost.
+
+```bash
+echo 'PAPERFACTS_LLM_API_KEY=...'  >> .env
+echo 'PAPERFACTS_WEB_PASSWORD=...' >> .env     # the username is web.username in config.json
+uv run paperfacts serve --host 0.0.0.0 --port 8000
+```
+
+With `PAPERFACTS_WEB_PASSWORD` set, every route, `/api` included, answers 401 until a browser or client
+sends HTTP Basic credentials, so an open tunnel cannot upload PDFs or spend tokens. Unset, the app is
+open, which is what a laptop wants. Run it long-lived in tmux.
+
+### How code reaches the server
+
+Development happens on the Mac, is committed and pushed to GitHub, and pulled on the server. **Do not try
+to operate the server over ssh from the dev machine.** Someone with a session on the server pulls and
+restarts it there.
+
+## Using the web interface
+
+`http://<host>:8000`. The interface is in Chinese; this section names the strings on screen.
+
+**The rail on the left** is the document library, with the drop zone above it. Drag a PDF in, or press
+「选择文件」, and processing starts on upload; 「忽略缓存，全部重跑」 next to the drop zone forces every
+stage to run again. Each library entry shows the paper's name and four badges: 一致 (both lanes agreed),
+冲突 (the lanes read different values), 不确定 (the pipeline could not decide) and 缺失 (only one lane
+found it). 「处理全部未完成」 queues every document that can run and is not already compared under the
+current keys, one job each, in library order; a document already queued or running simply gets its
+existing job back, so pressing it twice costs nothing. Documents with neither a PDF nor a cached parse
+are skipped with a reason.
+
+**The home page** is 论文结果总表: one row per processed paper, showing the sample that paper selected
+across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
+library.
+
+**A document page** reads top to bottom.
+
+1. The header carries the display name, the document id, 「强制重跑」 and 「重新处理」.
+2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `extract:mineru`,
+   `extract:paddleocr_vl`, `compare`, `export`.
+3. KPI tiles: the AGREE / CONFLICT / AMBIGUOUS / MISSING counts.
+4. 结果表（按样品） — the deliverable.
+5. 事实对照 and the page viewer beside it.
+6. 样品记录, collapsed.
+
+### 结果表（按样品）
+
+One row per sample after both lanes are merged, one column per field, plus a 靶材（论文级） row for the
+paper-level target values. The row chosen as the paper's row is marked ★ 论文行.
+
+A cell that carries a value shows the number and the field's canonical unit, and a small badge saying how
+it was decided: **双路** when both lanes agreed, or the lane's own name — **MinerU** or **PaddleOCR-VL** —
+when only one lane had it. Clicking a value highlights, on the rendered page, the blocks it was merged
+from. A value the paper stated once for a whole sample series says so in the tooltip rather than in a
+badge.
+
+**An empty cell is a refusal, not a gap.** The pipeline declined to commit a value and the reason is in
+the cell's tooltip and its accessible name, so a screen reader gets it without a hover. Clicking or
+pressing Enter on an empty cell jumps down to the two lanes' records for that sample and field, so the
+refusal can be checked against what each lane actually read.
+
+Above the table: 选择字段 chooses which of the twenty columns to show, 显示空字段 adds back the columns
+that are empty for every row, 复制表格 copies the table as TSV for a spreadsheet, and 下载 Excel
+downloads this document's workbook.
+
+### 事实对照 and the page viewer
+
+The comparison table is one row per compared fact: 状态, 样品, 字段, 条件, the MinerU reading, the
+PaddleOCR-VL reading, and 说明. Click any row and both lanes' source blocks light up on the rendered page
+in the viewer beside it — blue for MinerU, orange for PaddleOCR-VL, always with text as well as colour.
+The selected fact is part of the URL (`#/doc/<id>/fact/<n>`), so a link to one disputed number survives a
+reload and can be sent to someone else.
+
+### 样品记录
+
+Collapsed by default: each lane's raw sample records, from the paper's own wording through to the
+normalised value and back to the block it came from. A value tagged 全系列 was stated once for the whole
+sample series and written onto each sample by the code, not read separately for this one.
+
+Papers processed from the command line appear in the library too, though only uploaded ones carry their
+PDF and can be re-rendered on another machine. The HTTP API is documented at `/api/docs`.
+
+## Command line
+
+```bash
+uv run paperfacts run paper.pdf            # parse both lanes, extract both, compare, write the workbook
+uv run paperfacts batch template_files --output data/exports/template_files.xlsx
+uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
+uv run paperfacts fields                   # list the field table the package actually loaded
+```
+
+| Command | Purpose |
+|---|---|
+| `run <pdf>` | Parse, extract, compare and save `dataset.xlsx` for one paper |
+| `batch <pdf or dir>` | Recursively process every PDF and write one workbook for all of them |
+| `export <pdf or dir>` | Rebuild that workbook from cached results, with no parser and no LLM calls |
+| `parse <pdf>` | Parse into Markdown with provenance markers, a block list and the full artifact |
+| `extract <pdf>` | Extract sample-level records from parsed Markdown. Needs `parse` |
+| `compare <pdf>` | Match samples across lanes and compare their fields. Needs `parse` |
+| `overlay <pdf>` | Draw block boxes onto page images, to check provenance by eye. Needs `parse` |
+| `serve` | Serve the web interface |
+| `fields` | Print the loaded field table, so an edit to `config.json` can be checked at a glance |
+
+The flags worth knowing:
+
+- `--force` ignores caches and redoes that step. On `extract` it re-calls the LLM, which costs money; on
+  `parse` it re-runs the parser, which costs minutes of GPU time.
+- `--passes N` extracts each lane N times and keeps only what a majority of passes produced. N times the
+  calls, N times the cost.
+- `--mode document|passage` picks how the model is asked; see below.
+- `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
+- `--output` / `-o` names the Excel workbook for `batch` and `export`.
+- `--data-root` overrides the data directory; `--verbose` / `-v` prints INFO logs.
+- `overlay` also takes `--dpi` and `--pages 0,3,4` (0-based).
+
+`batch` walks subdirectories and accepts `.PDF` as well as `.pdf`. Identical PDF content is processed
+once. Every completed or failed paper checkpoints the workbook atomically, so re-running the same command
+reuses the caches and rebuilds the table without appending duplicate rows. Failed papers are listed in the
+运行记录 sheet, processing continues past them, and **the command exits with status 1 if any paper
+failed.**
+
+`export` is offline. It requires cached extractions and comparisons matching the current model, field
+schema and comparison rules, and reports outdated or absent results as failures rather than silently
+producing an old table. On a Mac, bring the MLX service up before `batch` touches an uncached PDF.
+
+## Configuration
+
+Two files at the repository root. **`config.json` holds everything that is not a secret** and is meant to
+be edited; **`.env` holds the API key and the web password** and is gitignored. Three layers decide a
+value: the built-in constants in `config.py`, then `config.json`, then the environment (including what
+`.env` puts there). Never edit a built-in constant to change a default — they are the baseline the cache
+keys treat as "unedited", so editing one renames every cached file. Change `config.json`.
+
+### `llm`
+
+| Key | Meaning |
+|---|---|
+| `base_url` | Any OpenAI-compatible endpoint; a trailing slash is stripped |
+| `model` | Model name sent with every request. Default `deepseek-v4.1-flash` |
+| `timeout_s` | Per-request timeout. Default 600, because this model reasons before it answers |
+| `context_tokens` | The window the prompt is planned against. Default 200000 |
+| `temperature` | Default 0.0 |
+| `max_tokens` | Completion budget, hidden reasoning included. Default 65536 |
+| `concurrency` | How many of one lane's field questions are in flight at once. Default 4 |
+| `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
+| `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
+| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured |
+| `retry_backoff_s` | Default 2.0 |
+
+`reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
+OpenAI-shaped `reasoning_effort` parameter. `null` omits the parameter entirely, which is the shipped
+default and the measured best answer. It changes what the model is asked, so changing it writes a new
+`extractor_key` and re-extracts.
+
+`inventory_reasoning_effort` gives passage mode's one inventory question its own effort. That question
+alone spends 11k–17k hidden reasoning tokens per lane, about 70 % of a run's completion tokens, while the
+field questions after it usually reason in the low hundreds. It has three answers, and they are three
+different requests:
+
+- `null` or `"inherit"` — send the inventory question exactly as the client builds it, carrying whatever
+  `reasoning_effort` says. This is the shipped value.
+- `"omit"` — send that one question with no `reasoning_effort` parameter at all, while every field
+  question still carries the client's. This is the only way to say that.
+- `"none"`, `"low"`, `"medium"`, `"high"` — the effort to send for that question.
+
+Both lanes always get the same value, and anything but the baseline writes a new `extractor_key`, in
+passage mode only, since document mode never asks the question.
+
+`concurrency` is the one knob here that changes only *when* requests are sent, never what they contain, so
+it stays out of both cache keys: raising or lowering it never re-extracts and never re-compares. The two
+lanes always run as a pair, so at most twice this many requests are open. Set it to 1 to send every
+question strictly one after another.
+
+### `extraction`
+
+| Key | Meaning |
+|---|---|
+| `mode` | `"passage"` (default) or `"document"` |
+| `passes` | Extract each lane this many times and keep the majority. Default 1 |
+| `candidate_limit` | How many retrieved blocks a field question may show. Default 8 |
+
+**Passage mode** asks which samples the paper reports, then asks about one field at a time, showing only
+the blocks retrieved for that field. Retrieval is ordinary code, not a model call: keyword and unit
+matching, ranked, capped at `candidate_limit`. Both lanes get identical retrieval rules, so the comparison
+still measures the parsers and not the retrieval. **Document mode** hands the whole paper over and asks
+for everything at once; on a fifteen-thousand-token paper the model loses its place, cites blocks that
+merely discuss a number, and never mentions fields the paper states in passing.
+
+`passes` votes on `(field, number, unit)` per rank — never on the wording of the measurement condition, so
+a paraphrase between passes is not counted as disagreement — and the sample inventory is asked once per
+lane, so every pass sees the same sample ids. A paper that reports the same number under two conditions
+keeps both. Each surviving value records the fraction of passes that produced it, so a 2/3 value stays
+visibly weaker than a 3/3 one. Measured on three papers, a second pass reproduces **75–90 %** of a first
+pass's values at temperature 0. Two passes are therefore a reproducibility filter at twice the model cost,
+not a way to find more.
+
+### `parsers`, `server`, `web`, `overlay`, `comparison`
+
+| Key | Meaning |
+|---|---|
+| `parsers.mineru_url` / `parsers.paddle_url` | Empty means run the `runners/` script as a subprocess; set means call that service over HTTP |
+| `parsers.paddle_render_dpi` | DPI pages are rasterised at for PaddleOCR-VL. Default 200. The subprocess and HTTP paths must agree or their pixel coordinates are not comparable |
+| `parsers.paddle_vl_backend` / `paddle_vl_server_url` / `paddle_vl_model_name` | Hand PaddleOCR-VL's vision stage to an external server, as `dev_up.sh` does with MLX |
+| `parsers.subprocess_timeout_s` | Default 3600: a first subprocess run downloads weights |
+| `parsers.http_timeout_s` | Default 900 |
+| `parsers.uv_bin` | The `uv` executable used to launch the runner scripts |
+| `server.host` / `server.port` | Defaults `127.0.0.1` and 8000 |
+| `server.max_upload_mb` | Default 200 |
+| `server.page_dpi.default` / `.min` / `.max` | Page renders for the viewer. Defaults 110, 50, 220 |
+| `web.username` | HTTP Basic username. Default `paperfacts`. The password is never here |
+| `overlay.dpi` | Default 150 |
+| `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
+| `condition_keywords` | The words that mark a measurement condition worth recording |
+| `data_root` | Where everything is written. Default `data` |
+
+### Environment overrides
+
+Every scalar setting also has a `PAPERFACTS_*` variable that wins over the file, which is how one machine
+points at its own services without editing the shared file:
+
+`PAPERFACTS_DATA_ROOT`, `PAPERFACTS_REPO_ROOT`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_MINERU_URL`,
+`PAPERFACTS_PADDLE_URL`, `PAPERFACTS_PADDLE_RENDER_DPI`, `PAPERFACTS_PADDLE_VL_BACKEND`,
+`PAPERFACTS_PADDLE_VL_SERVER_URL`, `PAPERFACTS_PADDLE_VL_MODEL_NAME`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
+`PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`,
+`PAPERFACTS_LLM_TIMEOUT_S`, `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`,
+`PAPERFACTS_LLM_MAX_TOKENS`, `PAPERFACTS_LLM_REASONING_EFFORT`,
+`PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`,
+`PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
-`PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
-`PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_WEB_PASSWORD`.
-`PAPERFACTS_CONFIG` points at a different configuration file altogether.
+`PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`,
+`PAPERFACTS_WEB_PASSWORD`.
 
-`llm.reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
-OpenAI-shaped `reasoning_effort` parameter; `null` omits the parameter entirely, which is the shipped
-default. On this endpoint's `deepseek-v4.1-flash`, `"none"` makes a paper about six times faster but loses
-recall: on the same twelve-page paper it found 77 values and 7 samples where the default found 112 values and
-8 samples (`.omc/research/reasoning-effort.md`). Set it to `"none"` for a quick first pass over a large
-batch, and leave it unset for the numbers you keep. It changes what the model is asked, so changing it
-writes a new `extractor_key` and re-extracts. `llm.inventory_reasoning_effort` gives passage mode's one
-inventory question its own effort: that question alone spends 11k-17k hidden reasoning tokens per lane,
-about 70% of a run's completion tokens, while the field questions after it reason in tens to hundreds, so
-turning it down is most of the wall-clock for one question's worth of recall risk. It has three answers,
-and they are three different requests. `null` — the shipped value — and the word `"inherit"` both mean
-"send the inventory question exactly as the client builds it", so it carries whatever
-`llm.reasoning_effort` says. `"omit"` sends that one question with no `reasoning_effort` parameter at all
-while every field question still carries the client's; this is the only way to say that, and it is why
-`null` no longer has to mean two things. Anything else (`"none"`, `"low"`, `"medium"`, `"high"`) is the
-effort to send. Both lanes always get the same value, and anything but the baseline writes a new
-`extractor_key` (in passage mode only, since document mode never asks the question).
+`PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
+and a value that will not parse as a number names the variable in the error.
 
-`llm.concurrency` is how many of one lane's per-field questions wait on the endpoint at once (default 4);
-the two lanes themselves always run as a pair, so at most twice that many requests are open. It is the one
-knob here that changes only *when* requests are sent, never what they contain, so it stays out of both
-`extractor_key` and `comparison_key`: raising or lowering it never re-extracts and never re-compares. Set it
-to 1 to send every question strictly one after another, which is what the pipeline did before it existed.
-
-Three settings are file-only, because a single environment variable is the wrong shape for them:
+Three settings are **file-only**, because a single environment variable is the wrong shape for them:
 `fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.
 
-### The fields to extract
+Secrets live only in `.env`: `PAPERFACTS_LLM_API_KEY` and `PAPERFACTS_WEB_PASSWORD`. `.env` is loaded
+without overriding what the environment already holds.
+
+### The field table
 
 `config.json`'s `fields` list **is** the schema. Each entry drives the description the model is given, the
 keywords retrieval searches for, the unit everything is converted to, and how close two numbers have to be
-to count as the same fact:
+to count as the same fact.
 
 ```jsonc
 {
   "name": "sheet_resistance",
-  "group": "film",                          // target = paper-level, process / film = per sample
+  "group": "film",                          // target = paper-level; process / film = per sample
   "kind": "numeric",                        // numeric | composition | text
   "description": "Sheet resistance of the film (Ω/sq).",
-  "label": "方阻",                            // optional Chinese column header; display only
-  "description_zh": "所选样品的薄膜方块电阻。",   // optional Chinese explanation; display only
+  "label": "方阻",                            // Chinese column header; display only
+  "description_zh": "所选样品的薄膜方块电阻。",   // Chinese explanation; display only
   "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
   "canonical_unit": "Ω/sq",
   "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
@@ -365,131 +421,247 @@ to count as the same fact:
 }
 ```
 
-`label` and `description_zh` are display-only: the web table prints the label above the column and shows
-the description as its tooltip, the Excel 字段说明 sheet prints both, and neither reaches a prompt or a
-verdict, so editing one changes neither `extractor_key` nor `comparison_key`. `description` is the English
-sentence the model is told to look for and is not interchangeable with them.
+`description` is the English sentence the model is told to look for. `label` and `description_zh` are
+display only — the web table prints the label above the column and the description in its tooltip, and the
+Excel 字段说明 sheet prints both — so editing either changes neither cache key. `keywords` steers
+passage-mode retrieval and nothing else. A `text` field may add `categories`, the closed set of answers it
+accepts, spelled the way the output should spell them: with `"categories": ["DC", "RF", "pulsed DC",
+"DC+RF", "HiPIMS"]` on `mode`, both "DC and RF magnetron co-sputtering" and "DC and RF" resolve to `DC+RF`
+and stop being judged two different modes, while "DC" and "RF" stay apart. A value naming no category is
+compared as ordinary text, never rounded to the nearest one. `categories` changes only verdicts, so adding
+one re-compares the stored facts instead of re-extracting them.
 
-A `text` field may add `"categories"`, the closed set of answers it accepts, written the way the output
-should spell them: `"categories": ["DC", "RF", "pulsed DC", "DC+RF", "HiPIMS"]` on `mode`. A quoted value is
-reduced to the tokens those names contain, so "DC and RF magnetron co-sputtering" and "DC and RF" both
-resolve to `DC+RF` and stop being judged two different modes, while "DC" and "RF" stay apart. A value naming
-no category is compared as ordinary text, never rounded to the nearest one. `categories` changes only
-verdicts, so it is folded into `comparison_key` and leaves `extractor_key` alone: adding one re-compares the
-stored facts instead of re-extracting them.
+A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
+`W`, `sccm`, `rpm`) or startup fails rather than guessing. Adding a field is one table entry; the prompt,
+normalisation and tolerances follow from it. `uv run paperfacts fields` prints what was actually loaded.
 
-Adding a field is one entry. A `canonical_unit` must be one the converters know
-(`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`, `W`, `sccm`, `rpm`) or startup fails rather than guessing.
-`paperfacts fields` lists the table the package actually loaded. Editing the table changes `extractor_key`, so
-affected papers are re-extracted and nothing stale is served.
+The twenty shipped fields are aimed at sputtered transparent-conductive-oxide films:
 
-## Data layout
+| Field | 中文名 | Group | Kind | Unit |
+|---|---|---|---|---|
+| `component` | 靶材成分 | target | composition | — |
+| `resistance` | 靶材电阻率 | target | numeric | Ω·cm |
+| `density` | 靶材密度 | target | numeric | % |
+| `inch` | 靶材尺寸 | target | numeric | inch |
+| `sputtering_time` | 溅射时间 | process | numeric | min |
+| `sputtering_power` | 溅射功率 | process | numeric | W |
+| `mode` | 溅射模式 | process | text (categories) | — |
+| `ar_flow_rate` | Ar 流量 | process | numeric | sccm |
+| `o2_flow_rate` | O2 流量 | process | numeric | sccm |
+| `h2_flow_rate` | H2 流量 | process | numeric | sccm |
+| `target_substrate_distance` | 靶基距 | process | numeric | cm |
+| `substrate_axis_distance` | 基片偏轴距 | process | numeric | cm |
+| `substrate_temperature` | 基片温度 | process | numeric | ℃ |
+| `annealing_temperature` | 退火温度 | process | numeric | ℃ |
+| `annealing_time` | 退火时间 | process | numeric | min |
+| `rotation_speed` | 转速 | process | numeric | rpm |
+| `sheet_resistance` | 方阻 | film | numeric | Ω/sq |
+| `resistivity` | 电阻率 | film | numeric | Ω·cm |
+| `transmittance` | 透光率 | film | numeric | % |
+| `thickness` | 厚度 | film | numeric | nm |
 
-One directory per document, holding every intermediate state:
+`transmittance` carries a `condition_hint` asking for the wavelength or spectral range; `density` and
+`transmittance` read a bare number as a percent or a fraction, and every other numeric field rejects a
+number with no unit rather than assuming one.
+
+## Caching, and why filenames carry keys
+
+Nothing is recomputed unless something it depends on changed, and each cache is keyed by a content hash of
+exactly its own inputs. The hashes are the `<key>` in the filenames under a document directory.
+
+| Cache | Keyed on | Invalidated by |
+|---|---|---|
+| Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
+| Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords and `passages.py` | changing any of them |
+| Comparison (`comparison_key`) | the field tolerances, the categories, and the source of `normalize.py`, `compare.py`, `matching.py` and the matching prompt | changing a tolerance or a rule |
+| LLM requests | the entire request payload | nothing — an identical request is free |
+
+So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
+serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own
+answers are cached by request payload, **a code-only change re-derives records for free** as long as the
+rendered document and the prompts stay byte-identical: rebuilding comparisons and tables for the whole
+14-paper corpus after a key change took 8 seconds (every model answer is a cache hit).
+
+Anything sitting at its built-in baseline is left out of the key material, so an unedited checkout keeps
+the filenames it has. There is no hand-maintained version number anywhere, and there should not be one.
+
+### The data directory
 
 ```text
-data/docs/<first 16 hex of sha256>/
-├── identity.json                   full sha256, display name, origin
-├── source.pdf                      the uploaded PDF (web uploads only)
-├── raw/<backend>/                  parser's native output + meta.json
-├── parsed/<backend>.md             every block's text behind its <!-- source: id --> marker, the same
-│                                   rendering the extraction model reads
-├── parsed/<backend>.artifact.json  the complete artifact: blocks with page + bbox, page geometry
-├── facts/<backend>.<key>.json      one lane's sample-level extraction
-├── comparisons/<key>.<key>.json    the two-lane comparison report
-├── datasets/<key>.<key>.json       the consolidated per-sample table the web UI reads
-├── dataset.xlsx                   consolidated paper/sample tables, written automatically by run
-├── overlays/<backend>/page_*.png   bbox overlays
-└── pages/<dpi>dpi/                 page renders for the web viewer
+data/
+├── llm_cache/                          model answers, keyed by request payload
+├── exports/paperfacts.xlsx             the default batch workbook
+└── docs/<first 16 hex of sha256>/
+    ├── identity.json                   full sha256, display name, origin
+    ├── source.pdf                      the uploaded PDF (web uploads only)
+    ├── raw/<backend>/                  the parser's native output plus meta.json
+    ├── parsed/<backend>.md             every block behind its <!-- source: id --> marker: exactly
+    │                                   what the extraction model reads
+    ├── parsed/<backend>.artifact.json  blocks with page and bbox, plus page geometry
+    ├── facts/<backend>.<extractor_key>.json          one lane's sample-level extraction
+    ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
+    ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated table the web UI reads
+    ├── dataset.xlsx                    this paper's workbook, written automatically by `run`
+    ├── overlays/<backend>/page_*.png   bbox overlays from `overlay`
+    └── pages/<dpi>dpi/                 page renders for the web viewer
 ```
 
 Every block carries `page` plus a bounding box normalised to `[0, 1]`, and every extracted value cites the
-block ids it was read from, so any value can be mapped back to a rectangle on a page.
+block ids it was read from, so any value maps back to a rectangle on a page. An export made under
+different settings lands beside the old one instead of overwriting it.
 
-## Server deployment
+## The Excel workbook
 
-On a GPU server the parsers run as long-running services and the main package talks to them over HTTP,
-producing byte-identical output to the subprocess path. Compose files, Dockerfile, host scripts and GPU
-assignments are in **[`deploy/`](deploy/README.md)**. The client side is two variables:
+`run` writes `data/docs/<sha>/dataset.xlsx` for one paper; `batch` and `export` write one workbook for a
+whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」. Five
+sheets:
 
-```bash
-export PAPERFACTS_MINERU_URL=http://localhost:8002
-export PAPERFACTS_PADDLE_URL=http://localhost:8080
-uv run paperfacts run paper.pdf
-```
+| Sheet | Contents |
+|---|---|
+| 论文数据 | One row per unique PDF: the selected sample's values, one column per field |
+| 样品数据 | Every sample after merging the two lanes, one row each, same columns |
+| 字段说明 | 字段, 中文名, 层级, 标准单位, 中文说明, 单值与缺失规则 |
+| 数据质量 | 文档ID, 文件名, 样品ID, 字段, 最终决策, 输出值, 标准单位, 条件, 合并证据来源, 证据来源通道, 系列级, 说明 |
+| 运行记录 | 文档ID, 文件名, 状态, 合并后样品数, 抽取版本, 比较版本, 说明 |
 
-Running the subprocess path directly on Linux also works and picks up CUDA automatically; restrict it
-with `CUDA_VISIBLE_DEVICES` as usual.
+论文数据 and 样品数据 both begin with 文档ID, 文件名, 样品ID, 样品标签, 样品及测量条件, 可用字段数 and
+双路一致字段数 before the twenty field columns.
 
-## Results on real papers
+数据质量 is where the provenance is: 最终决策 is `agree` or `single_source` for a committed value and the
+refusal name otherwise, 合并证据来源 lists the block ids behind it, **证据来源通道** says which lanes
+supplied it, and **系列级** marks a value the paper stated once for the whole sample series.
 
-Three transparent-conductive-oxide papers, DeepSeek `deepseek-chat` at temperature 0, parsers on an
-Apple M5:
+The paper row selects the sample with the most usable fields, then the most two-lane agreements, then a
+stable sample-id tie break. **It never combines different samples' measurements into one row.** That
+chooses the most complete sample, not the best-performing one; the others stay in 样品数据. Target
+properties are paper-level and shared across samples only when their extracted value is unique. Use 数据质量
+to restrict a training set to two-lane agreements if you need to — completeness alone is not a quality
+score.
 
-| | SnO₂:Ta, 10 pp. | GZO/ITO, 12 pp. | ATO, 6 pp. |
-|---|---|---|---|
-| MinerU blocks, kept for the prompt | 70 of 123 | 64 of 128 | 39 of 71 |
-| PaddleOCR-VL blocks, kept | 82 of 176 | 78 of 191 | 43 of 91 |
-| Prompt tokens per lane | 17.9K / 16.6K | 12.3K / 12.7K | 4.9K / 4.7K |
-| Samples found, both lanes | 6 | 7 | 4 |
-| Sample matching | exact, no model call | exact, no model call | exact, no model call |
-| Facts compared | 2 agree, 2 conflict, 2 missing | 5 agree, 3 missing | 10 agree, 2 conflict |
-| Values failing grounding | 1 | 0 | 1 |
+Numeric cells use the canonical units named in 字段说明. Missing values are empty, never zero.
 
-Filtering page furniture and the bibliography removes 40–55% of blocks and about a fifth of the prompt
-tokens before the model sees anything.
+## What a blank cell means
 
-On a two-page comparison both parsers produced **identical block counts and type distributions**,
-differing only in how they labelled running heads. Paragraph-level layout analysis is not where these two
-disagree; text recognition, table structure, and how far the model is willing to read are.
+Four guardrails stand between the model's answer and a committed number, and each exists because the
+failure it catches was observed on real input:
 
-The disagreements were informative rather than noisy, and every guardrail earned its place on real input:
+| Guardrail | What it catches |
+|---|---|
+| Schema and type cleaning | Fields outside the target schema; numeric fields holding words like `"minimum"` or `"n.a."` |
+| Scope enforcement | A paper-level field attached to one sample, or the reverse — a film's dopant concentration reported as the sputtering target's composition |
+| Citation validation | Block ids the model invented, or ids from parts of the document it was never shown |
+| Grounding | The quoted text cannot be found in the block it cites — a real id attached to a value that did not come from it |
 
-- **Grounding caught a cross-block quote.** The model reported a target composition of
-  `95% SnO2 and 5% Sb2O3` citing one block — but the sentence straddles two adjacent blocks, and only the
-  second was cited. The value is real, so a quote crossing the junction between the cited block and its
-  same-page neighbour counts as grounded; a quote lying entirely inside the neighbour still does not.
-- **Scope enforcement caught a mislabelled measurement.** One lane reported a film's Ta dopant
-  concentration (`0.74 at.%`) as the sputtering target's `component`. Four such values were dropped with
-  an audited reason.
-- **Repeated extraction quantified the noise.** Run three times, the `40 × 10 cm` target size and a
-  `>80%` transmittance each appeared in only **one pass out of three**. Single-pass runs had been
-  including or excluding them arbitrarily, and that flicker was being counted as parser disagreement.
-- **The rules refused to guess.** One lane read a Scherrer crystallite size of `15.6 to 16.3 nm` as a film
-  thickness where the other read `2 μm`; they were paired by numeric proximity, found incompatible in both
-  value and condition, and returned AMBIGUOUS rather than letting either through.
+The first three drop the value with an audited reason. Grounding only flags; it never drops. Grounding is
+the one that matters most and the one usually missing: without it, "traceable to a page and a bounding
+box" only means the model named a real block. It tolerates formatting differences — the same number
+reaches the model as `$( 4 0 \times 1 0 \mathrm { c m }$` from one parser and `(40 × 10 cm` from the other
+— while staying strict about digits, and a quote that straddles the junction between the cited block and
+its same-page neighbour counts as grounded. A quote lying entirely inside the neighbour still does not.
 
-## Limitations
+Two more rules shape the table. **Series fan-out**: when the model states that a value holds for every
+listed sample, the code writes it onto each of them and marks it 系列级, rather than leaving it
+unattributed. **The single-sample rule**: a cell is committed only when exactly one value survives for
+that sample and field. Everything else is a refusal, and the refusal has a name:
 
-- **Values that exist only in figures cannot be extracted.** A sheet-resistance curve that appears only in
-  a plot is correctly reported as MISSING, not invented.
-- **Rectangular target dimensions** such as `40 × 10 cm` are converted using the first number; a size-typed
-  field would be needed to represent both.
-- **The two lanes share one extractor**, so a mistake made by the language model itself — attributing a
-  value to the wrong sample — correlates across lanes and AGREE will not catch it. Parser error and
-  extractor error have to be counted separately when evaluating.
-- **Attribution disagreements** where both lanes extracted the value but neither could place it on a
-  sample are compared under the `unattributed` scope; the remaining case — placed in one lane,
-  unattributed in the other — is still reported as a MISSING on the placed side.
-- The field schema is currently twenty fields aimed at sputtered TCO films (`src/paperfacts/fields.py`).
-  Adding a field is one table entry; the prompt, normalisation and tolerances follow from it.
+| Decision | What happened |
+|---|---|
+| `agree` | Both lanes produced the same value. Committed |
+| `single_source` | One lane produced it, grounded and cited. Committed |
+| `conflict` | The lanes produced different values |
+| `ambiguous` | The lanes could not be decided between, or the sample match fell below `ambiguous_match_confidence` |
+| `ungrounded` | No evidence both located in the text and carrying a valid citation |
+| `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
+| `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
+| `non_scalar` | A range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
+
+Approximate values and measurements with ± uncertainty keep their centre value and carry a note. A value
+the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to
+2500 nm" — is kept and shown as **unattributed** rather than attached to a plausible neighbour. When both
+lanes hold the same unplaced value it is paired and compared like any other; a value only one lane could
+not place stays out of the comparison, because the other lane may hold it on a sample where it is already
+reported. An unplaced value is visible; a misplaced one is not.
+
+Values that exist only in a figure cannot be extracted, and a sheet-resistance curve that appears only in
+a plot is correctly reported as MISSING, not invented. The 48 `multiple_conditions` refusals in the
+current corpus were read one by one and are all correct: per-layer versus total thickness in bilayer and
+graded films, two targets with their two modes and diameters, transmittance quoted for two wavelength
+bands. No word-level rule separates those from a paraphrase, so the blank cell with its reason on hover is
+the right output for them.
+
+The two lanes share one extractor, so a mistake made by the language model itself — attributing a value to
+the wrong sample — correlates across lanes and AGREE will not catch it. Parser error and extractor error
+have to be counted separately when evaluating.
+
+## Measurements that decided the defaults
+
+All from `.omc/research/reasoning-effort.md`, run against `deepseek-v4.1-flash` on the Alibaba Cloud
+endpoint, passage mode, parsers cached.
+
+| Question | Answer | Evidence |
+|---|---|---|
+| `llm.reasoning_effort` | Leave unset | One 12-page paper: unset 10 min 30 s, 112 values, 8 samples; `"none"` 1 min 39 s but only 77 values and 7 samples; `"low"` 18 min 50 s and no better than unset |
+| `llm.inventory_reasoning_effort` | Leave unset | Same paper family: unset found 10 samples in each lane and matched all 10; `"low"` found 6 and 8 and matched 4; `"none"` found 6 and 6. Less reasoning merges the as-deposited and annealed films into one sample |
+| `llm.concurrency` | 4 | 42 live model calls finished in 3 min 42 s against roughly three times that serially. It changes only when requests are sent, so it costs no re-extraction |
+| `extraction.passes` | 1, opt in to more | A second pass reproduces 75–90 % of a first pass's values at temperature 0. That is the noise floor for any prompt experiment, not a recall gain |
+| Corpus verdict mix | — | 14 papers, 169 samples, 2760 sample×field cells. After the latest pairing change: 603 agree, 268 single-source, 0 conflicts; the comparison itself holds 765 agree, 400 missing, 9 ambiguous rows. Most cells are missing, and that is the honest answer |
+
+The research note also records what did **not** work and was reverted: a numeric-signature condition key
+(it cannot tell "550 nm" from "550 nm, annealed"), and a descriptive-reference prompt rule (no measurable
+gain, and the run-to-run noise floor above swallowed the difference). Read it before proposing a prompt
+change, and run the baseline twice before crediting or blaming a wording.
+
+## Troubleshooting
+
+**`import paperfacts` raises `ModuleNotFoundError` on the Mac.** An external tool has marked `.venv`
+hidden, and Python 3.13 then skips its `.pth` files. Run `scripts/dev_fix_venv.sh`. No reinstall is
+needed, and Linux does not have this problem.
+
+**Every request answers HTTP 500 `BalanceError: There are no suitable services`.** The account is out of
+balance, or the endpoint is having a transient outage. It is not the paper, the payload or the
+concurrency — all three have been bisected. Nothing runs until balance returns, and the resume is free
+because the answers already bought are cached. One observed outage lasted five minutes.
+
+**PaddleOCR-VL fails with a 401 and "Repository Not Found" against the MLX server.** The pipeline asked
+the server for `PaddleOCR-VL-1.6-0.9B`, which is not a Hugging Face repository. Set
+`PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6`. The name must be set wherever the MLX
+backend is used; `dev_up.sh` sets it for you.
+
+**A document has no PDF.** A paper processed on another machine still has its stored parse for both
+lanes, and extraction, comparison and export never open the PDF, so it can be re-run. The web app says
+so: 「处理全部未完成」 skips only documents with neither a PDF nor a cached parse, and asking to re-run
+one of those answers 409 with "re-upload it to process it". Only uploaded documents can have their pages
+re-rendered for the viewer.
+
+**A forced re-parse is expensive.** `--force` on `parse` re-runs both parsers: on this Mac, MinerU took
+24.5 s and PaddleOCR-VL 153.6 s for a 12-page paper with the MLX server up, and hours without it.
+`--force` on `extract` re-buys every model answer. Prefer letting the cache keys invalidate what actually
+changed.
+
+**A service will not come up on the server.** Cold starts are minutes, not seconds. Read
+`docker compose logs -f` before restarting anything, and check that only GPUs 4, 5 and 6 show usage.
 
 ## Development
 
 ```bash
-uv run pytest                                              # unit tests; no models, no network
-uv run pytest --run-parser                                 # integration; needs both parser environments
+uv run pytest                                              # unit tests; no models, no network, no real papers
+uv run pytest --cov=paperfacts                             # coverage target is 80%
+uv run pytest --run-parser                                 # integration; needs both parser environments and their weights
 uv run ruff check src tests runners && uv run ruff format --check src tests runners
 ```
 
-Tests never touch a real model or a real LLM: parser output comes from recorded fixtures of genuine runs,
-and the LLM is a fake that also serves as an assertion surface for prompt content.
+Line length is 120. Tests never touch a real model or a real LLM: parser output comes from recorded
+fixtures of genuine runs, temporary PDFs are generated with pypdfium2, and the LLM is a fake that doubles
+as an assertion surface for prompt content.
 
 | Path | Contents |
 |---|---|
-| `src/paperfacts/` | One flat module per pipeline stage (see the package docstring), plus `web/` |
-| `runners/` | The two PEP 723 parser scripts and their lockfiles |
+| `src/paperfacts/` | One flat module per pipeline stage, listed in order in `__init__.py`, plus `web/` |
+| `runners/` | The two PEP 723 parser scripts and their committed lockfiles |
 | `deploy/` | Linux GPU server deployment |
-| `tests/` | pytest suite and recorded parser fixtures |
+| `tests/` | The pytest suite and the recorded parser fixtures |
+| `.omc/research/` | The measurements behind the defaults |
 
-Conventions are in [CLAUDE.md](CLAUDE.md).
+Use `uv sync --group dev`; never `pip install` into the venv. After editing a runner's dependency header,
+run `uv lock --script runners/<name>.py`. `CLAUDE.md` holds the internal conventions for contributors —
+nothing a user or an operator needs.
