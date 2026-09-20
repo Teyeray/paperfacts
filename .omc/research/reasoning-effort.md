@@ -117,3 +117,22 @@ materials-13), two targets and their two modes and diameters (ae1c02771, crystal
 transmittance quoted for two wavelength bands. No lexical rule separates these from a paraphrase, and each
 would be a manufactured value if merged. Leave the rule as it is; the table's blank cell with its reason on
 hover is the right output for them.
+
+## Series fan-out measured on the corpus (2026-09-20)
+
+`applies_to_all_samples`: the model may state that a value holds for every listed sample; the code writes
+it onto each with `series=True`. Full re-extraction of 14 papers (every field question re-asked) took
+34 min.
+
+| | before | after |
+|---|---|---|
+| unattributed values | 120 | 71 |
+| values placed by series fan-out | — | 907 |
+| agree cells | 369 | 525 |
+| single_source cells | 168 | 345 |
+| conflict | 2 | 0 |
+| multiple_conditions | 48 | 88 |
+
+The extra multiple_conditions refusals were read: co-sputtered films with DC on one target and RF on the
+other, and lanes holding two Ar flows under two conditions — genuine two-value cases the fan-out made
+visible, not mis-placed values. No conflicts appeared, which is the test a wrong fan-out would fail.
