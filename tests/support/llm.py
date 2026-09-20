@@ -1,4 +1,5 @@
-"""A fake LLM client. Every extraction and matching unit test runs on it; no real call is ever made.
+"""A fake LLM client and a fake vision client. Every extraction, matching and validation unit test runs on
+them; no real call is ever made.
 
 The extraction layer depends on exactly one method of the
 :class:`paperfacts.llm.LlmClient` protocol, so "never call the real model" reduces to passing
@@ -136,6 +137,77 @@ class FakeLlmClient:
     @property
     def users(self) -> list[str]:
         return [call.user for call in self.calls]
+
+    def _as_result(self, response: Response) -> LlmResult:
+        if isinstance(response, LlmResult):
+            return response
+        return LlmResult(text=response, usage=dict(self._usage), cached=False)
+
+
+@dataclass(frozen=True)
+class VisionCall:
+    """The arguments of one ``complete_vision`` call. The image travels as bytes, so a test can assert on the
+    PNG that was actually sent (its size, its digest) rather than on how it was produced."""
+
+    system: str
+    user: str
+    image_png: bytes
+    refresh: bool = False
+
+
+# A canned reading: plain text is returned as the reply, or pass a function of the call to depend on it.
+VisionResponder = Callable[[VisionCall], Response]
+
+
+class FakeVisionClient:
+    """A :class:`paperfacts.llm.VisionClient` that answers with canned text.
+
+    ``responses`` is a sequence consumed in call order, or a ``(VisionCall) -> text`` function. Calls are
+    recorded under a lock because the validation stage checks several values at once.
+    """
+
+    def __init__(
+        self,
+        responses: Sequence[Response] | VisionResponder,
+        *,
+        model: str = "fake-vlm",
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        usage: dict[str, int] | None = None,
+    ) -> None:
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.calls: list[VisionCall] = []
+        self.closed = False
+        self._lock = threading.Lock()
+        self._usage = dict(DEFAULT_USAGE if usage is None else usage)
+        self._responder: VisionResponder | None = responses if callable(responses) else None
+        self._queue: list[Response] = [] if callable(responses) else list(responses)
+
+    def complete_vision(self, *, system: str, user: str, image_png: bytes, refresh: bool = False) -> LlmResult:
+        call = VisionCall(system=system, user=user, image_png=image_png, refresh=refresh)
+        with self._lock:
+            self.calls.append(call)
+            index = len(self.calls) - 1
+        if self._responder is not None:
+            return self._as_result(self._responder(call))
+        if index >= len(self._queue):
+            raise AssertionError(f"FakeVisionClient got call {index + 1} but only {len(self._queue)} responses queued")
+        return self._as_result(self._queue[index])
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __enter__(self) -> FakeVisionClient:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
 
     def _as_result(self, response: Response) -> LlmResult:
         if isinstance(response, LlmResult):

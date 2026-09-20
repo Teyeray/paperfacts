@@ -14,7 +14,9 @@ one shows every intermediate state of one paper:
     ├── parsed/<backend>.artifact.json   the complete ParsedArtifact
     ├── facts/<backend>.<extractor_key>.json           one lane's extraction, the model's own wording
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
-    ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated per-sample table, for the web UI
+    ├── validations/<extractor_key>.<comparison_key>.<validation_key>.json   the VLM's readings and verdicts
+    ├── crops/<page>_<bbox>_<dpi>dpi.png                    the page regions the VLM was shown
+    ├── datasets/<extractor_key>.<comparison_key>[.<validation_key>].json   the consolidated table, for the web UI
     ├── overlays/<backend>/page_000.png                bbox overlays
     └── pages/<dpi>dpi/page_000.png                    page renders for the web viewer
 
@@ -100,10 +102,28 @@ class DataLayout:
     def dataset_path(self, document_id: str) -> Path:
         return self.doc_dir(document_id) / "dataset.xlsx"
 
-    def dataset_json_path(self, document_id: str, extractor_key: str, comparison_key: str) -> Path:
+    def validation_path(self, document_id: str, extractor_key: str, comparison_key: str, validation_key: str) -> Path:
+        # All three keys: which values were checked follows from the extraction and the comparison, and
+        # how they were checked from the validation settings. Change any of them and this is another file.
+        return self.doc_dir(document_id) / "validations" / f"{extractor_key}.{comparison_key}.{validation_key}.json"
+
+    def crops_dir(self, document_id: str) -> Path:
+        return self.doc_dir(document_id) / "crops"
+
+    def crop_path(self, document_id: str, page: int, bbox_key: str, dpi: int) -> Path:
+        """One rendered region. Named by what it shows, not by which value asked for it, so two values cited
+        from the same table share one file and one render."""
+        return self.crops_dir(document_id) / f"p{page:03d}_{bbox_key}_{dpi}dpi.png"
+
+    def dataset_json_path(
+        self, document_id: str, extractor_key: str, comparison_key: str, validation_key: str | None = None
+    ) -> Path:
         # Keyed like comparison_path: a dataset built with another model or field table is a different
-        # file, so the browser can never be served a consolidated table the current settings disown.
-        return self.doc_dir(document_id) / "datasets" / f"{extractor_key}.{comparison_key}.json"
+        # file, so the browser can never be served a consolidated table the current settings disown. A
+        # dataset that consulted the VLM's verdicts adds their key too; one that did not keeps the two-key
+        # name it always had, so an installation without a VLM configured keeps every filename.
+        stem = f"{extractor_key}.{comparison_key}" + (f".{validation_key}" if validation_key else "")
+        return self.doc_dir(document_id) / "datasets" / f"{stem}.json"
 
     def batch_dataset_path(self) -> Path:
         return self.root / "exports" / "paperfacts.xlsx"
