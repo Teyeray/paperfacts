@@ -351,6 +351,14 @@ def test_the_field_list_carries_the_chinese_description_for_the_header_tooltip()
     assert by_name["transmittance"]["scope"] == "sample"
 
 
+def test_every_configured_field_has_a_chinese_description():
+    # The Excel field sheet and the header tooltips read the same map; a field added in config.json without
+    # an entry would export blank, which this test turns into a visible failure instead.
+    from paperfacts.dataset import _DESCRIPTIONS
+
+    assert {spec.name for spec in FIELD_SPECS} <= set(_DESCRIPTIONS)
+
+
 def test_from_dict_reverses_as_dict_exactly():
     # The corpus export rebuilds datasets from their JSON, so the inverse has to be lossless.
     result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])

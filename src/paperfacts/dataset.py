@@ -532,7 +532,7 @@ def write_dataset(
             "field": spec.name,
             "scope": "靶材（论文级）" if not spec.is_sample_level else "样品级",
             "unit": spec.canonical_unit or "文本",
-            "description": _DESCRIPTIONS[spec.name],
+            "description": _DESCRIPTIONS.get(spec.name, ""),
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
         for spec in FIELD_SPECS
