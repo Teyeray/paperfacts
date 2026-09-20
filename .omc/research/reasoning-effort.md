@@ -61,3 +61,11 @@ A numeric-signature condition key ("at 550 nm" == "550 nm wavelength") was built
 "550 nm" and "550 nm, annealed" share the signature, and optical values before and after annealing at one
 wavelength are routine. No word-level rule tells a paraphrase from a qualifier. The within-lane
 multiple_conditions refusal stays as it is; the cost is a handful of blank cells per paper.
+
+## Parsers verified live on this Mac (2026-09-20)
+
+Forced re-run of tsta-20-1599695 with the mlx-vlm server on port 8111 (Apple M4, 16 GB) and
+`PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6`: MinerU 3.4.5 in 24.5 s, PaddleOCR-VL 3.7.0 in
+153.6 s, 12 pages, 128 and 191 blocks — the same counts the cached parses from the other machine held.
+Without the model name the Paddle pipeline asks the server for "PaddleOCR-VL-1.6-0.9B", which is not a
+Hugging Face repository, and the parse fails with a 401; the name must be set wherever the mlx backend is.
