@@ -383,3 +383,24 @@ def test_without_a_display_name_the_dataset_still_reports_the_path_name():
 
     assert result.filename == "paper.pdf"
     assert result.paper_row["filename"] == "paper.pdf"
+
+
+def test_a_scale_factor_in_the_unit_reaches_the_paper_row():
+    # Observed on the corpus: a column headed "ρ (×10⁻⁴ Ω·cm)" makes the model transcribe the factor as the
+    # unit and leave the value a bare "19.4". The exported cell must be the resistivity, not an empty cell.
+    result = paired(
+        [value("resistivity", "19.4", "×10^-4 Ω-cm")],
+        [value("resistivity", "19.4", "×10^-4 Ω·cm", backend="paddleocr_vl")],
+    )
+
+    assert result.paper_row["resistivity"] == pytest.approx(1.94e-3)
+    assert decision(result, "resistivity")["decision"] == "agree"
+
+
+def test_an_approximate_value_spaced_out_by_latex_still_exports():
+    result = paired(
+        [value("thickness", "∼8 . 4", "nm")],
+        [value("thickness", "around 8.4", "nm", backend="paddleocr_vl")],
+    )
+
+    assert result.paper_row["thickness"] == pytest.approx(8.4)

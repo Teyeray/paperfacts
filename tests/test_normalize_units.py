@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from paperfacts.fields import FIELD_BY_NAME, FieldSpec
-from paperfacts.normalize import CONVERTERS, clean_unit, convert_to_canonical
+from paperfacts.normalize import CONVERTERS, clean_unit, convert_to_canonical, parse_number, split_scale_factor
 
 
 def convert(field: str, value: float, unit_raw: str | None):
@@ -310,3 +310,91 @@ def test_slm_is_refused_rather_than_scaled():
 @pytest.mark.parametrize("unit", ["rpm", "r/min", "rev/min"])
 def test_rotation_speed_spellings_convert_to_rpm(unit):
     assert convert("rotation_speed", 20.0, unit) == (20.0, "rpm", None)
+
+
+# ---- A scale factor written into the unit -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "unit", "expected"),
+    [
+        (19.4, "×10^-4 Ω-cm", 19.4e-4),
+        (0.88, "×10^-3 Ω·cm", 0.88e-3),
+        (1.0, "×10⁻⁴ Ω·cm", 1e-4),
+        (1.0, r"\times 10^{-4} \Omega cm", 1e-4),
+        (1.0, "x10-4 Ω·cm", 1e-4),
+        (1.0, "10^-4 Ω·cm", 1e-4),
+    ],
+)
+def test_a_power_of_ten_in_the_unit_is_applied_to_the_value(value, unit, expected):
+    # A table column headed "ρ (×10⁻⁴ Ω·cm)" leaves the model transcribing the factor as part of the unit.
+    # Refusing it as an unknown unit loses the fact; the factor belongs to the value.
+    number, canonical, note = convert("resistivity", value, unit)
+
+    assert number == pytest.approx(expected)
+    assert canonical == "Ω·cm"
+    assert "scale factor" in note
+
+
+def test_a_unit_that_merely_starts_with_digits_is_not_read_as_a_factor():
+    # Only an explicit "x10" or a caret makes a factor; "cm3/min" must stay the flow unit it is.
+    assert split_scale_factor("cm3/min") == (1.0, "cm3/min")
+    assert convert("ar_flow_rate", 30.0, "cm3/min") == (30.0, "sccm", None)
+
+
+def test_a_unit_that_is_only_a_factor_falls_back_to_the_bare_number_rule():
+    # Nothing is left to name the unit, so the field's own bare-number rule decides. resistivity rejects a
+    # unitless value rather than assuming Ω·cm, and the factor is still recorded in the note.
+    number, canonical, note = convert("resistivity", 19.4, "×10^-4")
+
+    assert (number, canonical) == (None, None)
+    assert note == "scale factor 0.0001 taken from the unit; no unit; resistivity requires one"
+
+    # A field with a bare-number rule of its own keeps the scaled value.
+    assert convert("transmittance", 0.85, "x10^2")[:2] == (pytest.approx(85.0), "%")
+
+
+# ---- Aliases seen in the corpus -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("unit", ["Ω·sq^-1", "Ω·sq⁻¹", "Ω/□", "Ω/sq."])
+def test_dotted_and_boxed_sheet_resistance_spellings_are_recognised(unit):
+    assert convert("sheet_resistance", 10.0, unit) == (10.0, "Ω/sq", None)
+
+
+def test_ohms_per_litre_is_ocr_damage_and_stays_unknown():
+    # "Ω/L" is a misread "Ω/□"; guessing it would invent a sheet resistance the paper never stated.
+    value, unit_out, note = convert("sheet_resistance", 10.0, "Ω/L")
+
+    assert (value, unit_out) == (None, None)
+    assert "unknown unit" in note
+
+
+@pytest.mark.parametrize("unit", ['"', "''", "″", "′′"])
+def test_every_double_prime_spelling_means_inches(unit):
+    assert convert("inch", 4.0, unit) == (4.0, "inch", None)
+    assert convert("target_substrate_distance", 4.0, unit) == (pytest.approx(10.16), "cm", None)
+
+
+def test_a_power_of_ten_in_both_the_value_and_the_unit_is_refused():
+    # "1.2 × 10⁻⁴" under a column headed "(×10⁻⁴ Ω·cm)" is either 1.2e-4 or 1.2e-8, depending on whether the
+    # author applied the header to the cell. Multiplying twice would manufacture a value, so neither lane
+    # gets one and the comparison layer judges it AMBIGUOUS.
+    spec = FIELD_BY_NAME["resistivity"]
+    number, _ = parse_number("1.2 × 10^-4")
+
+    assert convert_to_canonical(spec, number, "×10^-4 Ω·cm", value_text="1.2 × 10^-4") == (
+        None,
+        None,
+        "scale factor in both value and unit; ambiguous",
+    )
+    # Only one of the two carrying a factor stays unambiguous, whichever one it is.
+    assert convert_to_canonical(spec, number, "Ω·cm", value_text="1.2 × 10^-4") == (pytest.approx(1.2e-4), "Ω·cm", None)
+    assert convert_to_canonical(spec, 19.4, "×10^-4 Ω-cm", value_text="19.4")[0] == pytest.approx(1.94e-3)
+
+
+@pytest.mark.parametrize("unit", ["10mm", "10 mm"])
+def test_a_leading_number_without_a_caret_or_x10_is_not_a_factor(unit):
+    # "10mm" is a length someone wrote into the unit column, not a scale factor; reading it as 10^10 would
+    # be catastrophic and silent.
+    assert split_scale_factor(unit) == (1.0, "10mm")

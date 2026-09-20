@@ -44,7 +44,8 @@ Row = Mapping[str, CellValue]
 _NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
 _ATOM = rf"(?:{_NUMBER}\s*x\s*10\s*\^?\s*[-+]?\d+|10\s*\^\s*[-+]?\d+|{_NUMBER}(?:[eE][-+]?\d+)?)"
 _SCALAR = re.compile(rf"^(?P<center>{_ATOM})(?:\s*(?:±|\+/-|\+-|\\pm)\s*(?P<uncertainty>{_ATOM}))?(?P<tail>.*)$")
-_APPROX = re.compile(r"^(?:approximately|approx\.?|about|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
+# The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
+_APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _DESCRIPTIONS = {
     "component": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
@@ -201,7 +202,7 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     number, _ = parse_number(match.group("center"))
     if number is None or not math.isfinite(number):
         return None, "数值不可解析或非有限数"
-    canonical, _, note = convert_to_canonical(spec, number, value.unit_raw)
+    canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, value_text=match.group("center"))
     if canonical is None or not math.isfinite(canonical):
         return None, note or "单位无法转换为标准单位"
     notes = [note or ""]

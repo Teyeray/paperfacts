@@ -223,3 +223,13 @@ def test_text_key_of_a_field_without_categories_is_the_plain_text_key():
     spec = FIELD_BY_NAME["component"]
 
     assert text_key(spec, "SnO2:Ta") == normalize_key("SnO2 : ta")
+
+
+# ---- Approximation characters ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", ["∼83.6", "~83.6"])
+def test_the_tilde_operator_folds_to_an_ascii_tilde(raw):
+    # U+223C TILDE OPERATOR is what papers actually print for "approximately", and NFKC leaves it alone.
+    # Folding it here is what lets both the comparison lane and the dataset lane recognise the marker.
+    assert normalize_text(raw) == "~83.6"
