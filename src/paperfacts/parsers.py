@@ -171,8 +171,7 @@ class Parser:
         return (out_dir / META_FILENAME).is_file()
 
     def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
-        cached = self.is_cached(out_dir)
-        if not force and cached:
+        if self.is_cached(out_dir) and not force:  # always first: it also recovers interrupted swaps
             logger.info("cache_hit backend=%s doc=%s", self.backend, document.document_id[:16])
             try:
                 return RawParseOutput.load(out_dir, self.backend, cache_hit=True)

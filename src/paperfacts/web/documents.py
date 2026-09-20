@@ -238,19 +238,13 @@ class Library:
                 raise FileNotFoundError(
                     f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
                 )
-            # Both artifacts are stored, so nothing downstream opens the file; the path is carried anyway
-            # because the export names its workbook after it. Re-parsing raises ParserError instead.
-            pdf = self._recorded_pdf_path(identity)
+            # Both artifacts are stored, so nothing downstream opens the file. A path is carried anyway,
+            # pointing where the PDF was first seen, because the export names its workbook after it.
+            origin = Path(identity.source_path) if identity.source_path else self.layout.source_pdf(identity.sha256)
+            pdf = origin.parent / identity.name
         return DocumentInput(
             document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name
         )
-
-    def _recorded_pdf_path(self, identity: DocumentIdentity) -> Path:
-        """Where the PDF was when the document was first seen: a path that need not exist, whose name is
-        the recorded display name so the export filename survives the PDF."""
-        if identity.source_path:
-            return Path(identity.source_path).parent / identity.name
-        return self.layout.source_pdf(identity.sha256).parent / identity.name
 
     def register_upload(self, filename: str, data: bytes) -> DocumentInput:
         """Store an uploaded PDF in its document directory (re-uploading the same content is

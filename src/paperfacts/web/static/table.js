@@ -2,7 +2,7 @@
 // exports. This is the deliverable; the comparison workbench below it explains how each cell got there.
 
 import { escapeHtml, fmt, toast } from "./html.js";
-import { showEvidence, TARGET_SID } from "./samples.js";
+import { clearEvidence, showEvidence, TARGET_SID } from "./samples.js";
 import { state } from "./state.js";
 
 const TARGET_ROW_ID = "target";
@@ -333,8 +333,7 @@ function bindCells(tr) {
   for (const td of tr.querySelectorAll("td.cell[data-sources]")) {
     td.addEventListener("click", () => {
       for (const other of td.closest("tbody").querySelectorAll("td.selected")) other.classList.remove("selected");
-      // A value cell takes over the viewer; evidence marks left by a refused cell would now be stale.
-      for (const marked of td.closest(".document")?.querySelectorAll(".field.evidence") ?? []) marked.classList.remove("evidence");
+      clearEvidence(samplesHost(td));
       td.classList.add("selected");
       state.viewer?.highlight(td.dataset.sources.split("; ").filter(Boolean));
     });
@@ -351,9 +350,8 @@ function bindCells(tr) {
 }
 
 // The records section of the document this table belongs to, not of whichever document rendered first.
-function samplesHost(td) {
-  return td.closest(".document")?.querySelector("details.samples") ?? document.querySelector("details.samples");
-}
+const samplesHost = (td) =>
+  td.closest(".document")?.querySelector("details.samples") ?? document.querySelector("details.samples");
 
 // ---------- clipboard: the visible table as tab-separated text ----------
 //

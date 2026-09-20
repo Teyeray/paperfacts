@@ -110,7 +110,7 @@ class ParseReport:
     from_artifact: bool = False
 
 
-def _artifact_standing_in_for_missing_raw(
+def _stored_artifact_for_missing_raw(
     parser: Parser,
     document: DocumentInput,
     backend: Backend,
@@ -156,50 +156,36 @@ def parse_document(
     artifact_path = layout.artifact_path(document.document_id, backend)
     raw_dir = layout.raw_dir(document.document_id, backend)
 
-    stored = _artifact_standing_in_for_missing_raw(parser, document, backend, artifact_path, raw_dir, force=force)
+    stored = _stored_artifact_for_missing_raw(parser, document, backend, artifact_path, raw_dir, force=force)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
     if stored is not None:
-        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact, cache_hit, runtime_s = stored, True, 0.0
         if not markdown_path.is_file():
             # The artifact alone is not a complete document directory; re-render rather than leave a hole.
-            markdown_path.write_text(render_markdown(stored.blocks), encoding="utf-8")
-        report = ParseReport(
-            backend=backend,
-            backend_version=stored.backend_version,
-            cache_hit=True,
-            runtime_s=0.0,
-            page_count=stored.page_count,
-            block_count=len(stored.blocks),
-            type_counts=stored.type_counts(),
-            artifact_path=artifact_path,
-            markdown_path=markdown_path,
-            from_artifact=True,
-        )
-        logger.info("parsed %s", report)
-        return stored, report
-
-    if not document.pdf_path.is_file():
-        # Only the real parse path needs the file; say so plainly instead of failing inside the parser.
-        raise ParserError(backend, "input", "PDF not available; re-upload to re-parse")
-
-    clock = time.monotonic()
-    raw = parser.parse(document, raw_dir, force=force)
-    artifact = convert(raw, document, read_geometry(document.pdf_path))
-    runtime_s = time.monotonic() - clock
-
-    markdown_path.parent.mkdir(parents=True, exist_ok=True)
-    markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
-    artifact.write(artifact_path)  # last: its existence means parsed/ is complete
+            markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+    else:
+        if not document.pdf_path.is_file():
+            # Only the real parse path needs the file; say so plainly instead of failing inside the parser.
+            raise ParserError(backend, "input", "PDF not available; re-upload to re-parse")
+        clock = time.monotonic()
+        raw = parser.parse(document, raw_dir, force=force)
+        artifact = convert(raw, document, read_geometry(document.pdf_path))
+        runtime_s = time.monotonic() - clock
+        cache_hit = raw.cache_hit
+        markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+        artifact.write(artifact_path)  # last: its existence means parsed/ is complete
 
     report = ParseReport(
         backend=backend,
         backend_version=artifact.backend_version,
-        cache_hit=raw.cache_hit,
+        cache_hit=cache_hit,
         runtime_s=runtime_s,
         page_count=artifact.page_count,
         block_count=len(artifact.blocks),
         type_counts=artifact.type_counts(),
         artifact_path=artifact_path,
         markdown_path=markdown_path,
+        from_artifact=stored is not None,
     )
     logger.info("parsed %s", report)
     return artifact, report

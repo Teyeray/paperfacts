@@ -70,9 +70,14 @@ function fieldNode(f) {
 // identifies the record in its own lane.
 const ID_SEPARATOR = " | ";
 
+// Marks go stale the moment anything else takes over the viewer, so every entry point clears them first.
+export function clearEvidence(host) {
+  for (const marked of host?.querySelectorAll(".field.evidence") ?? []) marked.classList.remove("evidence");
+}
+
 export function showEvidence(host, fieldName, rowSampleId) {
   if (!host) return;
-  for (const marked of host.querySelectorAll(".field.evidence")) marked.classList.remove("evidence");
+  clearEvidence(host);
   const wanted = new Set(String(rowSampleId ?? "").split(ID_SEPARATOR).map((id) => id.trim()).filter(Boolean));
   const rows = [];
   for (const sample of host.querySelectorAll(".sample")) {
