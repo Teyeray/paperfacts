@@ -390,7 +390,11 @@ def _deduplicate(records: ExtractedRecords) -> ExtractedRecords:
 
 
 def _merge_repeats(values: Sequence[FieldValue]) -> tuple[FieldValue, ...]:
-    """One entry per distinct fact, in first-seen order, with the citations of its repeats merged in."""
+    """One entry per distinct fact, in first-seen order, with the citations of its repeats merged in.
+
+    Order decides which copy is kept, except between a series value and a sample-specific one: there the
+    sample-specific copy wins whichever came first.
+    """
     merged: dict[ValueKey, FieldValue] = {}
     for value in values:
         key = _value_key(value)
@@ -399,7 +403,11 @@ def _merge_repeats(values: Sequence[FieldValue]) -> tuple[FieldValue, ...]:
             merged[key] = value
             continue
         citations = tuple(dict.fromkeys((*previous.source_ids, *value.source_ids)))
-        merged[key] = previous.model_copy(update={"source_ids": citations})
+        # When the same fact arrives both as a series value fanned out onto this sample and as a quote
+        # naming the sample itself, the sample-specific one is the more precise claim and becomes the
+        # exemplar; the series copy only adds its citation.
+        exemplar = value if previous.series and not value.series else previous
+        merged[key] = exemplar.model_copy(update={"source_ids": citations})
     return tuple(merged.values())
 
 
@@ -428,6 +436,10 @@ def passage_records(
     not have, is kept in ``unattributed`` rather than attached to a plausible neighbour: an unplaced value
     is visible in the report, a misplaced one is indistinguishable from a real measurement. The one
     exception is a paper with a single sample, where a value naming no sample has only one possible owner.
+
+    A value the model flagged ``applies_to_all_samples`` is the other kind of null id: the paper stated it
+    once for the whole series ("all films were RF sputtered"), so it is written onto every sample with
+    ``series=True``. The flag is the model's explicit claim about the excerpt; the code never infers it.
     """
     cleaning = ResponseCleaning()
     cleaning.dropped.extend(dropped)
@@ -461,6 +473,7 @@ def passage_records(
     target_ids: list[str] = []
     unattributed: list[FieldValue] = []
     single_sample_attributed = 0
+    series_fanned_out = 0
     for harvest in harvests:
         for item in harvest.values:
             value = cleaning.value(
@@ -471,6 +484,7 @@ def passage_records(
                 source_ids=item.source_ids,
                 note=item.note,
                 known_ids=harvest.known_ids,
+                series=bool(item.applies_to_all_samples) and not item.sample_id,
             )
             if value is None:
                 continue
@@ -481,6 +495,25 @@ def passage_records(
                 target_ids.extend(value.source_ids)
                 continue
             index = index_by_key.get(normalize_key(item.sample_id)) if item.sample_id else None
+            if item.applies_to_all_samples and item.sample_id:
+                # An id and the series flag contradict each other. The id is the more specific claim and
+                # the one the prompt asks to be copied verbatim, so it wins; the flag is noise.
+                logger.debug(
+                    "ignoring applies_to_all_samples on %s: the value names sample %r",
+                    harvest.spec.name,
+                    item.sample_id,
+                )
+            elif value.series and not samples:
+                # Nothing to fan out to; the flag would claim a placement the record does not have.
+                value = value.model_copy(update={"series": False})
+            elif value.series:
+                # The paper states this once for the whole series ("all films were RF sputtered"). That is
+                # not an unplaceable value, it is a value the paper placed on every sample at once, so it
+                # is written onto each of them -- explicitly flagged, never inferred from the text by code.
+                for fields in sample_fields:
+                    fields.append(value)
+                series_fanned_out += 1
+                continue
             if index is None and not item.sample_id and len(samples) == 1:
                 # The prompt allows a null sample_id when the excerpts do not say which sample a value
                 # belongs to. With exactly one sample in the inventory there is nothing to say: the lone
@@ -491,6 +524,13 @@ def passage_records(
                 unattributed.append(value)
                 continue
             sample_fields[index].append(value)
+
+    if series_fanned_out:
+        logger.info(
+            "fanned out %d series value(s) stated for the whole sample list to each of %d sample(s)",
+            series_fanned_out,
+            len(samples),
+        )
 
     if single_sample_attributed:
         logger.info(

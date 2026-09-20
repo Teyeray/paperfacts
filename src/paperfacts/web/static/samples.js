@@ -54,8 +54,10 @@ function fieldNode(f) {
   row.className = "field";
   row.dataset.field = f.field ?? "";
   const cond = f.condition ? ` <small>@${escapeHtml(f.condition)}</small>` : "";
+  // Stated once for the whole series and written onto every sample: worth saying next to the number.
+  const series = f.series ? `<span class="flag series" title="论文对整个样品系列只写了一次，这里是按系列写到每个样品上的">全系列</span>` : "";
   const norm = f.value != null ? ` <small>= ${fmt(f.value)} ${escapeHtml(f.unit ?? "")}</small>` : (f.normalization_note ? ` <small>(${escapeHtml(f.normalization_note)})</small>` : "");
-  row.innerHTML = `<span class="fname">${escapeHtml(f.field)}</span><span class="fval">${escapeHtml(f.value_raw)} ${escapeHtml(f.unit_raw ?? "")}${cond}${norm}${caveats(f)}</span><button type="button" class="src">${escapeHtml(f.source_ids.join(", ") || "无来源")}</button>`;
+  row.innerHTML = `<span class="fname">${escapeHtml(f.field)}</span><span class="fval">${escapeHtml(f.value_raw)} ${escapeHtml(f.unit_raw ?? "")}${cond}${norm}${series}${caveats(f)}</span><button type="button" class="src">${escapeHtml(f.source_ids.join(", ") || "无来源")}</button>`;
   row.querySelector(".src").addEventListener("click", () => state.viewer?.highlight(f.source_ids));
   return row;
 }

@@ -662,3 +662,147 @@ def test_a_concurrency_below_one_is_rejected_before_any_call_is_made():
         extract(client, concurrency=0)
 
     assert client.call_count == 0
+
+
+# ---- series values: stated once for the whole sample list ---------------------------------------
+
+
+THREE_SAMPLES = [
+    {"sample_id": "A", "label": "O2 100 sccm", "conditions": {"flow": "100 sccm"}},
+    {"sample_id": "B", "label": "O2 200 sccm", "conditions": {"flow": "200 sccm"}},
+    {"sample_id": "C", "label": "O2 300 sccm", "conditions": {"flow": "300 sccm"}},
+]
+
+
+def test_the_field_question_asks_for_the_series_flag_and_says_when_it_is_true():
+    system = field_system_prompt()
+
+    assert '"applies_to_all_samples"' in system
+    assert "applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample" in system
+    assert "`sample_id` must be null" in system
+
+
+def test_a_series_value_is_written_onto_every_sample_keeping_its_citation():
+    # "Ar flow 3 sccm (deposition of all GZO films)": the paper placed it on every sample at once, so
+    # leaving it unattributed would compare real information with nothing.
+    shown = make_blocks()[1].source_id
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(THREE_SAMPLES),
+            sheet_resistance=values_json(
+                {
+                    "sample_id": None,
+                    "value_raw": "12.5",
+                    "source_ids": [shown],
+                    "applies_to_all_samples": True,
+                }
+            ),
+        )
+    )
+
+    lane = extract(client)
+
+    assert [sample.sample_id for sample in lane.samples] == ["A", "B", "C"]
+    for sample in lane.samples:
+        assert [(field.value_raw, field.series, field.source_ids) for field in sample.fields] == [
+            ("12.5", True, (shown,))
+        ]
+    assert lane.unattributed == ()
+
+
+def test_a_value_without_the_series_flag_is_still_left_unattributed():
+    # The fan-out is the model's explicit claim about the excerpt; a plain null id keeps meaning "unplaced".
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(THREE_SAMPLES),
+            sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"}),
+        )
+    )
+
+    lane = extract(client)
+
+    assert [field.value_raw for field in lane.unattributed] == ["12.5"]
+    assert [sample.fields for sample in lane.samples] == [(), (), ()]
+
+
+def test_the_series_flag_is_ignored_when_the_value_names_a_sample():
+    # An id and the flag contradict each other; the id is the more specific claim, so it wins.
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(THREE_SAMPLES),
+            sheet_resistance=values_json({"sample_id": "B", "value_raw": "12.5", "applies_to_all_samples": True}),
+        )
+    )
+
+    lane = extract(client)
+
+    assert [(sample.sample_id, [(f.value_raw, f.series) for f in sample.fields]) for sample in lane.samples] == [
+        ("A", []),
+        ("B", [("12.5", False)]),
+        ("C", []),
+    ]
+    assert lane.unattributed == ()
+
+
+def test_an_answer_that_omits_the_series_flag_is_accepted_as_not_a_series_value():
+    client = FakeLlmClient(responder(sheet_resistance=values_json({"sample_id": "A", "value_raw": "12.5"})))
+
+    lane = extract(client)
+
+    assert lane.samples[0].fields[0].series is False
+
+
+def test_the_series_flag_survives_a_round_trip_through_the_stored_lane():
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(THREE_SAMPLES),
+            sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5", "applies_to_all_samples": True}),
+        )
+    )
+
+    lane = extract(client)
+    reread = type(lane).model_validate_json(lane.model_dump_json())
+
+    assert [field.series for sample in reread.samples for field in sample.fields] == [True, True, True]
+
+
+@pytest.mark.parametrize("series_first", [True, False])
+def test_a_series_value_and_a_quote_naming_the_sample_become_one_sample_specific_value(series_first):
+    # The same number arrives twice on sample B: once fanned out from "all films", once quoted for B
+    # itself. They are one fact, and the quote naming B is the more precise claim, so it is what survives.
+    blocks = (
+        *make_blocks(),
+        make_block(page=0, order=2, backend="mineru", content="Sheet resistance was 12.5 ohm/sq for every film."),
+    )
+    series_id, specific_id = blocks[2].source_id, blocks[1].source_id
+    series = {
+        "sample_id": None,
+        "value_raw": "12.5",
+        "source_ids": [series_id],
+        "applies_to_all_samples": True,
+    }
+    specific = {"sample_id": "B", "value_raw": "12.5", "source_ids": [specific_id]}
+    answer = values_json(*((series, specific) if series_first else (specific, series)))
+    client = FakeLlmClient(responder(inventory=inventory_json(TWO_SAMPLES), sheet_resistance=answer))
+
+    lane = extract_lane(make_artifact(blocks, backend="mineru"), client, mode="passage")
+
+    sample_b = lane.sample("B")
+    assert [(field.value_raw, field.series) for field in sample_b.fields] == [("12.5", False)]
+    assert set(sample_b.fields[0].source_ids) == {series_id, specific_id}
+    assert [(field.value_raw, field.series) for field in lane.sample("A").fields] == [("12.5", True)]
+
+
+def test_a_series_value_with_no_samples_to_place_it_on_is_unattributed_and_unflagged():
+    # Nothing to fan out to, so the flag would claim a placement the record does not have.
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json([]),
+            sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5", "applies_to_all_samples": True}),
+        )
+    )
+
+    lane = extract(client)
+
+    assert lane.samples == ()
+    assert [(field.value_raw, field.series) for field in lane.unattributed] == [("12.5", False)]

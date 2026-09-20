@@ -76,7 +76,10 @@ this file is the part that is easy to get wrong.
   deterministic code, never a model call. Passage is the default; `.omc/research/extraction-modes.md` has
   the measurement that decided it.
 - A sample-level value the model cannot place on a sample goes to `LaneExtraction.unattributed`: kept,
-  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour.
+  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour. The two
+  exceptions are explicit, never inferred: a paper with exactly one sample owns every unplaced value, and a
+  value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
+  every sample with `series=True`.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
 - Four guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
