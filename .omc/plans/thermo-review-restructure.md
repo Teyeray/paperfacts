@@ -34,8 +34,14 @@ fingerprinted module changes, a corpus rebuild from cache must reproduce the ser
 
 ## Phase 4 — sentinel and decision ladder
 - J5 one `ReasoningEffort` type with an explicit INHERIT for the inventory override; README note.
-- T2 `_decide` as an ordered list of named checks; the caller's `blocked` becomes the first check.
+- T2 `_decide` as an ordered list of named checks — tried and REJECTED in review (more concepts, implicit
+  ordering contract). Kept: `_matching_blocked(scope)` replaces the caller's string, `_commit` names the
+  happy path; the ladder stays linear.
 
 ## Order and gates
 Phase 0 → 1 → 2 → 3 → 4. Each phase: executor (opus) → code-reviewer → fix → commit → rebuild check.
 Phases 1 and 0 run in parallel (disjoint files). Nothing is pushed.
+
+## Status (2026-09-20, evening)
+All phases done. B1-B4, J1, J3, J4, J5, M1, M2, T1 landed; J2 and T2's dispatcher rejected on evidence.
+Every phase reproduced the corpus verdict mix exactly (525/345/0/7/88).
