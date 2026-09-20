@@ -289,9 +289,9 @@ def test_the_same_field_under_two_conditions_is_two_separate_facts():
     ]
 
 
-def test_leftover_numeric_values_pair_by_numeric_proximity_when_the_condition_wording_differs():
-    """When both lanes phrase the same fact's condition differently, it shouldn't be split into two
-    records that each look like they're missing the other's value."""
+def test_leftover_equal_numeric_values_pair_when_the_condition_wording_differs():
+    """When both lanes phrase the same fact's condition differently, an equal value shouldn't be split
+    into two records that each look like they're missing the other's value."""
     lane_a = make_lane(
         backend="mineru",
         samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm", condition="ellipsometric")])],
@@ -305,13 +305,14 @@ def test_leftover_numeric_values_pair_by_numeric_proximity_when_the_condition_wo
     only = report.comparisons[0]
 
     assert only.status == "agree"
-    assert "condition texts differ" in only.detail
+    assert "conditions worded differently: 'ellipsometric' / 'from ellipsometric'" in only.detail
     assert only.a is not None and only.b is not None
 
 
-def test_a_proximity_paired_value_that_disagrees_is_ambiguous_not_conflict():
+def test_unequal_values_under_differently_worded_conditions_stay_one_sided():
     # Different condition wording plus different values: there's no way to tell "two facts under
-    # different conditions" from "a real conflict over the same fact," so it's left for review.
+    # different conditions" from "a real conflict over the same fact". Pairing them would be a guess,
+    # so each side is reported as missing in the other lane.
     lane_a = make_lane(
         backend="mineru",
         samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm", condition="ellipsometric")])],
@@ -323,8 +324,114 @@ def test_a_proximity_paired_value_that_disagrees_is_ambiguous_not_conflict():
 
     report = compare_lanes(lane_a, lane_b, exact_match())
 
-    assert report.comparisons[0].status == "ambiguous"
-    assert "condition texts differ" in report.comparisons[0].detail
+    assert [(c.condition, c.status, c.missing_in) for c in report.comparisons] == [
+        ("ellipsometric", "missing", "paddleocr_vl"),
+        ("from SEM", "missing", "mineru"),
+    ]
+    assert report.counts.missing == 2 and report.counts.conflict == 0 and report.counts.ambiguous == 0
+
+
+def test_numeric_values_within_tolerance_pair_across_differently_worded_conditions():
+    lane_a = make_lane(
+        backend="mineru",
+        samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm", condition="measured by SEM")])],
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        samples=[make_sample("A", [make_field("thickness", "305", unit_raw="nm", condition="cross-sectional SEM")])],
+    )
+
+    report = compare_lanes(lane_a, lane_b, exact_match())
+
+    assert statuses(report) == [("thickness", "agree")]
+    assert report.counts.agree == 1 and report.counts.missing == 0
+
+
+def test_equal_text_values_pair_across_differently_worded_conditions():
+    """The observed case: both lanes quote the same target composition, but only one of MinerU's two
+    readings carries a condition and PaddleOCR words its own differently. Pairing by condition alone
+    reported three MISSING rows for one fact."""
+    lane_a = make_lane(
+        backend="mineru",
+        target=TargetRecord(
+            fields=[
+                make_field("component", "SnO2:Sb2O3 (95:5)", condition="Alloy target"),
+                make_field("component", "95% SnO2 and 5% Sb2O3"),
+            ]
+        ),
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        target=TargetRecord(
+            fields=[
+                make_field(
+                    "component", "SnO2 : Sb2O3 (95:5)", condition="alloy target used for all ATO film depositions"
+                )
+            ]
+        ),
+    )
+
+    report = compare_lanes(lane_a, lane_b, exact_match())
+    paired = next(c for c in report.comparisons if c.status == "agree")
+
+    assert sorted(statuses(report)) == [("component", "agree"), ("component", "missing")]
+    assert report.counts.agree == 1 and report.counts.missing == 1 and report.counts.total == 2
+    assert paired.condition == "Alloy target"
+    assert paired.detail == (
+        "identical after text normalization; conditions worded differently: "
+        "'Alloy target' / 'alloy target used for all ATO film depositions'"
+    )
+
+
+def test_equal_values_under_conditions_naming_different_numbers_are_not_paired():
+    """85 % at 550 nm and 85 % at 600 nm are two measurements that happen to agree; pairing them would
+    invent an agreement the paper never claimed."""
+    lane_a = make_lane(
+        backend="mineru",
+        samples=[make_sample("A", [make_field("transmittance", "85", unit_raw="%", condition="at 550 nm")])],
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        samples=[make_sample("A", [make_field("transmittance", "85", unit_raw="%", condition="at 600 nm")])],
+    )
+
+    report = compare_lanes(lane_a, lane_b, exact_match())
+
+    assert [(c.condition, c.status, c.missing_in) for c in report.comparisons] == [
+        ("at 550 nm", "missing", "paddleocr_vl"),
+        ("at 600 nm", "missing", "mineru"),
+    ]
+    assert report.counts.agree == 0
+
+
+def test_the_same_number_worded_differently_still_pairs():
+    lane_a = make_lane(
+        backend="mineru",
+        samples=[make_sample("A", [make_field("transmittance", "85", unit_raw="%", condition="at 550 nm")])],
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        samples=[make_sample("A", [make_field("transmittance", "85", unit_raw="%", condition="550 nm wavelength")])],
+    )
+
+    report = compare_lanes(lane_a, lane_b, exact_match())
+
+    assert statuses(report) == [("transmittance", "agree")]
+    assert "conditions worded differently" in report.comparisons[0].detail
+
+
+def test_unattributed_equal_values_under_different_numbers_stay_visible_as_ambiguous():
+    lane_a = make_lane(
+        backend="mineru", unattributed=[make_field("transmittance", "85", unit_raw="%", condition="at 550 nm")]
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl", unattributed=[make_field("transmittance", "85", unit_raw="%", condition="at 600 nm")]
+    )
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching())
+
+    assert statuses(report) == [("transmittance", "ambiguous")]
+    assert report.counts.agree == 0 and report.counts.unattributed_compared == 1
 
 
 def test_unparsed_leftovers_cannot_be_paired_by_proximity_and_stay_one_sided():
@@ -562,7 +669,7 @@ def test_a_value_unattributed_in_one_lane_only_stays_uncompared():
     assert report.counts.unattributed_by_backend == {"mineru": 1}
 
 
-def test_unattributed_values_pair_by_condition_then_proximity_like_sample_values():
+def test_unattributed_values_pair_by_condition_then_equality_like_sample_values():
     lane_a = make_lane(
         backend="mineru",
         unattributed=[
@@ -585,9 +692,11 @@ def test_unattributed_values_pair_by_condition_then_proximity_like_sample_values
     assert report.counts.unattributed_compared == 2
 
 
-def test_unattributed_condition_mismatch_downgrades_conflict_to_ambiguous():
-    # The same protection sample values get: a proximity pair whose conditions differ cannot be judged
-    # a conflict, because the two readings may describe two different measurements.
+def test_unattributed_values_that_disagree_under_different_conditions_are_ambiguous():
+    # Unequal values under differently worded conditions are not paired on a sample -- they may be two
+    # different measurements. Unattributed rows are pairs only, though, so suppressing this one would
+    # hide a fact both lanes did report; one positional row keeps it visible, ambiguous rather than a
+    # conflict the positional pairing cannot justify.
     lane_a = make_lane(
         backend="mineru", unattributed=[make_field("transmittance", "80", unit_raw="%", condition="visible range")]
     )
@@ -598,7 +707,12 @@ def test_unattributed_condition_mismatch_downgrades_conflict_to_ambiguous():
     report = compare_lanes(lane_a, lane_b, SampleMatching())
 
     assert statuses(report) == [("transmittance", "ambiguous")]
-    assert "condition texts differ" in report.comparisons[0].detail
+    assert report.comparisons[0].detail == (
+        "unattributed in both lanes; both lanes report the field with different values under different "
+        "conditions ('visible range' / 'IR range')"
+    )
+    assert report.counts.ambiguous == 1 and report.counts.conflict == 0
+    assert report.counts.total == 1 and report.counts.unattributed_compared == 1
 
 
 # ---- Preconditions and cache key ---------------------------------------------------------------

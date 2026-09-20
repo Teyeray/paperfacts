@@ -2,12 +2,12 @@
 are left to the model layer.
 
 The unit of comparison is "one value of one field": first pair exactly by normalized measurement condition
-(550 nm and a full-spectrum average are two different facts), then pair whatever numeric values are left by
-numeric proximity — so when the two lanes phrase the same fact's condition differently ("ellipsometric" vs.
-"from ellipsometric"), it doesn't get split into two records that each look like they're missing the
-other's value. Numeric comparison uses ``math.isclose`` (|a-b| <= max(rel_tol*max(|a|,|b|), abs_tol)), with
-per-field tolerances configured in :mod:`paperfacts.fields`; text/composition comparison uses
-equality of the normalized key.
+(550 nm and a full-spectrum average are two different facts), then pair whatever is left by
+value equality — so when the two lanes phrase the same fact's condition differently ("ellipsometric" vs.
+"from ellipsometric"), an identical value doesn't get split into two records that each look like they're
+missing the other's value. Unequal leftovers are never paired across conditions. Numeric comparison uses
+``math.isclose`` (|a-b| <= max(rel_tol*max(|a|,|b|), abs_tol)), with per-field tolerances configured in
+:mod:`paperfacts.fields`; text/composition comparison uses equality of the normalized key.
 
 ``status`` is always the **actual** comparison outcome; sample-pairing confidence is recorded separately in
 ``match_confidence``. Whether a low-confidence pairing should be escalated for review is a decision left to
@@ -28,7 +28,15 @@ from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, SAMPLE_FIELDS, TARGET_
 from paperfacts.keys import comparison_key
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
-from paperfacts.normalize import canonical_category, clean_unit, normalize_key, normalize_lane, text_key
+from paperfacts.normalize import (
+    NUMBER_RE,
+    canonical_category,
+    clean_unit,
+    normalize_key,
+    normalize_lane,
+    normalize_text,
+    text_key,
+)
 from paperfacts.records import FieldValue, LaneExtraction
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]
@@ -181,6 +189,7 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
         a_name,
         b_name,
         emit_one_sided=False,
+        pair_leftovers_ambiguous=True,
         detail_prefix="unattributed in both lanes; ",
     )
 
@@ -232,6 +241,7 @@ def _compare_records(
     one_sided: FactStatus = "missing",
     one_sided_detail: str | None = None,
     emit_one_sided: bool = True,
+    pair_leftovers_ambiguous: bool = False,
     detail_prefix: str = "",
 ) -> list[FieldComparison]:
     """Pair up both sides' values field by field and compare them. When ``fields_b`` is empty this
@@ -239,6 +249,13 @@ def _compare_records(
 
     ``emit_one_sided=False`` suppresses the one-sided rows, for values whose other half may exist under a
     different scope (the unattributed comparison): pairing machinery is shared, reporting is not.
+
+    ``pair_leftovers_ambiguous`` is the companion of that suppression. When both sides are left holding a
+    value for the same field, no one-sided row reports it and the fact would vanish altogether -- yet both
+    lanes did report the field, with different values under differently worded conditions, which is
+    exactly what a reviewer needs to see. One positional row keeps it visible. It is always ambiguous,
+    never a conflict: the pairing is positional, so the two readings may equally well be two different
+    measurements.
     """
     spec_by_name = {spec.name: spec for spec in specs}
     names = sorted({f.field for f in (*fields_a, *fields_b)} & spec_by_name.keys())
@@ -247,7 +264,9 @@ def _compare_records(
         spec = spec_by_name[name]
         values_a = [f for f in fields_a if f.field == name]
         values_b = [f for f in fields_b if f.field == name]
-        for a, b in _pair_values(values_a, values_b, spec):
+        pairs = _pair_values(values_a, values_b, spec)
+        leftover = _split_off_first_leftover_pair(pairs) if pair_leftovers_ambiguous else None
+        for a, b in pairs:
             if a is None or b is None:
                 if not emit_one_sided:
                     continue
@@ -270,12 +289,9 @@ def _compare_records(
                 continue
             status, detail = compare_values(a, b, spec)
             if normalize_key(a.condition) != normalize_key(b.condition):
-                # A pair matched by numeric proximity, with condition wording that differs: if the values
-                # still agree, call it agreement (with a note); if not, there's no way to tell whether
-                # that's a real conflict or just two different conditions
-                detail = f"condition texts differ ({a.condition!r} vs {b.condition!r}); {detail}"
-                if status == "conflict":
-                    status = "ambiguous"
+                # Only an equal-value pair survives stage 2 (see _equal_pairs), so a differently worded
+                # condition never turns into a conflict here; it is an agreement with a note saying so.
+                detail = f"{detail}; conditions worded differently: {a.condition!r} / {b.condition!r}"
             out.append(
                 FieldComparison(
                     scope=scope,
@@ -288,7 +304,43 @@ def _compare_records(
                     detail=detail_prefix + detail,
                 )
             )
+        if leftover is not None:
+            left_a, left_b = leftover
+            out.append(
+                FieldComparison(
+                    scope=scope,
+                    field=name,
+                    condition=left_a.condition,
+                    status="ambiguous",
+                    match_confidence=match_confidence,
+                    a=left_a,
+                    b=left_b,
+                    detail=detail_prefix
+                    + "both lanes report the field with different values under different conditions "
+                    + f"({left_a.condition!r} / {left_b.condition!r})",
+                )
+            )
     return out
+
+
+def _split_off_first_leftover_pair(
+    pairs: list[tuple[FieldValue | None, FieldValue | None]],
+) -> tuple[FieldValue, FieldValue] | None:
+    """Remove the first unpaired value of each side from ``pairs`` and return the two, when both sides
+    have one; ``None`` (leaving ``pairs`` untouched) when only one side does.
+
+    Order is the order :func:`_pair_values` produced, so the choice is deterministic.
+    """
+    index_a = next((i for i, (a, b) in enumerate(pairs) if b is None and a is not None), None)
+    index_b = next((i for i, (a, b) in enumerate(pairs) if a is None and b is not None), None)
+    if index_a is None or index_b is None:
+        return None
+    left_a = pairs[index_a][0]
+    left_b = pairs[index_b][1]
+    assert left_a is not None and left_b is not None
+    for i in sorted((index_a, index_b), reverse=True):
+        pairs.pop(i)
+    return left_a, left_b
 
 
 def _pair_values(
@@ -296,9 +348,13 @@ def _pair_values(
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
     """Pair up both sides' values for one field, so that every value is accounted for.
 
-    Values under the same measurement condition are paired first, by numeric proximity within that
-    condition; whatever is left over can still pair across differently worded conditions ("ellipsometric"
-    against "from ellipsometric"), again by proximity. Anything still unpaired is reported one-sided.
+    Two stages. Stage 1 pairs values under the same measurement condition, by numeric proximity within
+    that condition. Stage 2 pairs whatever is left across differently worded conditions ("ellipsometric"
+    against "from ellipsometric", "Alloy target" against "alloy target used for all depositions"), but
+    only where the *values* are equal: the condition is the model's own wording and differs between the
+    lanes routinely, so equal values under differently worded conditions are one fact. Unequal values are
+    not -- pairing those would claim the two conditions describe the same fact, a guess the code is not
+    entitled to make -- so they stay one-sided. Anything still unpaired is reported one-sided.
 
     Every value gets a row. An earlier version indexed each side by condition and kept the first value per
     condition, which silently discarded a second reading of the same quantity -- exactly the case worth
@@ -319,10 +375,71 @@ def _pair_values(
             pairs.append((group_a.pop(0), group_b.pop(0)))
         rest_a += group_a
         rest_b += group_b
-    if spec.kind == "numeric":
-        pairs += _closest_pairs(rest_a, rest_b)
+    pairs += _equal_pairs(rest_a, rest_b, spec)
     pairs += [(a, None) for a in rest_a]
     pairs += [(None, b) for b in rest_b]
+    return pairs
+
+
+def _conditions_measure_differently(condition_a: str | None, condition_b: str | None) -> bool:
+    """Whether two conditions name different numbers, and so cannot describe the same measurement.
+
+    Equal values are not enough to pair across conditions when the conditions themselves are numeric:
+    85 % at 550 nm and 85 % at 600 nm are two measurements that happen to have come out the same, and
+    reporting them as one AGREE would invent agreement the paper never claimed. Numbers are the part of a
+    condition the lanes transcribe rather than phrase, so they are the part worth trusting -- wording
+    alone ("Alloy target" against "alloy target used for all ATO film depositions") still pairs, and so
+    does the same number said differently ("at 550 nm" against "550 nm wavelength"). A condition with no
+    number on either side carries nothing to contradict, so it never blocks a pair.
+    """
+    numbers_a = _condition_numbers(condition_a)
+    numbers_b = _condition_numbers(condition_b)
+    return bool(numbers_a) and bool(numbers_b) and numbers_a != numbers_b
+
+
+def _condition_numbers(condition: str | None) -> frozenset[float]:
+    """The numbers a condition names, as a set: "550 nm" -> {550}, "400-800 nm" -> {400, 800}."""
+    if not condition:
+        return frozenset()
+    text = normalize_text(condition)
+    numbers = set()
+    for match in NUMBER_RE.finditer(text):
+        token = match.group()
+        # A "-" straight after a digit is a range separator, not a sign: "400-800" names 400 and 800,
+        # not 400 and -800, and reading it as a sign would make one range look unlike the same range
+        # written "400 to 800".
+        if token[0] in "+-" and text[: match.start()].rstrip().endswith(tuple("0123456789")):
+            token = token[1:]
+        numbers.add(float(token.replace(",", "")))
+    return frozenset(numbers)
+
+
+def _equal_pairs(
+    rest_a: list[FieldValue], rest_b: list[FieldValue], spec: FieldSpec
+) -> list[tuple[FieldValue | None, FieldValue | None]]:
+    """Stage 2: pair leftovers whose values are equal, whatever their conditions say.
+
+    Equality is the same test the report uses: ``compare_values`` returning "agree" -- the field's
+    tolerances for a numeric field, the categories-aware text key for a text one. Greedy and deterministic:
+    lane A's order, first equal partner in lane B. Because only agreement pairs, a stage-2 row is an
+    agreement by construction and can never manufacture a conflict.
+
+    Conditions whose numbers disagree are refused outright, even when the values are equal: see
+    :func:`_conditions_measure_differently`.
+    """
+    pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
+    # Index-based removal: two values can be equal as models, and ``list.remove`` would then drop the
+    # wrong one.
+    i = 0
+    while i < len(rest_a):
+        for j, b in enumerate(rest_b):
+            if _conditions_measure_differently(rest_a[i].condition, b.condition):
+                continue
+            if compare_values(rest_a[i], b, spec)[0] == "agree":
+                pairs.append((rest_a.pop(i), rest_b.pop(j)))
+                break
+        else:
+            i += 1
     return pairs
 
 

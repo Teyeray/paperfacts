@@ -140,7 +140,9 @@ _RANGE = re.compile(rf"^(?P<a>{_NUM})\s*(?:-|to|~)\s*(?P<b>{_NUM})$")
 # A digit, "-" or "x" anywhere disqualifies it, so "1.2 x 10^-4" and "40 x 10 cm" can never be stripped.
 _TRAILING_UNIT = re.compile(r"[a-zA-ZΩμ%]+(?:[./][a-zA-ZΩμ%]+)*$")
 _PLUS_MINUS = re.compile(rf"^(?P<a>{_NUM})\s*(?:\+/-|±|\+-)\s*{_NUM}")
-_NUMBER = re.compile(_NUM)
+NUMBER_RE = re.compile(_NUM)
+"""Every plain number in a piece of text. Public because the comparison layer reads the numbers out of a
+measurement condition ("550 nm") and must use the same notion of "a number" this module parses with."""
 # Multi-character qualifiers first, or "<=" is swallowed by the lone "<" in the character class.
 _QUALIFIERS = re.compile(
     r"^(?P<q>>=|<=|approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅≥≤<>])\s*", re.IGNORECASE
@@ -240,7 +242,7 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
                 notes.append(f"range {a:g}-{b:g} → midpoint")
                 return (a + b) / 2, _join(notes)
 
-    numbers = _NUMBER.findall(text)
+    numbers = NUMBER_RE.findall(text)
     if not numbers:
         notes.append("no number found")
         return None, _join(notes)
