@@ -2,6 +2,7 @@
 // exports. This is the deliverable; the comparison workbench below it explains how each cell got there.
 
 import { escapeHtml, fmt, toast } from "./html.js";
+import { showEvidence, TARGET_SID } from "./samples.js";
 import { state } from "./state.js";
 
 const TARGET_ROW_ID = "target";
@@ -308,7 +309,15 @@ function cell(value, quality, sampleId, field) {
   const decision = quality.get(`${sampleId}${KEY_SEPARATOR}${field.name}`);
   const detail = decision?.detail ?? "";
   // An empty cell is a refusal with a reason, not a gap: the reason is one hover away.
-  if (value == null) return `<td class="cell empty" title="${escapeHtml(detail)}">—</td>`;
+  // Refused, not missing: the reason is the cell's accessible name (so it does not need a hover) and the
+  // cell is focusable, because clicking it jumps to the two lanes' records for this (sample, field).
+  if (value == null) {
+    const reason = detail || "流水线没有给出取值";
+    return (
+      `<td class="cell empty" tabindex="0" title="${escapeHtml(detail)}" aria-label="${escapeHtml(reason)}"` +
+      ` data-field="${escapeHtml(field.name)}" data-sample="${escapeHtml(sampleId === TARGET_ROW_ID ? TARGET_SID : sampleId)}">—</td>`
+    );
+  }
   const status = decision?.decision ?? "";
   const shown = shownValue(value);
   const badge = CELL_BADGE[status] ?? "";
@@ -324,10 +333,26 @@ function bindCells(tr) {
   for (const td of tr.querySelectorAll("td.cell[data-sources]")) {
     td.addEventListener("click", () => {
       for (const other of td.closest("tbody").querySelectorAll("td.selected")) other.classList.remove("selected");
+      // A value cell takes over the viewer; evidence marks left by a refused cell would now be stale.
+      for (const marked of td.closest(".document")?.querySelectorAll(".field.evidence") ?? []) marked.classList.remove("evidence");
       td.classList.add("selected");
       state.viewer?.highlight(td.dataset.sources.split("; ").filter(Boolean));
     });
   }
+  for (const td of tr.querySelectorAll("td.cell.empty[data-field]")) {
+    const jump = () => showEvidence(samplesHost(td), td.dataset.field, td.dataset.sample);
+    td.addEventListener("click", jump);
+    td.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      jump();
+    });
+  }
+}
+
+// The records section of the document this table belongs to, not of whichever document rendered first.
+function samplesHost(td) {
+  return td.closest(".document")?.querySelector("details.samples") ?? document.querySelector("details.samples");
 }
 
 // ---------- clipboard: the visible table as tab-separated text ----------
