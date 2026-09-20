@@ -15,7 +15,14 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from paperfacts.config import DEFAULT_LLM_REASONING_EFFORT, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
+from paperfacts.config import (
+    DEFAULT_LLM_REASONING_EFFORT,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
+    INHERIT,
+    Inherit,
+    ReasoningEffort,
+)
 from paperfacts.llm import LlmResult
 
 # Fake token counts. The numbers mean nothing; they only prove usage is recorded and summed.
@@ -35,7 +42,7 @@ class LlmCall:
     refresh: bool = False
     cache_salt: str = ""
     # The per-request effort override, as the caller passed it: None means "inherit the client's".
-    reasoning_effort: str | None = None
+    reasoning_effort: ReasoningEffort | Inherit | None = INHERIT
 
 
 class FakeLlmClient:
@@ -53,7 +60,7 @@ class FakeLlmClient:
         usage: dict[str, int] | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT,
+        reasoning_effort: ReasoningEffort | None = DEFAULT_LLM_REASONING_EFFORT,
     ) -> None:
         self.model = model
         # Part of the LlmClient protocol: what the real client would send, and therefore what the cache key
@@ -80,7 +87,7 @@ class FakeLlmClient:
         user: str,
         refresh: bool = False,
         cache_salt: str = "",
-        reasoning_effort: str | None = None,
+        reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
     ) -> LlmResult:
         with self._lock:
             self.calls.append(

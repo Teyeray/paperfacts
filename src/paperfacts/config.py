@@ -24,6 +24,7 @@ import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
@@ -66,16 +67,35 @@ DEFAULT_TEMPERATURE = 0.0
 # Room for the reasoning plus the JSON answer it precedes: 8192 was enough for a non-reasoning model and
 # is not for this one.
 DEFAULT_MAX_TOKENS = 65536
-# Reasoning effort, as the OpenAI-shaped `reasoning_effort` request parameter. The baseline is None, which
-# means the parameter is omitted entirely: that is what every request looked like before this setting
-# existed, so an unedited checkout keeps its cache keys. See _parse_reasoning_effort for the accepted values.
-DEFAULT_LLM_REASONING_EFFORT: str | None = None
+# What the OpenAI-shaped `reasoning_effort` request parameter may say. "none" is a value the endpoint
+# accepts and is sent as such; not sending the parameter at all is a different thing, spelled None.
+ReasoningEffort = Literal["none", "low", "medium", "high"]
+REASONING_EFFORTS: tuple[ReasoningEffort, ...] = get_args(ReasoningEffort)
+
+
+class Inherit(Enum):
+    """The one member is a sentinel: "whatever the client is already asking for".
+
+    Three meanings used to share one ``None``: omit the parameter, inherit the client's, and "no override
+    given". Spelling the third as its own value is what lets the inventory question say "omit" while the
+    client still sends an effort on every other question.
+    """
+
+    INHERIT = "inherit"
+
+
+INHERIT = Inherit.INHERIT
+# The inventory override: an effort to send, None to send no parameter at all, INHERIT to leave the
+# request exactly as the client would have built it.
+InventoryReasoningEffort = ReasoningEffort | None | Inherit
+# The baseline is None, which means the parameter is omitted entirely: that is what every request looked
+# like before this setting existed, so an unedited checkout keeps its cache keys.
+DEFAULT_LLM_REASONING_EFFORT: ReasoningEffort | None = None
 # Passage mode's inventory question ("which samples does this paper have?") reasons an order of magnitude
 # longer than the per-field questions that follow it -- measured at 11k-17k hidden tokens per lane, about
-# 70% of a run's completion tokens. This gives that one request its own effort. The baseline is None, which
-# means "inherit llm.reasoning_effort", i.e. exactly what every request looked like before this setting.
-DEFAULT_LLM_INVENTORY_REASONING_EFFORT: str | None = None
-REASONING_EFFORTS: tuple[str, ...] = ("none", "low", "medium", "high")
+# 70% of a run's completion tokens. This gives that one request its own effort. The baseline is INHERIT,
+# which leaves it exactly as it was before this setting existed.
+DEFAULT_LLM_INVENTORY_REASONING_EFFORT: InventoryReasoningEffort = INHERIT
 DEFAULT_RETRY_ATTEMPTS = 4
 DEFAULT_RETRY_BACKOFF_S = 2.0
 # How many of one lane's per-field questions may be in flight at once. Purely a scheduling knob: every
@@ -230,9 +250,10 @@ class Settings:
     llm_max_tokens: int = DEFAULT_MAX_TOKENS
     # None leaves `reasoning_effort` out of the request; a value asks the endpoint for that much hidden
     # reasoning before the answer.
-    llm_reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT
-    # None inherits llm_reasoning_effort; a value overrides it for passage mode's inventory question only.
-    llm_inventory_reasoning_effort: str | None = DEFAULT_LLM_INVENTORY_REASONING_EFFORT
+    llm_reasoning_effort: ReasoningEffort | None = DEFAULT_LLM_REASONING_EFFORT
+    # INHERIT reuses llm_reasoning_effort, None omits the parameter, a value overrides it -- for passage
+    # mode's inventory question only.
+    llm_inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT
     # Per-field questions in flight per lane. The two lanes themselves always run as a pair, so the peak
     # number of open requests is twice this. It changes nothing about what is asked, only when.
     llm_concurrency: int = DEFAULT_LLM_CONCURRENCY
@@ -301,11 +322,9 @@ class Settings:
             llm_reasoning_effort=_parse_reasoning_effort(
                 get("LLM_REASONING_EFFORT") or file.text_or_none("llm.reasoning_effort"), file.path
             ),
-            llm_inventory_reasoning_effort=_parse_reasoning_effort(
+            llm_inventory_reasoning_effort=_parse_inventory_reasoning_effort(
                 get("LLM_INVENTORY_REASONING_EFFORT") or file.text_or_none("llm.inventory_reasoning_effort"),
                 file.path,
-                dotted="llm.inventory_reasoning_effort",
-                variable="LLM_INVENTORY_REASONING_EFFORT",
             ),
             llm_concurrency=_positive(
                 number("LLM_CONCURRENCY", file.get("llm.concurrency", int), int),
@@ -372,23 +391,40 @@ def _parse_mode(raw: str, source: Path) -> ExtractionMode:
     return cast(ExtractionMode, raw)
 
 
-def _parse_reasoning_effort(
-    raw: str | None,
-    source: Path,
-    *,
-    dotted: str = "llm.reasoning_effort",
-    variable: str = "LLM_REASONING_EFFORT",
-) -> str | None:
+def _parse_reasoning_effort(raw: str | None, source: Path) -> ReasoningEffort | None:
     """``null`` (or an unset variable) means "omit the parameter"; anything else must be one we know the
     endpoint accepts, named here rather than discovered as a 400 halfway through a paper."""
     if raw is None:
         return None
+    return _known_effort(raw, source, dotted="llm.reasoning_effort", variable="LLM_REASONING_EFFORT", extra="null")
+
+
+def _parse_inventory_reasoning_effort(raw: str | None, source: Path) -> InventoryReasoningEffort:
+    """The override has three outcomes, so it has three spellings. ``null`` (the shipped value) and the
+    word ``inherit`` both mean "send the request the client would have sent"; ``omit`` is the explicit way
+    to ask for no ``reasoning_effort`` parameter on this one question while the client still sends one on
+    the others; anything else is the effort to send.
+    """
+    if raw is None or raw == INHERIT.value:
+        return INHERIT
+    if raw == "omit":
+        return None
+    return _known_effort(
+        raw,
+        source,
+        dotted="llm.inventory_reasoning_effort",
+        variable="LLM_INVENTORY_REASONING_EFFORT",
+        extra="null, inherit, omit",
+    )
+
+
+def _known_effort(raw: str, source: Path, *, dotted: str, variable: str, extra: str) -> ReasoningEffort:
     if raw not in REASONING_EFFORTS:
         efforts = ", ".join(REASONING_EFFORTS)
         raise ConfigError(
-            f"{dotted} is {raw!r}, expected null or one of {efforts} (set in {source} or {ENV_PREFIX}{variable})"
+            f"{dotted} is {raw!r}, expected {extra} or one of {efforts} (set in {source} or {ENV_PREFIX}{variable})"
         )
-    return raw
+    return cast(ReasoningEffort, raw)
 
 
 def _parse_number[T: (int, float)](name: str, raw: str | None, default: T, kind: type[T]) -> T:

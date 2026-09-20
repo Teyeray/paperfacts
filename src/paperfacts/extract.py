@@ -39,6 +39,7 @@ from paperfacts.config import (
     DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     EXTRACTION_MODES,
     ExtractionMode,
+    InventoryReasoningEffort,
 )
 from paperfacts.errors import ContextBudgetError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
@@ -154,7 +155,7 @@ def extract_lane(
     context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
     concurrency: int = DEFAULT_LLM_CONCURRENCY,
-    inventory_reasoning_effort: str | None = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
+    inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     refresh: bool = False,
 ) -> LaneExtraction:
     """Extract one parser lane, whole-document or question by question.
@@ -162,10 +163,11 @@ def extract_lane(
     ``concurrency`` only decides how many of passage mode's field questions wait on the network at once.
     Every request is the one the sequential loop would have sent, so it stays out of ``extractor_key``.
 
-    ``inventory_reasoning_effort`` overrides the client's effort for passage mode's inventory question
-    alone -- the one question that reasons for far longer than the field questions after it. It does change
-    what is sent, so it is in ``extractor_key``. Both lanes get the same value, so the disagreement signal
-    stays a comparison of two identically-asked lanes.
+    ``inventory_reasoning_effort`` overrides the client's effort for the inventory question alone -- the
+    one question that reasons for far longer than the field questions after it. ``INHERIT`` leaves the
+    request exactly as the client builds it, ``None`` sends that question with no such parameter at all,
+    a value sends that effort. It does change what is sent, so it is in ``extractor_key``. Both lanes get
+    the same value, so the disagreement signal stays a comparison of two identically-asked lanes.
     """
     if passes < 1:
         raise ValueError(f"passes must be at least 1, got {passes}")
@@ -315,7 +317,7 @@ def _take_inventory(
     *,
     backend: Backend,
     context_tokens: int,
-    inventory_reasoning_effort: str | None,
+    inventory_reasoning_effort: InventoryReasoningEffort,
     refresh: bool,
 ) -> SampleInventory:
     """Ask which samples exist -- once per lane.

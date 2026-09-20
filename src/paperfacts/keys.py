@@ -28,6 +28,8 @@ from paperfacts.config import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
     ExtractionMode,
+    InventoryReasoningEffort,
+    ReasoningEffort,
     Settings,
 )
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, CONDITION_KEYWORDS, FIELD_SPECS
@@ -135,8 +137,8 @@ def extractor_key(
     mode: ExtractionMode = "document",
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT,
-    inventory_reasoning_effort: str | None = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
+    reasoning_effort: ReasoningEffort | None = DEFAULT_LLM_REASONING_EFFORT,
+    inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
     context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
 ) -> str:

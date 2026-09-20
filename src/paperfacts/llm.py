@@ -29,6 +29,9 @@ from paperfacts.config import (
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_S,
     DEFAULT_TEMPERATURE,
+    INHERIT,
+    Inherit,
+    ReasoningEffort,
 )
 from paperfacts.errors import LlmError, LlmResponseError
 from paperfacts.storage import write_text_atomic
@@ -57,7 +60,7 @@ class LlmClient(Protocol):
     model: str
     temperature: float
     max_tokens: int
-    reasoning_effort: str | None
+    reasoning_effort: ReasoningEffort | None
 
     def complete_json(
         self,
@@ -66,7 +69,7 @@ class LlmClient(Protocol):
         user: str,
         refresh: bool = False,
         cache_salt: str = "",
-        reasoning_effort: str | None = None,
+        reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
     ) -> LlmResult: ...
 
 
@@ -84,7 +87,7 @@ class OpenAICompatibleClient:
         client: httpx.Client | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        reasoning_effort: str | None = DEFAULT_LLM_REASONING_EFFORT,
+        reasoning_effort: ReasoningEffort | None = DEFAULT_LLM_REASONING_EFFORT,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
         retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
         sleep: Callable[[float], None] = time.sleep,
@@ -118,7 +121,7 @@ class OpenAICompatibleClient:
         user: str,
         refresh: bool = False,
         cache_salt: str = "",
-        reasoning_effort: str | None = None,
+        reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
     ) -> LlmResult:
         payload = self.payload(system=system, user=user, reasoning_effort=reasoning_effort)
         key = self.cache_key(payload, cache_salt=cache_salt)
@@ -138,10 +141,13 @@ class OpenAICompatibleClient:
         self._write_cache(key, result)
         return result
 
-    def payload(self, *, system: str, user: str, reasoning_effort: str | None = None) -> dict[str, Any]:
+    def payload(
+        self, *, system: str, user: str, reasoning_effort: ReasoningEffort | Inherit | None = INHERIT
+    ) -> dict[str, Any]:
         """The complete request body. The cache key hashes this, so no parameter can escape the key.
 
-        ``reasoning_effort`` overrides the client's own setting for this one request; ``None`` inherits it.
+        ``reasoning_effort`` overrides the client's own setting for this one request: ``INHERIT`` keeps it,
+        ``None`` sends no such parameter at all, a value sends that one.
         A question that reasons far longer than its neighbours can therefore be given its own effort
         without changing any other request's bytes, and so without invalidating their cached answers.
         """
@@ -156,7 +162,7 @@ class OpenAICompatibleClient:
         }
         # Omitted rather than sent as null when unset: the bytes on the wire stay what they were before this
         # parameter existed, so every cached answer still resolves.
-        effort = self.reasoning_effort if reasoning_effort is None else reasoning_effort
+        effort = self.reasoning_effort if reasoning_effort is INHERIT else reasoning_effort
         if effort is not None:
             body["reasoning_effort"] = effort
         return body
@@ -274,7 +280,7 @@ def complete_validated[M: BaseModel](
     repair: Callable[[str, str], str],
     refresh: bool = False,
     cache_salt: str = "",
-    reasoning_effort: str | None = None,
+    reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
 ) -> tuple[M, str, dict[str, int]]:
     """Ask for JSON that validates against ``model_cls``, giving the model one chance to fix itself.
 

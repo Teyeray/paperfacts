@@ -32,6 +32,7 @@ from paperfacts.config import (
     DEFAULT_TEMPERATURE,
     ENV_CONFIG_PATH,
     ENV_PREFIX,
+    INHERIT,
     ConfigDocument,
     Settings,
     config_path,
@@ -355,12 +356,23 @@ def test_the_inventory_reasoning_effort_comes_from_the_file(tmp_path: Path):
 
 
 def test_a_null_inventory_reasoning_effort_inherits_the_general_one(tmp_path: Path):
-    # null is the baseline: the inventory question is sent with whatever llm.reasoning_effort says.
+    # null is the baseline, spelled INHERIT in code: the inventory question is sent with whatever
+    # llm.reasoning_effort says. The word "inherit" says the same thing out loud.
     path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": None})
 
     settings = Settings.from_env(env_for(path))
 
-    assert settings.llm_inventory_reasoning_effort is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is None
+    assert settings.llm_inventory_reasoning_effort is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is INHERIT
+    spelled = write_config(tmp_path / "spelled.json", {"llm.inventory_reasoning_effort": "inherit"})
+    assert Settings.from_env(env_for(spelled)).llm_inventory_reasoning_effort is INHERIT
+
+
+def test_an_omitted_inventory_reasoning_effort_sends_no_parameter(tmp_path: Path):
+    # The one meaning null cannot carry: send that question with no reasoning_effort at all, while the
+    # client keeps sending its own on every other question.
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": "omit"})
+
+    assert Settings.from_env(env_for(path)).llm_inventory_reasoning_effort is None
 
 
 def test_an_unknown_inventory_reasoning_effort_names_its_own_key(tmp_path: Path):
@@ -603,7 +615,8 @@ def test_the_shipped_configuration_mirrors_the_built_in_baselines():
     # (.omc/research/reasoning-effort.md), and an unedited checkout must keep its cache keys.
     assert data["llm"]["reasoning_effort"] is DEFAULT_LLM_REASONING_EFFORT is None
     # Shipped unset too: the inventory question inherits the general effort until somebody asks otherwise.
-    assert data["llm"]["inventory_reasoning_effort"] is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is None
+    assert data["llm"]["inventory_reasoning_effort"] is None
+    assert DEFAULT_LLM_INVENTORY_REASONING_EFFORT is INHERIT
     assert data["llm"]["concurrency"] == DEFAULT_LLM_CONCURRENCY
     assert data["llm"]["retry_attempts"] == DEFAULT_RETRY_ATTEMPTS
     assert data["llm"]["retry_backoff_s"] == DEFAULT_RETRY_BACKOFF_S

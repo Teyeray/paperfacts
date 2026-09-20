@@ -15,6 +15,7 @@ import json
 import pytest
 
 from paperfacts.adapters import render_markdown
+from paperfacts.config import INHERIT
 from paperfacts.errors import ContextBudgetError, LlmResponseError
 from paperfacts.extract import extract_lane
 from paperfacts.keys import FINGERPRINT_LENGTH, extractor_key, schema_fingerprint
@@ -90,6 +91,14 @@ def test_extractor_key_changes_with_the_reasoning_effort():
 
 def test_extractor_key_ignores_the_inventory_effort_at_its_baseline():
     assert extractor_key("deepseek-chat", mode="passage") == extractor_key(
+        "deepseek-chat", mode="passage", inventory_reasoning_effort=INHERIT
+    )
+
+
+def test_extractor_key_changes_when_the_inventory_question_omits_the_parameter():
+    # "omit no parameter at all" is a different request from "inherit whatever the client sends", so it
+    # cannot quietly reuse the baseline's stored extractions.
+    assert extractor_key("deepseek-chat", mode="passage") != extractor_key(
         "deepseek-chat", mode="passage", inventory_reasoning_effort=None
     )
 

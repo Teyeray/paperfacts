@@ -277,7 +277,7 @@ be edited:
                   "model": "deepseek-v4.1-flash",     // any OpenAI-compatible endpoint and model
                   "timeout_s": 600, "context_tokens": 60000, "temperature": 0.0, "max_tokens": 16384,
                   "reasoning_effort": null,                    // null | none | low | medium | high
-                  "inventory_reasoning_effort": null,          // null = inherit reasoning_effort
+                  "inventory_reasoning_effort": null,          // null/"inherit" | "omit" | none…high
                   "retry_attempts": 4, "retry_backoff_s": 2.0 },
   "extraction": { "mode": "passage", "passes": 1, "candidate_limit": 8 },
   "comparison": { "ambiguous_match_confidence": 0.6 },
@@ -322,10 +322,15 @@ recall: on the same twelve-page paper it found 77 values and 7 samples where the
 8 samples (`.omc/research/reasoning-effort.md`). Set it to `"none"` for a quick first pass over a large
 batch, and leave it unset for the numbers you keep. It changes what the model is asked, so changing it
 writes a new `extractor_key` and re-extracts. `llm.inventory_reasoning_effort` gives passage mode's one
-inventory question its own effort, inheriting `llm.reasoning_effort` when left `null`: that question alone
-spends 11k-17k hidden reasoning tokens per lane, about 70% of a run's completion tokens, while the field
-questions after it reason in tens to hundreds, so turning it down is most of the wall-clock for one
-question's worth of recall risk. Both lanes always get the same value, and it too writes a new
+inventory question its own effort: that question alone spends 11k-17k hidden reasoning tokens per lane,
+about 70% of a run's completion tokens, while the field questions after it reason in tens to hundreds, so
+turning it down is most of the wall-clock for one question's worth of recall risk. It has three answers,
+and they are three different requests. `null` — the shipped value — and the word `"inherit"` both mean
+"send the inventory question exactly as the client builds it", so it carries whatever
+`llm.reasoning_effort` says. `"omit"` sends that one question with no `reasoning_effort` parameter at all
+while every field question still carries the client's; this is the only way to say that, and it is why
+`null` no longer has to mean two things. Anything else (`"none"`, `"low"`, `"medium"`, `"high"`) is the
+effort to send. Both lanes always get the same value, and anything but the baseline writes a new
 `extractor_key` (in passage mode only, since document mode never asks the question).
 
 `llm.concurrency` is how many of one lane's per-field questions wait on the endpoint at once (default 4);

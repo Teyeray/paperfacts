@@ -19,6 +19,7 @@ import time
 
 import pytest
 
+from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
 from paperfacts.keys import extractor_key
 from paperfacts.prompts import field_system_prompt, inventory_system_prompt
@@ -110,7 +111,7 @@ def extract(
     backend: str = "mineru",
     passes: int = 1,
     concurrency: int = 1,
-    inventory_reasoning_effort: str | None = None,
+    inventory_reasoning_effort: InventoryReasoningEffort = INHERIT,
 ):
     return extract_lane(
         make_artifact(make_blocks(backend), backend=backend),
@@ -463,7 +464,20 @@ def test_the_inventory_effort_reaches_the_inventory_question_and_nothing_else():
     inventory = [call for call in client.calls if call.system == inventory_system_prompt()]
     fields = [call for call in client.calls if call.system != inventory_system_prompt()]
     assert [call.reasoning_effort for call in inventory] == ["none"]
-    assert fields and all(call.reasoning_effort is None for call in fields)
+    assert fields and all(call.reasoning_effort is INHERIT for call in fields)
+
+
+def test_the_inventory_question_can_omit_the_parameter_the_client_still_sends():
+    # None is the third meaning the sentinel separates out: this one question goes without a
+    # reasoning_effort parameter while every field question keeps the client's own.
+    client = FakeLlmClient(responder())
+
+    extract(client, inventory_reasoning_effort=None)
+
+    inventory = [call for call in client.calls if call.system == inventory_system_prompt()]
+    fields = [call for call in client.calls if call.system != inventory_system_prompt()]
+    assert [call.reasoning_effort for call in inventory] == [None]
+    assert fields and all(call.reasoning_effort is INHERIT for call in fields)
 
 
 def test_without_the_setting_every_question_inherits_the_clients_effort():
@@ -471,7 +485,7 @@ def test_without_the_setting_every_question_inherits_the_clients_effort():
 
     extract(client)
 
-    assert all(call.reasoning_effort is None for call in client.calls)
+    assert all(call.reasoning_effort is INHERIT for call in client.calls)
 
 
 def test_the_inventory_effort_is_stored_in_the_extractor_key():
