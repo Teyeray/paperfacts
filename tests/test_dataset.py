@@ -344,6 +344,13 @@ def test_the_json_view_survives_a_round_trip(tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_the_field_list_carries_the_chinese_description_for_the_header_tooltip():
+    result = paired([value("transmittance", "85", "%")], [value("transmittance", "85", "%", backend="paddleocr_vl")])
+    by_name = {field["name"]: field for field in result.as_dict()["fields"]}
+    assert "透光率" in by_name["transmittance"]["description"]
+    assert by_name["transmittance"]["scope"] == "sample"
+
+
 def test_from_dict_reverses_as_dict_exactly():
     # The corpus export rebuilds datasets from their JSON, so the inverse has to be lossless.
     result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])

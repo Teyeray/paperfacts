@@ -122,6 +122,9 @@ class DocumentDataset:
                     "name": spec.name,
                     "unit": spec.canonical_unit,
                     "scope": "sample" if spec.is_sample_level else "target",
+                    # The browser's header tooltip; a field added in config.json without a Chinese
+                    # description simply has none.
+                    "description": _DESCRIPTIONS.get(spec.name, ""),
                 }
                 for spec in FIELD_SPECS
             ],

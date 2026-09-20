@@ -264,7 +264,7 @@ export function headRow(leading, fields) {
   const cells = leading.map((label) => `<th>${escapeHtml(label)}</th>`);
   for (const field of fields) {
     const unit = field.unit ? `<small>${escapeHtml(field.unit)}</small>` : "";
-    cells.push(`<th class="fcol">${escapeHtml(field.name)}${unit}</th>`);
+    cells.push(`<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(field.name)}${unit}</th>`);
   }
   tr.innerHTML = cells.join("");
   return tr;
