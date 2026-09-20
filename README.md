@@ -349,6 +349,7 @@ to count as the same fact:
   "group": "film",                          // target = paper-level, process / film = per sample
   "kind": "numeric",                        // numeric | composition | text
   "description": "Sheet resistance of the film (Ω/sq).",
+  "label": "方阻",                            // optional Chinese column header; display only
   "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
   "canonical_unit": "Ω/sq",
   "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
@@ -357,6 +358,9 @@ to count as the same fact:
   "bare_number": "reject"                   // reject | assume_canonical | percent_or_fraction
 }
 ```
+
+`label` is display-only: the web table and the Excel field sheet print it above the column, and it reaches
+no prompt and no verdict, so editing one changes neither `extractor_key` nor `comparison_key`.
 
 A `text` field may add `"categories"`, the closed set of answers it accepts, written the way the output
 should spell them: `"categories": ["DC", "RF", "pulsed DC", "DC+RF", "HiPIMS"]` on `mode`. A quoted value is

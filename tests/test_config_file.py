@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from paperfacts import keys
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONCURRENCY,
@@ -433,6 +434,42 @@ def test_every_optional_key_is_read_when_it_is_given():
     assert (spec.rel_tol, spec.abs_tol) == (0.05, 1.0)
     assert spec.condition_hint == "wavelength"
     assert spec.bare_number == "assume_canonical"
+
+
+def test_a_field_label_is_optional_and_read_when_it_is_given():
+    assert load_field_specs(document({"fields": [MINIMAL_FIELD]}))[0].label == ""
+
+    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": "厚度"}]}))[0]
+
+    assert spec.label == "厚度"
+
+
+@pytest.mark.parametrize("bad", ["", "  ", 5, None])
+def test_a_label_that_is_not_a_non_empty_string_is_refused(bad):
+    with pytest.raises(ConfigError, match="label"):
+        load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": bad}]}))
+
+
+def test_every_shipped_field_has_a_chinese_label():
+    assert all(spec.label for spec in FIELD_SPECS)
+
+
+def test_a_label_changes_neither_cache_key(monkeypatch):
+    # It is a column header, nothing more: adding or editing one must not re-extract or re-compare a paper.
+    plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
+    labelled = load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": "厚度"}]}))
+
+    def keys_for(specs):
+        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
+        return keys.extractor_key("a-model"), keys.comparison_key()
+
+    try:
+        assert keys_for(plain) == keys_for(labelled)
+    finally:
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
 
 
 def test_an_unknown_key_in_a_field_names_the_field_and_the_valid_keys():

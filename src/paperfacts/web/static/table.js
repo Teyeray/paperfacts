@@ -183,7 +183,8 @@ export function fieldPicker(fields, onChange) {
       commit(new Set(boxes.filter((box) => box.checked).map((box) => box.value)));
     });
     const text = document.createElement("span");
-    text.textContent = field.unit ? `${field.name}（${field.unit}）` : field.name;
+    const name = field.label ? `${field.label} ${field.name}` : field.name;
+    text.textContent = field.unit ? `${name}（${field.unit}）` : name;
     label.append(input, text);
     return label;
   }
@@ -263,8 +264,12 @@ export function headRow(leading, fields) {
   const tr = document.createElement("tr");
   const cells = leading.map((label) => `<th>${escapeHtml(label)}</th>`);
   for (const field of fields) {
-    const unit = field.unit ? `<small>${escapeHtml(field.unit)}</small>` : "";
-    cells.push(`<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(field.name)}${unit}</th>`);
+    // With a Chinese label the header reads label over `name unit`, so the column is recognisable at a
+    // glance while the id it exports under stays visible. Without one it is the id over the unit, as before.
+    const title = field.label || field.name;
+    const second = [field.label ? field.name : "", field.unit ?? ""].filter(Boolean).join(" ");
+    const sub = second ? `<small>${escapeHtml(second)}</small>` : "";
+    cells.push(`<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`);
   }
   tr.innerHTML = cells.join("");
   return tr;
@@ -381,9 +386,16 @@ function sampleValues(row, fields) {
 }
 
 // A field column is labelled `name (unit)` when the field has a unit, so the numbers stay readable once
-// they leave the page that showed the unit in the header's second line.
+// they leave the page that showed the unit in the header's second line. A field with a Chinese label is
+// labelled with it instead, matching what the reader saw on screen.
 export function tsvHeader(leading, fields) {
-  return [...leading, ...fields.map((field) => (field.unit ? `${field.name} (${field.unit})` : field.name))];
+  return [
+    ...leading,
+    ...fields.map((field) => {
+      const name = field.label || field.name;
+      return field.unit ? `${name} (${field.unit})` : name;
+    }),
+  ];
 }
 
 // Tabs and newlines inside a value would invent columns and rows, so they collapse to a space.

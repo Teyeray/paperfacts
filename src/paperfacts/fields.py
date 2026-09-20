@@ -46,6 +46,9 @@ class FieldSpec:
     description: str
     keywords: tuple[str, ...]
     canonical_unit: str | None = None
+    # A short Chinese name for the column header. Display only: it reaches no prompt and no verdict, so it
+    # stays out of the cache keys (see keys._SCHEMA_EXCLUDED). Empty means the UI falls back to ``name``.
+    label: str = ""
     # Numeric tolerance: |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
     rel_tol: float = 0.0
     abs_tol: float = 0.0
@@ -101,6 +104,10 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
     if not isinstance(description, str) or not description.strip():
         raise ConfigError(f"{where} needs a non-empty 'description'; it is what the model is told to look for")
 
+    label = entry.get("label", "")
+    if not isinstance(label, str) or ("label" in entry and not label.strip()):
+        raise ConfigError(f"{where}: label must be a non-empty string when present, got {entry.get('label')!r}")
+
     categories = entry.get("categories", [])
     if not isinstance(categories, list) or not all(isinstance(word, str) and word.strip() for word in categories):
         raise ConfigError(f"{where}: categories must be a list of non-empty strings")
@@ -114,6 +121,7 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         description=description,
         keywords=tuple(keywords),
         canonical_unit=text_or_none("canonical_unit"),
+        label=label,
         rel_tol=number("rel_tol", 0.0),
         abs_tol=number("abs_tol", 0.0),
         condition_hint=text_or_none("condition_hint"),

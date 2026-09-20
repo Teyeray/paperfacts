@@ -359,6 +359,14 @@ def test_every_configured_field_has_a_chinese_description():
     assert {spec.name for spec in FIELD_SPECS} <= set(_DESCRIPTIONS)
 
 
+def test_the_field_list_carries_the_chinese_label_for_the_column_header():
+    # The browser prints this above the column; a field without one falls back to its id, never to blank.
+    by_name = {field["name"]: field for field in dataset(make_lane()).as_dict()["fields"]}
+
+    assert by_name["transmittance"]["label"] == "透光率"
+    assert by_name["thickness"]["label"] == "厚度"
+
+
 def test_from_dict_reverses_as_dict_exactly():
     # The corpus export rebuilds datasets from their JSON, so the inverse has to be lossless.
     result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])

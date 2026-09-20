@@ -42,7 +42,9 @@ from paperfacts.prompts import (
 FINGERPRINT_LENGTH = 12
 _PACKAGE_DIR = Path(__file__).parent
 # Cells that change a verdict or retrieval but never what the model is asked; each has its own fingerprint.
-_SCHEMA_EXCLUDED = {"keywords", "categories"}
+# ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
+# verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
+_SCHEMA_EXCLUDED = {"keywords", "categories", "label"}
 
 
 def content_fingerprint(material: str) -> str:
@@ -61,6 +63,9 @@ def schema_fingerprint() -> str:
     ``keywords`` is deliberately left out. It steers passage-mode retrieval and nothing else -- never a
     prompt, never a tolerance -- so folding it in here would invalidate document-mode extractions and every
     stored comparison each time a synonym is added. :func:`retrieval_fingerprint` covers it instead.
+
+    ``label`` is left out because nothing downstream of it is cached: it is only what the web table prints
+    above a column.
 
     ``categories`` is left out for the same reason in the other direction: it renames nothing the model is
     asked and only decides whether two quoted spellings count as the same answer, which is a verdict.

@@ -120,6 +120,8 @@ class DocumentDataset:
             "fields": [
                 {
                     "name": spec.name,
+                    # The short Chinese column header, empty when config.json declares none.
+                    "label": spec.label,
                     "unit": spec.canonical_unit,
                     "scope": "sample" if spec.is_sample_level else "target",
                     # The browser's header tooltip; a field added in config.json without a Chinese
@@ -530,6 +532,7 @@ def write_dataset(
     descriptions = [
         {
             "field": spec.name,
+            "label": spec.label,
             "scope": "靶材（论文级）" if not spec.is_sample_level else "样品级",
             "unit": spec.canonical_unit or "文本",
             "description": _DESCRIPTIONS.get(spec.name, ""),
@@ -542,6 +545,7 @@ def write_dataset(
         "字段说明",
         (
             ("field", "字段"),
+            ("label", "中文名"),
             ("scope", "层级"),
             ("unit", "标准单位"),
             ("description", "中文说明"),

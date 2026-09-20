@@ -67,6 +67,7 @@
   "fields": [
     {
       "name": "component",
+      "label": "靶材成分",
       "group": "target",
       "kind": "composition",
       "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.",
@@ -87,6 +88,7 @@
     },
     {
       "name": "resistance",
+      "label": "靶材电阻率",
       "group": "target",
       "kind": "numeric",
       "description": "Electrical resistivity of the sputtering target itself (not the film).",
@@ -104,6 +106,7 @@
     },
     {
       "name": "density",
+      "label": "靶材密度",
       "group": "target",
       "kind": "numeric",
       "description": "Relative density of the sputtering target as a percentage of theoretical density.",
@@ -121,6 +124,7 @@
     },
     {
       "name": "inch",
+      "label": "靶材尺寸",
       "group": "target",
       "kind": "numeric",
       "description": "Size of the sputtering target: diameter, or length and width for a rectangular or rotary target.",
@@ -141,6 +145,7 @@
     },
     {
       "name": "sputtering_time",
+      "label": "溅射时间",
       "group": "process",
       "kind": "numeric",
       "description": "Duration of the sputtering deposition for this sample.",
@@ -163,6 +168,7 @@
     },
     {
       "name": "sputtering_power",
+      "label": "溅射功率",
       "group": "process",
       "kind": "numeric",
       "description": "Electrical power applied to the sputtering target to generate and sustain the plasma (W).",
@@ -183,6 +189,7 @@
     },
     {
       "name": "mode",
+      "label": "溅射模式",
       "group": "process",
       "kind": "text",
       "description": "Operational regime of the sputtering process: DC, RF or pulsed DC.",
@@ -208,6 +215,7 @@
     },
     {
       "name": "ar_flow_rate",
+      "label": "Ar 流量",
       "group": "process",
       "kind": "numeric",
       "description": "Argon flow rate introduced into the vacuum chamber (sccm).",
@@ -224,6 +232,7 @@
     },
     {
       "name": "o2_flow_rate",
+      "label": "O2 流量",
       "group": "process",
       "kind": "numeric",
       "description": "Oxygen flow rate introduced into the vacuum chamber (sccm).",
@@ -240,6 +249,7 @@
     },
     {
       "name": "h2_flow_rate",
+      "label": "H2 流量",
       "group": "process",
       "kind": "numeric",
       "description": "Hydrogen flow rate introduced into the vacuum chamber (sccm).",
@@ -256,6 +266,7 @@
     },
     {
       "name": "target_substrate_distance",
+      "label": "靶基距",
       "group": "process",
       "kind": "numeric",
       "description": "Spatial gap between the sputtering target and the substrate holder (cm).",
@@ -273,6 +284,7 @@
     },
     {
       "name": "substrate_axis_distance",
+      "label": "基片偏轴距",
       "group": "process",
       "kind": "numeric",
       "description": "Distance between the substrate surface and the holder center, i.e. the off-axis offset (cm).",
@@ -290,6 +302,7 @@
     },
     {
       "name": "substrate_temperature",
+      "label": "基片温度",
       "group": "process",
       "kind": "numeric",
       "description": "Substrate/holder temperature during the sputtering deposition (°C).",
@@ -307,6 +320,7 @@
     },
     {
       "name": "annealing_temperature",
+      "label": "退火温度",
       "group": "process",
       "kind": "numeric",
       "description": "Temperature of the thermal treatment performed after deposition is complete (°C).",
@@ -325,6 +339,7 @@
     },
     {
       "name": "annealing_time",
+      "label": "退火时间",
       "group": "process",
       "kind": "numeric",
       "description": "Duration of the thermal treatment performed after deposition is complete (min).",
@@ -342,6 +357,7 @@
     },
     {
       "name": "rotation_speed",
+      "label": "转速",
       "group": "process",
       "kind": "numeric",
       "description": "Rotation speed of the substrate holder during film deposition (rpm).",
@@ -360,6 +376,7 @@
     },
     {
       "name": "sheet_resistance",
+      "label": "方阻",
       "group": "film",
       "kind": "numeric",
       "description": "Sheet resistance of the film (Ω/sq).",
@@ -377,6 +394,7 @@
     },
     {
       "name": "resistivity",
+      "label": "电阻率",
       "group": "film",
       "kind": "numeric",
       "description": "Electrical resistivity of the deposited film, as opposed to the `resistance` of the target it was sputtered from.",
@@ -394,6 +412,7 @@
     },
     {
       "name": "transmittance",
+      "label": "透光率",
       "group": "film",
       "kind": "numeric",
       "description": "Optical transmittance of the film (%). Always record the wavelength or range it refers to.",
@@ -413,6 +432,7 @@
     },
     {
       "name": "thickness",
+      "label": "厚度",
       "group": "film",
       "kind": "numeric",
       "description": "Film thickness (e.g. from SEM cross section or profilometry).",
