@@ -69,3 +69,12 @@ Forced re-run of tsta-20-1599695 with the mlx-vlm server on port 8111 (Apple M4,
 153.6 s, 12 pages, 128 and 191 blocks — the same counts the cached parses from the other machine held.
 Without the model name the Paddle pipeline asks the server for "PaddleOCR-VL-1.6-0.9B", which is not a
 Hugging Face repository, and the parse fails with a 401; the name must be set wherever the mlx backend is.
+
+## Corpus run (2026-09-20) and the endpoint running dry
+
+All 14 library papers were extracted under the current keys (13 via `paperfacts batch` over the template
+zip, the web uploads through run-all); rebuilding comparisons and tables after a key change takes 34 s
+for 13 papers because every model answer is cached. The 14th paper (s41598-022-19270-w) stopped mid-way:
+from 08:56 every request to the endpoint, even a one-line test, answers HTTP 500 `BalanceError: There are
+no suitable services`. 748 answers were bought today. It is not the paper, the payload, or concurrency —
+all three were bisected. Nothing runs until the account has balance again; the cache makes the resume free.
