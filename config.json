@@ -21,6 +21,7 @@
     "context_tokens": 200000,
     "temperature": 0.0,
     "max_tokens": 65536,
+    "concurrency": 4,
     "reasoning_effort": null,
     "inventory_reasoning_effort": null,
     "retry_attempts": 4,
@@ -71,6 +72,7 @@
       "group": "target",
       "kind": "composition",
       "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.",
+      "description_zh": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
       "keywords": [
         "target",
         "sputtering target",
@@ -92,6 +94,7 @@
       "group": "target",
       "kind": "numeric",
       "description": "Electrical resistivity of the sputtering target itself (not the film).",
+      "description_zh": "靶材电阻率；与薄膜电阻率 resistivity 区分。",
       "keywords": [
         "target resistivity",
         "target resistance",
@@ -110,6 +113,7 @@
       "group": "target",
       "kind": "numeric",
       "description": "Relative density of the sputtering target as a percentage of theoretical density.",
+      "description_zh": "靶材相对理论密度，数值 95 表示 95%。",
       "keywords": [
         "relative density",
         "target density",
@@ -128,6 +132,7 @@
       "group": "target",
       "kind": "numeric",
       "description": "Size of the sputtering target: diameter, or length and width for a rectangular or rotary target.",
+      "description_zh": "靶材直径或唯一长度；矩形长宽、范围值不转成单个数值。",
       "keywords": [
         "inch",
         "target size",
@@ -149,6 +154,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Duration of the sputtering deposition for this sample.",
+      "description_zh": "所选样品的溅射沉积时间。",
       "keywords": [
         "sputtering time",
         "deposition time",
@@ -172,6 +178,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Electrical power applied to the sputtering target to generate and sustain the plasma (W).",
+      "description_zh": "所选样品的溅射功率（W）。",
       "keywords": [
         "sputtering power",
         "sputter power",
@@ -193,6 +200,7 @@
       "group": "process",
       "kind": "text",
       "description": "Operational regime of the sputtering process: DC, RF or pulsed DC.",
+      "description_zh": "溅射工作模式：DC、RF 或 pulsed DC。",
       "keywords": [
         "DC",
         "RF",
@@ -219,6 +227,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Argon flow rate introduced into the vacuum chamber (sccm).",
+      "description_zh": "所选样品的氩气流量（sccm）。",
       "keywords": [
         "Ar flow rate",
         "argon flow rate",
@@ -236,6 +245,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Oxygen flow rate introduced into the vacuum chamber (sccm).",
+      "description_zh": "所选样品的氧气流量（sccm）。",
       "keywords": [
         "O2 flow rate",
         "oxygen flow rate",
@@ -253,6 +263,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Hydrogen flow rate introduced into the vacuum chamber (sccm).",
+      "description_zh": "所选样品的氢气流量（sccm）。",
       "keywords": [
         "H2 flow rate",
         "hydrogen flow rate",
@@ -270,6 +281,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Spatial gap between the sputtering target and the substrate holder (cm).",
+      "description_zh": "靶到基片/样品台的间距（cm）。",
       "keywords": [
         "target to substrate distance",
         "target-substrate distance",
@@ -288,6 +300,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Distance between the substrate surface and the holder center, i.e. the off-axis offset (cm).",
+      "description_zh": "基片到样品台中心的偏轴距离（cm）。",
       "keywords": [
         "off-axis distance",
         "offset",
@@ -306,6 +319,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Substrate/holder temperature during the sputtering deposition (°C).",
+      "description_zh": "沉积时的基片/样品台温度（°C）。",
       "keywords": [
         "substrate temperature",
         "holder temperature",
@@ -324,6 +338,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Temperature of the thermal treatment performed after deposition is complete (°C).",
+      "description_zh": "沉积后退火处理的温度（°C）。",
       "keywords": [
         "post-annealing temperature",
         "annealing temperature",
@@ -343,6 +358,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Duration of the thermal treatment performed after deposition is complete (min).",
+      "description_zh": "沉积后退火处理的时长（min）。",
       "keywords": [
         "post-annealing duration",
         "annealing time",
@@ -361,6 +377,7 @@
       "group": "process",
       "kind": "numeric",
       "description": "Rotation speed of the substrate holder during film deposition (rpm).",
+      "description_zh": "沉积时样品台的旋转速度（rpm）。",
       "keywords": [
         "rotation speed",
         "rotational speed",
@@ -380,6 +397,7 @@
       "group": "film",
       "kind": "numeric",
       "description": "Sheet resistance of the film (Ω/sq).",
+      "description_zh": "所选样品的薄膜方块电阻。",
       "keywords": [
         "sheet resistance",
         "sheet resistivity",
@@ -398,6 +416,7 @@
       "group": "film",
       "kind": "numeric",
       "description": "Electrical resistivity of the deposited film, as opposed to the `resistance` of the target it was sputtered from.",
+      "description_zh": "所选样品的薄膜电阻率。",
       "keywords": [
         "resistivity",
         "electrical resistivity",
@@ -416,6 +435,7 @@
       "group": "film",
       "kind": "numeric",
       "description": "Optical transmittance of the film (%). Always record the wavelength or range it refers to.",
+      "description_zh": "所选样品的透光率，数值 85 表示 85%；测量波段见条件及数据质量。",
       "keywords": [
         "transmittance",
         "transmission",
@@ -436,6 +456,7 @@
       "group": "film",
       "kind": "numeric",
       "description": "Film thickness (e.g. from SEM cross section or profilometry).",
+      "description_zh": "所选样品的薄膜厚度。",
       "keywords": [
         "thickness",
         "film thickness",

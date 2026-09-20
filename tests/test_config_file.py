@@ -363,17 +363,6 @@ def test_a_null_inventory_reasoning_effort_inherits_the_general_one(tmp_path: Pa
     assert settings.llm_inventory_reasoning_effort is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is None
 
 
-def test_a_file_written_before_the_inventory_effort_existed_still_loads(tmp_path: Path):
-    # The key is younger than some checkouts' config.json, so its absence reads as the baseline rather
-    # than as the hand-edited-file error every other missing key raises.
-    path = write_config(tmp_path / "config.json", {})
-    data = json.loads(path.read_text(encoding="utf-8"))
-    del data["llm"]["inventory_reasoning_effort"]
-    path.write_text(json.dumps(data), encoding="utf-8")
-
-    assert Settings.from_env(env_for(path)).llm_inventory_reasoning_effort is None
-
-
 def test_an_unknown_inventory_reasoning_effort_names_its_own_key(tmp_path: Path):
     # The error has to name the key that is wrong, not the neighbouring one that shares the parser.
     path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": "maximum"})
@@ -467,6 +456,42 @@ def test_a_label_changes_neither_cache_key(monkeypatch):
 
     try:
         assert keys_for(plain) == keys_for(labelled)
+    finally:
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
+
+
+def test_a_chinese_description_is_optional_and_read_when_it_is_given():
+    assert load_field_specs(document({"fields": [MINIMAL_FIELD]}))[0].description_zh == ""
+
+    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": "薄膜厚度"}]}))[0]
+
+    assert spec.description_zh == "薄膜厚度"
+
+
+@pytest.mark.parametrize("bad", ["", "  ", 5, None])
+def test_a_chinese_description_that_is_not_a_non_empty_string_is_refused(bad):
+    with pytest.raises(ConfigError, match="description_zh"):
+        load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": bad}]}))
+
+
+def test_every_shipped_field_has_a_chinese_description():
+    assert all(spec.description_zh for spec in FIELD_SPECS)
+
+
+def test_a_chinese_description_changes_neither_cache_key(monkeypatch):
+    # Like the label: it reaches a tooltip and a spreadsheet sheet, never a prompt and never a verdict.
+    plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
+    described = load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": "薄膜厚度"}]}))
+
+    def keys_for(specs):
+        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
+        return keys.extractor_key("a-model"), keys.comparison_key()
+
+    try:
+        assert keys_for(plain) == keys_for(described)
     finally:
         for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
             cached.cache_clear()
@@ -579,6 +604,7 @@ def test_the_shipped_configuration_mirrors_the_built_in_baselines():
     assert data["llm"]["reasoning_effort"] is DEFAULT_LLM_REASONING_EFFORT is None
     # Shipped unset too: the inventory question inherits the general effort until somebody asks otherwise.
     assert data["llm"]["inventory_reasoning_effort"] is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is None
+    assert data["llm"]["concurrency"] == DEFAULT_LLM_CONCURRENCY
     assert data["llm"]["retry_attempts"] == DEFAULT_RETRY_ATTEMPTS
     assert data["llm"]["retry_backoff_s"] == DEFAULT_RETRY_BACKOFF_S
     assert data["extraction"]["candidate_limit"] == DEFAULT_CANDIDATE_LIMIT
@@ -630,14 +656,15 @@ def test_a_concurrency_below_one_names_the_key_and_the_file(tmp_path: Path):
         Settings.from_env(env_for(path))
 
 
-def test_a_file_without_a_concurrency_key_falls_back_to_the_baseline(tmp_path: Path):
-    """The knob changes no cache key, so a configuration file written before it existed stays valid."""
-    path = write_config(tmp_path / "config.json", {"llm.concurrency": None})
+def test_a_file_without_a_concurrency_key_names_the_key_and_the_file(tmp_path: Path):
+    """Every setting is declared in config.json, so a missing key is a hand-edited file, not a default."""
+    path = write_config(tmp_path / "config.json", {})
     data = json.loads(path.read_text(encoding="utf-8"))
     del data["llm"]["concurrency"]
     path.write_text(json.dumps(data), encoding="utf-8")
 
-    assert Settings.from_env(env_for(path)).llm_concurrency == DEFAULT_LLM_CONCURRENCY
+    with pytest.raises(ConfigError, match=r"missing setting 'llm\.concurrency'"):
+        Settings.from_env(env_for(path))
 
 
 def test_a_non_integer_concurrency_still_names_the_key(tmp_path: Path):

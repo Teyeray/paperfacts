@@ -350,6 +350,7 @@ to count as the same fact:
   "kind": "numeric",                        // numeric | composition | text
   "description": "Sheet resistance of the film (Ω/sq).",
   "label": "方阻",                            // optional Chinese column header; display only
+  "description_zh": "所选样品的薄膜方块电阻。",   // optional Chinese explanation; display only
   "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
   "canonical_unit": "Ω/sq",
   "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
@@ -359,8 +360,10 @@ to count as the same fact:
 }
 ```
 
-`label` is display-only: the web table and the Excel field sheet print it above the column, and it reaches
-no prompt and no verdict, so editing one changes neither `extractor_key` nor `comparison_key`.
+`label` and `description_zh` are display-only: the web table prints the label above the column and shows
+the description as its tooltip, the Excel 字段说明 sheet prints both, and neither reaches a prompt or a
+verdict, so editing one changes neither `extractor_key` nor `comparison_key`. `description` is the English
+sentence the model is told to look for and is not interchangeable with them.
 
 A `text` field may add `"categories"`, the closed set of answers it accepts, written the way the output
 should spell them: `"categories": ["DC", "RF", "pulsed DC", "DC+RF", "HiPIMS"]` on `mode`. A quoted value is

@@ -371,7 +371,8 @@ const samplesHost = (td) =>
 function targetValues(data, fields) {
   const paper = data.paper_row ?? {};
   const cells = fields.map((field) => (field.scope === "target" ? paper[field.name] : null));
-  return [TARGET_LABEL, "", "", ...cells];
+  // One entry per LEADING column: the label plus three blanks, then the field cells.
+  return [TARGET_LABEL, ...Array(LEADING.length - 1).fill(""), ...cells];
 }
 
 function sampleValues(row, fields) {

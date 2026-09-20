@@ -30,6 +30,7 @@ from paperfacts.normalize import (
     clean_unit,
     convert_to_canonical,
     delatex,
+    normalize_key,
     normalize_lane,
     normalize_text,
     parse_number,
@@ -47,28 +48,6 @@ _SCALAR = re.compile(rf"^(?P<center>{_ATOM})(?:\s*(?:±|\+/-|\+-|\\pm)\s*(?P<unc
 # The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
 _APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-_DESCRIPTIONS = {
-    "component": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
-    "resistance": "靶材电阻率；与薄膜电阻率 resistivity 区分。",
-    "density": "靶材相对理论密度，数值 95 表示 95%。",
-    "inch": "靶材直径或唯一长度；矩形长宽、范围值不转成单个数值。",
-    "sputtering_time": "所选样品的溅射沉积时间。",
-    "sputtering_power": "所选样品的溅射功率（W）。",
-    "mode": "溅射工作模式：DC、RF 或 pulsed DC。",
-    "ar_flow_rate": "所选样品的氩气流量（sccm）。",
-    "o2_flow_rate": "所选样品的氧气流量（sccm）。",
-    "h2_flow_rate": "所选样品的氢气流量（sccm）。",
-    "target_substrate_distance": "靶到基片/样品台的间距（cm）。",
-    "substrate_axis_distance": "基片到样品台中心的偏轴距离（cm）。",
-    "substrate_temperature": "沉积时的基片/样品台温度（°C）。",
-    "annealing_temperature": "沉积后退火处理的温度（°C）。",
-    "annealing_time": "沉积后退火处理的时长（min）。",
-    "rotation_speed": "沉积时样品台的旋转速度（rpm）。",
-    "sheet_resistance": "所选样品的薄膜方块电阻。",
-    "resistivity": "所选样品的薄膜电阻率。",
-    "transmittance": "所选样品的透光率，数值 85 表示 85%；测量波段见条件及数据质量。",
-    "thickness": "所选样品的薄膜厚度。",
-}
 _DATA_COLUMNS = (
     ("document_id", "文档ID"),
     ("filename", "文件名"),
@@ -94,6 +73,20 @@ _QUALITY_COLUMNS = (
 )
 
 
+def _field_column(spec: FieldSpec) -> dict[str, CellValue]:
+    """What a reader needs to know about one column, built once for both the web UI and the Excel sheet.
+
+    ``label`` and ``description`` are display only and may be empty when ``config.json`` declares neither.
+    """
+    return {
+        "name": spec.name,
+        "label": spec.label,
+        "unit": spec.canonical_unit,
+        "scope": "sample" if spec.is_sample_level else "target",
+        "description": spec.description_zh,
+    }
+
+
 @dataclass(frozen=True)
 class DocumentDataset:
     document_id: str
@@ -117,19 +110,7 @@ class DocumentDataset:
             "filename": self.filename,
             "extractor_key": self.extractor_key,
             "comparison_key": self.comparison_key,
-            "fields": [
-                {
-                    "name": spec.name,
-                    # The short Chinese column header, empty when config.json declares none.
-                    "label": spec.label,
-                    "unit": spec.canonical_unit,
-                    "scope": "sample" if spec.is_sample_level else "target",
-                    # The browser's header tooltip; a field added in config.json without a Chinese
-                    # description simply has none.
-                    "description": _DESCRIPTIONS.get(spec.name, ""),
-                }
-                for spec in FIELD_SPECS
-            ],
+            "fields": [_field_column(spec) for spec in FIELD_SPECS],
             "paper_row": dict(self.paper_row),
             "sample_rows": [dict(row) for row in self.sample_rows],
             "quality_rows": [dict(row) for row in self.quality_rows],
@@ -183,11 +164,6 @@ class _Decision:
     # The committed value rests entirely on evidence the paper stated for the whole sample series,
     # never for this sample on its own. False for a rejected decision, which commits to nothing.
     series: bool = False
-
-
-def _condition_key(value: str | None) -> str:
-    # Preserve non-Latin text and meaningful operators, unlike a formula-oriented ASCII key.
-    return re.sub(r"\s+", "", normalize_text(value or "")).casefold()
 
 
 def _joined(values: Sequence[str]) -> str:
@@ -267,10 +243,11 @@ def _decide(
     if len(trusted) != len(evidence):
         details.append("已排除未定位到原文或缺少有效引用的候选")
     # Per lane only: the two lanes word the same condition differently ("after sputtering" vs
-    # "after deposition"), and compare.py has already judged whether their values and conditions
-    # correspond. Several distinct conditions inside one lane really are several measurements.
+    # "after deposition"), so only a lane disagreeing with itself is evidence of several measurements.
+    # The key is normalize_key, the same one compare.py and extract.py judge conditions by, so a
+    # condition the comparison report called one thing is never two here.
     if any(
-        len({_condition_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
+        len({normalize_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
     ):
         return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
     parsed: list[tuple[Backend, FieldValue, CellValue]] = []
@@ -530,21 +507,20 @@ def write_dataset(
     _worksheet(workbook, "论文数据", _DATA_COLUMNS, [doc.paper_row for doc in unique], "Papers")
     _worksheet(workbook, "样品数据", _DATA_COLUMNS, [row for doc in unique for row in doc.sample_rows], "Samples")
     descriptions = [
-        {
-            "field": spec.name,
-            "label": spec.label,
-            "scope": "靶材（论文级）" if not spec.is_sample_level else "样品级",
-            "unit": spec.canonical_unit or "文本",
-            "description": _DESCRIPTIONS.get(spec.name, ""),
+        column
+        | {
+            # The sheet says the same things in Chinese, for a reader who opens the workbook alone.
+            "scope": "样品级" if column["scope"] == "sample" else "靶材（论文级）",
+            "unit": column["unit"] or "文本",
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
-        for spec in FIELD_SPECS
+        for column in (_field_column(spec) for spec in FIELD_SPECS)
     ]
     _worksheet(
         workbook,
         "字段说明",
         (
-            ("field", "字段"),
+            ("name", "字段"),
             ("label", "中文名"),
             ("scope", "层级"),
             ("unit", "标准单位"),

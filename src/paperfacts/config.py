@@ -139,22 +139,6 @@ class ConfigDocument:
             raise ConfigError(f"{self.path}: {dotted} must be {kind.__name__}, got {node!r}")
         return cast(T, node)
 
-    def has(self, dotted: str) -> bool:
-        """Whether the file carries this key at all. Absent means "use the built-in baseline"."""
-        try:
-            self._node(dotted)
-        except ConfigError:
-            return False
-        return True
-
-    def get_or[T](self, dotted: str, kind: type[T], default: T) -> T:
-        """A setting whose key a configuration file written before it existed does not carry yet.
-
-        Absent means "use the built-in baseline". Present still has to be the right type, so a typo is
-        an error naming the key rather than a silent fallback.
-        """
-        return self.get(dotted, kind) if self.has(dotted) else default
-
     def text_or_none(self, dotted: str) -> str | None:
         """A string setting that may be ``null``, which is how "not configured" is written for a URL."""
         value = self._node(dotted)
@@ -163,11 +147,6 @@ class ConfigDocument:
         if not isinstance(value, str):
             raise ConfigError(f"{self.path}: {dotted} must be a string or null, got {value!r}")
         return value.strip() or None
-
-    def text_or_none_if_absent(self, dotted: str) -> str | None:
-        """:meth:`text_or_none` for a key a file written before this setting existed may not carry:
-        absent reads as ``null`` rather than as an error, the same contract as :meth:`get_or`."""
-        return self.text_or_none(dotted) if self.has(dotted) else None
 
     def entries(self, dotted: str) -> list[Any]:
         value = self._node(dotted)
@@ -323,13 +302,13 @@ class Settings:
                 get("LLM_REASONING_EFFORT") or file.text_or_none("llm.reasoning_effort"), file.path
             ),
             llm_inventory_reasoning_effort=_parse_reasoning_effort(
-                get("LLM_INVENTORY_REASONING_EFFORT") or file.text_or_none_if_absent("llm.inventory_reasoning_effort"),
+                get("LLM_INVENTORY_REASONING_EFFORT") or file.text_or_none("llm.inventory_reasoning_effort"),
                 file.path,
                 dotted="llm.inventory_reasoning_effort",
                 variable="LLM_INVENTORY_REASONING_EFFORT",
             ),
             llm_concurrency=_positive(
-                number("LLM_CONCURRENCY", file.get_or("llm.concurrency", int, DEFAULT_LLM_CONCURRENCY), int),
+                number("LLM_CONCURRENCY", file.get("llm.concurrency", int), int),
                 "llm.concurrency",
                 file.path,
             ),

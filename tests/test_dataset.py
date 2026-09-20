@@ -352,11 +352,9 @@ def test_the_field_list_carries_the_chinese_description_for_the_header_tooltip()
 
 
 def test_every_configured_field_has_a_chinese_description():
-    # The Excel field sheet and the header tooltips read the same map; a field added in config.json without
-    # an entry would export blank, which this test turns into a visible failure instead.
-    from paperfacts.dataset import _DESCRIPTIONS
-
-    assert {spec.name for spec in FIELD_SPECS} <= set(_DESCRIPTIONS)
+    # The Excel field sheet and the header tooltips both read description_zh; a field shipped in
+    # config.json without one would export blank, which this test turns into a visible failure instead.
+    assert [spec.name for spec in FIELD_SPECS if not spec.description_zh] == []
 
 
 def test_the_field_list_carries_the_chinese_label_for_the_column_header():

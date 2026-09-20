@@ -44,7 +44,7 @@ _PACKAGE_DIR = Path(__file__).parent
 # Cells that change a verdict or retrieval but never what the model is asked; each has its own fingerprint.
 # ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
 # verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
-_SCHEMA_EXCLUDED = {"keywords", "categories", "label"}
+_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh"}
 
 
 def content_fingerprint(material: str) -> str:
