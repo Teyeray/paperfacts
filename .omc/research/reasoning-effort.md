@@ -145,3 +145,16 @@ agree 525 → 528, single_source 345 → 292, conflict 0 → 1. Nothing it targe
 single-source cells cannot be separated from run-to-run variance without another 34-minute run. Reverted;
 the prompt stays as measured. Lesson for later prompt work: two runs of the baseline first, to know the
 noise floor, before crediting or blaming a wording change.
+
+## extraction.passes repaired and measured (2026-09-20)
+
+Two defects made `passes=2` destructive: the vote key carried the model's free-text condition, so a
+paraphrase between passes counted as disagreement, and every pass re-asked the inventory, so sample ids
+differed and no sample reached a majority (a corpus run kept 227 of ~1,300 values). Fixed: passes vote on
+(field, number, unit) per rank, and the inventory is asked once per lane.
+
+Three papers, two passes, after the fix (per lane: kept values / dropped by the vote):
+coatings 28/4 and 38/3; tsta 32/12 and 39/9; ae1c02771 26/4 and 24/2. All samples survive; every kept
+value is unanimous. So 10–25 % of one-pass values are not reproduced by a second pass at temperature 0:
+that is the noise floor for any prompt experiment. Two passes stay opt-in — they double the model cost
+and act as a reproducibility filter, not a recall gain.
