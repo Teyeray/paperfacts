@@ -136,3 +136,12 @@ it onto each with `series=True`. Full re-extraction of 14 papers (every field qu
 The extra multiple_conditions refusals were read: co-sputtered films with DC on one target and RF on the
 other, and lanes holding two Ar flows under two conditions — genuine two-value cases the fan-out made
 visible, not mis-placed values. No conflicts appeared, which is the test a wrong fan-out would fail.
+
+## Descriptive-reference prompt rule: no gain, reverted (2026-09-20)
+
+Rule 4 was extended so a sample named by a property ("the electrode with 0.46 at% V") maps onto the one
+list entry it fits. Full re-extraction: unattributed 71 → 71 (transmittance 24, sputtering_power 13),
+agree 525 → 528, single_source 345 → 292, conflict 0 → 1. Nothing it targeted moved, and the drop in
+single-source cells cannot be separated from run-to-run variance without another 34-minute run. Reverted;
+the prompt stays as measured. Lesson for later prompt work: two runs of the baseline first, to know the
+noise floor, before crediting or blaming a wording change.
