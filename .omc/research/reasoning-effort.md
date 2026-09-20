@@ -158,3 +158,19 @@ coatings 28/4 and 38/3; tsta 32/12 and 39/9; ae1c02771 26/4 and 24/2. All sample
 value is unanimous. So 10–25 % of one-pass values are not reproduced by a second pass at temperature 0:
 that is the noise floor for any prompt experiment. Two passes stay opt-in — they double the model cost
 and act as a reproducibility filter, not a recall gain.
+
+## Pairing leftovers by equality (2026-09-20, evening)
+
+The lanes word one measurement condition two ways, so one fact both lanes quoted showed as two or three
+one-sided MISSING rows. Leftovers now pair when their values are equal and neither condition carries a
+different number. Corpus, 14 papers, rebuilt from cache:
+
+| | before | after |
+|---|---|---|
+| comparison rows: agree / missing / ambiguous | (not tracked) | 765 / 400 / 9 |
+| table cells: agree | 525 | 603 |
+| table cells: single_source | 345 | 268 |
+| conflict | 0 | 0 |
+
+77 single-source cells became double-lane agreements (the commit message says 97: that was the count
+before the numeric-condition guard, which correctly refuses 85 % @ 550 nm against 85 % @ 600 nm).
