@@ -241,7 +241,9 @@ class Library:
             # Both artifacts are stored, so nothing downstream opens the file; the path is carried anyway
             # because the export names its workbook after it. Re-parsing raises ParserError instead.
             pdf = self._recorded_pdf_path(identity)
-        return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256)
+        return DocumentInput(
+            document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name
+        )
 
     def _recorded_pdf_path(self, identity: DocumentIdentity) -> Path:
         """Where the PDF was when the document was first seen: a path that need not exist, whose name is
@@ -261,14 +263,16 @@ class Library:
         """
         sha = hashlib.sha256(data).hexdigest()
         pdf = self.layout.source_pdf(sha)
-        document = DocumentInput(document_id=sha, pdf_path=pdf, sha256=sha)
         name = Path(filename).name or f"{document_key(sha)}.pdf"
+        document = DocumentInput(document_id=sha, pdf_path=pdf, sha256=sha)
         identity = ensure_identity(self.layout, document, name=name, uploaded=True)
         if not pdf.is_file() or pdf.stat().st_size != len(data):
             write_bytes_atomic(pdf, data)
-        mark_uploaded(self.layout, identity, name=name)
+        identity = mark_uploaded(self.layout, identity, name=name)
         logger.info("registered upload doc=%s name=%s bytes=%d", document_key(sha), filename, len(data))
-        return document
+        # The stored PDF is always source.pdf, so the name a user sees can only come from the identity --
+        # the one already on disk, so a re-upload of the same bytes returns exactly what the first did.
+        return document.model_copy(update={"display_name": identity.name})
 
     # ---- internal -----------------------------------------------------------------------
 

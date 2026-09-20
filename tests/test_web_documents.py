@@ -514,3 +514,21 @@ def test_an_extraction_without_its_artifact_keeps_the_stored_grounding(library: 
     lane = library.extraction(DOC_KEY, "mineru")
 
     assert lane.sample("A").get("sheet_resistance").grounded is False
+
+
+def test_an_upload_carries_the_uploaded_filename_as_its_display_name(library: Library):
+    """The stored PDF is always source.pdf, so the export would otherwise name every upload that."""
+    document = library.register_upload("Sputtered ITO.pdf", PDF_BYTES)
+
+    assert document.display_name == "Sputtered ITO.pdf"
+    assert document.display_filename == "Sputtered ITO.pdf"
+    assert document.pdf_path.name == "source.pdf"
+    assert library.document(document.document_id[:16]).display_name == "Sputtered ITO.pdf"
+
+
+def test_a_cli_document_is_displayed_under_the_name_it_was_first_seen_with(library: Library, two_page_pdf: Path):
+    seed_cli_document(library, two_page_pdf)
+
+    document = library.document(DOC_KEY)
+
+    assert document.display_filename == two_page_pdf.name

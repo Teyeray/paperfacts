@@ -174,6 +174,16 @@ class DocumentInput(BaseModel):
     document_id: str = Field(min_length=64, max_length=64)
     pdf_path: Path
     sha256: str = Field(min_length=64, max_length=64)
+    display_name: str | None = Field(
+        default=None,
+        description="Name to show a user. Web uploads are all stored as source.pdf, so the on-disk name is "
+        "useless there; the real one comes from identity.json.",
+    )
+
+    @property
+    def display_filename(self) -> str:
+        """The filename a user should see, wherever a document is named in output."""
+        return self.display_name or self.pdf_path.name
 
     @classmethod
     def from_path(cls, pdf_path: Path) -> Self:

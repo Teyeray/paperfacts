@@ -360,3 +360,26 @@ def test_the_json_field_list_carries_the_unit_and_the_scope():
     assert fields["thickness"]["scope"] == "sample"
     assert fields["component"]["scope"] == "target"
     assert fields["thickness"]["unit"] == "nm"
+
+
+def test_the_display_name_is_the_filename_a_dataset_reports():
+    """A web upload is stored as source.pdf, so the path can't name the paper: the display name does."""
+    document = DocumentInput(
+        document_id=DOC_ID, sha256=DOC_ID, pdf_path=Path("source.pdf"), display_name="Sputtered ITO.pdf"
+    )
+    a = make_lane(samples=[make_sample("A", [value("thickness", "100 nm")])])
+    b = make_lane(backend="paddleocr_vl")
+    matching = SampleMatching(unmatched_a=("A",))
+    result = consolidate_document(document, {a.backend: a, b.backend: b}, compare_lanes(a, b, matching))
+
+    assert result.filename == "Sputtered ITO.pdf"
+    assert result.paper_row["filename"] == "Sputtered ITO.pdf"
+    assert [row["filename"] for row in result.sample_rows] == ["Sputtered ITO.pdf"]
+    assert all(row["filename"] == "Sputtered ITO.pdf" for row in result.quality_rows)
+
+
+def test_without_a_display_name_the_dataset_still_reports_the_path_name():
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "100 nm")])]), filename="paper.pdf")
+
+    assert result.filename == "paper.pdf"
+    assert result.paper_row["filename"] == "paper.pdf"

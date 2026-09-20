@@ -473,13 +473,13 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
     key = extractor_key_for(settings)
     report_path = layout.comparison_path(document.document_id, key, comparison_key())
     if not report_path.is_file():
-        raise FileNotFoundError(f"no current comparison for {document.pdf_path.name}; run `paperfacts run` first")
+        raise FileNotFoundError(f"no current comparison for {document.display_filename}; run `paperfacts run` first")
     report = ComparisonReport.read(report_path)
     lanes: dict[Backend, LaneExtraction] = {}
     for backend in BACKENDS:
         lane = read_lane(layout, document.document_id, backend, key)
         if lane is None:
-            raise FileNotFoundError(f"no current {backend} extraction for {document.pdf_path.name}")
+            raise FileNotFoundError(f"no current {backend} extraction for {document.display_filename}")
         lanes[backend] = lane
     # Grounding is rechecked on read, so comparison must use those same refreshed values.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)

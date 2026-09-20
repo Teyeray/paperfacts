@@ -339,7 +339,7 @@ def consolidate_document(
     if any(lane.extractor_key != report.extractor_key for lane in lanes.values()):
         raise ValueError("extraction lanes and comparison report have different extractor keys")
     lanes = {backend: normalize_lane(lane) for backend, lane in lanes.items()}
-    metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.pdf_path.name}
+    metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.display_filename}
     quality: list[Row] = []
 
     def record(sample_id: str, spec: FieldSpec, decision: _Decision) -> None:
@@ -448,7 +448,7 @@ def consolidate_document(
     )
     return DocumentDataset(
         document.document_id,
-        document.pdf_path.name,
+        document.display_filename,
         paper_row,
         tuple(sample_rows),
         tuple(quality),

@@ -177,7 +177,7 @@ def ensure_identity(
         layout,
         DocumentIdentity(
             sha256=document.sha256,
-            name=name or document.pdf_path.name,
+            name=name or document.display_filename,
             source_path=None if uploaded else str(document.pdf_path),
             uploaded=uploaded,
             created_at=_now_iso(),
