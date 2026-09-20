@@ -99,9 +99,10 @@ def test_a_condition_spelled_differently_across_passes_still_counts_as_one_vote(
     assert field.agreement == pytest.approx(2 / 3)
 
 
-def test_the_surviving_values_source_ids_come_from_the_first_pass_that_produced_it():
-    # _value_key ignores source_ids, so two passes citing different blocks for the same number still count
-    # as one vote; the exemplar that is kept is whichever pass was seen first.
+def test_the_surviving_value_keeps_the_first_passs_wording_and_every_passs_citation():
+    # The vote ignores source_ids, so two passes citing different blocks for the same number still count as
+    # one vote. The exemplar kept is the first pass's, but the evidence is the union: a block only the
+    # second pass quoted is still a block that supports the value.
     first = make_field("sheet_resistance", "12.5", source_ids=("mineru_p0_b1",))
     second = make_field("sheet_resistance", "12.5", source_ids=("paddleocr_vl_p0_b3",))
     passes = [records(samples=[make_sample("A", [first])]), records(samples=[make_sample("A", [second])])]
@@ -109,7 +110,7 @@ def test_the_surviving_values_source_ids_come_from_the_first_pass_that_produced_
     merged = merge_passes(passes)
 
     field = find(merged, "A").get("sheet_resistance")
-    assert field.source_ids == ("mineru_p0_b1",)
+    assert field.source_ids == ("mineru_p0_b1", "paddleocr_vl_p0_b3")
     assert field.agreement == 1.0
 
 
@@ -230,3 +231,178 @@ def test_the_scopes_that_are_not_a_sample_cannot_collide_with_a_sample_id():
     # paper can name a sample in a way that lands its values in the target or unattributed bucket.
     assert not isinstance(Scope.TARGET, str)
     assert not isinstance(Scope.UNATTRIBUTED, str)
+
+
+# ---- The vote ignores the condition wording; the entries still carry it ------------------------
+
+
+def test_a_paraphrased_condition_is_one_value_carrying_the_first_passs_wording():
+    # The measured defect: the model rewords the condition on every pass, and a vote on the full key gave
+    # each wording a single vote, so nothing reached a majority and two passes destroyed the extraction.
+    passes = [
+        records(samples=[make_sample("A", [make_field("transmittance", "85", condition="at 550 nm")])]),
+        records(samples=[make_sample("A", [make_field("transmittance", "85", condition="550 nm wavelength")])]),
+    ]
+
+    merged = merge_passes(passes)
+
+    fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
+    assert len(fields) == 1
+    assert fields[0].condition == "at 550 nm"  # the exemplar is the first pass to report the number
+    assert fields[0].agreement == 1.0
+
+
+def test_two_different_numbers_under_the_same_condition_still_fail_the_vote():
+    # Voting condition-free must not make disagreement disappear: these are two different measurements,
+    # each seen once, and both are dropped exactly as before.
+    passes = [
+        records(samples=[make_sample("A", [make_field("transmittance", "85", condition="at 550 nm")])]),
+        records(samples=[make_sample("A", [make_field("transmittance", "90", condition="at 550 nm")])]),
+    ]
+
+    merged = merge_passes(passes)
+
+    assert [v for v in find(merged, "A").fields if v.field == "transmittance"] == []
+    assert "transmittance: only 1/2 passes produced '85'" in merged.dropped
+    assert "transmittance: only 1/2 passes produced '90'" in merged.dropped
+
+
+def test_one_number_under_two_genuine_conditions_keeps_both_entries():
+    # 85 % at 550 nm and 85 % at 600 nm are two measurements that happen to share a number. Collapsing
+    # them would merge conditions, which the extraction never does.
+    def pass_with_both():
+        return records(
+            samples=[
+                make_sample(
+                    "A",
+                    [
+                        make_field("transmittance", "85", condition="at 550 nm"),
+                        make_field("transmittance", "85", condition="at 600 nm"),
+                    ],
+                )
+            ]
+        )
+
+    merged = merge_passes([pass_with_both(), pass_with_both()])
+
+    fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
+    assert [v.condition for v in fields] == ["at 550 nm", "at 600 nm"]
+    assert [v.agreement for v in fields] == [1.0, 1.0]
+
+
+def test_a_paraphrase_seen_in_two_of_three_passes_keeps_the_partial_agreement():
+    passes = [
+        records(samples=[make_sample("A", [make_field("transmittance", "85", condition="at 550 nm")])]),
+        records(samples=[make_sample("A", [make_field("transmittance", "85", condition="measured at 550 nm")])]),
+        records(samples=[make_sample("A", [])]),
+    ]
+
+    merged = merge_passes(passes)
+
+    fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
+    assert len(fields) == 1
+    assert fields[0].agreement == pytest.approx(2 / 3)
+
+
+def test_unattributed_values_are_voted_on_condition_free_too():
+    def unplaced(condition: str) -> ExtractedRecords:
+        return ExtractedRecords(
+            target=None,
+            samples=(),
+            invalid_source_ids=(),
+            dropped=(),
+            unattributed=(make_field("transmittance", "85", condition=condition),),
+        )
+
+    merged = merge_passes([unplaced("at 550 nm"), unplaced("550 nm wavelength")])
+
+    assert len(merged.unattributed) == 1
+    assert merged.unattributed[0].condition == "at 550 nm"
+    assert merged.unattributed[0].agreement == 1.0
+
+
+def test_a_paraphrase_that_loses_its_wording_still_contributes_its_citation():
+    # Only one wording survives, but both passes supported the number: the block pass 2 quoted has to
+    # reach the kept value, or merging passes would quietly narrow the evidence.
+    passes = [
+        records(
+            samples=[
+                make_sample(
+                    "A", [make_field("transmittance", "85", condition="at 550 nm", source_ids=("mineru_p0_b1",))]
+                )
+            ]
+        ),
+        records(
+            samples=[
+                make_sample(
+                    "A",
+                    [make_field("transmittance", "85", condition="550 nm wavelength", source_ids=("mineru_p0_b7",))],
+                )
+            ]
+        ),
+    ]
+
+    merged = merge_passes(passes)
+
+    fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
+    assert len(fields) == 1
+    assert fields[0].source_ids == ("mineru_p0_b1", "mineru_p0_b7")
+
+
+def test_a_second_condition_only_one_pass_reported_is_dropped_like_any_lone_value():
+    # Both passes place the number at 550 nm, so that entry is unanimous; the extra 600 nm entry has no
+    # counterpart in pass 1 and must not be carried in on the back of the agreement about 550 nm.
+    passes = [
+        records(samples=[make_sample("A", [make_field("transmittance", "85", condition="at 550 nm")])]),
+        records(
+            samples=[
+                make_sample(
+                    "A",
+                    [
+                        make_field("transmittance", "85", condition="at 550 nm"),
+                        make_field("transmittance", "85", condition="at 600 nm"),
+                    ],
+                )
+            ]
+        ),
+    ]
+
+    merged = merge_passes(passes)
+
+    fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
+    assert [(v.condition, v.agreement) for v in fields] == [("at 550 nm", 1.0)]
+    assert "transmittance: only 1/2 passes produced '85'" in merged.dropped
+
+
+def test_citations_are_not_carried_across_conditions_when_the_passes_disagree_on_order():
+    # Rank matching pairs entries by position, so opposite orders pair 550 nm with 600 nm. Both ranks are
+    # unanimous, but the citation union must not move pass 2's 600 nm block onto the 550 nm exemplar.
+    first = records(
+        samples=[
+            make_sample(
+                "A",
+                [
+                    make_field("transmittance", "85", condition="at 550 nm", source_ids=("mineru_p0_b1",)),
+                    make_field("transmittance", "85", condition="at 600 nm", source_ids=("mineru_p0_b2",)),
+                ],
+            )
+        ]
+    )
+    second = records(
+        samples=[
+            make_sample(
+                "A",
+                [
+                    make_field("transmittance", "85", condition="at 600 nm", source_ids=("mineru_p0_b9",)),
+                    make_field("transmittance", "85", condition="at 550 nm", source_ids=("mineru_p0_b8",)),
+                ],
+            )
+        ]
+    )
+
+    merged = merge_passes([first, second])
+
+    fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
+    assert [(v.condition, v.agreement) for v in fields] == [("at 550 nm", 1.0), ("at 600 nm", 1.0)]
+    # Each entry keeps its own citation; only a matching condition key may add to it.
+    assert [v.source_ids for v in fields] == [("mineru_p0_b1",), ("mineru_p0_b2",)]

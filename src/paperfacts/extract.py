@@ -622,25 +622,65 @@ class Scope(Enum):
 
 type ScopeKey = str | Scope
 type ValueKey = tuple[str, str, str, str]
+# The identity the passes vote on: the same number, in the same unit, for the same field. The
+# condition is deliberately absent -- see ``_vote_key``.
+type VoteKey = tuple[str, str, str]
+# What a vote is actually cast for: the nth entry a pass gave one voted identity. Rank 1 is the first
+# condition a pass reported that number under, rank 2 the second, and so on -- see ``merge_passes``.
+type VoteSlot = tuple[ScopeKey, VoteKey, int]
 
 
 def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
-    """Keep the values a majority of ``results`` agree on, annotated with their agreement."""
+    """Keep the values a majority of ``results`` agree on, annotated with their agreement.
+
+    The vote is on ``_vote_key`` -- field, number, unit -- and not on the condition, because the condition
+    is free text the model rewords between passes ("at 550 nm", "550 nm wavelength"). Voting on the full
+    key made every paraphrase its own candidate with a single vote, so two passes dropped nearly everything
+    they in fact agreed on.
+
+    Conditions are still never merged. A pass that reports one number under several genuinely different
+    conditions (85 % at 550 nm and at 600 nm) keeps an entry for each, because the passes vote per *rank*:
+    within a pass the entries for one voted identity are ordered as they were reported, and rank n is
+    supported by every pass that produced at least n of them. Two passes reporting the number once each
+    therefore agree on one entry however differently they word its condition, while a second entry only one
+    pass produced fails the majority like any other lone value.
+
+    The wording kept for a rank is the first pass's, so the order of ``results`` is meaningful; the
+    citations of every pass that supported the rank are merged into it.
+    """
     if len(results) == 1:
         return results[0]
     passes = len(results)
     majority = passes // 2 + 1
 
-    counts: Counter[tuple[ScopeKey, ValueKey]] = Counter()
-    exemplars: dict[tuple[ScopeKey, ValueKey], FieldValue] = {}
+    counts: Counter[VoteSlot] = Counter()
+    entries: dict[VoteSlot, FieldValue] = {}
+    # Every pass's entry for each slot, kept aside until all passes are in: whether its citations may be
+    # merged into the exemplar depends on how many conditions the identity turned out to have.
+    supporters: list[tuple[VoteSlot, ValueKey, tuple[str, ...]]] = []
+    conditions: Counter[tuple[ScopeKey, VoteKey]] = Counter()
     sample_counts: Counter[str] = Counter()
     samples: dict[str, SampleRecord] = {}
     target_ids: tuple[str, ...] = ()
     for records in results:
-        for key in {(scope, _value_key(value)) for scope, value in _values(records)}:
-            counts[key] += 1
+        slots: dict[tuple[ScopeKey, ValueKey], VoteSlot] = {}
+        ranks: Counter[tuple[ScopeKey, VoteKey]] = Counter()
+        citations: dict[VoteSlot, tuple[str, ...]] = {}
         for scope, value in _values(records):
-            exemplars.setdefault((scope, _value_key(value)), value)
+            full = (scope, _value_key(value))
+            slot = slots.get(full)
+            if slot is None:
+                vote = (scope, _vote_key(value))
+                ranks[vote] += 1
+                slot = (*vote, ranks[vote])
+                slots[full] = slot
+                counts[slot] += 1
+                conditions[vote] = max(conditions[vote], ranks[vote])
+                entries.setdefault(slot, value)
+                citations[slot] = value.source_ids
+            else:
+                citations[slot] = (*citations[slot], *value.source_ids)
+        supporters.extend((slot, full[1], citations[slot]) for full, slot in slots.items())
         for scope in {normalize_key(sample.sample_id) for sample in records.samples}:
             sample_counts[scope] += 1
         for sample in records.samples:
@@ -648,10 +688,23 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
         if records.target is not None and not target_ids:
             target_ids = records.target.source_ids
 
+    # A pass that supported a rank also supported its citations, including when its wording of the condition
+    # was not the one kept: losing the wording must not lose the block it quoted. The union is guarded,
+    # though, because rank matching pairs entries by position, and two passes may list the same number's
+    # conditions in opposite orders. Merge only when the identity has a single entry everywhere -- there is
+    # then no other condition the citation could belong to -- or when the two conditions normalise alike.
+    for slot, value_key, source_ids in supporters:
+        exemplar = entries[slot]
+        if conditions[(slot[0], slot[1])] > 1 and _value_key(exemplar)[1] != value_key[1]:
+            continue
+        merged = tuple(dict.fromkeys((*exemplar.source_ids, *source_ids)))
+        if merged != exemplar.source_ids:
+            entries[slot] = exemplar.model_copy(update={"source_ids": merged})
+
     kept: dict[ScopeKey, list[FieldValue]] = {}
     dropped = [entry for records in results for entry in records.dropped]
-    for (scope, value_key), value in exemplars.items():
-        count = counts[(scope, value_key)]
+    for slot, value in entries.items():
+        scope, count = slot[0], counts[slot]
         if count < majority:
             dropped.append(f"{value.field}: only {count}/{passes} passes produced {value.value_raw!r}")
             continue
@@ -687,11 +740,23 @@ def _values(records: ExtractedRecords) -> Iterator[tuple[ScopeKey, FieldValue]]:
 
 
 def _value_key(value: FieldValue) -> ValueKey:
-    """Identity for voting and for merging repeats: the same number in the same unit under the same
-    condition, however it is spelled.
+    """Full identity, used to merge repeats *within* one pass: the same number in the same unit under the
+    same condition, however it is spelled.
 
-    The unit belongs in the identity: "2.1 μm" and "2.1 nm" are a thousand-fold disagreement, and treating
-    them as one value would merge the disagreement away instead of reporting it.
+    Within a pass the condition belongs in the identity -- two conditions are two measurements and must not
+    be merged. Across passes it does not; ``_vote_key`` is what the passes vote on.
     """
     unit = clean_unit(value.unit_raw) if value.unit_raw else ""
     return value.field, normalize_key(value.condition), grounding_key(value.value_raw), unit
+
+
+def _vote_key(value: FieldValue) -> VoteKey:
+    """Condition-free identity: what "the passes agree on this number" means.
+
+    The unit belongs in it: "2.1 μm" and "2.1 nm" are a thousand-fold disagreement, and treating them as
+    one value would merge the disagreement away instead of reporting it. The condition does not: it is free
+    text the model paraphrases between passes, and counting paraphrases as separate candidates split the
+    vote until nothing reached a majority.
+    """
+    key = _value_key(value)
+    return key[0], key[2], key[3]
