@@ -85,16 +85,21 @@ def responder(inventory: str = "", **by_field: str):
 def passage_responder(inventory: str, per_pass: list[dict[str, str]]):
     """Like :func:`responder`, but answers differently on each pass.
 
-    Every pass sends byte-identical prompts, so the pass can only be told apart by counting: each one opens
-    with the inventory question.
+    Every pass sends byte-identical prompts, so the pass can only be told apart by counting. The inventory
+    is asked once for the whole lane, so it cannot mark the boundary: a pass ends when a field is asked
+    about for the second time.
     """
-    state = {"pass_index": -1}
+    state: dict = {"pass_index": 0, "asked": set()}
 
     def respond(system: str, user: str) -> str:
         if system == inventory_system_prompt():
-            state["pass_index"] += 1
             return inventory
-        return per_pass[state["pass_index"]].get(field_of(user), values_json())
+        field = field_of(user)
+        if field in state["asked"]:
+            state["pass_index"] += 1
+            state["asked"] = set()
+        state["asked"].add(field)
+        return per_pass[state["pass_index"]].get(field, values_json())
 
     return respond
 
@@ -387,12 +392,16 @@ def test_an_unattributed_value_found_in_the_block_it_cites_is_grounded():
 # ---- repeated passes -----------------------------------------------------------------------------
 
 
-def test_three_passes_run_the_whole_flow_three_times():
+def test_three_passes_repeat_the_field_questions_but_ask_the_inventory_once():
+    # Which samples exist is a fact about the paper, not a measurement to average: re-asking it let the
+    # model rename the samples between passes, and a renamed sample is a scope no value can reach a
+    # majority in. Only the field questions, whose noise the vote exists to filter, are repeated.
     client = FakeLlmClient(responder())
 
     lane = extract(client, passes=3)
 
-    assert client.call_count == 15  # (1 inventory + 4 fields) x 3
+    assert client.call_count == 13  # 1 inventory + 4 fields x 3
+    assert sum(call.system == inventory_system_prompt() for call in client.calls) == 1
     assert lane.passes == 3
 
 
@@ -403,7 +412,9 @@ def test_each_pass_after_the_first_carries_its_own_cache_salt():
 
     extract(client, passes=3)
 
-    assert [call.cache_salt for call in client.calls] == [""] * 5 + ["pass-1"] * 5 + ["pass-2"] * 5
+    # The lone inventory call opens the lane on pass 0's empty salt, so a lane re-run with more passes
+    # still hits the inventory entry an earlier run cached.
+    assert [call.cache_salt for call in client.calls] == [""] * 5 + ["pass-1"] * 4 + ["pass-2"] * 4
 
 
 def test_a_value_only_one_pass_of_three_produced_is_dropped():
@@ -806,3 +817,42 @@ def test_a_series_value_with_no_samples_to_place_it_on_is_unattributed_and_unfla
 
     assert lane.samples == ()
     assert [(field.value_raw, field.series) for field in lane.unattributed] == [("12.5", False)]
+
+
+# ---- One inventory per lane is what makes the sample vote work --------------------------------
+
+
+def test_every_pass_field_questions_carry_the_same_sample_list():
+    # The defect this guards: re-asking the inventory let the model answer "ITO-O2-0.0sccm-480C" once and
+    # "ITO-0.0sccm-480C" the next time. A sample id is the scope its values are voted under, so the two
+    # spellings shared no scope, no sample reached a majority, and the lane came back empty.
+    client = FakeLlmClient(responder())
+
+    extract(client, passes=3)
+
+    field_questions = [call.user for call in client.calls if call.system != inventory_system_prompt()]
+    by_field: dict[str, list[str]] = {}
+    for question in field_questions:
+        by_field.setdefault(field_of(question), []).append(question)
+
+    assert len(field_questions) == 12  # four fields, three passes
+    # Byte-identical across passes, so the sample list rendered into them cannot drift either.
+    assert all(asked == [asked[0]] * 3 for asked in by_field.values())
+
+
+def test_a_sample_named_once_survives_every_pass_and_its_agreed_value_is_unanimous():
+    inventory = inventory_json([{"sample_id": "ITO-O2-0.0sccm-480C", "label": "0.0 sccm", "conditions": {}}])
+    agreed = {"sample_id": "ITO-O2-0.0sccm-480C", "value_raw": "12.5"}
+    only_once = {"sample_id": "ITO-O2-0.0sccm-480C", "value_raw": "99.9"}
+    client = FakeLlmClient(
+        passage_responder(
+            inventory,
+            [{ASKED_FIELD: values_json(agreed)}, {ASKED_FIELD: values_json(agreed, only_once)}],
+        )
+    )
+
+    lane = extract(client, passes=2)
+
+    assert [sample.sample_id for sample in lane.samples] == ["ITO-O2-0.0sccm-480C"]
+    assert [(field.value_raw, field.agreement) for field in lane.samples[0].fields] == [("12.5", 1.0)]
+    assert any("only 1/2 passes produced '99.9'" in entry for entry in lane.dropped)

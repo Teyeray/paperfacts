@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -174,11 +174,37 @@ def extract_lane(
     results: list[ExtractedRecords] = []
     usage: dict[str, int] = {}
     raw_response = ""
+
+    # Passage mode asks which samples exist exactly once for the whole lane, however many passes follow.
+    # Repeating that question let the model name the same sample differently in each pass
+    # ("ITO-O2-0.0sccm-480C" against "ITO-0.0sccm-480C"), and since a sample id is the scope its values are
+    # voted under, no sample reached a majority and two passes returned an empty lane. One inventory makes
+    # the sample list rendered into every pass's field questions byte-identical, so the ids match across
+    # passes by construction and the sample vote in `merge_passes` becomes unanimous rather than useless.
+    # What the passes repeat is what they are meant to measure: the field questions, whose noise is the
+    # noise the vote exists to filter.
+    inventory = (
+        None
+        if document is not None
+        else _take_inventory(
+            blocks,
+            client,
+            backend=artifact.backend,
+            context_tokens=context_tokens,
+            inventory_reasoning_effort=inventory_reasoning_effort,
+            refresh=refresh,
+        )
+    )
+    if inventory is not None:
+        # One call, counted once: charging it to every pass would misreport what the lane cost.
+        for key, value in inventory.usage.items():
+            usage[key] = usage.get(key, 0) + value
+
     for index in range(passes):
         # Every pass asks exactly the same question; only the cache key differs, so a repeat costs a call
         # but never a different prompt.
         cache_salt = "" if index == 0 else f"pass-{index}"
-        if document is not None:
+        if inventory is None:
             records, pass_usage, text = _extract_whole_document(
                 document, client, context_tokens=context_tokens, refresh=refresh, cache_salt=cache_salt
             )
@@ -186,11 +212,10 @@ def extract_lane(
             records, pass_usage, text = _extract_passages(
                 blocks,
                 client,
-                backend=artifact.backend,
+                inventory=inventory,
                 context_tokens=context_tokens,
                 candidate_limit=candidate_limit,
                 concurrency=concurrency,
-                inventory_reasoning_effort=inventory_reasoning_effort,
                 refresh=refresh,
                 cache_salt=cache_salt,
             )
@@ -266,37 +291,74 @@ class FieldHarvest:
     known_ids: frozenset[str]
 
 
-def _extract_passages(
+@dataclass(frozen=True)
+class SampleInventory:
+    """Which samples the paper has, asked once and reused by every pass of one lane."""
+
+    response: InventoryResponse
+    raw_text: str
+    usage: Mapping[str, int]
+    source_ids: frozenset[str]
+
+
+def _budget_chars(client: LlmClient, context_tokens: int) -> int:
+    """How much rendered markdown one question may carry, once the reply and the prompt are paid for."""
+    return int(max(context_tokens - client.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
+
+
+def _take_inventory(
     blocks: Sequence[SourceBlock],
     client: LlmClient,
     *,
     backend: Backend,
     context_tokens: int,
-    candidate_limit: int,
-    concurrency: int,
     inventory_reasoning_effort: str | None,
     refresh: bool,
-    cache_salt: str,
-) -> tuple[ExtractedRecords, dict[str, int], str]:
-    """Passage mode: one question about the samples, then one question per field."""
-    budget_chars = int(max(context_tokens - client.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
-    selection = fit_budget(inventory_blocks(blocks), budget_chars=budget_chars)
+) -> SampleInventory:
+    """Ask which samples exist -- once per lane.
+
+    The salt is empty, the salt pass 0 would have used, so a lane re-run with more passes still hits the
+    inventory entry the earlier run cached.
+    """
+    selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(client, context_tokens))
     system = inventory_system_prompt()
     user = inventory_user_prompt(render_markdown(selection))
     _check_context_budget(system, user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
-    inventory, raw_text, usage = complete_validated(
+    response, raw_text, usage = complete_validated(
         client,
         InventoryResponse,
         system=system,
         user=user,
         repair=lambda previous, error: repair_prompt(user, previous, error),
         refresh=refresh,
-        cache_salt=cache_salt,
+        cache_salt="",
         reasoning_effort=inventory_reasoning_effort,
     )
-    logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(inventory.samples), len(selection))
+    logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(response.samples), len(selection))
+    return SampleInventory(
+        response=response,
+        raw_text=raw_text,
+        usage=usage,
+        source_ids=frozenset(block.source_id for block in selection),
+    )
 
-    sample_list = _render_sample_list(inventory.samples)
+
+def _extract_passages(
+    blocks: Sequence[SourceBlock],
+    client: LlmClient,
+    *,
+    inventory: SampleInventory,
+    context_tokens: int,
+    candidate_limit: int,
+    concurrency: int,
+    refresh: bool,
+    cache_salt: str,
+) -> tuple[ExtractedRecords, dict[str, int], str]:
+    """Passage mode, one pass: one question per field against the lane's single inventory."""
+    budget_chars = _budget_chars(client, context_tokens)
+    usage: dict[str, int] = {}
+
+    sample_list = _render_sample_list(inventory.response.samples)
     field_system = field_system_prompt()
 
     # Which fields get asked, and with which blocks, is decided here in FIELD_SPECS order and nowhere else.
@@ -350,7 +412,7 @@ def _extract_passages(
             answers = list(pool.map(ask, questions))
 
     harvests: list[FieldHarvest] = []
-    raw_parts = [f"# inventory\n{raw_text}"]
+    raw_parts = [f"# inventory\n{inventory.raw_text}"]
     for harvest, text, field_usage in answers:
         harvests.append(harvest)
         raw_parts.append(f"# {harvest.spec.name}\n{text}")
@@ -358,9 +420,9 @@ def _extract_passages(
             usage[key] = usage.get(key, 0) + value
 
     records = passage_records(
-        inventory,
+        inventory.response,
         harvests,
-        inventory_ids=frozenset(block.source_id for block in selection),
+        inventory_ids=inventory.source_ids,
         dropped=dropped,
     )
     return records, usage, "\n\n".join(raw_parts)
