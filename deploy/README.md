@@ -139,7 +139,13 @@ bash deploy/host/start_paddle_vlm.sh
 
 # Window 3: PaddleOCR-VL's API layer (GPU 6 → :8080) — must start after window 2 is ready
 bash deploy/host/start_paddle_api.sh
+
+# Window 4 (optional): the visual validation model (GPU 7 → :8090)
+bash deploy/host/start_qwen_vlm.sh
 ```
+
+`start_qwen_vlm.sh` creates a third venv under `~/.paperfacts/envs/qwen-vlm` with vLLM on its first run;
+it shares nothing with either parser environment.
 
 `start_paddle_api.sh` curls the VLM's `/health` before starting and exits with a clear error
 if it's not reachable, instead of surfacing a wall of confusing openai connection exceptions.
@@ -191,7 +197,7 @@ projects and must never be touched.**
 | 4 | MinerU pipeline worker #1 | `mineru-api`, spawned by `mineru-router` | one worker per GPU, allocated on demand |
 | 5 | MinerU pipeline worker #2 | same as above | same as above |
 | 6 | PaddleOCR-VL (both layers share this GPU) | `paddleocr-vlm-server` + `paddleocr-vl-api` | vLLM capped at `gpu-memory-utilization: 0.5`, leaving the rest for the layout detection model PP-DocLayoutV2 (1-2GB) |
-| 7 | **Unused, currently free** | — | — |
+| 7 | The visual validation model (optional) | `qwen-vlm-server`, vLLM serving `VALIDATION_MODEL` | The whole card, `gpu-memory-utilization: 0.90`; the 8B leaves most of it as KV cache, the 32B in bf16 fits with less |
 
 Route A enforces this via compose's `device_ids`; Route B enforces it via
 `CUDA_VISIBLE_DEVICES` in each script, and `require_allowed_gpus` in
@@ -216,8 +222,20 @@ export PAPERFACTS_PADDLE_URL=http://localhost:8080
 
 When the orchestrator runs on a different machine, replace `localhost` with this server's
 IP/hostname, and make sure the firewall allows 8002 and 8080.
-Note: **do not expose 8118 externally** — that's the VLM's raw OpenAI-compatible endpoint,
+Note: **do not expose 8118 externally** — that's PaddleOCR-VL's raw OpenAI-compatible endpoint,
 meant only for the local API layer.
+
+The validate stage reads pages back with the hosted Qwen3-VL named in `config.json` unless told
+otherwise. To use the server's own model on GPU 7 instead:
+
+```bash
+export PAPERFACTS_VLM_BASE_URL=http://localhost:8090/v1
+export PAPERFACTS_VLM_MODEL=Qwen/Qwen3-VL-8B-Instruct     # exactly what qwen-vlm-server serves
+```
+
+The model name is part of `validation_key`, so the hosted 32B and the self-hosted 8B write their
+verdicts to different files rather than overwriting each other's. Port 8090 may be opened to the
+orchestrator's machine; it carries only page crops and transcriptions.
 
 ---
 

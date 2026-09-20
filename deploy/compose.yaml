@@ -5,13 +5,14 @@
 #   paperfacts orchestrator (pure python, runs on the host or any other machine)
 #        │  HTTP
 #        ├──→ mineru-router        :8002   POST /file_parse    (GPU 4, 5)
-#        └──→ paddleocr-vl-api     :8080   POST /layout-parsing (GPU 6)
-#                  │ HTTP inside the container network (not published externally)
-#                  └──→ paddleocr-vlm-server  vLLM service for the 0.9B VLM (GPU 6, shares the card above)
+#        ├──→ paddleocr-vl-api     :8080   POST /layout-parsing (GPU 6)
+#        │          │ HTTP inside the container network (not published externally)
+#        │          └──→ paddleocr-vlm-server  vLLM service for the 0.9B VLM (GPU 6, shares the card above)
+#        └──→ qwen-vlm-server      :8090   OpenAI-compatible /v1 (GPU 7): the visual validation model
 #
 # Hard GPU constraint: this server has 8 GPUs; PaperFacts **may only use 4, 5, 6, 7**
 # (0-3 belong to other projects).
-# This file only allocates 4, 5, 6; GPU 7 is currently unused/free.
+# This file allocates 4, 5, 6 to the parsers and 7 to the validation model.
 #
 # Usage:
 #   cd deploy && cp .env.example .env
@@ -200,9 +201,76 @@ services:
               capabilities: ["gpu"]
 
   # ---------------------------------------------------------------------------
-  # GPU 7 is currently unused and not allocated to any service.
+  # Visual validation model -- uses GPU 7 (the whole card; nothing else runs there)
   # ---------------------------------------------------------------------------
+  # Serves the vision-language model the validate stage reads page regions with, behind vLLM's
+  # OpenAI-compatible server. This is the self-hosted alternative to the hosted Qwen3-VL the
+  # shipped config.json points at; the orchestrator switches with two variables:
+  #   PAPERFACTS_VLM_BASE_URL=http://<server>:8090/v1
+  #   PAPERFACTS_VLM_MODEL=<VALIDATION_MODEL below>
+  # The model name is part of validation_key on purpose: the hosted 32B and a self-hosted 8B are
+  # different readers and their verdicts are stored as different files.
+  #
+  # Independence is the reason this is a *different* model from the two parsers rather than a
+  # second copy of PaddleOCR-VL: a validator that shares a layout model or an OCR training set with
+  # a lane would inherit that lane's mistakes. Qwen3-VL shares nothing with MinerU's pipeline or
+  # with PaddleOCR-VL (see docs/vlm-validation.md).
+  #
+  # Optional: `docker compose up -d mineru-router paddleocr-vl-api` brings up the parsers alone.
+  qwen-vlm-server:
+    image: vllm/vllm-openai:${VLLM_IMAGE_TAG}
+    container_name: paperfacts-qwen-vlm-server
+    restart: unless-stopped
+    shm_size: 16g
+    ipc: host
+    # The weights are pulled from Hugging Face on first start and kept in this volume; on a
+    # network where Hugging Face is slow set HF_ENDPOINT=https://hf-mirror.com in deploy/.env.
+    environment:
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    command:
+      - "--model"
+      - "${VALIDATION_MODEL}"
+      - "--served-model-name"
+      - "${VALIDATION_MODEL}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8090"
+      # One crop and one short transcription per request: a modest context is plenty and keeps the
+      # KV cache small. Raise --max-model-len only if a request is refused for length.
+      - "--max-model-len"
+      - "16384"
+      - "--max-num-seqs"
+      - "32"
+      # Qwen3-VL uses dynamic resolution; this caps the vision tokens per image so a full-page
+      # crop cannot exhaust the context. The stage's crop_max_pixels already bounds the image.
+      - "--limit-mm-per-prompt"
+      - "image=1"
+      - "--gpu-memory-utilization"
+      - "0.90"
+    ports:
+      - "8090:8090"
+    volumes:
+      - paperfacts-qwen-vlm-cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8090/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      # First start downloads the weights (16 GB for the 8B, 65 GB for the 32B) and compiles the
+      # CUDA graph; ten minutes is not unusual.
+      start_period: 600s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["7"]
+              capabilities: ["gpu"]
 
 volumes:
   paperfacts-mineru-cache:
     name: paperfacts-mineru-cache
+  paperfacts-qwen-vlm-cache:
+    name: paperfacts-qwen-vlm-cache
