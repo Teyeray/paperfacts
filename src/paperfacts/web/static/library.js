@@ -45,7 +45,8 @@ export function renderLibrary() {
     button.className = "doc-item" + (doc.document_id === state.current ? " active" : "");
     button.innerHTML = `
       <div class="name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</div>
-      <div class="sub"><span class="dots">${progressDots(doc)}</span>${queuedMark(doc)}${miniCounts(doc)}<code>${escapeHtml(doc.document_id.slice(0, 8))}</code></div>`;
+      <div class="sub"><span class="dots">${progressDots(doc)}</span>${queuedMark(doc)}<code>${escapeHtml(doc.document_id.slice(0, 8))}</code></div>
+      ${miniCounts(doc)}`;
     button.addEventListener("click", () => navigate(documentHash(doc.document_id)));
     li.append(button);
     list.append(li);
@@ -70,9 +71,21 @@ function queuedMark(doc) {
     : "";
 }
 
+// The comparison tally as four small badges. Each keeps its status colour but always carries the
+// count and a word, so the row stays readable without relying on colour.
 function miniCounts(doc) {
   const c = doc.counts;
-  return c ? `<span class="mini-counts" title="agree / conflict / ambiguous / missing">${c.agree}✓ ${c.conflict}✗ ${c.ambiguous}? ${c.missing}–</span>` : "";
+  if (!c) return "";
+  const items = [
+    ["agree", "一致", c.agree],
+    ["conflict", "冲突", c.conflict],
+    ["ambiguous", "不确定", c.ambiguous],
+    ["missing", "缺失", c.missing],
+  ];
+  const badges = items
+    .map(([kind, label, n]) => `<span class="tally-item ${kind}${n ? "" : " zero"}" title="${label}：${n}"><i></i>${n}<em>${label}</em></span>`)
+    .join("");
+  return `<div class="tally">${badges}</div>`;
 }
 
 export function setupUpload() {

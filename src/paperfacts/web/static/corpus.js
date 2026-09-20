@@ -34,9 +34,9 @@ export function renderCorpus(root) {
   const chosen = chosenFields(data.fields);
   const fields = visibleFields(chosen, paperRows, showAllFields);
 
+  // No heading of its own: on the home view the page title above the table already names it.
   const head = document.createElement("div");
   head.className = "results-head";
-  head.innerHTML = `<h2>结果总表（按论文）</h2>`;
   const chips = document.createElement("div");
   chips.className = "chips";
   chips.append(
