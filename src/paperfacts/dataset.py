@@ -67,6 +67,7 @@ _QUALITY_COLUMNS = (
     ("unit", "标准单位"),
     ("conditions", "条件"),
     ("source_ids", "合并证据来源"),
+    ("lanes", "证据来源通道"),
     ("series", "系列级"),
     ("detail", "说明"),
 )
@@ -197,6 +198,9 @@ class _Decision:
     # The committed value rests entirely on evidence the paper stated for the whole sample series,
     # never for this sample on its own. False for a rejected decision, which commits to nothing.
     series: bool = False
+    # The backends whose trusted, parsed evidence produced the committed value. A reader seeing a
+    # single-source cell needs to know which lane it came from; empty for a rejected decision.
+    lanes: tuple[Backend, ...] = ()
 
 
 def _joined(values: Sequence[str]) -> str:
@@ -277,7 +281,13 @@ def _commit(
     details.append(f"采用 {chosen_backend}；抽取重复一致率 {chosen_field.agreement:g}；合并重复证据")
     series = all(field.series for _, field, _ in parsed)
     return _Decision(
-        value, "agree" if agreed else "single_source", conditions, sources, _joined(details), series=series
+        value,
+        "agree" if agreed else "single_source",
+        conditions,
+        sources,
+        _joined(details),
+        series=series,
+        lanes=tuple(dict.fromkeys(backend for backend, _, _ in parsed)),
     )
 
 
@@ -407,6 +417,7 @@ def consolidate_document(
                     "unit": spec.canonical_unit,
                     "conditions": decision.conditions,
                     "source_ids": decision.sources,
+                    "lanes": "; ".join(decision.lanes),
                     "series": decision.series,
                     "detail": decision.detail,
                 }

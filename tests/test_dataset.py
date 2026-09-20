@@ -481,3 +481,30 @@ def test_the_series_mark_reaches_the_quality_sheet(tmp_path):
     rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
     assert sheet.cell(rows["thickness"], columns["系列级"]).value is True
     assert sheet.cell(rows["resistivity"], columns["系列级"]).value is False
+
+
+def test_the_quality_row_names_the_lanes_behind_a_committed_value():
+    agreed = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm", backend="paddleocr_vl")])
+    assert decision(agreed, "thickness")["decision"] == "agree"
+    assert decision(agreed, "thickness")["lanes"] == "mineru; paddleocr_vl"
+
+    only_b = make_sample("A", [value("thickness", "300", "nm", backend="paddleocr_vl")])
+    single = dataset(make_lane(), make_lane(backend="paddleocr_vl", samples=[only_b]))
+    assert decision(single, "thickness")["decision"] == "single_source"
+    assert decision(single, "thickness")["lanes"] == "paddleocr_vl"
+
+
+def test_a_refused_cell_names_no_lane():
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "300", "nm", grounded=False)])]))
+    assert decision(result, "thickness")["lanes"] == ""
+
+
+def test_the_lane_column_reaches_the_quality_sheet(tmp_path):
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm", backend="paddleocr_vl")])
+    output = tmp_path / "dataset.xlsx"
+    write_dataset([result], output)
+
+    sheet = load_workbook(output)["数据质量"]
+    columns = {cell.value: cell.column for cell in sheet[1]}
+    rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
+    assert sheet.cell(rows["thickness"], columns["证据来源通道"]).value == "mineru; paddleocr_vl"

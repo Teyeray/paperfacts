@@ -4,7 +4,7 @@
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
 import { escapeHtml, fmt } from "./html.js";
 import { clearEvidence, showEvidence, TARGET_SID } from "./samples.js";
-import { state } from "./state.js";
+import { LANE_LABEL, state } from "./state.js";
 import { copyTable, tsvHeader, tsvRow } from "./tsv.js";
 
 const TARGET_ROW_ID = "target";
@@ -14,7 +14,20 @@ const LEADING = ["样品", "标签", "条件", "可用/一致"];
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
 // two decisions that produce one; every other decision deliberately leaves the cell empty.
 const CELL_CLASS = { agree: "ok", single_source: "warn" };
-const CELL_BADGE = { agree: "双路", single_source: "单路" };
+// A decided cell says how it was decided: 双路 when both lanes agreed, otherwise the name of the lane
+// the value actually came from -- "单路" alone left the reader guessing which one.
+const LANE_CLASS = { mineru: "lane-a", paddleocr_vl: "lane-b" };
+function cellBadge(decision) {
+  const status = decision?.decision ?? "";
+  if (status === "agree") return { text: "双路", cls: "" };
+  if (status !== "single_source") return { text: "", cls: "" };
+  const lanes = String(decision?.lanes ?? "").split(";").map((l) => l.trim()).filter(Boolean);
+  if (!lanes.length) return { text: "单路", cls: "" };
+  return {
+    text: lanes.map((l) => LANE_LABEL[l] ?? l).join("+"),
+    cls: lanes.length === 1 ? (LANE_CLASS[lanes[0]] ?? "") : "",
+  };
+}
 // quality_rows are keyed by (sample_id, field); a sample_id may itself contain "|", so join on a
 // character that cannot occur in either half.
 const KEY_SEPARATOR = "\u0000";
@@ -135,15 +148,15 @@ function cell(value, quality, sampleId, field) {
   }
   const status = decision?.decision ?? "";
   const shown = shownValue(value);
-  const badge = CELL_BADGE[status] ?? "";
+  const badge = cellBadge(decision);
   const sources = decision?.source_ids ?? "";
   // The accepted evidence was stated for the whole sample series, not for this sample on its own.
   const series = decision?.series
-    ? `<small title="论文对整个样品系列只写了一次，这里是按系列写到该样品上的">系列</small>`
+    ? `<small title="论文对整个样品系列只写了一次，这里是按系列写到该样品上的">全系列</small>`
     : "";
   return (
     `<td class="cell ${CELL_CLASS[status] ?? ""}" title="${escapeHtml(detail)}" data-sources="${escapeHtml(sources)}">` +
-    `${escapeHtml(shown)}<small>${escapeHtml(badge)}</small>${series}</td>`
+    `${escapeHtml(shown)}<small class="${badge.cls}">${escapeHtml(badge.text)}</small>${series}</td>`
   );
 }
 
