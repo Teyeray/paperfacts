@@ -244,12 +244,49 @@ def _same_value(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
     return normalize_text(a) == normalize_text(b)
 
 
+def _matching_blocked(scope: _Scope | None) -> str | None:
+    """Why nothing measured on this scope may be committed, or None if it may.
+
+    Scope-wide rather than per-field: if the two lanes' samples were not confidently identified as the
+    same sample, no value on them can be trusted, whatever the per-field comparison says. The paper-level
+    target row has no scope and so is never blocked this way.
+    """
+    if scope is None:
+        return None
+    if scope.matching_failed:
+        return "样品匹配失败，无法确认跨通道身份"
+    if scope.confidence is not None and scope.confidence < AMBIGUOUS_MATCH_CONFIDENCE:
+        return "样品匹配置信度低于阈值"
+    return None
+
+
+def _commit(
+    spec: FieldSpec,
+    chosen: tuple[Backend, FieldValue, CellValue],
+    parsed: Sequence[tuple[Backend, FieldValue, CellValue]],
+    *,
+    agreed: bool,
+    conditions: str,
+    sources: str,
+    details: list[str],
+) -> _Decision:
+    """Nothing refused the evidence: record the value and how it was arrived at."""
+    chosen_backend, chosen_field, value = chosen
+    if spec.name == "transmittance" and not conditions:
+        details.append("原文提取结果未注明透光率波长或波段")
+    details.append(f"采用 {chosen_backend}；抽取重复一致率 {chosen_field.agreement:g}；合并重复证据")
+    series = all(field.series for _, field, _ in parsed)
+    return _Decision(
+        value, "agree" if agreed else "single_source", conditions, sources, _joined(details), series=series
+    )
+
+
 def _decide(
     spec: FieldSpec,
     evidence: Sequence[tuple[Backend, FieldValue]],
     comparisons: Sequence[FieldComparison],
     *,
-    blocked: str | None = None,
+    scope: _Scope | None = None,
 ) -> _Decision:
     conditions = _joined([value.condition or "" for _, value in evidence])
     sources = _joined(sorted({source for _, value in evidence for source in value.source_ids}))
@@ -261,6 +298,7 @@ def _decide(
 
     if not evidence:
         return reject("missing", "未提取到该字段；留空，不填 0")
+    blocked = _matching_blocked(scope)
     if blocked:
         return reject("ambiguous", blocked)
     if any(c.status in {"conflict", "ambiguous"} for c in comparisons):
@@ -297,19 +335,11 @@ def _decide(
         same_lane = [scalar for lane, _, scalar in parsed if lane == backend]
         if same_lane and any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
-    chosen_backend, chosen_field, chosen = min(
-        parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw)
-    )
+    chosen = min(parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw))
     agreed = any(c.status == "agree" for c in comparisons) and len({backend for backend, _, _ in parsed}) == 2
-    if not agreed and any(not _same_value(chosen, scalar, spec) for _, _, scalar in parsed):
+    if not agreed and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
-    if spec.name == "transmittance" and not conditions:
-        details.append("原文提取结果未注明透光率波长或波段")
-    details.append(f"采用 {chosen_backend}；抽取重复一致率 {chosen_field.agreement:g}；合并重复证据")
-    series = all(value.series for _, value, _ in parsed)
-    return _Decision(
-        chosen, "agree" if agreed else "single_source", conditions, sources, _joined(details), series=series
-    )
+    return _commit(spec, chosen, parsed, agreed=agreed, conditions=conditions, sources=sources, details=details)
 
 
 def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> tuple[_Scope, ...]:
@@ -402,11 +432,6 @@ def consolidate_document(
     for scope in _scopes(lanes, report):
         scope_comparisons = _scope_comparisons(scope, report)
         decisions = dict(target)
-        blocked = None
-        if scope.matching_failed:
-            blocked = "样品匹配失败，无法确认跨通道身份"
-        elif scope.confidence is not None and scope.confidence < AMBIGUOUS_MATCH_CONFIDENCE:
-            blocked = "样品匹配置信度低于阈值"
         for spec in SAMPLE_FIELDS:
             evidence = [
                 (backend, field)
@@ -415,7 +440,7 @@ def consolidate_document(
                 for field in sample.fields
                 if field.field == spec.name
             ]
-            decision = _decide(spec, evidence, [c for c in scope_comparisons if c.field == spec.name], blocked=blocked)
+            decision = _decide(spec, evidence, [c for c in scope_comparisons if c.field == spec.name], scope=scope)
             decisions[spec.name] = decision
             record(scope.sample_id, spec, decision)
         samples = [sample for sample in (scope.a, scope.b) if sample is not None]
