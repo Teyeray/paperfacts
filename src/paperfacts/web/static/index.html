@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PaperFacts · 双路事实溯源</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2716%27 fill=%27%23141311%27/%3E%3Ctext x=%2716%27 y=%2721%27 text-anchor=%27middle%27 font-family=%27Georgia,serif%27 font-weight=%27700%27 font-size=%2714%27 fill=%27%23f7f5f0%27%3EPF%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/">
+    <span class="brand-mark">PF</span>
+    <span class="brand-text"><b>PaperFacts</b></span>
+  </a>
+  <div class="topbar-meta" id="health">…</div>
+</header>
+
+<main class="shell">
+  <aside class="rail" aria-label="文档库">
+    <section class="upload" id="dropzone">
+      <input type="file" id="file-input" accept="application/pdf,.pdf" hidden>
+      <div class="upload-title">拖入 PDF，或<button class="linklike" id="pick-file" type="button">选择文件</button></div>
+      <div class="upload-hint">上传即开始：两路解析 → LLM 抽取 → 对齐比较</div>
+      <label class="upload-force"><input type="checkbox" id="upload-force"> 忽略缓存，全部重跑</label>
+    </section>
+    <div class="rail-head">
+      <h2>文档库</h2>
+      <div class="rail-head-actions">
+        <button class="ghost" id="run-all" type="button" title="把所有未完成的文档排入处理队列">处理全部未完成</button>
+        <button class="ghost" id="refresh-library" type="button" title="刷新">↻</button>
+      </div>
+    </div>
+    <ul class="doc-list" id="doc-list"></ul>
+  </aside>
+
+  <section class="content" id="content">
+    <div class="intro" id="empty-state">
+      <h1><span class="intro-title" data-when="empty">文献参数提取</span><span class="intro-title" data-when="corpus">论文结果总表</span></h1>
+      <p class="intro-lead" data-when="corpus">下表汇总已处理论文的样品级参数，点论文名可以查看它的逐条证据。</p>
+      <div class="intro-empty" data-when="empty">
+        <p class="intro-lead">从科研论文中抽取样品级的测量参数：两路解析各自抽取、逐条比较，每一个数都能点回原文页面上的那一块。</p>
+        <p class="intro-cta">在左侧拖入一份 PDF，或点「选择文件」开始。</p>
+        <p class="intro-steps muted">两路解析 → LLM 抽取 → 对齐比较</p>
+      </div>
+    </div>
+    <div class="corpus-view hidden" id="corpus-view"></div>
+    <div class="document hidden" id="document-view"></div>
+  </section>
+</main>
+
+<template id="tpl-document">
+  <header class="doc-head">
+    <div class="doc-title">
+      <h1 data-slot="name"></h1>
+      <div class="doc-id"><code data-slot="id"></code> <span data-slot="uploaded"></span></div>
+    </div>
+    <div class="doc-actions">
+      <label class="force-label"><input type="checkbox" data-slot="force"> 强制重跑</label>
+      <button class="primary" data-action="run" type="button">重新处理</button>
+    </div>
+  </header>
+  <ol class="stages" data-slot="stages"></ol>
+  <div class="kpis" data-slot="kpis"></div>
+  <section class="results" aria-label="结果表">
+    <div class="results-head">
+      <h2>结果表（按样品）</h2>
+      <div class="chips" data-slot="results-chips"></div>
+      <button class="copy-table hidden" data-slot="dataset-copy" type="button">复制表格</button>
+      <a class="download hidden" data-slot="dataset-download" download>下载 Excel</a>
+    </div>
+    <p class="results-note muted">每一行是合并两路解析后的一个样品；空白单元格是流水线拒绝猜测的取值，不是 0。</p>
+    <div class="table-wrap">
+      <table class="facts-table results-table">
+        <thead data-slot="results-head"></thead>
+        <tbody data-slot="results-rows"></tbody>
+      </table>
+      <div class="table-empty hidden" data-slot="results-empty">还没有结果表，处理完成后会出现在这里。</div>
+    </div>
+  </section>
+  <div class="workbench">
+    <section class="facts" aria-label="事实对照">
+      <div class="facts-head">
+        <h2>事实对照</h2>
+        <div class="chips" data-slot="filters"></div>
+      </div>
+      <div class="table-wrap">
+        <table class="facts-table">
+          <thead><tr><th>状态</th><th>样品</th><th>字段</th><th>条件</th><th class="lane-a">MinerU</th><th class="lane-b">PaddleOCR-VL</th><th>说明</th></tr></thead>
+          <tbody data-slot="rows"></tbody>
+        </table>
+        <div class="table-empty hidden" data-slot="rows-empty">还没有比较报告。</div>
+      </div>
+    </section>
+    <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
+  </div>
+  <details class="samples" aria-label="样品记录">
+    <summary class="samples-head"><h2>样品记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
+    <div class="lanes" data-slot="lanes"></div>
+  </details>
+  <details class="joblog" data-slot="joblog">
+    <summary>处理日志 <span class="muted" data-slot="job-status"></span></summary>
+    <pre data-slot="log"></pre>
+  </details>
+</template>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,487 @@
+{
+  "$comment": "PaperFacts configuration: edit this file to change anything about a run. Secrets never live here -- the API key goes in .env (see .env.example). The PAPERFACTS_* environment variables listed in README.md still win over this file, which is how a deployment overrides one value without editing it.",
+  "data_root": "data",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "max_upload_mb": 200,
+    "page_dpi": {
+      "default": 110,
+      "min": 50,
+      "max": 220
+    }
+  },
+  "web": {
+    "username": "paperfacts"
+  },
+  "llm": {
+    "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "model": "deepseek-v4.1-flash",
+    "timeout_s": 600.0,
+    "context_tokens": 200000,
+    "temperature": 0.0,
+    "max_tokens": 65536,
+    "concurrency": 4,
+    "reasoning_effort": null,
+    "inventory_reasoning_effort": null,
+    "retry_attempts": 4,
+    "retry_backoff_s": 2.0
+  },
+  "extraction": {
+    "mode": "passage",
+    "passes": 1,
+    "candidate_limit": 8
+  },
+  "comparison": {
+    "ambiguous_match_confidence": 0.6
+  },
+  "vlm": {
+    "enabled": true,
+    "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen3-vl-32b-instruct",
+    "timeout_s": 300.0,
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "crop_dpi": 200,
+    "crop_padding": 0.01,
+    "crop_max_pixels": 2000000,
+    "policy": "disputed",
+    "concurrency": 4
+  },
+  "parsers": {
+    "mineru_url": null,
+    "paddle_url": null,
+    "paddle_render_dpi": 200,
+    "paddle_vl_backend": null,
+    "paddle_vl_server_url": null,
+    "paddle_vl_model_name": null,
+    "subprocess_timeout_s": 3600.0,
+    "http_timeout_s": 900.0,
+    "uv_bin": "uv"
+  },
+  "overlay": {
+    "dpi": 150
+  },
+  "condition_keywords": [
+    "sample",
+    "substrate",
+    "deposition",
+    "deposited",
+    "sputtering",
+    "sputtered",
+    "annealing",
+    "annealed",
+    "flow",
+    "flow rate",
+    "power",
+    "pressure",
+    "temperature",
+    "atmosphere"
+  ],
+  "fields": [
+    {
+      "name": "component",
+      "label": "靶材成分",
+      "group": "target",
+      "kind": "composition",
+      "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.",
+      "description_zh": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
+      "keywords": [
+        "target",
+        "sputtering target",
+        "component",
+        "composition",
+        "wt%",
+        "at%",
+        "purity"
+      ],
+      "canonical_unit": null,
+      "rel_tol": 0.0,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "resistance",
+      "label": "靶材电阻率",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Electrical resistivity of the sputtering target itself (not the film).",
+      "description_zh": "靶材电阻率；与薄膜电阻率 resistivity 区分。",
+      "keywords": [
+        "target resistivity",
+        "target resistance",
+        "resistivity of the target",
+        "bulk resistivity"
+      ],
+      "canonical_unit": "Ω·cm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "density",
+      "label": "靶材密度",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Relative density of the sputtering target as a percentage of theoretical density.",
+      "description_zh": "靶材相对理论密度，数值 95 表示 95%。",
+      "keywords": [
+        "relative density",
+        "target density",
+        "theoretical density",
+        "density of the target"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.0,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "inch",
+      "label": "靶材尺寸",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Size of the sputtering target: diameter, or length and width for a rectangular or rotary target.",
+      "description_zh": "靶材直径或唯一长度；矩形长宽、范围值不转成单个数值。",
+      "keywords": [
+        "inch",
+        "target size",
+        "diameter",
+        "target",
+        "magnetron",
+        "cathode",
+        "length and width"
+      ],
+      "canonical_unit": "inch",
+      "rel_tol": 0.01,
+      "abs_tol": 0.05,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sputtering_time",
+      "label": "溅射时间",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Duration of the sputtering deposition for this sample.",
+      "description_zh": "所选样品的溅射沉积时间。",
+      "keywords": [
+        "sputtering time",
+        "deposition time",
+        "duration",
+        "deposited for",
+        "sputtered for",
+        "sputtering duration",
+        "deposition duration",
+        "growth time",
+        "sputtering period"
+      ],
+      "canonical_unit": "min",
+      "rel_tol": 0.02,
+      "abs_tol": 1.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sputtering_power",
+      "label": "溅射功率",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Electrical power applied to the sputtering target to generate and sustain the plasma (W).",
+      "description_zh": "所选样品的溅射功率（W）。",
+      "keywords": [
+        "sputtering power",
+        "sputter power",
+        "applied power",
+        "power density",
+        "DC power",
+        "RF power",
+        "pulsed DC power"
+      ],
+      "canonical_unit": "W",
+      "rel_tol": 0.02,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "mode",
+      "label": "溅射模式",
+      "group": "process",
+      "kind": "text",
+      "description": "Operational regime of the sputtering process: DC, RF or pulsed DC.",
+      "description_zh": "溅射工作模式：DC、RF 或 pulsed DC。",
+      "keywords": [
+        "DC",
+        "RF",
+        "pulsed DC",
+        "sputtering mode",
+        "power mode"
+      ],
+      "canonical_unit": null,
+      "rel_tol": 0.0,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject",
+      "categories": [
+        "DC",
+        "RF",
+        "pulsed DC",
+        "DC+RF",
+        "HiPIMS"
+      ]
+    },
+    {
+      "name": "ar_flow_rate",
+      "label": "Ar 流量",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Argon flow rate introduced into the vacuum chamber (sccm).",
+      "description_zh": "所选样品的氩气流量（sccm）。",
+      "keywords": [
+        "Ar flow rate",
+        "argon flow rate",
+        "Ar flow"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "o2_flow_rate",
+      "label": "O2 流量",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Oxygen flow rate introduced into the vacuum chamber (sccm).",
+      "description_zh": "所选样品的氧气流量（sccm）。",
+      "keywords": [
+        "O2 flow rate",
+        "oxygen flow rate",
+        "O2 flow"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "h2_flow_rate",
+      "label": "H2 流量",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Hydrogen flow rate introduced into the vacuum chamber (sccm).",
+      "description_zh": "所选样品的氢气流量（sccm）。",
+      "keywords": [
+        "H2 flow rate",
+        "hydrogen flow rate",
+        "H2 flow"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "target_substrate_distance",
+      "label": "靶基距",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Spatial gap between the sputtering target and the substrate holder (cm).",
+      "description_zh": "靶到基片/样品台的间距（cm）。",
+      "keywords": [
+        "target to substrate distance",
+        "target-substrate distance",
+        "target to holder distance",
+        "target-substrate separation"
+      ],
+      "canonical_unit": "cm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "substrate_axis_distance",
+      "label": "基片偏轴距",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Distance between the substrate surface and the holder center, i.e. the off-axis offset (cm).",
+      "description_zh": "基片到样品台中心的偏轴距离（cm）。",
+      "keywords": [
+        "off-axis distance",
+        "offset",
+        "substrate-to-axis distance",
+        "substrate to holder center distance"
+      ],
+      "canonical_unit": "cm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "substrate_temperature",
+      "label": "基片温度",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Substrate/holder temperature during the sputtering deposition (°C).",
+      "description_zh": "沉积时的基片/样品台温度（°C）。",
+      "keywords": [
+        "substrate temperature",
+        "holder temperature",
+        "stage temperature",
+        "deposition temperature"
+      ],
+      "canonical_unit": "℃",
+      "rel_tol": 0.02,
+      "abs_tol": 2.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "annealing_temperature",
+      "label": "退火温度",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Temperature of the thermal treatment performed after deposition is complete (°C).",
+      "description_zh": "沉积后退火处理的温度（°C）。",
+      "keywords": [
+        "post-annealing temperature",
+        "annealing temperature",
+        "post-deposition annealing",
+        "PDA",
+        "heat treatment"
+      ],
+      "canonical_unit": "℃",
+      "rel_tol": 0.02,
+      "abs_tol": 2.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "annealing_time",
+      "label": "退火时间",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Duration of the thermal treatment performed after deposition is complete (min).",
+      "description_zh": "沉积后退火处理的时长（min）。",
+      "keywords": [
+        "post-annealing duration",
+        "annealing time",
+        "post-deposition annealing duration",
+        "annealed for"
+      ],
+      "canonical_unit": "min",
+      "rel_tol": 0.02,
+      "abs_tol": 1.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "rotation_speed",
+      "label": "转速",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Rotation speed of the substrate holder during film deposition (rpm).",
+      "description_zh": "沉积时样品台的旋转速度（rpm）。",
+      "keywords": [
+        "rotation speed",
+        "rotational speed",
+        "substrate rotation rate",
+        "holder rotation",
+        "rpm"
+      ],
+      "canonical_unit": "rpm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sheet_resistance",
+      "label": "方阻",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Sheet resistance of the film (Ω/sq).",
+      "description_zh": "所选样品的薄膜方块电阻。",
+      "keywords": [
+        "sheet resistance",
+        "sheet resistivity",
+        "Rs",
+        "R_s"
+      ],
+      "canonical_unit": "Ω/sq",
+      "rel_tol": 0.02,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "resistivity",
+      "label": "电阻率",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Electrical resistivity of the deposited film, as opposed to the `resistance` of the target it was sputtered from.",
+      "description_zh": "所选样品的薄膜电阻率。",
+      "keywords": [
+        "resistivity",
+        "electrical resistivity",
+        "specific resistance",
+        "ρ"
+      ],
+      "canonical_unit": "Ω·cm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "transmittance",
+      "label": "透光率",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Optical transmittance of the film (%). Always record the wavelength or range it refers to.",
+      "description_zh": "所选样品的透光率，数值 85 表示 85%；测量波段见条件及数据质量。",
+      "keywords": [
+        "transmittance",
+        "transmission",
+        "transparency",
+        "UV-vis",
+        "%T",
+        "AVT"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.0,
+      "abs_tol": 1.0,
+      "condition_hint": "wavelength or spectral range, e.g. '550 nm' or 'average 400-800 nm'",
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "thickness",
+      "label": "厚度",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Film thickness (e.g. from SEM cross section or profilometry).",
+      "description_zh": "所选样品的薄膜厚度。",
+      "keywords": [
+        "thickness",
+        "film thickness",
+        "SEM cross section",
+        "profilometry",
+        "d ="
+      ],
+      "canonical_unit": "nm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    }
+  ]
+}

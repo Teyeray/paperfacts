@@ -1,0 +1,650 @@
+"""Orchestration: parser -> adapter -> disk, then extraction, comparison, visual validation, export.
+
+This is the only place that decides which parser implementation runs: a configured ``*_url`` means an HTTP
+service (a GPU server), an empty one means the ``runners/`` script as a subprocess (a workstation).
+
+:func:`run_document` is the single pipeline. The CLI and the web job both call it, so they cannot drift.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+from paperfacts.adapters import convert, render_markdown
+from paperfacts.compare import ComparisonReport, compare_lanes
+from paperfacts.config import Settings
+from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
+from paperfacts.errors import ConfigError, PaperFactsError, ParserError
+from paperfacts.extract import build_extraction_document, extract_lane
+from paperfacts.grounding import block_adjacency, ground_lane
+from paperfacts.keys import comparison_key, extractor_key_for, validation_key_for
+from paperfacts.llm import LlmClient, OpenAICompatibleClient, VisionClient
+from paperfacts.matching import match_samples
+from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
+from paperfacts.normalize import normalize_lane
+from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
+from paperfacts.pdf import read_geometry
+from paperfacts.records import LaneExtraction
+from paperfacts.storage import DataLayout, ensure_identity
+from paperfacts.validate import ValidationReport, validate_lanes
+
+logger = logging.getLogger(__name__)
+
+# The comparison is strictly between two lanes; a third parser would need compare_lanes redesigned.
+BACKEND_A, BACKEND_B = BACKENDS
+
+
+# ---- Parsing ----------------------------------------------------------------------------------------------
+
+
+def _uv_prefix(settings: Settings) -> tuple[str, ...]:
+    return (settings.uv_bin, "run", "--locked", "--script")
+
+
+def _build_mineru(settings: Settings) -> Parser:
+    if settings.mineru_url:
+        return MinerUHttpParser(settings.mineru_url, timeout_s=settings.http_timeout_s)
+    return SubprocessParser(
+        "mineru",
+        default_runner_script(settings.repo_root, "mineru"),
+        command_prefix=_uv_prefix(settings),
+        timeout_s=settings.subprocess_timeout_s,
+    )
+
+
+def _build_paddle(settings: Settings) -> Parser:
+    if settings.paddle_url:
+        return PaddleHttpParser(
+            settings.paddle_url, timeout_s=settings.http_timeout_s, render_dpi=settings.paddle_render_dpi
+        )
+    extra_args: list[str] = ["--dpi", str(settings.paddle_render_dpi)]
+    for flag, value in (
+        ("--vl-backend", settings.paddle_vl_backend),
+        ("--vl-server-url", settings.paddle_vl_server_url),
+        ("--vl-model-name", settings.paddle_vl_model_name),
+    ):
+        if value:
+            extra_args += [flag, value]
+    return SubprocessParser(
+        "paddleocr_vl",
+        default_runner_script(settings.repo_root, "paddleocr_vl"),
+        command_prefix=_uv_prefix(settings),
+        extra_args=tuple(extra_args),
+        timeout_s=settings.subprocess_timeout_s,
+    )
+
+
+# A new backend is one builder here plus one adapter in adapters.py, never an if-chain edit.
+PARSER_BUILDERS: dict[Backend, Callable[[Settings], Parser]] = {
+    "mineru": _build_mineru,
+    "paddleocr_vl": _build_paddle,
+}
+
+
+def build_parser(backend: Backend, settings: Settings) -> Parser:
+    """The parser implementation the configuration asks for."""
+    try:
+        builder = PARSER_BUILDERS[backend]
+    except KeyError as exc:
+        raise ValueError(f"unknown backend: {backend!r}") from exc
+    return builder(settings)
+
+
+@dataclass(frozen=True)
+class ParseReport:
+    backend: Backend
+    backend_version: str | None
+    cache_hit: bool
+    runtime_s: float
+    page_count: int
+    block_count: int
+    type_counts: dict[str, int]
+    artifact_path: Path
+    markdown_path: Path
+    # The raw parser output was gone and the stored artifact stood in for it, so no adapter ran this time.
+    from_artifact: bool = False
+
+
+def _stored_artifact_for_missing_raw(
+    parser: Parser,
+    document: DocumentInput,
+    backend: Backend,
+    artifact_path: Path,
+    raw_dir: Path,
+    *,
+    force: bool,
+) -> ParsedArtifact | None:
+    """The stored artifact when the raw output it came from is gone, otherwise ``None``.
+
+    Raw output is bulky and gets pruned or moved; the artifact is the small file worth keeping. Re-parsing
+    a paper costs GPU minutes, so when only the raw output is missing the artifact stands in for it. The
+    cost is that adapter changes are not re-applied — hence the warning and ``--force``.
+    """
+    if force or not artifact_path.is_file() or parser.is_cached(raw_dir):
+        return None
+    try:
+        artifact = ParsedArtifact.read(artifact_path)
+    except (OSError, ValueError) as exc:
+        logger.warning("stored %s artifact at %s is unreadable (%s); re-parsing", backend, artifact_path, exc)
+        return None
+    logger.warning(
+        "raw parser output missing for backend=%s doc=%s; using the stored artifact — run with --force to re-parse",
+        backend,
+        document.document_id[:16],
+    )
+    return artifact
+
+
+def parse_document(
+    document: DocumentInput,
+    backend: Backend,
+    settings: Settings,
+    *,
+    force: bool = False,
+) -> tuple[ParsedArtifact, ParseReport]:
+    """Parse one lane: run the parser (or hit its cache), adapt it, write the Markdown and the artifact."""
+    layout = DataLayout(settings.data_root)
+    ensure_identity(layout, document)  # written the moment the directory exists; readers only read it
+    parser = build_parser(backend, settings)
+
+    markdown_path = layout.markdown_path(document.document_id, backend)
+    artifact_path = layout.artifact_path(document.document_id, backend)
+    raw_dir = layout.raw_dir(document.document_id, backend)
+
+    stored = _stored_artifact_for_missing_raw(parser, document, backend, artifact_path, raw_dir, force=force)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    if stored is not None:
+        artifact, cache_hit, runtime_s = stored, True, 0.0
+        if not markdown_path.is_file():
+            # The artifact alone is not a complete document directory; re-render rather than leave a hole.
+            markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+    else:
+        if not document.pdf_path.is_file():
+            # Only the real parse path needs the file; say so plainly instead of failing inside the parser.
+            raise ParserError(backend, "input", "PDF not available; re-upload to re-parse")
+        clock = time.monotonic()
+        raw = parser.parse(document, raw_dir, force=force)
+        artifact = convert(raw, document, read_geometry(document.pdf_path))
+        runtime_s = time.monotonic() - clock
+        cache_hit = raw.cache_hit
+        markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+        artifact.write(artifact_path)  # last: its existence means parsed/ is complete
+
+    report = ParseReport(
+        backend=backend,
+        backend_version=artifact.backend_version,
+        cache_hit=cache_hit,
+        runtime_s=runtime_s,
+        page_count=artifact.page_count,
+        block_count=len(artifact.blocks),
+        type_counts=artifact.type_counts(),
+        artifact_path=artifact_path,
+        markdown_path=markdown_path,
+        from_artifact=stored is not None,
+    )
+    logger.info("parsed %s", report)
+    return artifact, report
+
+
+def load_artifact(document: DocumentInput, backend: Backend, settings: Settings) -> ParsedArtifact:
+    path = DataLayout(settings.data_root).artifact_path(document.document_id, backend)
+    if not path.is_file():
+        raise FileNotFoundError(f"no {backend} artifact at {path}; run `paperfacts parse` first")
+    return ParsedArtifact.read(path)
+
+
+# ---- Extraction and comparison --------------------------------------------------------------------------------
+
+
+def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
+    """One client shared by extraction and matching (connection pool, usage accounting). Close it."""
+    return OpenAICompatibleClient(
+        settings.llm_base_url,
+        settings.require_llm_api_key(),
+        settings.llm_model,
+        timeout_s=settings.llm_timeout_s,
+        cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+        reasoning_effort=settings.llm_reasoning_effort,
+        retry_attempts=settings.llm_retry_attempts,
+        retry_backoff_s=settings.llm_retry_backoff_s,
+    )
+
+
+def read_lane(
+    layout: DataLayout, document_id: str, backend: Backend, key: str, *, artifact: ParsedArtifact | None = None
+) -> LaneExtraction | None:
+    """A stored lane, re-deriving what is cheap: grounding against the artifact, then normalisation.
+
+    Both are pure functions of the stored record, so they are redone on every read rather than trusted from
+    the file: improving a rule costs nothing and never leaves a stale verdict behind. The artifact is read
+    from disk unless the caller already holds it; without one the stored grounding verdicts are kept, since
+    they cannot be re-checked but are still the best answer.
+    """
+    path = layout.extraction_path(document_id, backend, key)
+    if not path.is_file():
+        return None
+    lane = LaneExtraction.read(path)
+    artifact_path = layout.artifact_path(document_id, backend)
+    if artifact is None and artifact_path.is_file():
+        artifact = ParsedArtifact.read(artifact_path)
+    if artifact is not None:
+        lane = ground_lane(lane, build_extraction_document(artifact).blocks, adjacency=block_adjacency(artifact.blocks))
+    return normalize_lane(lane)
+
+
+def extract_document(
+    document: DocumentInput,
+    backend: Backend,
+    settings: Settings,
+    client: LlmClient,
+    *,
+    force: bool = False,
+) -> LaneExtraction:
+    """Extract one lane. What is stored is the model's own wording; what is returned is normalised.
+
+    Changing the prompt, the model or the schema changes ``extractor_key`` and re-runs the extraction.
+    ``force`` bypasses both this cache and the LLM cache, and really re-asks.
+    """
+    layout = DataLayout(settings.data_root)
+    key = extractor_key_for(settings, client.model)
+    artifact = load_artifact(document, backend, settings)
+    if not force:
+        cached = read_lane(layout, document.document_id, backend, key, artifact=artifact)
+        if cached is not None:
+            logger.info("extraction cache_hit backend=%s doc=%s", backend, document.document_id[:16])
+            return cached
+
+    lane = extract_lane(
+        artifact,
+        client,
+        mode=settings.extraction_mode,
+        passes=settings.extraction_passes,
+        context_tokens=settings.llm_context_tokens,
+        candidate_limit=settings.candidate_limit,
+        concurrency=settings.llm_concurrency,
+        inventory_reasoning_effort=settings.llm_inventory_reasoning_effort,
+        refresh=force,
+    )
+    lane.write(layout.extraction_path(document.document_id, backend, key))
+    return normalize_lane(lane)
+
+
+def compare_document(
+    document: DocumentInput,
+    settings: Settings,
+    client: LlmClient,
+    *,
+    force: bool = False,
+    lanes: Mapping[Backend, LaneExtraction] | None = None,
+) -> ComparisonReport:
+    """Match samples with the model, compare fields by rule, store the report.
+
+    The report path carries both keys, so changing a tolerance recomputes the comparison without paying for
+    extraction again and cannot serve a stale verdict. ``force`` redoes matching and comparison only;
+    extraction has its own cache and its own force.
+
+    ``lanes`` lets a caller that already holds both extractions hand them over instead of having them
+    loaded again; without it the lanes are read through :func:`extract_document`, whose cached path
+    rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader.
+    """
+    layout = DataLayout(settings.data_root)
+    path = layout.comparison_path(
+        document.document_id,
+        extractor_key_for(settings, client.model),
+        comparison_key(),
+    )
+    if path.is_file() and not force:
+        logger.info("comparison cache_hit doc=%s", document.document_id[:16])
+        return ComparisonReport.read(path)
+
+    if lanes is None:
+        lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
+    lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
+    matching = match_samples(lane_a, lane_b, client, refresh=force)
+    report = compare_lanes(lane_a, lane_b, matching)
+    report.write(path)
+    logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
+    return report
+
+
+# ---- Visual validation -----------------------------------------------------------------------------------------
+
+
+def build_vlm_client(settings: Settings) -> OpenAICompatibleClient:
+    """The vision model's client: the same OpenAI-compatible class, its own endpoint, model and sampling.
+
+    Reusing the class is deliberate -- one retry policy, one cache directory, one place that knows how a
+    request is keyed -- but it is a *separate instance*: extraction and validation must never share a
+    model by accident, and the ``VisionClient`` protocol the stage is typed against keeps the two apart.
+    """
+    return OpenAICompatibleClient(
+        settings.vlm_base_url,
+        settings.require_vlm_api_key(),
+        settings.vlm_model,
+        timeout_s=settings.vlm_timeout_s,
+        cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
+        temperature=settings.vlm_temperature,
+        max_tokens=settings.vlm_max_tokens,
+        reasoning_effort=None,
+        retry_attempts=settings.llm_retry_attempts,
+        retry_backoff_s=settings.llm_retry_backoff_s,
+    )
+
+
+def read_validation(layout: DataLayout, document_id: str, settings: Settings) -> ValidationReport | None:
+    """The stored validation under the current keys, or None. Nothing is re-derived on read: a verdict is a
+    reading of pixels, and there is no cheaper way to re-check it than to ask again."""
+    if not settings.vlm_enabled:
+        return None
+    path = layout.validation_path(
+        document_id, extractor_key_for(settings), comparison_key(), validation_key_for(settings)
+    )
+    return ValidationReport.read(path) if path.is_file() else None
+
+
+def validate_document(
+    document: DocumentInput,
+    settings: Settings,
+    client: VisionClient,
+    *,
+    lanes: Mapping[Backend, LaneExtraction],
+    report: ComparisonReport,
+    force: bool = False,
+) -> ValidationReport:
+    """Show the vision model the regions the disputed values were cited from, and store its verdicts.
+
+    Keyed by all three keys: a different extraction or comparison selects different values, a different
+    validation setting reads them differently. ``force`` re-asks the model; the crops themselves are
+    deterministic renders and are reused.
+    """
+    layout = DataLayout(settings.data_root)
+    path = layout.validation_path(
+        document.document_id, report.extractor_key, report.comparison_key, validation_key_for(settings)
+    )
+    if path.is_file() and not force:
+        logger.info("validation cache_hit doc=%s", document.document_id[:16])
+        return ValidationReport.read(path)
+    artifacts = {backend: load_artifact(document, backend, settings) for backend in BACKENDS}
+    validation = validate_lanes(
+        document_id=document.document_id,
+        pdf_path=document.pdf_path,
+        lanes=lanes,
+        report=report,
+        artifacts=artifacts,
+        client=client,
+        layout=layout,
+        validation_key=validation_key_for(settings),
+        policy=settings.vlm_policy,
+        crop_dpi=settings.vlm_crop_dpi,
+        crop_padding=settings.vlm_crop_padding,
+        crop_max_pixels=settings.vlm_crop_max_pixels,
+        concurrency=settings.vlm_concurrency,
+        refresh=force,
+    )
+    validation.write(path)
+    return validation
+
+
+# ---- The whole pipeline, shared by the CLI and the web job ------------------------------------------------------
+
+StageStatus = Literal["pending", "running", "done", "failed", "skipped"]
+# (stage, status, detail). Stage names are a public contract: the progress bar and the CLI both use them.
+StageCallback = Callable[[str, StageStatus, str], None]
+
+
+def stage_names() -> tuple[str, ...]:
+    """``validate`` is always a stage, even when the VLM is off: the progress bar then shows it skipped, and
+    a reader of a run never has to wonder whether the pipeline had a validation step at all."""
+    return (
+        *(f"parse:{b}" for b in BACKENDS),
+        *(f"extract:{b}" for b in BACKENDS),
+        "compare",
+        "validate",
+        "export",
+    )
+
+
+@dataclass(frozen=True)
+class PipelineResult:
+    parse_reports: dict[Backend, ParseReport]
+    lanes: dict[Backend, LaneExtraction]
+    report: ComparisonReport
+    dataset: DocumentDataset
+    excel_path: Path
+    dataset_json_path: Path
+    validation: ValidationReport | None = None
+
+
+def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
+    """The web UI reads the consolidated table from disk, so every path that produces one writes it.
+
+    The dataset carries the keys it was built under, which is what the JSON file is named after: an
+    export made with different settings lands beside the old one instead of overwriting it.
+    """
+    path = layout.dataset_json_path(
+        dataset.document_id, dataset.extractor_key, dataset.comparison_key, dataset.validation_key or None
+    )
+    write_dataset_json(dataset, path)
+    return path
+
+
+def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
+    pass
+
+
+def run_document(
+    document: DocumentInput,
+    settings: Settings,
+    *,
+    force: bool = False,
+    on_stage: StageCallback = _ignore_stage,
+) -> PipelineResult:
+    """Run both lanes and automatically export consolidated data. Expensive steps are cached."""
+    parse_reports: dict[Backend, ParseReport] = {}
+    for backend in BACKENDS:
+        on_stage(f"parse:{backend}", "running", "")
+        _, parse_report = parse_document(document, backend, settings, force=force)
+        parse_reports[backend] = parse_report
+        cached = " (cached)" if parse_report.cache_hit else ""
+        on_stage(f"parse:{backend}", "done", f"{parse_report.block_count} blocks{cached}")
+
+    lanes: dict[Backend, LaneExtraction] = {}
+    with build_llm_client(settings) as client:
+        # The two lanes are independent and both spend their time waiting on the model, so they overlap.
+        # Nothing here touches pdf.py: extraction reads the stored artifact JSON and never opens the PDF,
+        # so PDFium's process-wide lock is not involved. Both lanes are handed the same `settings` and the
+        # same client, so they still ask the same model the same prompts at the same temperature -- only
+        # the text differs, which is the measurement. Every on_stage call is made from this thread:
+        # results are collected in BACKENDS order, so a caller's callback needs no locking of its own and
+        # the stage marks stay in a fixed order. (web/jobs.JobManager would tolerate worker threads anyway
+        # -- it replaces the frozen Job under its lock on every transition -- but not every caller is it.)
+        for backend in BACKENDS:
+            on_stage(f"extract:{backend}", "running", "")
+        with ThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
+            futures: dict[Backend, Future[LaneExtraction]] = {
+                backend: pool.submit(extract_document, document, backend, settings, client, force=force)
+                for backend in BACKENDS
+            }
+            # Every lane's outcome is collected before any of them is acted on, so an exception nobody
+            # asked for is logged rather than dropped by the garbage collector. A BaseException (a
+            # KeyboardInterrupt, say) still propagates straight out, as it always did; leaving the `with`
+            # then waits for the other lane.
+            extracted: dict[Backend, LaneExtraction] = {}
+            failures: list[tuple[Backend, Exception]] = []
+            for backend in BACKENDS:
+                try:
+                    extracted[backend] = futures[backend].result()
+                except Exception as exc:
+                    failures.append((backend, exc))
+            if failures:
+                # In BACKENDS order, so the first lane's failure wins as before; the rest are explanations.
+                for backend, exc in failures[1:]:
+                    logger.warning("extraction lane %s also failed with %s", backend, exc)
+                raise failures[0][1]
+            for backend, lane in extracted.items():
+                lanes[backend] = lane
+                ungrounded = len(lane.ungrounded())
+                detail = f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
+                on_stage(f"extract:{backend}", "done", detail)
+        on_stage("compare", "running", "")
+        report = compare_document(document, settings, client, force=force, lanes=lanes)
+    counts = report.counts
+    on_stage(
+        "compare",
+        "done",
+        f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
+    )
+    validation = _validate_stage(document, settings, lanes=lanes, report=report, force=force, on_stage=on_stage)
+    on_stage("export", "running", "")
+    dataset = consolidate_document(document, lanes, report, validation)
+    layout = DataLayout(settings.data_root)
+    excel_path = layout.dataset_path(document.document_id)
+    write_dataset([dataset], excel_path)
+    dataset_json_path = _store_dataset(layout, dataset)
+    on_stage("export", "done", str(excel_path))
+    return PipelineResult(
+        parse_reports=parse_reports,
+        lanes=lanes,
+        report=report,
+        dataset=dataset,
+        excel_path=excel_path,
+        dataset_json_path=dataset_json_path,
+        validation=validation,
+    )
+
+
+def _validate_stage(
+    document: DocumentInput,
+    settings: Settings,
+    *,
+    lanes: Mapping[Backend, LaneExtraction],
+    report: ComparisonReport,
+    force: bool,
+    on_stage: StageCallback,
+) -> ValidationReport | None:
+    """The validate stage of :func:`run_document`: skipped, with the reason in the stage detail, when no VLM
+    is configured; otherwise its own client, opened and closed here, because the vision model is a
+    different model from the extractor and shares nothing with it but the cache directory."""
+    if not settings.vlm_enabled:
+        on_stage("validate", "skipped", "vlm.enabled is false")
+        return None
+    on_stage("validate", "running", "")
+    with build_vlm_client(settings) as client:
+        validation = validate_document(document, settings, client, lanes=lanes, report=report, force=force)
+    counts = validation.counts
+    detail = (
+        f"confirmed {counts.confirmed} · contradicted {counts.contradicted} · illegible {counts.illegible}"
+        f" · not checked {counts.not_checked}" + (f" · errors {counts.error}" if counts.error else "")
+    )
+    on_stage("validate", "done", detail)
+    return validation
+
+
+# ---- Directory batches and offline re-export -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BatchResult:
+    documents: tuple[DocumentDataset, ...]
+    failures: tuple[dict[str, str], ...]
+    duplicate_count: int
+    excel_path: Path
+
+
+def discover_pdfs(source: Path) -> tuple[Path, ...]:
+    """Keep discovery stable across runs, including uppercase PDF suffixes and nested folders."""
+    if source.is_file():
+        paths = (source,) if source.suffix.lower() == ".pdf" else ()
+    elif source.is_dir():
+        paths = tuple(sorted(p for p in source.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"))
+    else:
+        raise FileNotFoundError(source)
+    if not paths:
+        raise ConfigError(f"no PDF files found in {source}")
+    return paths
+
+
+def export_document(document: DocumentInput, settings: Settings) -> DocumentDataset:
+    """Rebuild a workbook row from current cached extractions without starting a parser or an LLM."""
+    layout = DataLayout(settings.data_root)
+    key = extractor_key_for(settings)
+    report_path = layout.comparison_path(document.document_id, key, comparison_key())
+    if not report_path.is_file():
+        raise FileNotFoundError(f"no current comparison for {document.display_filename}; run `paperfacts run` first")
+    report = ComparisonReport.read(report_path)
+    lanes: dict[Backend, LaneExtraction] = {}
+    for backend in BACKENDS:
+        lane = read_lane(layout, document.document_id, backend, key)
+        if lane is None:
+            raise FileNotFoundError(f"no current {backend} extraction for {document.display_filename}")
+        lanes[backend] = lane
+    # Grounding is rechecked on read, so comparison must use those same refreshed values.
+    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
+    # Offline means no model, the vision one included: a stored validation is used, a missing one is not
+    # manufactured, and the dataset says which it was through its validation_key.
+    validation = read_validation(layout, document.document_id, settings)
+    dataset = consolidate_document(document, lanes, report, validation)
+    # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
+    _store_dataset(layout, dataset)
+    return dataset
+
+
+def run_batch(
+    source: Path,
+    settings: Settings,
+    *,
+    output: Path | None = None,
+    force: bool = False,
+    export_only: bool = False,
+    on_stage: StageCallback = _ignore_stage,
+) -> BatchResult:
+    """Process unique PDFs serially and checkpoint the workbook after every attempted document.
+
+    Local parser models cannot safely share the laptop's memory. Completed parse/extraction caches
+    make interruption resumable, while expected per-paper errors remain visible in the workbook.
+    """
+    paths = discover_pdfs(source)
+    output = output or DataLayout(settings.data_root).batch_dataset_path()
+    if output.suffix.lower() != ".xlsx":
+        raise ConfigError("Excel output must have the .xlsx extension")
+    if force and export_only:
+        raise ConfigError("--force cannot be used with offline export")
+    datasets: list[DocumentDataset] = []
+    failures: list[dict[str, str]] = []
+    seen: set[str] = set()
+    duplicates = 0
+    for index, path in enumerate(paths, 1):
+        prefix = f"{index}/{len(paths)} {path.name}"
+        on_stage(prefix, "running", "")
+        document_id = ""
+        try:
+            document = DocumentInput.from_path(path)
+            document_id = document.document_id
+            if document_id in seen:
+                duplicates += 1
+                on_stage(prefix, "skipped", "duplicate PDF content")
+                continue
+            seen.add(document_id)
+            if export_only:
+                dataset = export_document(document, settings)
+            else:
+                result = run_document(document, settings, force=force, on_stage=on_stage)
+                dataset = result.dataset
+            datasets.append(dataset)
+        except (PaperFactsError, OSError, ValueError) as exc:
+            logger.exception("batch failed for %s", path.name)
+            failures.append({"document_id": document_id, "filename": path.name, "error": str(exc)})
+            on_stage(prefix, "failed", str(exc))
+        else:
+            on_stage(prefix, "done", "")
+        # Export failures are fatal: claiming progress without a writable output would be misleading.
+        write_dataset(datasets, output, failures=failures)
+    return BatchResult(tuple(datasets), tuple(failures), duplicates, output)

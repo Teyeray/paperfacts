@@ -1,0 +1,795 @@
+# PaperFacts (VLM edition)
+
+Extract structured, **verifiably traceable** measurements from scientific PDFs — and, in this fork, have a
+vision-language model read the page itself wherever the two parsers could not settle a number between them.
+
+This repository is a personal fork of [Teyeray/paperfacts](https://github.com/Teyeray/paperfacts) that
+adds one pipeline stage, **visual validation**. The design, the reasons behind every choice and a reading
+order for reviewers are in [`docs/vlm-validation.md`](docs/vlm-validation.md) and
+[`docs/REVIEW-ROADMAP.md`](docs/REVIEW-ROADMAP.md); this README is the manual for the whole tool.
+
+Give it a batch of papers and a list of target fields — sputtering power, gas flow, sheet resistance,
+transmittance — and it returns one record per sample, where every number can be traced back to the exact
+page and bounding box it was read from.
+
+```
+paper.pdf
+  ├─ MinerU        ──→ Markdown + source map ──→ LLM extraction ──→ facts A
+  └─ PaddleOCR-VL  ──→ Markdown + source map ──→ LLM extraction ──→ facts B
+                                                        │
+                                          sample matching, normalisation,
+                                             field-by-field comparison
+                                                        │
+                        ┌───────────────┬───────────────┼───────────────┐
+                      AGREE          CONFLICT        AMBIGUOUS        MISSING
+                   both lanes      values differ    can't decide    one lane only
+                                        │               │               │
+                                        └───────────────┼───────────────┘
+                                                        │  the cited page region, as pixels
+                                              Qwen3-VL transcribes it ──→ code checks the quote
+                                                        │
+                                  CONFIRMED · CONTRADICTED · ILLEGIBLE · NOT CHECKED
+```
+
+This file is the whole manual: installing it on a Mac, deploying it on the GPU server, using the web
+interface, every command, every configuration key, and what a blank cell means. `CLAUDE.md` is internal
+working conventions for people editing the code, and nothing here depends on reading it.
+
+## Why two parsers
+
+A single PDF parser plus a language model will happily produce a confident, well-formatted table of
+numbers that are subtly wrong — a column misread, a row shifted, a value attached to the wrong sample —
+and nothing in the output says which ones. The failure is silent, which is the worst property a data
+pipeline can have.
+
+PaperFacts runs two structurally independent parsers over the same paper and extracts from each with an
+identical prompt, model and retrieval. Where they agree, the number survived two different layout
+analyses and two different OCR passes. Where they disagree, you have a specific, located, reviewable
+question instead of a uniform wall of unearned confidence. Disagreement is the product.
+
+The model is constrained structurally rather than by instruction: the JSON schema it must return has
+`value_raw` and `unit_raw` and no `value` or `unit` field, so it has nowhere to put a converted number.
+All unit conversion, scientific-notation parsing and tolerance comparison happen in ordinary, testable
+Python. The model quotes; the code converts.
+
+### Why a third reader
+
+Everything above works on *text the parsers produced*. Both lanes are extracted from parser text, the
+grounding check compares a quote with parser text, and the comparison compares two parser texts. When both
+parsers misread the same character — a minus sign lost from `10^-2`, a shifted table cell — the pipeline
+reports AGREE at full confidence, and nothing anywhere has looked at the page.
+
+The validate stage looks at the page. For every value the two lanes could not settle between them, it
+renders the region the value was cited from and hands the pixels to a vision-language model that never saw
+either parser's text. The model is not asked whether the value is right; it is asked to transcribe what is
+printed, and the same grounding matcher the pipeline already trusts decides whether the quoted value occurs
+in that transcription. Confirmed, contradicted, or illegible — each recorded with the model's reading, so a
+reviewer can overrule it. See [How the page is read back](#how-the-page-is-read-back).
+
+## Quick start on a Mac
+
+Requires Apple silicon, Python 3.13 and [uv](https://docs.astral.sh/uv/). Python is pinned to
+`>=3.13,<3.14`: MinerU caps below 3.14 and paddlepaddle publishes no 3.14 wheels.
+
+```bash
+uv sync --group dev                        # the main package: pure Python, seconds
+uv sync --script runners/mineru_runner.py  # MinerU environment (torch, ~1-2 GB on first run)
+uv sync --script runners/paddle_runner.py  # PaddleOCR-VL environment (paddlepaddle)
+```
+
+The two parsers live in **separate environments on purpose**: they both ship a `cv2` (opencv-python vs
+opencv-contrib-python) and they pull in torch and paddlepaddle respectively, so they cannot be installed
+together. Each is a [PEP 723](https://peps.python.org/pep-0723/) script under `runners/` with its own
+committed lockfile, run via `uv run --script`. The main package never imports either one; it only reads
+the files they write. Model weights download on first use; set `MINERU_MODEL_SOURCE=modelscope` on
+networks where Hugging Face is slow.
+
+Then the API key. Extraction needs an OpenAI-compatible LLM endpoint; the shipped default is an Alibaba
+Cloud Model Studio (百炼) workspace serving `deepseek-v4.1-flash` through its `compatible-mode/v1`
+address:
+
+```bash
+cp .env.example .env     # then set PAPERFACTS_LLM_API_KEY
+```
+
+The key is looked for in `PAPERFACTS_LLM_API_KEY`, then `DEEPSEEK_API_KEY`, then the file named by
+`PAPERFACTS_LLM_API_KEY_FILE`, then a `deepseek_api_key` file in the repository root. All of those are
+gitignored, and `config.json` has nowhere to put a key, which is the point.
+
+### Starting everything
+
+```bash
+scripts/dev_up.sh                # the usual way to work
+scripts/dev_up.sh --host 0.0.0.0 --port 8765    # arguments are passed to `paperfacts serve`
+```
+
+`dev_up.sh` does three things in order. It clears a hidden flag that keeps appearing on `.venv`; it
+starts an `mlx-vlm` server on port 8111 for PaddleOCR-VL's vision stage unless something already listens
+there, waiting up to 60 seconds and refusing to continue if it never comes up; and it starts
+`paperfacts serve` with `PAPERFACTS_PADDLE_VL_BACKEND`, `PAPERFACTS_PADDLE_VL_SERVER_URL` and
+`PAPERFACTS_PADDLE_VL_MODEL_NAME` filled in for whatever `.env` left unset. The MLX step is not a nicety:
+PaddleOCR-VL's vision model on in-process CPU inference takes hours per paper, and a minute or two
+through MLX.
+
+```bash
+scripts/dev_down.sh              # stops the mlx-vlm server it started
+```
+
+Stop the web server with Ctrl-C in its own terminal; `dev_down.sh` only handles the background process,
+whose pid it reads from `data/mlx_vlm_server.pid`.
+
+On this machine some external tool periodically marks the whole `.venv` as hidden, and Python 3.13 then
+skips its `.pth` files, so `import paperfacts` suddenly raises `ModuleNotFoundError`; `scripts/dev_fix_venv.sh`
+clears the flag without a reinstall, and `dev_up.sh` runs it for you.
+
+To drive the MLX path by hand instead, the three variables are:
+
+```bash
+uvx --python 3.13 --from "mlx-vlm>=0.3.11" mlx_vlm.server --port 8111   # leave running
+export PAPERFACTS_PADDLE_VL_BACKEND=mlx-vlm-server
+export PAPERFACTS_PADDLE_VL_SERVER_URL=http://localhost:8111/
+export PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6
+```
+
+## Deploying on the Linux GPU server
+
+On the server the two parsers run as long-running services and the main package talks to them over HTTP,
+producing byte-identical output to the subprocess path used on a Mac. Everything needed is under
+`deploy/`: `compose.yaml` for the four containers, `mineru.Dockerfile` for the one image that has to be
+built locally, `vllm_config.yaml` for PaddleOCR-VL's vLLM memory and concurrency, and `host/*.sh` for the
+bare-metal route when Docker is unavailable. `deploy/README.md` is the long form; this is the shape of it.
+
+**The server has 8 GPUs and PaperFacts may only use 4, 5, 6 and 7.** GPUs 0–3 belong to other projects
+and must never be touched. Do not widen that range.
+
+| GPU | Runs | Port |
+|---|---|---|
+| 4, 5 | `mineru-router`, one `mineru-api` worker per GPU, load balanced | 8002, `POST /file_parse` |
+| 6 | `paddleocr-vl-api` and the `paddleocr-vlm-server` vLLM service it calls, sharing the card | 8080 `POST /layout-parsing`; vLLM on 8118, local only |
+| 7 | `qwen-vlm-server`: vLLM serving the validation model (`VALIDATION_MODEL` in `deploy/.env`, default `Qwen/Qwen3-VL-8B-Instruct`) | 8090, OpenAI-compatible `/v1` |
+
+Docker Compose pins the allocation with `device_ids`; the host scripts pin it with `CUDA_VISIBLE_DEVICES`
+and validate the id in `deploy/host/_common.sh` before anything loads, so a typo exits immediately
+instead of being discovered after a model has grabbed someone else's card. Do not publish port 8118: it
+is the VLM's raw OpenAI-compatible endpoint, meant only for the API layer beside it.
+
+```bash
+cd deploy
+cp .env.example .env
+docker compose build mineru-router   # 20-40 min, pre-downloads MinerU weights into the image; use tmux
+docker compose up -d
+curl http://localhost:8002/health
+curl http://localhost:8080/health
+curl http://localhost:8090/health          # the validation model; first start downloads the weights
+```
+
+The validation model is optional on the server: `docker compose up -d mineru-router paddleocr-vl-api`
+brings up the parsers alone, and the orchestrator keeps using the hosted Qwen3-VL from `config.json`.
+
+Cold starts are slow by nature — each MinerU worker loads three model sets, and vLLM loads weights and
+compiles a CUDA graph in roughly five minutes — so read `docker compose logs -f` before concluding that
+something is wrong.
+
+### Pointing the orchestrator at the services
+
+The main package needs exactly two variables. Both set means HTTP to the services; neither set means run
+the `runners/` scripts as subprocesses, which is how a Mac works.
+
+```bash
+export PAPERFACTS_MINERU_URL=http://localhost:8002
+export PAPERFACTS_PADDLE_URL=http://localhost:8080
+```
+
+From another machine, replace `localhost` with the server's hostname and open 8002 and 8080 in the
+firewall.
+
+To read pages back with the server's own vision model instead of the hosted one, add two more and keep the
+model name equal to what vLLM serves — the name is part of `validation_key`, so switching between the hosted
+`qwen3-vl-32b-instruct` and a self-hosted `Qwen/Qwen3-VL-8B-Instruct` is, correctly, a different set of
+verdicts:
+
+```bash
+export PAPERFACTS_VLM_BASE_URL=http://localhost:8090/v1
+export PAPERFACTS_VLM_MODEL=Qwen/Qwen3-VL-8B-Instruct
+```
+
+### The web app on the server
+
+`.env` on the server holds two secrets: the LLM API key, and `PAPERFACTS_WEB_PASSWORD`. Set the password
+before binding to anything but localhost.
+
+```bash
+echo 'PAPERFACTS_LLM_API_KEY=...'  >> .env
+echo 'PAPERFACTS_WEB_PASSWORD=...' >> .env     # the username is web.username in config.json
+uv run paperfacts serve --host 0.0.0.0 --port 8000
+```
+
+With `PAPERFACTS_WEB_PASSWORD` set, every route, `/api` included, answers 401 until a browser or client
+sends HTTP Basic credentials, so an open tunnel cannot upload PDFs or spend tokens. Unset, the app is
+open, which is what a laptop wants. Run it long-lived in tmux.
+
+### How code reaches the server
+
+Development happens on the Mac, is committed and pushed to GitHub, and pulled on the server. **Do not try
+to operate the server over ssh from the dev machine.** Someone with a session on the server pulls and
+restarts it there.
+
+## Using the web interface
+
+`http://<host>:8000`. The interface is in Chinese; this section names the strings on screen.
+
+**The rail on the left** is the document library, with the drop zone above it. Drag a PDF in, or press
+「选择文件」, and processing starts on upload; 「忽略缓存，全部重跑」 next to the drop zone forces every
+stage to run again. Each library entry shows the paper's name and four badges: 一致 (both lanes agreed),
+冲突 (the lanes read different values), 不确定 (the pipeline could not decide) and 缺失 (only one lane
+found it). 「处理全部未完成」 queues every document that can run and is not already compared under the
+current keys, one job each, in library order; a document already queued or running simply gets its
+existing job back, so pressing it twice costs nothing. Documents with neither a PDF nor a cached parse
+are skipped with a reason.
+
+**The home page** is 论文结果总表: one row per processed paper, showing the sample that paper selected
+across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
+library.
+
+**A document page** reads top to bottom.
+
+1. The header carries the display name, the document id, 「强制重跑」 and 「重新处理」.
+2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `extract:mineru`,
+   `extract:paddleocr_vl`, `compare`, `validate` (视觉核验; shown hollow and "skipped" when `vlm.enabled`
+   is false), `export`.
+3. KPI tiles: the AGREE / CONFLICT / AMBIGUOUS / MISSING counts, and — once the validate stage has run —
+   a 视觉确认 tile: how many of the checked values the page confirmed, with the denied, unreadable and
+   unchecked counts beneath.
+4. 结果表（按样品） — the deliverable.
+5. 事实对照 and the page viewer beside it.
+6. 样品记录, collapsed.
+
+### 结果表（按样品）
+
+One row per sample after both lanes are merged, one column per field, plus a 靶材（论文级） row for the
+paper-level target values. The row chosen as the paper's row is marked ★ 论文行.
+
+A cell that carries a value shows the number and the field's canonical unit, and a small badge saying how
+it was decided: **双路** when both lanes agreed, or the lane's own name — **MinerU** or **PaddleOCR-VL** —
+when only one lane had it. Clicking a value highlights, on the rendered page, the blocks it was merged
+from. A value the paper stated once for a whole sample series says so in the tooltip rather than in a
+badge.
+
+**An empty cell is a refusal, not a gap.** The pipeline declined to commit a value and the reason is in
+the cell's tooltip and its accessible name, so a screen reader gets it without a hover. Clicking or
+pressing Enter on an empty cell jumps down to the two lanes' records for that sample and field, so the
+refusal can be checked against what each lane actually read.
+
+Above the table: 选择字段 chooses which of the twenty columns to show, 显示空字段 adds back the columns
+that are empty for every row, 复制表格 copies the table as TSV for a spreadsheet, and 下载 Excel
+downloads this document's workbook.
+
+In 事实对照, each lane's value carries the VLM's verdict as a small badge when it was checked — 视觉确认,
+视觉否定, 区域不可读, 未核验 or 核验失败 — and hovering the badge shows the model's transcription of the
+region, so a denial can be read against what the page actually says.
+
+### 事实对照 and the page viewer
+
+The comparison table is one row per compared fact: 状态, 样品, 字段, 条件, the MinerU reading, the
+PaddleOCR-VL reading, and 说明. Click any row and both lanes' source blocks light up on the rendered page
+in the viewer beside it — blue for MinerU, orange for PaddleOCR-VL, always with text as well as colour.
+The selected fact is part of the URL (`#/doc/<id>/fact/<n>`), so a link to one disputed number survives a
+reload and can be sent to someone else.
+
+### 样品记录
+
+Collapsed by default: each lane's raw sample records, from the paper's own wording through to the
+normalised value and back to the block it came from. A value tagged 全系列 was stated once for the whole
+sample series and written onto each sample by the code, not read separately for this one.
+
+Papers processed from the command line appear in the library too, though only uploaded ones carry their
+PDF and can be re-rendered on another machine. The HTTP API is documented at `/api/docs`.
+
+## Command line
+
+```bash
+uv run paperfacts run paper.pdf            # parse both lanes, extract both, compare, validate, write the workbook
+uv run paperfacts validate paper.pdf       # the VLM stage alone (needs compare); --policy all checks every value
+uv run paperfacts batch template_files --output data/exports/template_files.xlsx
+uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
+uv run paperfacts fields                   # list the field table the package actually loaded
+```
+
+| Command | Purpose |
+|---|---|
+| `run <pdf>` | Parse, extract, compare, validate with the VLM and save `dataset.xlsx` for one paper |
+| `validate <pdf>` | Show the VLM the page regions the disputed values were cited from. Needs `compare`. Runs even when `vlm.enabled` is false |
+| `batch <pdf or dir>` | Recursively process every PDF and write one workbook for all of them |
+| `export <pdf or dir>` | Rebuild that workbook from cached results, with no parser and no LLM calls |
+| `parse <pdf>` | Parse into Markdown with provenance markers, a block list and the full artifact |
+| `extract <pdf>` | Extract sample-level records from parsed Markdown. Needs `parse` |
+| `compare <pdf>` | Match samples across lanes and compare their fields. Needs `extract` (which implies `parse`) |
+| `overlay <pdf>` | Draw block boxes onto page images, to check provenance by eye. Needs `parse` |
+| `serve` | Serve the web interface |
+| `fields` | Print the loaded field table, so an edit to `config.json` can be checked at a glance |
+
+The flags worth knowing:
+
+- `--force` ignores caches and redoes that step. On `extract` it re-calls the LLM, which costs money; on
+  `parse` it re-runs the parser, which costs minutes of GPU time.
+- `--passes N` extracts each lane N times and keeps only what a majority of passes produced. N times the
+  calls, N times the cost.
+- `--mode document|passage` picks how the model is asked; see below.
+- `--policy disputed|all` on `run` and `validate` picks which values the VLM checks: the disputed ones
+  (default) or every value in both lanes.
+- `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
+- `--output` / `-o` names the Excel workbook for `batch` and `export`.
+- `--data-root` overrides the data directory; `--verbose` / `-v` prints INFO logs.
+- `overlay` also takes `--dpi` and `--pages 0,3,4` (0-based).
+
+`batch` walks subdirectories and accepts `.PDF` as well as `.pdf`. Identical PDF content is processed
+once. Every completed or failed paper checkpoints the workbook atomically, so re-running the same command
+reuses the caches and rebuilds the table without appending duplicate rows. Failed papers are listed in the
+运行记录 sheet, processing continues past them, and **the command exits with status 1 if any paper
+failed.**
+
+`export` is offline. It requires cached extractions and comparisons matching the current model, field
+schema and comparison rules, and reports outdated or absent results as failures rather than silently
+producing an old table. On a Mac, bring the MLX service up before `batch` touches an uncached PDF.
+
+## Configuration
+
+Two files at the repository root. **`config.json` holds everything that is not a secret** and is meant to
+be edited; **`.env` holds the API key and the web password** and is gitignored. Three layers decide a
+value: the built-in constants in `config.py`, then `config.json`, then the environment (including what
+`.env` puts there). Never edit a built-in constant to change a default — they are the baseline the cache
+keys treat as "unedited", so editing one renames every cached file. Change `config.json`.
+
+### `llm`
+
+| Key | Meaning |
+|---|---|
+| `base_url` | Any OpenAI-compatible endpoint; a trailing slash is stripped |
+| `model` | Model name sent with every request. Default `deepseek-v4.1-flash` |
+| `timeout_s` | Per-request timeout. Default 600, because this model reasons before it answers |
+| `context_tokens` | The window the prompt is planned against. Default 200000 |
+| `temperature` | Default 0.0 |
+| `max_tokens` | Completion budget, hidden reasoning included. Default 65536 |
+| `concurrency` | How many of one lane's field questions are in flight at once. Default 4 |
+| `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
+| `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
+| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured |
+| `retry_backoff_s` | Default 2.0 |
+
+`reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
+OpenAI-shaped `reasoning_effort` parameter. `null` omits the parameter entirely, which is the shipped
+default and the measured best answer. It changes what the model is asked, so changing it writes a new
+`extractor_key` and re-extracts.
+
+`inventory_reasoning_effort` gives passage mode's one inventory question its own effort. That question
+alone spends 11k–17k hidden reasoning tokens per lane, about 70 % of a run's completion tokens, while the
+field questions after it usually reason in the low hundreds. It has three answers, and they are three
+different requests:
+
+- `null` or `"inherit"` — send the inventory question exactly as the client builds it, carrying whatever
+  `reasoning_effort` says. This is the shipped value.
+- `"omit"` — send that one question with no `reasoning_effort` parameter at all, while every field
+  question still carries the client's. This is the only way to say that.
+- `"none"`, `"low"`, `"medium"`, `"high"` — the effort to send for that question.
+
+Both lanes always get the same value, and anything but the baseline writes a new `extractor_key`, in
+passage mode only, since document mode never asks the question.
+
+`concurrency` is the one knob here that changes only *when* requests are sent, never what they contain, so
+it stays out of both cache keys: raising or lowering it never re-extracts and never re-compares. The two
+lanes always run as a pair, so at most twice this many requests are open. Set it to 1 to send every
+question strictly one after another.
+
+### `extraction`
+
+| Key | Meaning |
+|---|---|
+| `mode` | `"passage"` (default) or `"document"` |
+| `passes` | Extract each lane this many times and keep the majority. Default 1 |
+| `candidate_limit` | How many retrieved blocks a field question may show. Default 8 |
+
+**Passage mode** asks which samples the paper reports, then asks about one field at a time, showing only
+the blocks retrieved for that field. Retrieval is ordinary code, not a model call: keyword and unit
+matching, ranked, capped at `candidate_limit`. Both lanes get identical retrieval rules, so the comparison
+still measures the parsers and not the retrieval. **Document mode** hands the whole paper over and asks
+for everything at once; on a fifteen-thousand-token paper the model loses its place, cites blocks that
+merely discuss a number, and never mentions fields the paper states in passing.
+
+`passes` votes on `(field, number, unit)` per rank — never on the wording of the measurement condition, so
+a paraphrase between passes is not counted as disagreement — and the sample inventory is asked once per
+lane, so every pass sees the same sample ids. A paper that reports the same number under two conditions
+keeps both. Each surviving value records the fraction of passes that produced it, so a 2/3 value stays
+visibly weaker than a 3/3 one. Measured on three papers, a second pass reproduces **75–90 %** of a first
+pass's values at temperature 0. Two passes are therefore a reproducibility filter at twice the model cost,
+not a way to find more.
+
+### `vlm`
+
+The visual validation stage. Off at the built-in baseline, **on in the shipped `config.json`**; set
+`PAPERFACTS_VLM_ENABLED=false` to run the pipeline exactly as it ran without this fork.
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Whether the validate stage runs. When false it is shown as skipped and nothing is written or stamped |
+| `base_url` | An OpenAI-compatible endpoint serving a vision model. Default: the same Model Studio address as `llm.base_url` |
+| `model` | Default `qwen3-vl-32b-instruct`, an open-weight Qwen3-VL so the hosted pilot and a self-hosted vLLM run the same weights. Chosen for independence from both lanes, not leaderboard rank — see `docs/vlm-validation.md` |
+| `timeout_s` | Default 300 |
+| `temperature` / `max_tokens` | Defaults 0.0 and 4096: a transcription of one block or table |
+| `crop_dpi` | The region is rendered at this DPI. Default 200, the same density PaddleOCR-VL read the page at |
+| `crop_padding` | Page fraction added around the cited blocks. Default 0.01 |
+| `crop_max_pixels` | Above this the crop is shrunk (aspect kept) before it is sent, here rather than on the endpoint. Default 2000000 |
+| `policy` | `disputed` (default): conflicts, ambiguities, one-sided values and anything grounding flagged. `all`: every value in both lanes, for measuring how often both lanes agree on a wrong reading |
+| `concurrency` | Vision requests in flight at once. Default 4. Scheduling only; not in any key |
+
+The key is `PAPERFACTS_VLM_API_KEY` in `.env`, and it falls back to the LLM key: the shipped configuration
+serves both models from one workspace. A self-hosted vLLM wants no key but the protocol still sends one.
+
+### `parsers`, `server`, `web`, `overlay`, `comparison`
+
+| Key | Meaning |
+|---|---|
+| `parsers.mineru_url` / `parsers.paddle_url` | Empty means run the `runners/` script as a subprocess; set means call that service over HTTP |
+| `parsers.paddle_render_dpi` | DPI pages are rasterised at for PaddleOCR-VL. Default 200. The subprocess and HTTP paths must agree or their pixel coordinates are not comparable |
+| `parsers.paddle_vl_backend` / `paddle_vl_server_url` / `paddle_vl_model_name` | Hand PaddleOCR-VL's vision stage to an external server, as `dev_up.sh` does with MLX |
+| `parsers.subprocess_timeout_s` | Default 3600: a first subprocess run downloads weights |
+| `parsers.http_timeout_s` | Default 900 |
+| `parsers.uv_bin` | The `uv` executable used to launch the runner scripts |
+| `server.host` / `server.port` | Defaults `127.0.0.1` and 8000 |
+| `server.max_upload_mb` | Default 200 |
+| `server.page_dpi.default` / `.min` / `.max` | Page renders for the viewer. Defaults 110, 50, 220 |
+| `web.username` | HTTP Basic username. Default `paperfacts`. The password is never here |
+| `overlay.dpi` | Default 150 |
+| `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
+| `condition_keywords` | The words that mark a measurement condition worth recording |
+| `data_root` | Where everything is written. Default `data` |
+
+### Environment overrides
+
+Every scalar setting also has a `PAPERFACTS_*` variable that wins over the file, which is how one machine
+points at its own services without editing the shared file:
+
+`PAPERFACTS_DATA_ROOT`, `PAPERFACTS_REPO_ROOT`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_MINERU_URL`,
+`PAPERFACTS_PADDLE_URL`, `PAPERFACTS_PADDLE_RENDER_DPI`, `PAPERFACTS_PADDLE_VL_BACKEND`,
+`PAPERFACTS_PADDLE_VL_SERVER_URL`, `PAPERFACTS_PADDLE_VL_MODEL_NAME`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
+`PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`,
+`PAPERFACTS_LLM_TIMEOUT_S`, `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`,
+`PAPERFACTS_LLM_MAX_TOKENS`, `PAPERFACTS_LLM_REASONING_EFFORT`,
+`PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`,
+`PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_EXTRACTION_MODE`,
+`PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
+`PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
+`PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`,
+`PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_VLM_ENABLED`, `PAPERFACTS_VLM_BASE_URL`, `PAPERFACTS_VLM_MODEL`,
+`PAPERFACTS_VLM_TIMEOUT_S`, `PAPERFACTS_VLM_TEMPERATURE`, `PAPERFACTS_VLM_MAX_TOKENS`,
+`PAPERFACTS_VLM_CROP_DPI`, `PAPERFACTS_VLM_CROP_PADDING`, `PAPERFACTS_VLM_CROP_MAX_PIXELS`,
+`PAPERFACTS_VLM_POLICY`, `PAPERFACTS_VLM_CONCURRENCY`.
+
+`PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
+and a value that will not parse as a number names the variable in the error.
+
+Three settings are **file-only**, because a single environment variable is the wrong shape for them:
+`fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.
+
+Secrets live only in `.env`: `PAPERFACTS_LLM_API_KEY`, `PAPERFACTS_WEB_PASSWORD` and, when the vision
+model lives behind a different key, `PAPERFACTS_VLM_API_KEY`. `.env` is loaded without overriding what the
+environment already holds.
+
+### The field table
+
+`config.json`'s `fields` list **is** the schema. Each entry drives the description the model is given, the
+keywords retrieval searches for, the unit everything is converted to, and how close two numbers have to be
+to count as the same fact.
+
+```jsonc
+{
+  "name": "sheet_resistance",
+  "group": "film",                          // target = paper-level; process / film = per sample
+  "kind": "numeric",                        // numeric | composition | text
+  "description": "Sheet resistance of the film (Ω/sq).",
+  "label": "方阻",                            // Chinese column header; display only
+  "description_zh": "所选样品的薄膜方块电阻。",   // Chinese explanation; display only
+  "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
+  "canonical_unit": "Ω/sq",
+  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
+  "abs_tol": 0.0,
+  "condition_hint": null,                   // what to record alongside, e.g. a wavelength
+  "bare_number": "reject"                   // reject | assume_canonical | percent_or_fraction
+}
+```
+
+`description` is the English sentence the model is told to look for. `label` and `description_zh` are
+display only — the web table prints the label above the column and the description in its tooltip, and the
+Excel 字段说明 sheet prints both — so editing either changes neither cache key. `keywords` steers
+passage-mode retrieval and nothing else. A `text` field may add `categories`, the closed set of answers it
+accepts, spelled the way the output should spell them: with `"categories": ["DC", "RF", "pulsed DC",
+"DC+RF", "HiPIMS"]` on `mode`, both "DC and RF magnetron co-sputtering" and "DC and RF" resolve to `DC+RF`
+and stop being judged two different modes, while "DC" and "RF" stay apart. A value naming no category is
+compared as ordinary text, never rounded to the nearest one. `categories` changes only verdicts, so adding
+one re-compares the stored facts instead of re-extracting them.
+
+A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
+`W`, `sccm`, `rpm`) or startup fails rather than guessing. Adding a field is one table entry; the prompt,
+normalisation and tolerances follow from it. `uv run paperfacts fields` prints what was actually loaded.
+
+The twenty shipped fields are aimed at sputtered transparent-conductive-oxide films:
+
+| Field | 中文名 | Group | Kind | Unit |
+|---|---|---|---|---|
+| `component` | 靶材成分 | target | composition | — |
+| `resistance` | 靶材电阻率 | target | numeric | Ω·cm |
+| `density` | 靶材密度 | target | numeric | % |
+| `inch` | 靶材尺寸 | target | numeric | inch |
+| `sputtering_time` | 溅射时间 | process | numeric | min |
+| `sputtering_power` | 溅射功率 | process | numeric | W |
+| `mode` | 溅射模式 | process | text (categories) | — |
+| `ar_flow_rate` | Ar 流量 | process | numeric | sccm |
+| `o2_flow_rate` | O2 流量 | process | numeric | sccm |
+| `h2_flow_rate` | H2 流量 | process | numeric | sccm |
+| `target_substrate_distance` | 靶基距 | process | numeric | cm |
+| `substrate_axis_distance` | 基片偏轴距 | process | numeric | cm |
+| `substrate_temperature` | 基片温度 | process | numeric | ℃ |
+| `annealing_temperature` | 退火温度 | process | numeric | ℃ |
+| `annealing_time` | 退火时间 | process | numeric | min |
+| `rotation_speed` | 转速 | process | numeric | rpm |
+| `sheet_resistance` | 方阻 | film | numeric | Ω/sq |
+| `resistivity` | 电阻率 | film | numeric | Ω·cm |
+| `transmittance` | 透光率 | film | numeric | % |
+| `thickness` | 厚度 | film | numeric | nm |
+
+`transmittance` carries a `condition_hint` asking for the wavelength or spectral range; `density` and
+`transmittance` read a bare number as a percent or a fraction, and every other numeric field rejects a
+number with no unit rather than assuming one.
+
+## Caching, and why filenames carry keys
+
+Nothing is recomputed unless something it depends on changed, and each cache is keyed by a content hash of
+exactly its own inputs. The hashes are the `<key>` in the filenames under a document directory.
+
+| Cache | Keyed on | Invalidated by |
+|---|---|---|
+| Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
+| Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords and `passages.py` | changing any of them |
+| Comparison (`comparison_key`) | the field tolerances, the categories, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
+| Validation (`validation_key`) | the vision model, its prompt, the crop DPI / padding / pixel cap, the policy, and the source of `validate.py`, `grounding.py`, `normalize.py`, `prompts.py` and `pdf.py` | changing any of them — and only them: a VLM prompt tweak never re-runs extraction or renames a comparison |
+| LLM and VLM requests | the entire request payload; for a vision request the image is stood in by its sha256 | nothing — an identical request is free |
+
+So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
+serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own
+answers are cached by request payload, **a code-only change re-derives records for free** as long as the
+rendered document and the prompts stay byte-identical: rebuilding comparisons and tables for the whole
+14-paper corpus after a key change took 8 seconds (every model answer is a cache hit).
+
+Anything sitting at its built-in baseline is left out of the key material, so an unedited checkout keeps
+the filenames it has. There is no hand-maintained version number anywhere, and there should not be one.
+
+### The data directory
+
+```text
+data/
+├── llm_cache/                          model answers, keyed by request payload
+├── exports/paperfacts.xlsx             the default batch workbook
+└── docs/<first 16 hex of sha256>/
+    ├── identity.json                   full sha256, display name, origin
+    ├── source.pdf                      the uploaded PDF (web uploads only)
+    ├── raw/<backend>/                  the parser's native output plus meta.json
+    ├── parsed/<backend>.md             every block behind its <!-- source: id --> marker: exactly
+    │                                   what the extraction model reads
+    ├── parsed/<backend>.artifact.json  blocks with page and bbox, plus page geometry
+    ├── facts/<backend>.<extractor_key>.json          one lane's sample-level extraction
+    ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
+    ├── validations/<extractor_key>.<comparison_key>.<validation_key>.json   the VLM's readings and verdicts
+    ├── crops/p000_<x1>-<y1>-<x2>-<y2>_200dpi.png        the page regions the VLM was shown
+    ├── datasets/<extractor_key>.<comparison_key>[.<validation_key>].json   the consolidated table the web UI reads
+    ├── dataset.xlsx                    this paper's workbook, written automatically by `run`
+    ├── overlays/<backend>/page_*.png   bbox overlays from `overlay`
+    └── pages/<dpi>dpi/                 page renders for the web viewer
+```
+
+Every block carries `page` plus a bounding box normalised to `[0, 1]`, and every extracted value cites the
+block ids it was read from, so any value maps back to a rectangle on a page. An export made under
+different settings lands beside the old one instead of overwriting it.
+
+## The Excel workbook
+
+`run` writes `data/docs/<sha>/dataset.xlsx` for one paper; `batch` and `export` write one workbook for a
+whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」. Five
+sheets:
+
+| Sheet | Contents |
+|---|---|
+| 论文数据 | One row per unique PDF: the selected sample's values, one column per field |
+| 样品数据 | Every sample after merging the two lanes, one row each, same columns |
+| 字段说明 | 字段, 中文名, 层级, 标准单位, 中文说明, 单值与缺失规则 |
+| 数据质量 | 文档ID, 文件名, 样品ID, 字段, 最终决策, 输出值, 标准单位, 条件, 合并证据来源, 证据来源通道, 系列级, 视觉核验, 说明 |
+| 运行记录 | 文档ID, 文件名, 状态, 合并后样品数, 抽取版本, 比较版本, 视觉核验版本, 说明 |
+
+论文数据 and 样品数据 both begin with 文档ID, 文件名, 样品ID, 样品标签, 样品及测量条件, 可用字段数 and
+双路一致字段数 before the twenty field columns.
+
+数据质量 is where the provenance is: 最终决策 is `agree`, `single_source` or `vlm_resolved` for a committed
+value and the refusal name otherwise, 合并证据来源 lists the block ids behind it, **证据来源通道** says which
+lanes supplied it, **系列级** marks a value the paper stated once for the whole sample series, and
+**视觉核验** says, lane by lane, what the vision model made of the evidence (`mineru: confirmed;
+paddleocr_vl: contradicted`), empty when it was never shown.
+
+The paper row selects the sample with the most usable fields, then the most two-lane agreements, then a
+stable sample-id tie break. **It never combines different samples' measurements into one row.** That
+chooses the most complete sample, not the best-performing one; the others stay in 样品数据. Target
+properties are paper-level and shared across samples only when their extracted value is unique. Use 数据质量
+to restrict a training set to two-lane agreements if you need to — completeness alone is not a quality
+score.
+
+Numeric cells use the canonical units named in 字段说明. Missing values are empty, never zero.
+
+## What a blank cell means
+
+Four guardrails stand between the model's answer and a committed number, and each exists because the
+failure it catches was observed on real input:
+
+| Guardrail | What it catches |
+|---|---|
+| Schema and type cleaning | Fields outside the target schema; numeric fields holding words like `"minimum"` or `"n.a."` |
+| Scope enforcement | A paper-level field attached to one sample, or the reverse — a film's dopant concentration reported as the sputtering target's composition |
+| Citation validation | Block ids the model invented, or ids from parts of the document it was never shown |
+| Grounding | The quoted text cannot be found in the block it cites — a real id attached to a value that did not come from it |
+
+The first three drop the value with an audited reason. Grounding only flags; it never drops. Grounding is
+the one that matters most and the one usually missing: without it, "traceable to a page and a bounding
+box" only means the model named a real block. It tolerates formatting differences — the same number
+reaches the model as `$( 4 0 \times 1 0 \mathrm { c m }$` from one parser and `(40 × 10 cm` from the other
+— while staying strict about digits, and a quote that straddles the junction between the cited block and
+its same-page neighbour counts as grounded. A quote lying entirely inside the neighbour still does not.
+
+Two more rules shape the table. **Series fan-out**: when the model states that a value holds for every
+listed sample, the code writes it onto each of them and marks it 系列级, rather than leaving it
+unattributed. **The single-sample rule**: a cell is committed only when exactly one value survives for
+that sample and field. Everything else is a refusal, and the refusal has a name:
+
+| Decision | What happened |
+|---|---|
+| `agree` | Both lanes produced the same value. Committed |
+| `single_source` | One lane produced it, grounded and cited. Committed |
+| `vlm_resolved` | The lanes conflicted; the VLM read exactly one side off the page and denied the other. The confirmed side is committed |
+| `vlm_contradicted` | Every candidate was denied by the VLM: the cited region, read from pixels, does not contain the quoted characters |
+| `conflict` | The lanes produced different values (and the VLM did not settle it) |
+| `ambiguous` | The lanes could not be decided between, or the sample match fell below `ambiguous_match_confidence` |
+| `ungrounded` | No evidence both located in the text and carrying a valid citation — unless the VLM located it on the page, which is the one appeal against a grounding false negative |
+| `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
+| `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
+| `non_scalar` | A range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
+
+Approximate values and measurements with ± uncertainty keep their centre value and carry a note. A value
+the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to
+2500 nm" — is kept and shown as **unattributed** rather than attached to a plausible neighbour. When both
+lanes hold the same unplaced value it is paired and compared like any other; a value only one lane could
+not place stays out of the comparison, because the other lane may hold it on a sample where it is already
+reported. An unplaced value is visible; a misplaced one is not.
+
+Values that exist only in a figure cannot be extracted, and a sheet-resistance curve that appears only in
+a plot is correctly reported as MISSING, not invented. The 48 `multiple_conditions` refusals in the
+current corpus were read one by one and are all correct: per-layer versus total thickness in bilayer and
+graded films, two targets with their two modes and diameters, transmittance quoted for two wavelength
+bands. No word-level rule separates those from a paraphrase, so the blank cell with its reason on hover is
+the right output for them.
+
+The two lanes share one extractor, so a mistake made by the language model itself — attributing a value to
+the wrong sample — correlates across lanes and AGREE will not catch it. Parser error and extractor error
+have to be counted separately when evaluating. The VLM checks *characters in a region*, not attribution:
+it can tell you that `10^2` is not printed where a lane says it is, not that a correctly read number
+belongs to a different sample.
+
+## How the page is read back
+
+The validate stage sits between `compare` and `export` and is the only stage that looks at pixels.
+
+1. **Selection is a lane-blind rule, not a model call.** Under `vlm.policy = disputed` the list is: both
+   sides of every CONFLICT and AMBIGUOUS row, the one side of every MISSING row, and every value grounding
+   flagged in either lane. Each value is listed once, in a fixed order. `all` lists every value in both
+   lanes, which is how the rate at which *both* parsers agree on a wrong reading is measured — the number
+   that justifies the stage, and one nobody had measured before it existed.
+2. **The region is the union of the cited blocks** on the first cited page, padded by `crop_padding`,
+   rendered at `crop_dpi` through the same `pdf.py` and the same `NormalizedBBox.to_pixels` the web viewer
+   uses, so the crop is exactly the rectangle the viewer draws. Each distinct box is rendered once and kept
+   under `crops/`.
+3. **The model transcribes; it is never told the value.** The prompt asks for a verbatim transcription of
+   the region and names the field, identically for both lanes — nothing else. A model asked "is 10^-2
+   written here?" tends to agree; one asked "what is written here?" has no side to take.
+4. **The code adjudicates.** The transcription is stood in as a block the value cites, and
+   `grounding.is_grounded` — the matcher the pipeline already trusts — decides whether the quoted
+   `value_raw` occurs in it, with the same leniency (LaTeX, `×`/`x`, superscripts, case) and the same
+   strictness (a number never matches inside a longer number). One extra fold, applied to both sides:
+   spaces around a multiplication sign between digits are dropped, because parsers copy the PDF's spacing
+   and a model writes its own.
+5. **Verdicts are kept apart.** `confirmed`, `contradicted`, `illegible` (the model could not read the
+   region), `not_checked` (no citation or no PDF, so no region existed) and `error` (the request failed) are
+   five different things, and a value nobody could check never looks like one that was checked and passed.
+   Every verdict carries the transcription and the crop's page, box and digest.
+
+On the stored table the verdicts act in exactly three places (see the decision table above): a contradicted
+value is set aside before anything else is judged; a conflict in which exactly the surviving side was
+confirmed becomes `vlm_resolved`; an ungrounded value the VLM located is trusted. A verdict never invents a
+value and never promotes a cell the two-lane rules would have refused for another reason.
+
+**What it costs.** Under `disputed`, one vision request per disputed value — on the 14-paper corpus,
+9 ambiguous rows plus every one-sided and ungrounded value, so tens of small requests per paper rather than
+the hundreds extraction makes. Under `all`, one request per value in both lanes. Identical crops share one
+request (the cache keys the image by digest), and a re-run replays every answer for free.
+
+**What it is not.** A fourth reading, not the truth: `confirmed` means a model that never saw the parser's
+text also reads these characters in this region. The transcription is stored so a reviewer can overrule
+any verdict, and the web page shows it on hover.
+
+## Measurements that decided the defaults
+
+All from `.omc/research/reasoning-effort.md`, run against `deepseek-v4.1-flash` on the Alibaba Cloud
+endpoint, passage mode, parsers cached.
+
+| Question | Answer | Evidence |
+|---|---|---|
+| `llm.reasoning_effort` | Leave unset | One 12-page paper: unset 10 min 30 s, 112 values, 8 samples; `"none"` 1 min 39 s but only 77 values and 7 samples; `"low"` 18 min 50 s and no better than unset |
+| `llm.inventory_reasoning_effort` | Leave unset | Same paper family: unset found 10 samples in each lane and matched all 10; `"low"` found 6 and 8 and matched 4; `"none"` found 6 and 6. Less reasoning merges the as-deposited and annealed films into one sample |
+| `llm.concurrency` | 4 | 42 live model calls finished in 3 min 42 s against roughly three times that serially. It changes only when requests are sent, so it costs no re-extraction |
+| `extraction.passes` | 1, opt in to more | A second pass reproduces 75–90 % of a first pass's values at temperature 0. That is the noise floor for any prompt experiment, not a recall gain |
+| Corpus verdict mix | — | 14 papers, 169 samples, 2760 sample×field cells. After the latest pairing change: 603 agree, 268 single-source, 0 conflicts; the comparison itself holds 765 agree, 400 missing, 9 ambiguous rows. Most cells are missing, and that is the honest answer |
+
+The research note also records what did **not** work and was reverted: a numeric-signature condition key
+(it cannot tell "550 nm" from "550 nm, annealed"), and a descriptive-reference prompt rule (no measurable
+gain, and the run-to-run noise floor above swallowed the difference). Read it before proposing a prompt
+change, and run the baseline twice before crediting or blaming a wording.
+
+## Troubleshooting
+
+**`import paperfacts` raises `ModuleNotFoundError` on the Mac.** An external tool has marked `.venv`
+hidden, and Python 3.13 then skips its `.pth` files. Run `scripts/dev_fix_venv.sh`. No reinstall is
+needed, and Linux does not have this problem.
+
+**Every request answers HTTP 500 `BalanceError: There are no suitable services`.** The account is out of
+balance, or the endpoint is having a transient outage. It is not the paper, the payload or the
+concurrency — all three have been bisected. Nothing runs until balance returns, and the resume is free
+because the answers already bought are cached. One observed outage lasted five minutes.
+
+**PaddleOCR-VL fails with a 401 and "Repository Not Found" against the MLX server.** The pipeline asked
+the server for `PaddleOCR-VL-1.6-0.9B`, which is not a Hugging Face repository. Set
+`PAPERFACTS_PADDLE_VL_MODEL_NAME=PaddlePaddle/PaddleOCR-VL-1.6`. The name must be set wherever the MLX
+backend is used; `dev_up.sh` sets it for you.
+
+**A document has no PDF.** A paper processed on another machine still has its stored parse for both
+lanes, and extraction, comparison and export never open the PDF, so it can be re-run. The web app says
+so: 「处理全部未完成」 skips only documents with neither a PDF nor a cached parse, and asking to re-run
+one of those answers 409 with "re-upload it to process it". Only uploaded documents can have their pages
+re-rendered for the viewer.
+
+**A forced re-parse is expensive.** `--force` on `parse` re-runs both parsers: on this Mac, MinerU took
+24.5 s and PaddleOCR-VL 153.6 s for a 12-page paper with the MLX server up, and hours without it.
+`--force` on `extract` re-buys every model answer. Prefer letting the cache keys invalidate what actually
+changed.
+
+**A service will not come up on the server.** Cold starts are minutes, not seconds. Read
+`docker compose logs -f` before restarting anything, and check that only GPUs 4, 5 and 6 show usage.
+
+## Development
+
+```bash
+uv run pytest                                              # unit tests; no models, no network, no real papers
+uv run pytest --cov=paperfacts                             # coverage target is 80%
+uv run pytest --run-parser                                 # integration; needs both parser environments and their weights
+uv run ruff check src tests runners && uv run ruff format --check src tests runners
+```
+
+Line length is 120. Tests never touch a real model or a real LLM: parser output comes from recorded
+fixtures of genuine runs, temporary PDFs are generated with pypdfium2, and the LLM is a fake that doubles
+as an assertion surface for prompt content. The vision model is faked the same way
+(`support.llm.FakeVisionClient`), and the crops it is "shown" are rendered from those blank PDFs, so the
+whole validate stage runs in the suite.
+
+| Path | Contents |
+|---|---|
+| `src/paperfacts/` | One flat module per pipeline stage, listed in order in `__init__.py`, plus `web/` |
+| `runners/` | The two PEP 723 parser scripts and their committed lockfiles |
+| `deploy/` | Linux GPU server deployment |
+| `tests/` | The pytest suite and the recorded parser fixtures |
+| `.omc/research/` | The measurements behind the defaults |
+
+Use `uv sync --group dev`; never `pip install` into the venv. After editing a runner's dependency header,
+run `uv lock --script runners/<name>.py`. `CLAUDE.md` holds the internal conventions for contributors —
+nothing a user or an operator needs.
