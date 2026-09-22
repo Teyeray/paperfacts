@@ -357,13 +357,16 @@ def validate_document(
     *,
     lanes: Mapping[Backend, LaneExtraction],
     report: ComparisonReport,
+    llm: LlmClient | None = None,
     force: bool = False,
 ) -> ValidationReport:
-    """Show the vision model the regions the disputed values were cited from, and store its verdicts.
+    """Show the vision model the regions the selected values were cited from, fill blanks from the tables,
+    and store the result.
 
     Keyed by all three keys: a different extraction or comparison selects different values, a different
-    validation setting reads them differently. ``force`` re-asks the model; the crops themselves are
-    deterministic renders and are reused.
+    validation setting reads them differently. ``force`` re-asks the models; the crops themselves are
+    deterministic renders and are reused. ``llm`` is the extraction model's client, needed only when
+    ``vlm.fill_blanks`` is on: the fill step is an extraction and is made by the extractor.
     """
     layout = DataLayout(settings.data_root)
     path = layout.validation_path(
@@ -382,10 +385,13 @@ def validate_document(
         client=client,
         layout=layout,
         validation_key=validation_key_for(settings),
+        llm=llm,
         policy=settings.vlm_policy,
         crop_dpi=settings.vlm_crop_dpi,
         crop_padding=settings.vlm_crop_padding,
         crop_max_pixels=settings.vlm_crop_max_pixels,
+        context_blocks=settings.vlm_context_blocks,
+        fill_blanks=settings.vlm_fill_blanks,
         concurrency=settings.vlm_concurrency,
         refresh=force,
     )
@@ -496,13 +502,14 @@ def run_document(
                 on_stage(f"extract:{backend}", "done", detail)
         on_stage("compare", "running", "")
         report = compare_document(document, settings, client, force=force, lanes=lanes)
-    counts = report.counts
-    on_stage(
-        "compare",
-        "done",
-        f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
-    )
-    validation = _validate_stage(document, settings, lanes=lanes, report=report, force=force, on_stage=on_stage)
+        c = report.counts
+        summary = f"agree {c.agree} · conflict {c.conflict} · ambiguous {c.ambiguous} · missing {c.missing}"
+        on_stage("compare", "done", summary)
+        # Inside the extractor client's lifetime: the fill step asks the extractor about the tables the
+        # vision model read, with the same connection pool and cache.
+        validation = _validate_stage(
+            document, settings, lanes=lanes, report=report, llm=client, force=force, on_stage=on_stage
+        )
     on_stage("export", "running", "")
     dataset = consolidate_document(document, lanes, report, validation)
     layout = DataLayout(settings.data_root)
@@ -527,6 +534,7 @@ def _validate_stage(
     *,
     lanes: Mapping[Backend, LaneExtraction],
     report: ComparisonReport,
+    llm: LlmClient,
     force: bool,
     on_stage: StageCallback,
 ) -> ValidationReport | None:
@@ -538,11 +546,14 @@ def _validate_stage(
         return None
     on_stage("validate", "running", "")
     with build_vlm_client(settings) as client:
-        validation = validate_document(document, settings, client, lanes=lanes, report=report, force=force)
+        validation = validate_document(document, settings, client, lanes=lanes, report=report, llm=llm, force=force)
     counts = validation.counts
     detail = (
         f"confirmed {counts.confirmed} · contradicted {counts.contradicted} · illegible {counts.illegible}"
-        f" · not checked {counts.not_checked}" + (f" · errors {counts.error}" if counts.error else "")
+        f" · not checked {counts.not_checked}"
+        + (f" · errors {counts.error}" if counts.error else "")
+        # "filled 0" is worth a word when the fill step ran: it says the tables held nothing more to quote.
+        + (f" · filled {counts.filled}" if settings.vlm_fill_blanks else "")
     )
     on_stage("validate", "done", detail)
     return validation

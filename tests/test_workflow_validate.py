@@ -22,7 +22,7 @@ from paperfacts.validate import ValidationReport
 from paperfacts.workflow import read_validation, run_document, validate_document
 from support.extraction import make_artifact, make_field, make_lane, make_sample
 from support.factories import make_block
-from support.llm import FakeVisionClient
+from support.llm import FakeLlmClient, FakeVisionClient
 from test_workflow_run import install_fake_pipeline
 
 BOX = NormalizedBBox(x1=0.1, y1=0.4, x2=0.9, y2=0.6)
@@ -39,7 +39,8 @@ def settings(tmp_path: Path) -> Settings:
 
 @pytest.fixture
 def vlm_settings(settings: Settings) -> Settings:
-    return dataclasses.replace(settings, vlm_enabled=True, vlm_crop_dpi=72)
+    # The checking half of the stage alone; the fill step has its own tests below.
+    return dataclasses.replace(settings, vlm_enabled=True, vlm_crop_dpi=72, vlm_fill_blanks=False)
 
 
 def store_artifacts(document: DocumentInput, settings: Settings) -> dict:
@@ -178,3 +179,68 @@ def test_read_validation_is_none_when_the_stage_is_off_or_has_not_run(document, 
     assert read_validation(layout, document.document_id, settings) is None
     assert read_validation(layout, document.document_id, vlm_settings) is None
     assert comparison_key()  # the keys used for the lookup are the ordinary ones, computed the same way
+
+
+# ---- The fill step inside the stage ----------------------------------------------------------------------------
+
+
+TABLE_TEXT = "Sample | Rs (Ω/sq) | Thickness (nm)\nA | 12.5 | 250"
+
+
+def fill_answer(system: str, user: str) -> str:
+    marker = user.split("<!-- source: ", 1)[1].split(" -->", 1)[0]
+    return json.dumps(
+        {
+            "samples": [
+                {
+                    "sample_id": "A",
+                    "fields": [{"field": "thickness", "value_raw": "250", "unit_raw": "nm", "source_ids": [marker]}],
+                }
+            ]
+        }
+    )
+
+
+def test_with_filling_on_the_stage_asks_the_extractor_and_stores_the_fills(document, vlm_settings):
+    filling = dataclasses.replace(vlm_settings, vlm_fill_blanks=True)
+    artifacts = store_artifacts(document, filling)
+    lanes, report = conflicting_lanes(document, artifacts)
+    client = FakeVisionClient(lambda call: reading(TABLE_TEXT))
+    llm = FakeLlmClient(fill_answer)
+
+    validation = validate_document(document, filling, client, lanes=lanes, report=report, llm=llm)
+
+    assert validation.counts.filled == 2
+    assert {(f.backend, f.owner, f.field, f.value_raw) for f in validation.fills} == {
+        ("mineru", "sample:A", "thickness", "250"),
+        ("paddleocr_vl", "sample:A", "thickness", "250"),
+    }
+    assert llm.call_count == 2, "one question per lane's table"
+    # 2 verdict requests + 2 table transcriptions; the same crop, so the second is the same image.
+    assert client.call_count == 4
+    assert read_validation(DataLayout(filling.data_root), document.document_id, filling) == validation
+
+
+def test_filling_without_the_extractor_is_a_configuration_error(document, vlm_settings):
+    filling = dataclasses.replace(vlm_settings, vlm_fill_blanks=True)
+    artifacts = store_artifacts(document, filling)
+    lanes, report = conflicting_lanes(document, artifacts)
+
+    with pytest.raises(ValueError, match="llm"):
+        validate_document(document, filling, FakeVisionClient(lambda call: reading("x")), lanes=lanes, report=report)
+
+
+def test_run_document_hands_the_extractor_to_the_stage_and_reports_the_fills(monkeypatch, document, vlm_settings):
+    # With the fake pipeline there are no table blocks, so nothing is filled -- but the stage ran with the
+    # extractor in hand and said so in its summary.
+    filling = dataclasses.replace(vlm_settings, vlm_fill_blanks=True)
+    install_fake_pipeline(monkeypatch)
+    client = FakeVisionClient([])
+    monkeypatch.setattr("paperfacts.workflow.build_vlm_client", lambda s: client)
+    monkeypatch.setattr("paperfacts.workflow.load_artifact", lambda d, b, s: make_artifact(backend=b))
+
+    marks: list[tuple[str, str, str]] = []
+    result = run_document(document, filling, on_stage=lambda s, st, d: marks.append((s, st, d)))
+
+    assert ("validate", "done", "confirmed 0 · contradicted 0 · illegible 0 · not checked 0 · filled 0") in marks
+    assert result.validation is not None and result.validation.fills == ()

@@ -4,6 +4,9 @@ Three entry points, each pinned: a contradicted value is set aside before anythi
 conflict in which exactly the surviving side was confirmed becomes ``vlm_resolved``; a value grounding could
 not locate is trusted when the VLM located it. Everything else about the two-lane rules is unchanged, and a
 verdict about evidence the dataset never held is silently irrelevant rather than wrongly applied.
+
+A fill -- a value quoted from the VLM's transcription of a table -- has one entry point of its own: a cell
+that would otherwise be blank, committed as ``vlm_filled``. It never replaces a value a lane read.
 """
 
 from __future__ import annotations
@@ -16,9 +19,9 @@ from openpyxl import load_workbook
 from paperfacts.compare import compare_lanes
 from paperfacts.dataset import DatasetPayload, DocumentDataset, consolidate_document, write_dataset
 from paperfacts.matching import SampleMatch, SampleMatching
-from paperfacts.models import DocumentInput
+from paperfacts.models import DocumentInput, NormalizedBBox
 from paperfacts.records import FieldValue, TargetRecord
-from paperfacts.validate import ValidationReport, ValueValidation, Verdict, value_key
+from paperfacts.validate import FilledValue, RegionCrop, ValidationReport, ValueValidation, Verdict, value_key
 from support.extraction import DEFAULT_EXTRACTOR_KEY, make_lane, make_sample
 from support.factories import DOC_ID
 
@@ -70,6 +73,40 @@ def verdicts(report, *entries: tuple[str, str, FieldValue, Verdict]) -> Validati
 
 def decision(result: DocumentDataset, field: str):
     return next(row for row in result.quality_rows if row["field"] == field and row["sample_id"] == "A")
+
+
+CROP = RegionCrop(
+    page=0,
+    bbox=NormalizedBBox(x1=0.1, y1=0.4, x2=0.9, y2=0.6),
+    dpi=72,
+    width_px=100,
+    height_px=20,
+    source_ids=("mineru_p0_b1",),
+    image_sha256="0" * 64,
+    path="p000_x_72dpi.png",
+)
+
+
+def fill(
+    name: str, raw: str, unit: str | None = None, *, backend: str = "mineru", owner: str = "sample:A"
+) -> FilledValue:
+    """A fill as the stage stores it: quoted from the transcription, cited to the crop."""
+    field = FieldValue(field=name, value_raw=raw, unit_raw=unit, source_ids=("vlm:" + CROP.path,))
+    return FilledValue(
+        key=value_key(backend, owner, field),
+        backend=backend,
+        owner=owner,
+        field=name,
+        value_raw=raw,
+        unit_raw=unit,
+        source_id="vlm:" + CROP.path,
+        crop=CROP,
+        transcription="Sample | Thickness\nA | " + raw,
+    )
+
+
+def filled(report, *fills: FilledValue, entries: tuple = ()) -> ValidationReport:
+    return verdicts(report, *entries).model_copy(update={"fills": fills})
 
 
 # ---- A conflict the page settles -------------------------------------------------------------------------------
@@ -298,3 +335,110 @@ def test_the_verdict_column_and_the_validation_key_reach_the_workbook(tmp_path: 
     runs = workbook["运行记录"]
     run_header = [cell.value for cell in runs[1]]
     assert runs[2][run_header.index("视觉核验版本")].value == VALIDATION_KEY
+
+
+# ---- Fills: only into a cell that would otherwise be blank -------------------------------------------------------
+
+
+def test_a_blank_cell_is_filled_from_the_table_transcription():
+    a = value("sheet_resistance", "12.5", "Ω/sq")
+    lanes, report = paired([a], [])
+    assert decision(consolidate_document(DOCUMENT, lanes, report), "thickness")["decision"] == "missing"
+    validation = filled(report, fill("thickness", "250", "nm"))
+
+    result = consolidate_document(DOCUMENT, lanes, report, validation)
+
+    row = decision(result, "thickness")
+    assert row["decision"] == "vlm_filled"
+    assert row["value"] == 250
+    assert row["lanes"] == "mineru"
+    assert row["source_ids"] == "vlm:" + CROP.path
+    assert row["vlm"] == "mineru: filled"
+    assert "表格转写补全" in row["detail"]
+    assert result.paper_row["thickness"] == 250
+    # The cell the lane did read is untouched.
+    assert decision(result, "sheet_resistance")["decision"] == "single_source"
+
+
+def test_a_fill_never_replaces_a_value_a_lane_read():
+    a = value("thickness", "250", "nm")
+    lanes, report = paired([a], [])
+    validation = filled(report, fill("thickness", "999", "nm"))
+
+    row = decision(consolidate_document(DOCUMENT, lanes, report, validation), "thickness")
+
+    assert row["decision"] == "single_source" and row["value"] == 250
+    assert "filled" not in row["vlm"]
+
+
+def test_a_fill_does_not_settle_a_conflict():
+    # Two readings that disagree are a disagreement to review; a third number from the table transcription
+    # is not a tiebreaker, and the cell stays empty with the conflict named.
+    a, b = value("thickness", "250", "nm"), value("thickness", "2500", "nm", backend="paddleocr_vl")
+    lanes, report = paired([a], [b])
+    validation = filled(report, fill("thickness", "250", "nm"))
+
+    row = decision(consolidate_document(DOCUMENT, lanes, report, validation), "thickness")
+
+    assert row["decision"] == "conflict" and row["value"] is None
+
+
+def test_a_cell_whose_every_reading_was_denied_takes_the_fill():
+    # Both parsers misread the number; the VLM denied both and its table transcription carries the real
+    # one: the fill is the only evidence left standing.
+    a, b = value("thickness", "250", "nm"), value("thickness", "250", "nm", backend="paddleocr_vl")
+    lanes, report = paired([a], [b])
+    validation = filled(
+        report,
+        fill("thickness", "2500", "nm"),
+        entries=(("mineru", "sample:A", a, "contradicted"), ("paddleocr_vl", "sample:A", b, "contradicted")),
+    )
+
+    row = decision(consolidate_document(DOCUMENT, lanes, report, validation), "thickness")
+
+    assert row["decision"] == "vlm_filled" and row["value"] == 2500
+    assert row["vlm"] == "mineru: contradicted; paddleocr_vl: contradicted; mineru: filled"
+
+
+def test_the_first_lane_in_backend_order_supplies_the_fill_when_both_have_one():
+    a = value("sheet_resistance", "12.5", "Ω/sq")
+    lanes, report = paired([a], [value("sheet_resistance", "12.5", "Ω/sq", backend="paddleocr_vl")])
+    validation = filled(report, fill("thickness", "300", "nm", backend="paddleocr_vl"), fill("thickness", "250", "nm"))
+
+    row = decision(consolidate_document(DOCUMENT, lanes, report, validation), "thickness")
+
+    assert row["decision"] == "vlm_filled" and row["value"] == 250 and row["lanes"] == "mineru"
+
+
+def test_a_fill_keyed_to_a_sample_the_scope_does_not_own_does_not_apply():
+    a = value("sheet_resistance", "12.5", "Ω/sq")
+    lanes, report = paired([a], [])
+    validation = filled(report, fill("thickness", "250", "nm", owner="sample:B"))
+
+    row = decision(consolidate_document(DOCUMENT, lanes, report, validation), "thickness")
+
+    assert row["decision"] == "missing" and row["value"] is None
+
+
+def test_a_fill_that_is_not_a_scalar_is_refused_like_any_other_value():
+    a = value("sheet_resistance", "12.5", "Ω/sq")
+    lanes, report = paired([a], [])
+    validation = filled(report, fill("thickness", "thick", "nm"))
+
+    row = decision(consolidate_document(DOCUMENT, lanes, report, validation), "thickness")
+
+    assert row["decision"] == "non_scalar" and row["value"] is None
+
+
+def test_a_filled_cell_reaches_the_workbook_with_its_decision(tmp_path: Path):
+    a = value("sheet_resistance", "12.5", "Ω/sq")
+    lanes, report = paired([a], [])
+    result = consolidate_document(DOCUMENT, lanes, report, filled(report, fill("thickness", "250", "nm")))
+    output = tmp_path / "out.xlsx"
+
+    write_dataset([result], output)
+
+    quality = load_workbook(output)["数据质量"]
+    header = [cell.value for cell in quality[1]]
+    decisions = {row[header.index("最终决策")].value for row in quality.iter_rows(min_row=2)}
+    assert "vlm_filled" in decisions

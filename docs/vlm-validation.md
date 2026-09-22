@@ -31,17 +31,24 @@ the two lanes can share an OCR mistake too — had no stage that could catch it.
 
 ## 2. What it does, in one paragraph
 
-After `compare` and before `export`, for every value the two lanes could not settle between them, the stage
-renders the page region the value was cited from (the union of its cited blocks, padded), hands the PNG to
-a vision-language model with the instruction *transcribe exactly what is printed here*, and then — in code —
-checks whether the quoted `value_raw` occurs in that transcription using the same matcher grounding already
-uses. The result is one of five verdicts per value, stored with the transcription and the crop's page, box
-and digest, and consulted by the dataset in exactly three places.
+After `compare` and before `export`, for every value the two lanes could not settle between them — and,
+under the default policy, every value that was read out of a table — the stage renders the page region the
+value was cited from (the union of its cited blocks, widened by a sliding window of one neighbour on each
+side, padded), hands the PNG to a vision-language model with the instruction *transcribe exactly what is
+printed here*, and then — in code — checks whether the quoted `value_raw` occurs in that transcription
+using the same matcher grounding already uses. The result is one of five verdicts per value, stored with
+the transcription and the crop's page, box and digest, and consulted by the dataset in exactly three
+places.
+
+Then, still inside the stage, every table a lane's samples were read from is transcribed once as a whole
+and the *extraction* model is asked to quote, from that transcription only, the fields those samples still
+lack. What it quotes is cleaned and grounded like any other value; what survives is a **fill**, which the
+dataset commits in exactly one place: a cell that would otherwise be blank.
 
 ```
  comparison report ──→ select_targets (a lane-blind rule) ──→ [value, lane, cited blocks]
                                                                      │
- artifact (blocks + bboxes) ──→ region_for: union of cited blocks on one page, padded
+ artifact (blocks + bboxes) ──→ region_for: cited blocks ± context_blocks neighbours on one page, padded
                                                                      │
  source PDF ──→ pdf.render_region (same pixel mapping as the web viewer) ──→ PNG, cached under crops/
                                                                      │
@@ -54,7 +61,23 @@ and digest, and consulted by the dataset in exactly three places.
         confirmed │ contradicted │ illegible │ not_checked │ error  ──→ validations/<ek>.<ck>.<vk>.json
                                                                      │
                        dataset._decide: three entry points, nothing else
+
+ lane samples ──→ table_regions_of: every cited table block, ± context, once ──→ PNG (same crop store)
+                                                                     │
+                       VisionClient.complete_vision(system, user = "transcribe the whole table") ──→ text
+                                                                     │
+                       LlmClient (the extractor): "these samples lack these fields; quote them from this"
+                                                                     │
+                       response_to_records ──→ adjudicate against the transcription ──→ FilledValue
+                                                                     │
+                       dataset._decide: one entry point -- a cell that would otherwise be blank
 ```
+
+Why the fill step is made by the extraction model and not by the VLM: the VLM's job is to read pixels
+faithfully, and the extractor's job is to know which printed cell is *this sample's sheet resistance* —
+the field table, the quoting rules and the record cleaning all live on that side. Handing the VLM's
+transcription to the extractor keeps each model doing the thing it is trusted for, and a filled value
+goes through exactly the guardrails a lane value goes through, with the transcription as its one citation.
 
 ## 3. The three rules, and why each one
 
@@ -153,6 +176,35 @@ And nowhere else. A verdict never invents a value, never changes a unit, never o
 test file `test_dataset_validation.py` pins each entry point and, for each, the neighbouring shape it must
 *not* apply to.
 
+Fills have one entry point of their own, deliberately narrower than any of the three above: **a cell for
+which no lane holds a value** (or every value it held was contradicted) takes the fill and is committed as
+`vlm_filled`, through the same scalar parsing as any other value. A fill never replaces a value a lane
+read, never breaks a conflict (two parser readings that disagree are a disagreement to review, not a vote a
+third reading can swing), and when both lanes' tables produced one, the first lane in `BACKENDS` order is
+taken so the choice is deterministic. The cell cites `vlm:<crop file>`, so a reviewer opens the exact PNG
+the transcription came from.
+
+### 4.1 Why tables get more of the model than prose
+
+Running text reaches the extraction LLM whole, in context, and a misread word there tends to surface as the
+two lanes disagreeing — the existing machinery already catches it, and the VLM is only needed for the
+residue (`disputed`). A table cell is a single token in a grid; the classical parser failures on tables —
+a shifted column, a merged header row, a superscript dropped from a unit — produce two lanes that *agree*
+on the same wrong number, or two lanes that both leave the cell blank because neither Markdown carried it.
+Neither shape is visible to a text-only pipeline. So the default policy checks every table-cited value
+whether or not the lanes agreed, and the fill step reads every cited table back as a whole. Text still gets
+checked — the disputed rule applies to it as before — just not exhaustively.
+
+### 4.2 The sliding window
+
+A cited block alone is often not enough to read: a table cell without its header row has no unit, a
+caption without its table names samples the crop does not show, and grounding itself accepts a quote that
+straddles the boundary into the next block. `context_blocks` widens every crop by that many text-bearing
+neighbours before and after the cited block, in the page's reading order — the same adjacency grounding
+walks — skipping figures and page furniture without counting them and never crossing a page. The default
+of 1 brings a table its caption and footnote. The window is part of `validation_key` (a wider crop is a
+different question) and the stored verdict names the context blocks alongside the cited ones.
+
 ## 5. Why Qwen3-VL, and why not the models that score higher
 
 The obvious pick from the document-parsing leaderboards is not the right pick here, because the property
@@ -183,10 +235,16 @@ useful third reader, not a guarantee of anything.
 
 ## 6. Cost and what to measure
 
-Under the default `disputed` policy the stage sends one vision request per disputed value — on the 14-paper
+Under the `disputed` policy the stage sends one vision request per disputed value — on the 14-paper
 corpus, the 9 ambiguous rows plus every one-sided and ungrounded value: tens of small requests per paper
-against the hundreds extraction makes. Identical crops share one request (the cache stands the image in by
-digest), and a re-run replays every answer for free.
+against the hundreds extraction makes. The default `tables` policy adds one request per table-cited value,
+and the fill step adds one vision request plus one extraction request per cited table per lane — a
+handful per paper. Identical crops share one request (the cache stands the image in by digest), and a
+re-run replays every answer for free.
+
+Two more numbers the fill step makes measurable: the fraction of blank cells it fills, and — on the
+hand-labelled sample — how often a `vlm_filled` value is right. A fill that is confirmed by neither lane
+rests on one model's reading of one crop, so its precision must be reported apart from the two-lane cells.
 
 Under `policy = all` it sends one request per value in both lanes. That is the measurement mode, and it
 answers the question that justifies the stage: **how often do both lanes agree on a wrong reading?**
@@ -210,19 +268,19 @@ validator has to be validated too.
 
 | File | What changed |
 |---|---|
-| `src/paperfacts/validate.py` | new — selection, region, crop store, reading, adjudication, the stage |
+| `src/paperfacts/validate.py` | new — selection (`select_targets`, `cites_table`), region (`region_for`, `region_of_blocks` with the sliding window), crop store, reading, adjudication, the stage; the fill step (`missing_fields`, `table_regions_of`, `fill_from_tables`, `FilledValue`) |
 | `src/paperfacts/llm.py` | `VisionClient` protocol; `complete_vision`, `vision_payload`, `vision_cache_key` |
 | `src/paperfacts/pdf.py` | `render_region`, `png_bytes` |
-| `src/paperfacts/prompts.py` | `validation_system_prompt`, `validation_user_prompt` |
-| `src/paperfacts/config.py` | `vlm.*` constants, `Settings.vlm_*`, `require_vlm_api_key`, `_parse_bool`, `_parse_policy` |
-| `src/paperfacts/keys.py` | `validation_key`, `validation_key_for`, `validation_code_fingerprint` |
+| `src/paperfacts/prompts.py` | `validation_system_prompt`, `validation_user_prompt`, `table_transcription_user_prompt`, `fill_system_prompt`, `fill_user_prompt` |
+| `src/paperfacts/config.py` | `vlm.*` constants, `Settings.vlm_*` (incl. `vlm_policy`, `vlm_context_blocks`, `vlm_fill_blanks`), `require_vlm_api_key`, `_parse_bool`, `_parse_policy`, `_non_negative` |
+| `src/paperfacts/keys.py` | `validation_key` (both prompts, the window, the policy, the fill switch), `validation_key_for`, `validation_code_fingerprint` |
 | `src/paperfacts/storage.py` | `validation_path`, `crops_dir`, `crop_path`; `dataset_json_path` takes the optional third key |
-| `src/paperfacts/dataset.py` | verdict lookup; the three entry points in `_decide`; 视觉核验 column; `validation_key` on the payload |
-| `src/paperfacts/workflow.py` | `build_vlm_client`, `read_validation`, `validate_document`, the `validate` stage, export reads a stored validation |
-| `src/paperfacts/cli.py` | `paperfacts validate`; `--policy` on `run` and `validate` |
-| `src/paperfacts/report.py` | `render_validation` |
+| `src/paperfacts/dataset.py` | verdict lookup; the three entry points in `_decide`; the fill lookup and `_commit_fill` (`vlm_filled`); 视觉核验 column; `validation_key` on the payload |
+| `src/paperfacts/workflow.py` | `build_vlm_client`, `read_validation`, `validate_document` (takes the extractor for the fill step), the `validate` stage inside the extractor's client scope, export reads a stored validation |
+| `src/paperfacts/cli.py` | `paperfacts validate`; `--policy disputed|tables|all` on `run` and `validate` |
+| `src/paperfacts/report.py` | `render_validation` (verdicts, fills, dropped fills) |
 | `src/paperfacts/web/documents.py`, `web/app.py` | `Library.validation`, `GET /api/documents/{id}/validation`, three-key dataset lookup, `vlm` in `/api/health` |
-| `src/paperfacts/web/static/*` | verdict badges, KPI tile, stage label, skipped state |
+| `src/paperfacts/web/static/*` | verdict badges, KPI tile, stage label, skipped state; 视觉裁定 / 视觉补全 cell badges in the results table |
 | `config.json` | the `vlm` block |
 | `deploy/compose.yaml`, `deploy/host/start_qwen_vlm.sh`, `deploy/.env.example` | `qwen-vlm-server` on GPU 7 |
 | `tests/` | `test_validate.py`, `test_llm_vision.py`, `test_pdf_region.py`, `test_dataset_validation.py`, `test_workflow_validate.py`, `test_keys_validation.py`; additions to the config, workflow, CLI and web tests; `FakeVisionClient` in `support/llm.py` |

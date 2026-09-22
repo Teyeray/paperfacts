@@ -1,11 +1,14 @@
 # PaperFacts (VLM edition)
 
 Extract structured, **verifiably traceable** measurements from scientific PDFs — and, in this fork, have a
-vision-language model read the page itself wherever the two parsers could not settle a number between them.
+vision-language model read the page itself: to check the numbers the two parsers could not settle between
+them, to check every number that came out of a table, and to fill the cells the parsers left blank from
+what the tables actually print.
 
 This repository is a personal fork of [Teyeray/paperfacts](https://github.com/Teyeray/paperfacts) that
-adds one pipeline stage, **visual validation**. The design, the reasons behind every choice and a reading
-order for reviewers are in [`docs/vlm-validation.md`](docs/vlm-validation.md) and
+adds one pipeline stage, **visual validation**, making the pipeline a chain of three readers and one
+adjudicator: MinerU → PaddleOCR-VL → Qwen3-VL → code. The design, the reasons behind every choice and a
+reading order for reviewers are in [`docs/vlm-validation.md`](docs/vlm-validation.md) and
 [`docs/REVIEW-ROADMAP.md`](docs/REVIEW-ROADMAP.md); this README is the manual for the whole tool.
 
 Give it a batch of papers and a list of target fields — sputtering power, gas flow, sheet resistance,
@@ -23,12 +26,19 @@ paper.pdf
                         ┌───────────────┬───────────────┼───────────────┐
                       AGREE          CONFLICT        AMBIGUOUS        MISSING
                    both lanes      values differ    can't decide    one lane only
-                                        │               │               │
-                                        └───────────────┼───────────────┘
-                                                        │  the cited page region, as pixels
+                        │               │               │               │
+              (table-cited only)        └───────────────┼───────────────┘
+                        └───────────────────────────────┤
+                                                        │  the cited block ± its neighbours, as pixels
                                               Qwen3-VL transcribes it ──→ code checks the quote
                                                         │
                                   CONFIRMED · CONTRADICTED · ILLEGIBLE · NOT CHECKED
+                                                        │
+                                   every table a sample was read from, transcribed once
+                                                        │
+                            extractor quotes the still-blank fields from the transcription
+                                                        │
+                                            FILLED (only into an empty cell)
 ```
 
 This file is the whole manual: installing it on a Mac, deploying it on the GPU server, using the web
@@ -59,12 +69,21 @@ grounding check compares a quote with parser text, and the comparison compares t
 parsers misread the same character — a minus sign lost from `10^-2`, a shifted table cell — the pipeline
 reports AGREE at full confidence, and nothing anywhere has looked at the page.
 
-The validate stage looks at the page. For every value the two lanes could not settle between them, it
-renders the region the value was cited from and hands the pixels to a vision-language model that never saw
-either parser's text. The model is not asked whether the value is right; it is asked to transcribe what is
-printed, and the same grounding matcher the pipeline already trusts decides whether the quoted value occurs
-in that transcription. Confirmed, contradicted, or illegible — each recorded with the model's reading, so a
-reviewer can overrule it. See [How the page is read back](#how-the-page-is-read-back).
+The validate stage looks at the page. For every value the two lanes could not settle between them — and,
+by default, for every value that was read out of a table — it renders the region the value was cited from,
+together with the block before and after it (a table's caption and footnote), and hands the pixels to a
+vision-language model that never saw either parser's text. The model is not asked whether the value is
+right; it is asked to transcribe what is printed, and the same grounding matcher the pipeline already
+trusts decides whether the quoted value occurs in that transcription. Confirmed, contradicted, or
+illegible — each recorded with the model's reading, so a reviewer can overrule it.
+
+Tables get more of the model's attention than prose on purpose. Running text is read by the extraction LLM
+in full, with context, and a misread word there is usually caught by the two lanes disagreeing; a table
+cell is one token in a grid, and the classical failures — a shifted column, a merged header, a lost
+superscript — produce two parsers that agree on the same wrong number, or two lanes that both leave the
+cell empty. So the stage also reads each cited table once as a whole and lets the extractor quote, from
+that transcription alone, the fields the lanes left blank. A filled value only ever lands in a cell that
+would otherwise be empty. See [How the page is read back](#how-the-page-is-read-back).
 
 ## Quick start on a Mac
 
@@ -250,10 +269,11 @@ One row per sample after both lanes are merged, one column per field, plus a 靶
 paper-level target values. The row chosen as the paper's row is marked ★ 论文行.
 
 A cell that carries a value shows the number and the field's canonical unit, and a small badge saying how
-it was decided: **双路** when both lanes agreed, or the lane's own name — **MinerU** or **PaddleOCR-VL** —
-when only one lane had it. Clicking a value highlights, on the rendered page, the blocks it was merged
-from. A value the paper stated once for a whole sample series says so in the tooltip rather than in a
-badge.
+it was decided: **双路** when both lanes agreed, the lane's own name — **MinerU** or **PaddleOCR-VL** —
+when only one lane had it, **视觉裁定** when the vision model settled a conflict between the lanes, or
+**视觉补全** when the lanes left the cell blank and the value was quoted from the vision model's reading of a
+table. Clicking a value highlights, on the rendered page, the blocks it was merged from. A value the paper
+stated once for a whole sample series says so in the tooltip rather than in a badge.
 
 **An empty cell is a refusal, not a gap.** The pipeline declined to commit a value and the reason is in
 the cell's tooltip and its accessible name, so a screen reader gets it without a hover. Clicking or
@@ -298,7 +318,7 @@ uv run paperfacts fields                   # list the field table the package ac
 | Command | Purpose |
 |---|---|
 | `run <pdf>` | Parse, extract, compare, validate with the VLM and save `dataset.xlsx` for one paper |
-| `validate <pdf>` | Show the VLM the page regions the disputed values were cited from. Needs `compare`. Runs even when `vlm.enabled` is false |
+| `validate <pdf>` | Show the VLM the page regions the selected values were cited from, then fill blank cells from the tables. Needs `compare`. Runs even when `vlm.enabled` is false |
 | `batch <pdf or dir>` | Recursively process every PDF and write one workbook for all of them |
 | `export <pdf or dir>` | Rebuild that workbook from cached results, with no parser and no LLM calls |
 | `parse <pdf>` | Parse into Markdown with provenance markers, a block list and the full artifact |
@@ -315,8 +335,8 @@ The flags worth knowing:
 - `--passes N` extracts each lane N times and keeps only what a majority of passes produced. N times the
   calls, N times the cost.
 - `--mode document|passage` picks how the model is asked; see below.
-- `--policy disputed|all` on `run` and `validate` picks which values the VLM checks: the disputed ones
-  (default) or every value in both lanes.
+- `--policy disputed|tables|all` on `run` and `validate` picks which values the VLM checks: the disputed
+  ones, the disputed ones plus every value read from a table (default), or every value in both lanes.
 - `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
 - `--data-root` overrides the data directory; `--verbose` / `-v` prints INFO logs.
@@ -418,7 +438,9 @@ The visual validation stage. Off at the built-in baseline, **on in the shipped `
 | `crop_dpi` | The region is rendered at this DPI. Default 200, the same density PaddleOCR-VL read the page at |
 | `crop_padding` | Page fraction added around the cited blocks. Default 0.01 |
 | `crop_max_pixels` | Above this the crop is shrunk (aspect kept) before it is sent, here rather than on the endpoint. Default 2000000 |
-| `policy` | `disputed` (default): conflicts, ambiguities, one-sided values and anything grounding flagged. `all`: every value in both lanes, for measuring how often both lanes agree on a wrong reading |
+| `context_blocks` | The sliding window: how many text-bearing blocks before and after the cited block are drawn into the crop, in the page's reading order. Default 1, which brings a table its caption and its footnote — where the sample names and the units are. 0 crops the cited block alone; figures and page furniture are skipped over, never counted, and a neighbour is never taken from another page |
+| `policy` | `disputed`: conflicts, ambiguities, one-sided values and anything grounding flagged. `tables` (default): the disputed values plus every value cited from a table block, in either lane. `all`: every value in both lanes, for measuring how often both lanes agree on a wrong reading |
+| `fill_blanks` | Default true. After the checks, every table a lane's samples were read from is transcribed once as a whole, and the extraction model is asked to quote — from that transcription only — the fields those samples still lack. A quote that does not occur in the transcription is dropped; one that does becomes a `vlm_filled` cell, and only where the cell would otherwise be blank |
 | `concurrency` | Vision requests in flight at once. Default 4. Scheduling only; not in any key |
 
 The key is `PAPERFACTS_VLM_API_KEY` in `.env`, and it falls back to the LLM key: the shipped configuration
@@ -462,7 +484,8 @@ points at its own services without editing the shared file:
 `PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_VLM_ENABLED`, `PAPERFACTS_VLM_BASE_URL`, `PAPERFACTS_VLM_MODEL`,
 `PAPERFACTS_VLM_TIMEOUT_S`, `PAPERFACTS_VLM_TEMPERATURE`, `PAPERFACTS_VLM_MAX_TOKENS`,
 `PAPERFACTS_VLM_CROP_DPI`, `PAPERFACTS_VLM_CROP_PADDING`, `PAPERFACTS_VLM_CROP_MAX_PIXELS`,
-`PAPERFACTS_VLM_POLICY`, `PAPERFACTS_VLM_CONCURRENCY`.
+`PAPERFACTS_VLM_CONTEXT_BLOCKS`, `PAPERFACTS_VLM_POLICY`, `PAPERFACTS_VLM_FILL_BLANKS`,
+`PAPERFACTS_VLM_CONCURRENCY`.
 
 `PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
 and a value that will not parse as a number names the variable in the error.
@@ -550,7 +573,7 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
 | Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords and `passages.py` | changing any of them |
 | Comparison (`comparison_key`) | the field tolerances, the categories, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
-| Validation (`validation_key`) | the vision model, its prompt, the crop DPI / padding / pixel cap, the policy, and the source of `validate.py`, `grounding.py`, `normalize.py`, `prompts.py` and `pdf.py` | changing any of them — and only them: a VLM prompt tweak never re-runs extraction or renames a comparison |
+| Validation (`validation_key`) | the vision model, its two prompts (transcription and fill), the crop DPI / padding / pixel cap, the context window, the policy, whether blanks are filled, and the source of `validate.py`, `grounding.py`, `normalize.py`, `prompts.py` and `pdf.py` | changing any of them — and only them: a VLM prompt tweak never re-runs extraction or renames a comparison |
 | LLM and VLM requests | the entire request payload; for a vision request the image is stood in by its sha256 | nothing — an identical request is free |
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
@@ -606,11 +629,12 @@ sheets:
 论文数据 and 样品数据 both begin with 文档ID, 文件名, 样品ID, 样品标签, 样品及测量条件, 可用字段数 and
 双路一致字段数 before the twenty field columns.
 
-数据质量 is where the provenance is: 最终决策 is `agree`, `single_source` or `vlm_resolved` for a committed
-value and the refusal name otherwise, 合并证据来源 lists the block ids behind it, **证据来源通道** says which
-lanes supplied it, **系列级** marks a value the paper stated once for the whole sample series, and
-**视觉核验** says, lane by lane, what the vision model made of the evidence (`mineru: confirmed;
-paddleocr_vl: contradicted`), empty when it was never shown.
+数据质量 is where the provenance is: 最终决策 is `agree`, `single_source`, `vlm_resolved` or `vlm_filled`
+for a committed value and the refusal name otherwise, 合并证据来源 lists the block ids behind it (for a filled
+cell, `vlm:` and the crop file the transcription was read from), **证据来源通道** says which lanes supplied
+it, **系列级** marks a value the paper stated once for the whole sample series, and **视觉核验** says, lane
+by lane, what the vision model made of the evidence (`mineru: confirmed; paddleocr_vl: contradicted`, or
+`mineru: filled`), empty when it was never shown.
 
 The paper row selects the sample with the most usable fields, then the most two-lane agreements, then a
 stable sample-id tie break. **It never combines different samples' measurements into one row.** That
@@ -650,6 +674,7 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `agree` | Both lanes produced the same value. Committed |
 | `single_source` | One lane produced it, grounded and cited. Committed |
 | `vlm_resolved` | The lanes conflicted; the VLM read exactly one side off the page and denied the other. The confirmed side is committed |
+| `vlm_filled` | Neither lane held a value for the cell (or every value it held was denied); the extractor quoted one from the VLM's transcription of a table this sample was read from, and the quote occurs in that transcription. Committed, cited to the crop |
 | `vlm_contradicted` | Every candidate was denied by the VLM: the cited region, read from pixels, does not contain the quoted characters |
 | `conflict` | The lanes produced different values (and the VLM did not settle it) |
 | `ambiguous` | The lanes could not be decided between, or the sample match fell below `ambiguous_match_confidence` |
@@ -680,17 +705,26 @@ belongs to a different sample.
 
 ## How the page is read back
 
-The validate stage sits between `compare` and `export` and is the only stage that looks at pixels.
+The validate stage sits between `compare` and `export` and is the only stage that looks at pixels. It
+has two halves: checking (values the lanes read, verified against the page) and filling (cells the lanes
+left blank, quoted from the page's tables).
 
 1. **Selection is a lane-blind rule, not a model call.** Under `vlm.policy = disputed` the list is: both
    sides of every CONFLICT and AMBIGUOUS row, the one side of every MISSING row, and every value grounding
-   flagged in either lane. Each value is listed once, in a fixed order. `all` lists every value in both
+   flagged in either lane. `tables`, the default, adds every value that cites a table block in its own
+   lane's artifact — including the ones the lanes agree on, because a table is where two parsers agree on
+   the same wrong cell. Each value is listed once, in a fixed order. `all` lists every value in both
    lanes, which is how the rate at which *both* parsers agree on a wrong reading is measured — the number
    that justifies the stage, and one nobody had measured before it existed.
-2. **The region is the union of the cited blocks** on the first cited page, padded by `crop_padding`,
-   rendered at `crop_dpi` through the same `pdf.py` and the same `NormalizedBBox.to_pixels` the web viewer
-   uses, so the crop is exactly the rectangle the viewer draws. Each distinct box is rendered once and kept
-   under `crops/`.
+2. **The region is the union of the cited blocks** on the first cited page, **plus a sliding window of
+   `context_blocks` neighbours** on each side in the page's reading order — the same order grounding walks
+   when it accepts a quote across a block boundary, so whatever grounding accepted is inside the crop. With
+   the default of 1 a cited table cell arrives with its caption above and its footnote below, which is
+   where the sample names and the units are printed; a figure between them is skipped over, not counted.
+   The box is padded by `crop_padding` and rendered at `crop_dpi` through the same `pdf.py` and the same
+   `NormalizedBBox.to_pixels` the web viewer uses, so the crop is exactly the rectangle the viewer would
+   draw. Each distinct box is rendered once and kept under `crops/`, and the stored verdict names both
+   the cited blocks and the context blocks the crop contained.
 3. **The model transcribes; it is never told the value.** The prompt asks for a verbatim transcription of
    the region and names the field, identically for both lanes — nothing else. A model asked "is 10^-2
    written here?" tends to agree; one asked "what is written here?" has no side to take.
@@ -705,15 +739,29 @@ The validate stage sits between `compare` and `export` and is the only stage tha
    five different things, and a value nobody could check never looks like one that was checked and passed.
    Every verdict carries the transcription and the crop's page, box and digest.
 
+6. **Filling comes after checking, and only from tables.** With `fill_blanks` on, each lane's samples are
+   walked for the table blocks they cite; every such table is transcribed once as a whole (caption, header,
+   every row, footnote — the window brings them in), and the *extraction* model is asked one question per
+   table: given this lane's own sample ids and the fields each of them still lacks, quote the missing values
+   from this transcription. The transcription is the only block it can cite. Every answer goes through the
+   ordinary record cleaning, then through the same grounding matcher against the transcription; a quote the
+   transcription does not contain is dropped with a reason, and the report lists every drop.
+
 On the stored table the verdicts act in exactly three places (see the decision table above): a contradicted
 value is set aside before anything else is judged; a conflict in which exactly the surviving side was
 confirmed becomes `vlm_resolved`; an ungrounded value the VLM located is trusted. A verdict never invents a
-value and never promotes a cell the two-lane rules would have refused for another reason.
+value and never promotes a cell the two-lane rules would have refused for another reason. Fills act in
+exactly one place: a cell for which no lane holds a value — or every value it held was denied — takes the
+fill and is committed as `vlm_filled`. A fill never replaces a value a lane read and never settles a
+conflict; when both lanes' tables produced one, MinerU's is taken, deterministically, and the other is kept
+in the report.
 
 **What it costs.** Under `disputed`, one vision request per disputed value — on the 14-paper corpus,
 9 ambiguous rows plus every one-sided and ungrounded value, so tens of small requests per paper rather than
-the hundreds extraction makes. Under `all`, one request per value in both lanes. Identical crops share one
-request (the cache keys the image by digest), and a re-run replays every answer for free.
+the hundreds extraction makes. `tables` adds one request per table-cited value, and the fill step adds one
+vision request and one extraction request per cited table per lane — a handful per paper. Under `all`, one
+request per value in both lanes. Identical crops share one request (the cache keys the image by digest), and
+a re-run replays every answer for free.
 
 **What it is not.** A fourth reading, not the truth: `confirmed` means a model that never saw the parser's
 text also reads these characters in this region. The transcription is stored so a reviewer can overrule

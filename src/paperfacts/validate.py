@@ -22,10 +22,26 @@ Three rules keep it honest, and they mirror the rules extraction lives by:
   text also reads these characters in this region; ``contradicted`` means it does not. Both are recorded
   with the transcription, so a reviewer can overrule either. Nothing here ever deletes a value.
 
-The stage runs after comparison and before export, on the values the two lanes could not settle between
-them (``policy="disputed"``): conflicts, ambiguities, one-sided values, and anything grounding could not
-locate. ``policy="all"`` checks every value, which is how the "both lanes agree and both are wrong" rate --
-the number that justifies this stage -- is measured.
+The stage runs after comparison and before export. Which values it checks is the policy: ``disputed`` is
+everything the two lanes could not settle between them (conflicts, ambiguities, one-sided values, anything
+grounding could not locate); ``tables`` (the default) adds every value cited from a table, agreed or not,
+because a table is where a parser fails silently -- a shifted column reads as a clean number -- and where
+the extractor only ever saw what the parser gave it; ``all`` checks every value, which is how the "both
+lanes agree and both are wrong" rate is measured.
+
+Two more things the stage does, both about tables:
+
+- **The crop is a sliding window.** The region a value is checked in is the cited block plus its
+  neighbours before and after in reading order on the same page (``context_blocks``): a table's caption
+  is the block before it and its footnote the block after, and a number the parser split across a block
+  boundary lives in both. The model sees the header row and the units; the verdict is still about the
+  cited block's characters.
+- **Blanks are filled from the tables the sample was read from.** For the fields a lane's sample still
+  lacks, the transcription of each table that sample was cited from is handed to the extraction model --
+  the same one the lanes use, with the same rules -- and a value it quotes is kept only when it grounds in
+  that transcription. The pixels give the text, the extractor quotes it, the code checks the quote. A
+  fill is stored apart from the lanes' own evidence and lands in the dataset only where the cell would
+  otherwise be blank (``vlm_filled``); it never overrides a value a lane read.
 """
 
 from __future__ import annotations
@@ -46,6 +62,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import (
     DEFAULT_VLM_CONCURRENCY,
+    DEFAULT_VLM_CONTEXT_BLOCKS,
     DEFAULT_VLM_CROP_DPI,
     DEFAULT_VLM_CROP_MAX_PIXELS,
     DEFAULT_VLM_CROP_PADDING,
@@ -53,14 +70,21 @@ from paperfacts.config import (
     VALIDATION_POLICIES,
     ValidationPolicy,
 )
-from paperfacts.errors import LlmError
-from paperfacts.fields import FIELD_BY_NAME
+from paperfacts.errors import LlmError, LlmResponseError
+from paperfacts.fields import FIELD_BY_NAME, SAMPLE_FIELDS, FieldSpec
 from paperfacts.grounding import is_grounded
-from paperfacts.llm import VisionClient
-from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact
+from paperfacts.llm import LlmClient, VisionClient, complete_validated
+from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
 from paperfacts.pdf import png_bytes, render_region
-from paperfacts.prompts import validation_system_prompt, validation_user_prompt
-from paperfacts.records import FieldValue, LaneExtraction
+from paperfacts.prompts import (
+    fill_system_prompt,
+    fill_user_prompt,
+    repair_prompt,
+    table_transcription_user_prompt,
+    validation_system_prompt,
+    validation_user_prompt,
+)
+from paperfacts.records import ExtractionResponse, FieldValue, LaneExtraction, SampleRecord, response_to_records
 from paperfacts.storage import DataLayout, write_bytes_atomic
 
 logger = logging.getLogger(__name__)
@@ -71,8 +95,15 @@ logger = logging.getLogger(__name__)
 Verdict = Literal["confirmed", "contradicted", "illegible", "not_checked", "error"]
 VERDICTS: tuple[Verdict, ...] = ("confirmed", "contradicted", "illegible", "not_checked", "error")
 # Why a value was selected. The comparison status that put it on the list, ``ungrounded`` for a value
-# grounding flagged in either lane, ``all`` under the exhaustive policy.
-Reason = Literal["conflict", "ambiguous", "missing", "ungrounded", "all"]
+# grounding flagged in either lane, ``table`` for a value cited from a table under the tables policy,
+# ``all`` under the exhaustive policy.
+Reason = Literal["conflict", "ambiguous", "missing", "ungrounded", "table", "all"]
+# Block types worth including as sliding-window context. A figure's block is a picture (its content is a
+# file path) and page furniture is noise; both would only make the crop larger.
+CONTEXT_TYPES: frozenset[str] = frozenset({"text", "title", "table", "caption", "formula"})
+# The source id a fill cites: the transcription is one block with this id, so the extractor can cite
+# nothing else and citation validation keeps working unchanged.
+FILL_SOURCE_PREFIX = "vlm:"
 # Where in its lane a value lives. Together with the backend this is what makes a value's key unique, and
 # it is spelled the way the comparison report spells scopes so the web UI can rebuild the key from a row.
 OWNER_TARGET = "target"
@@ -103,6 +134,9 @@ class RegionCrop(BaseModel):
     width_px: int = Field(gt=0)
     height_px: int = Field(gt=0)
     source_ids: tuple[str, ...] = Field(description="the cited blocks the box is the union of (same page only)")
+    context_ids: tuple[str, ...] = Field(
+        default=(), description="neighbouring blocks the sliding window added around the cited ones"
+    )
     image_sha256: str = Field(min_length=64, max_length=64)
     path: str = Field(description="file name under the document's crops/ directory")
 
@@ -130,6 +164,38 @@ class ValueValidation(BaseModel):
     cached: bool = Field(default=False, description="the reading came from the LLM cache, not a new request")
 
 
+class FilledValue(BaseModel):
+    """A value the extraction model quoted from the VLM's transcription of a table, for a field the lane's
+    sample lacked. Grounded in that transcription by construction; kept apart from the lane's own evidence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key: str = Field(description="value_key() with the crop's source id as the citation")
+    backend: Backend = Field(description="the lane whose sample list and cited table produced it")
+    owner: str = Field(description='"sample:<id>"')
+    field: str
+    value_raw: str
+    unit_raw: str | None = None
+    condition: str | None = None
+    note: str | None = None
+    source_id: str = Field(description="vlm:<crop path>, the one id the transcription carried")
+    crop: RegionCrop
+    transcription: str
+
+    def as_field_value(self) -> FieldValue:
+        """The fill as ordinary evidence, for the dataset's scalar parsing; ``grounded`` is true because an
+        ungrounded fill is dropped before it is ever stored."""
+        return FieldValue(
+            field=self.field,
+            value_raw=self.value_raw,
+            unit_raw=self.unit_raw,
+            condition=self.condition,
+            source_ids=(self.source_id,),
+            note=self.note,
+            grounded=True,
+        )
+
+
 class ValidationCounts(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -139,6 +205,7 @@ class ValidationCounts(BaseModel):
     not_checked: int = 0
     error: int = 0
     total: int = 0
+    filled: int = Field(default=0, description="blanks filled from table transcriptions, both lanes")
     by_backend: dict[str, dict[str, int]] = Field(default_factory=dict, description="per lane, verdict -> count")
     by_reason: dict[str, dict[str, int]] = Field(
         default_factory=dict, description="per selection reason, verdict -> count"
@@ -157,11 +224,22 @@ class ValidationReport(BaseModel):
     model: str
     policy: ValidationPolicy
     values: tuple[ValueValidation, ...] = ()
+    fills: tuple[FilledValue, ...] = ()
+    fill_dropped: tuple[str, ...] = Field(
+        default=(), description="fills the extractor offered that were refused, with the reason"
+    )
     counts: ValidationCounts = Field(default_factory=ValidationCounts)
     usage: dict[str, int] = Field(default_factory=dict)
 
     def verdicts(self) -> dict[str, ValueValidation]:
         return {value.key: value for value in self.values}
+
+    def fills_by_cell(self) -> dict[tuple[str, str, str], FilledValue]:
+        """``(backend, owner, field) -> fill``; one fill per cell, the first quoted wins."""
+        cells: dict[tuple[str, str, str], FilledValue] = {}
+        for fill in self.fills:
+            cells.setdefault((fill.backend, fill.owner, fill.field), fill)
+        return cells
 
     def write(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,18 +298,36 @@ def owner_of(lane: LaneExtraction, value: FieldValue) -> str | None:
     return None
 
 
+def cites_table(value: FieldValue, artifact: ParsedArtifact | None) -> bool:
+    """Whether any block the value cites is a table in its own lane's artifact."""
+    if artifact is None:
+        return False
+    for source_id in value.source_ids:
+        try:
+            if artifact.block(source_id).type == "table":
+                return True
+        except KeyError:
+            continue
+    return False
+
+
 def select_targets(
     lanes: Mapping[Backend, LaneExtraction],
     report: ComparisonReport,
     *,
     policy: ValidationPolicy = DEFAULT_VLM_POLICY,
+    artifacts: Mapping[Backend, ParsedArtifact] | None = None,
 ) -> tuple[ValidationTarget, ...]:
     """The values to show the model, in a fixed order, each once.
 
     The rule is lane-blind by construction: a conflict or an ambiguity puts *both* sides on the list, a
-    one-sided value is the one side there is, and grounding's flag is applied to both lanes alike. The same
-    value reached from two comparison rows is listed once, under the first reason that named it; the
-    reasons rank conflict > ambiguous > missing > ungrounded only through that order of traversal.
+    one-sided value is the one side there is, grounding's flag is applied to both lanes alike, and under the
+    ``tables`` policy "cited from a table" is judged in each lane's own artifact by the same test. The same
+    value reached twice is listed once, under the first reason that named it; the reasons rank
+    conflict > ambiguous > missing > ungrounded > table only through that order of traversal.
+
+    ``artifacts`` is what the tables policy reads block types from; without it that policy degrades to
+    ``disputed`` with a warning rather than guessing which values came from tables.
     """
     if policy not in VALIDATION_POLICIES:
         raise ValueError(f"unknown validation policy: {policy!r}, expected one of {', '.join(VALIDATION_POLICIES)}")
@@ -265,6 +361,14 @@ def select_targets(
         for backend, lane in lanes.items():
             for value in lane.ungrounded():
                 add(backend, value, "ungrounded")
+        if policy == "tables":
+            if artifacts is None:
+                logger.warning("tables policy without artifacts: only the disputed values are checked")
+            else:
+                for backend, lane in lanes.items():
+                    for value in lane.values():
+                        if cites_table(value, artifacts.get(backend)):
+                            add(backend, value, "table")
     return tuple(
         sorted(
             chosen.values(),
@@ -281,12 +385,18 @@ class Region:
     page: int
     bbox: NormalizedBBox
     source_ids: tuple[str, ...]
+    context_ids: tuple[str, ...] = ()
 
 
 def region_for(
-    value: FieldValue, artifact: ParsedArtifact, *, padding: float = DEFAULT_VLM_CROP_PADDING
+    value: FieldValue,
+    artifact: ParsedArtifact,
+    *,
+    padding: float = DEFAULT_VLM_CROP_PADDING,
+    context: int = DEFAULT_VLM_CONTEXT_BLOCKS,
 ) -> Region | None:
-    """The union of the cited blocks on the first cited page, padded; None when nothing was cited.
+    """The union of the cited blocks on the first cited page and their sliding-window neighbours, padded;
+    None when nothing was cited.
 
     Citations on other pages are dropped rather than joined: a box spanning two pages is not a region of any
     page. The first cited block decides which page, because the extractor is asked to cite the most
@@ -302,10 +412,50 @@ def region_for(
         return None
     page = blocks[0].page
     same_page = [block for block in blocks if block.page == page]
-    bbox = same_page[0].bbox
-    for block in same_page[1:]:
+    return region_of_blocks(same_page, artifact, padding=padding, context=context)
+
+
+def region_of_blocks(
+    cited: Sequence[SourceBlock],
+    artifact: ParsedArtifact,
+    *,
+    padding: float = DEFAULT_VLM_CROP_PADDING,
+    context: int = DEFAULT_VLM_CONTEXT_BLOCKS,
+) -> Region:
+    """The crop for some blocks on one page: their union, widened by ``context`` neighbours on each side.
+
+    Neighbours are the adjacent blocks in the page's reading order, the same order grounding's
+    ``block_adjacency`` walks, so a quote grounding accepts across a boundary is inside the crop. Figures
+    and page furniture are skipped over (not counted) because they carry no text worth reading, and a
+    neighbour is never taken from another page.
+    """
+    page = cited[0].page
+    on_page = list(artifact.blocks_on_page(page))
+    index_of = {block.source_id: i for i, block in enumerate(on_page)}
+    context_ids: list[str] = []
+    cited_ids = {block.source_id for block in cited}
+    for block in cited:
+        position = index_of.get(block.source_id)
+        if position is None:
+            continue
+        for step in (-1, 1):
+            taken, i = 0, position + step
+            while taken < context and 0 <= i < len(on_page):
+                neighbour = on_page[i]
+                if neighbour.type in CONTEXT_TYPES:
+                    if neighbour.source_id not in cited_ids and neighbour.source_id not in context_ids:
+                        context_ids.append(neighbour.source_id)
+                    taken += 1
+                i += step
+    bbox = cited[0].bbox
+    for block in list(cited[1:]) + [artifact.block(i) for i in context_ids]:
         bbox = bbox.union(block.bbox)
-    return Region(page=page, bbox=bbox.padded(padding), source_ids=tuple(block.source_id for block in same_page))
+    return Region(
+        page=page,
+        bbox=bbox.padded(padding),
+        source_ids=tuple(block.source_id for block in cited),
+        context_ids=tuple(sorted(context_ids, key=lambda i: index_of[i])),
+    )
 
 
 def bbox_key(bbox: NormalizedBBox) -> str:
@@ -357,6 +507,7 @@ class CropStore:
             width_px=width,
             height_px=height,
             source_ids=region.source_ids,
+            context_ids=region.context_ids,
             image_sha256=_sha256(data),
             path=path.name,
         )
@@ -445,21 +596,28 @@ def validate_lanes(
     client: VisionClient,
     layout: DataLayout,
     validation_key: str,
+    llm: LlmClient | None = None,
     policy: ValidationPolicy = DEFAULT_VLM_POLICY,
     crop_dpi: int = DEFAULT_VLM_CROP_DPI,
     crop_padding: float = DEFAULT_VLM_CROP_PADDING,
     crop_max_pixels: int = DEFAULT_VLM_CROP_MAX_PIXELS,
+    context_blocks: int = DEFAULT_VLM_CONTEXT_BLOCKS,
+    fill_blanks: bool = False,
     concurrency: int = DEFAULT_VLM_CONCURRENCY,
     refresh: bool = False,
 ) -> ValidationReport:
-    """Check every selected value and return the report. Nothing is written to disk but the crops.
+    """Check every selected value, then fill blanks from the tables, and return the report. Nothing is
+    written to disk but the crops.
 
     Requests run ``concurrency`` at a time; the report is assembled in the fixed order of
     :func:`select_targets`, so two runs over the same inputs produce the same file. One failed request is
     an ``error`` verdict, not a failed stage; a stage where *every* request failed raises, because that is a
     misconfigured endpoint and not a hundred coincidences.
+
+    ``fill_blanks`` needs ``llm``, the extraction model's client: the fill step is an extraction, and it is
+    made with the extractor so that a filled value is quoted under the same rules as every other value.
     """
-    targets = select_targets(lanes, report, policy=policy)
+    targets = select_targets(lanes, report, policy=policy, artifacts=artifacts)
     store = (
         None
         if pdf_path is None or not pdf_path.is_file()
@@ -468,7 +626,9 @@ def validate_lanes(
     system = validation_system_prompt()
 
     def check(target: ValidationTarget) -> ValueValidation:
-        return _validate_one(target, artifacts, store, client, system, padding=crop_padding, refresh=refresh)
+        return _validate_one(
+            target, artifacts, store, client, system, padding=crop_padding, context=context_blocks, refresh=refresh
+        )
 
     with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-vlm") as pool:
         values = tuple(pool.map(check, targets))
@@ -481,6 +641,18 @@ def validate_lanes(
     for value in values:
         for key, amount in value.usage.items():
             usage[key] = usage.get(key, 0) + amount
+
+    fills: tuple[FilledValue, ...] = ()
+    fill_dropped: tuple[str, ...] = ()
+    if fill_blanks and store is not None:
+        if llm is None:
+            raise ValueError("fill_blanks needs the extraction model's client (llm)")
+        fills, fill_dropped, fill_usage = fill_from_tables(
+            lanes, artifacts, store, client, llm, padding=crop_padding, context=context_blocks, refresh=refresh
+        )
+        for key, amount in fill_usage.items():
+            usage[key] = usage.get(key, 0) + amount
+
     validation = ValidationReport(
         document_id=document_id,
         extractor_key=report.extractor_key,
@@ -489,7 +661,9 @@ def validate_lanes(
         model=client.model,
         policy=policy,
         values=values,
-        counts=_count(values),
+        fills=fills,
+        fill_dropped=fill_dropped,
+        counts=_count(values, filled=len(fills)),
         usage=usage,
     )
     logger.info("validated doc=%s policy=%s counts=%s", document_id[:16], policy, validation.counts.model_dump())
@@ -504,6 +678,7 @@ def _validate_one(
     system: str,
     *,
     padding: float,
+    context: int,
     refresh: bool,
 ) -> ValueValidation:
     value = target.value
@@ -524,7 +699,7 @@ def _validate_one(
     if store is None:
         return ValueValidation(**base, verdict="not_checked", detail="PDF not available; no region could be rendered")
     artifact = artifacts.get(target.backend)
-    region = None if artifact is None else region_for(value, artifact, padding=padding)
+    region = None if artifact is None else region_for(value, artifact, padding=padding, context=context)
     if region is None:
         return ValueValidation(**base, verdict="not_checked", detail="no valid citation, so there is no region to read")
     try:
@@ -549,7 +724,159 @@ def _validate_one(
     )
 
 
-def _count(values: Sequence[ValueValidation]) -> ValidationCounts:
+# ---- Filling blanks from the tables a sample was read from ----------------------------------------------------
+
+
+def missing_fields(sample: SampleRecord) -> tuple[FieldSpec, ...]:
+    """The sample-level fields this sample carries no value for, in table order."""
+    present = {value.field for value in sample.fields}
+    return tuple(spec for spec in SAMPLE_FIELDS if spec.name not in present)
+
+
+def table_regions_of(
+    lane: LaneExtraction, artifact: ParsedArtifact, *, padding: float, context: int
+) -> dict[str, tuple[Region, tuple[str, ...]]]:
+    """Every table block a lane's sample values cite, as a crop region, with the ids of the samples cited
+    from it -- keyed by the table block's id so one table is read once however many samples it holds."""
+    regions: dict[str, tuple[Region, list[str]]] = {}
+    for sample in lane.samples:
+        for value in sample.fields:
+            for source_id in value.source_ids:
+                try:
+                    block = artifact.block(source_id)
+                except KeyError:
+                    continue
+                if block.type != "table":
+                    continue
+                if source_id not in regions:
+                    regions[source_id] = (region_of_blocks([block], artifact, padding=padding, context=context), [])
+                if sample.sample_id not in regions[source_id][1]:
+                    regions[source_id][1].append(sample.sample_id)
+    return {source_id: (region, tuple(ids)) for source_id, (region, ids) in regions.items()}
+
+
+def _render_samples(samples: Sequence[SampleRecord]) -> str:
+    lines = []
+    for sample in samples:
+        conditions = "; ".join(f"{name}={value}" for name, value in sample.conditions.items()) or "-"
+        lines.append(f"- id: {sample.sample_id} | label: {sample.label or '-'} | conditions: {conditions}")
+    return "\n".join(lines)
+
+
+def _render_missing(missing: Mapping[str, tuple[FieldSpec, ...]]) -> str:
+    return "\n".join(f"- {sample_id}: {', '.join(spec.name for spec in specs)}" for sample_id, specs in missing.items())
+
+
+def fill_from_tables(
+    lanes: Mapping[Backend, LaneExtraction],
+    artifacts: Mapping[Backend, ParsedArtifact],
+    store: CropStore,
+    vlm: VisionClient,
+    llm: LlmClient,
+    *,
+    padding: float,
+    context: int,
+    refresh: bool,
+) -> tuple[tuple[FilledValue, ...], tuple[str, ...], dict[str, int]]:
+    """For each lane and each table its samples were read from: transcribe the table, ask the extractor for
+    the fields those samples still lack, keep what grounds in the transcription.
+
+    Lane by lane, with the lane's own sample ids and its own tables, so the two lanes are treated alike and
+    a fill is attributable to one lane's reading of the paper. The table is read by the VLM once (the
+    request is cached by image digest); the extractor is asked once per table, for all the missing fields of
+    all the samples cited from it, which keeps the cost at a handful of calls per paper.
+    """
+    fills: list[FilledValue] = []
+    dropped: list[str] = []
+    usage: dict[str, int] = {}
+    system = fill_system_prompt()
+    for backend in sorted(lanes):
+        lane, artifact = lanes[backend], artifacts.get(backend)
+        if artifact is None:
+            continue
+        for table_id, (region, sample_ids) in sorted(
+            table_regions_of(lane, artifact, padding=padding, context=context).items()
+        ):
+            samples = [sample for sample_id in sample_ids if (sample := lane.sample(sample_id)) is not None]
+            missing = {sample.sample_id: specs for sample in samples if (specs := missing_fields(sample))}
+            if not missing:
+                continue
+            try:
+                image, crop = store.crop(region)
+                read = vlm.complete_vision(
+                    system=validation_system_prompt(),
+                    user=table_transcription_user_prompt(),
+                    image_png=image,
+                    refresh=refresh,
+                )
+            except (LlmError, OSError, ValueError, IndexError) as exc:
+                dropped.append(f"{backend} {table_id}: table could not be read ({type(exc).__name__}: {exc})")
+                continue
+            for key, amount in read.usage.items():
+                usage[key] = usage.get(key, 0) + amount
+            reading, _ = parse_reading(read.text)
+            if not reading.legible or not reading.transcription.strip():
+                dropped.append(f"{backend} {table_id}: the table was illegible to the vision model")
+                continue
+            source_id = FILL_SOURCE_PREFIX + crop.path
+            markdown = f"<!-- source: {source_id} -->\n{reading.transcription}\n"
+            user = fill_user_prompt(_render_samples(samples), _render_missing(missing), markdown)
+            try:
+                response, _, ask_usage = complete_validated(
+                    llm,
+                    ExtractionResponse,
+                    system=system,
+                    user=user,
+                    repair=lambda previous, error, question=user: repair_prompt(question, previous, error),
+                    refresh=refresh,
+                )
+            except (LlmError, LlmResponseError) as exc:
+                dropped.append(f"{backend} {table_id}: the extractor failed ({type(exc).__name__}: {exc})")
+                continue
+            for key, amount in ask_usage.items():
+                usage[key] = usage.get(key, 0) + amount
+            records = response_to_records(response, known_ids=frozenset({source_id}))
+            dropped.extend(f"{backend} {table_id}: {reason}" for reason in records.dropped)
+            for record in records.samples:
+                wanted = {spec.name for spec in missing.get(record.sample_id, ())}
+                if not wanted:
+                    dropped.append(f"{backend} {table_id}: {record.sample_id!r} is not a sample cited from this table")
+                    continue
+                owner = f"sample:{record.sample_id}"
+                for value in record.fields:
+                    if value.field not in wanted:
+                        dropped.append(f"{backend} {table_id}: {record.sample_id} {value.field} was not asked for")
+                        continue
+                    if not value.source_ids:
+                        dropped.append(f"{backend} {table_id}: {record.sample_id} {value.field} cited nothing")
+                        continue
+                    verdict, _ = adjudicate(value, reading)
+                    if verdict != "confirmed":
+                        dropped.append(
+                            f"{backend} {table_id}: {record.sample_id} {value.field} {value.value_raw!r} "
+                            "is not in the transcription"
+                        )
+                        continue
+                    fills.append(
+                        FilledValue(
+                            key=value_key(backend, owner, value),
+                            backend=backend,
+                            owner=owner,
+                            field=value.field,
+                            value_raw=value.value_raw,
+                            unit_raw=value.unit_raw,
+                            condition=value.condition,
+                            note=value.note,
+                            source_id=source_id,
+                            crop=crop,
+                            transcription=reading.transcription,
+                        )
+                    )
+    fills.sort(key=lambda fill: (fill.backend, fill.owner, fill.field, fill.value_raw))
+    return tuple(fills), tuple(dropped), usage
+
+
+def _count(values: Sequence[ValueValidation], *, filled: int = 0) -> ValidationCounts:
     tally = Counter(value.verdict for value in values)
     by_backend: dict[str, Counter[str]] = {}
     by_reason: dict[str, Counter[str]] = {}
@@ -563,6 +890,7 @@ def _count(values: Sequence[ValueValidation]) -> ValidationCounts:
         not_checked=tally["not_checked"],
         error=tally["error"],
         total=len(values),
+        filled=filled,
         by_backend={backend: dict(sorted(counts.items())) for backend, counts in sorted(by_backend.items())},
         by_reason={reason: dict(sorted(counts.items())) for reason, counts in sorted(by_reason.items())},
     )

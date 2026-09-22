@@ -12,14 +12,19 @@ const TARGET_LABEL = "靶材（论文级）";
 // The identity columns of the per-sample results table, shared by its header and its clipboard copy.
 const LEADING = ["样品", "标签", "条件", "可用/一致"];
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
-// two decisions that produce one; every other decision deliberately leaves the cell empty.
-const CELL_CLASS = { agree: "ok", single_source: "warn" };
+// two-lane decisions that produce one; `vlm_resolved` (the VLM settled a conflict) and `vlm_filled` (the cell
+// was blank and the VLM's table transcription supplied it) are the two the visual stage adds. Every other
+// decision deliberately leaves the cell empty.
+const CELL_CLASS = { agree: "ok", single_source: "warn", vlm_resolved: "warn", vlm_filled: "vlm" };
 // A decided cell says how it was decided: 双路 when both lanes agreed, otherwise the name of the lane
-// the value actually came from -- "单路" alone left the reader guessing which one.
+// the value actually came from -- "单路" alone left the reader guessing which one. A cell the visual stage
+// decided says so, because its value rests on a reading no parser made.
 const LANE_CLASS = { mineru: "lane-a", paddleocr_vl: "lane-b" };
 function cellBadge(decision) {
   const status = decision?.decision ?? "";
   if (status === "agree") return { text: "双路", cls: "" };
+  if (status === "vlm_resolved") return { text: "视觉裁定", cls: "vlm" };
+  if (status === "vlm_filled") return { text: "视觉补全", cls: "vlm" };
   if (status !== "single_source") return { text: "", cls: "" };
   const lanes = String(decision?.lanes ?? "").split(";").map((l) => l.trim()).filter(Boolean);
   if (!lanes.length) return { text: "单路", cls: "" };

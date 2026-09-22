@@ -39,6 +39,10 @@ def test_every_knob_that_changes_what_the_model_sees_or_how_it_is_judged_changes
         {"vlm_crop_padding": 0.03},
         {"vlm_crop_max_pixels": 500_000},
         {"vlm_policy": "all"},
+        {"vlm_policy": "disputed"},
+        {"vlm_context_blocks": 0},
+        {"vlm_context_blocks": 2},
+        {"vlm_fill_blanks": False},
     ):
         assert validation_key_for(dataclasses.replace(Settings(), **change)) != baseline, change
 

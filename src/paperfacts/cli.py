@@ -95,6 +95,7 @@ class PolicyOption(StrEnum):
     """Which values the VLM is shown, on the command line; mirrors ``config.ValidationPolicy`` the same way."""
 
     disputed = "disputed"
+    tables = "tables"
     all = "all"
 
 
@@ -262,7 +263,9 @@ def compare(
 
 PolicyOpt = Annotated[
     PolicyOption | None,
-    typer.Option("--policy", help="which values the VLM checks: the disputed ones (default) or all of them"),
+    typer.Option(
+        "--policy", help="which values the VLM checks: disputed, tables (default: disputed plus every table value), all"
+    ),
 ]
 
 
@@ -286,13 +289,12 @@ def validate(
     settings = _settings(data_root, passes, mode, policy)
     document = DocumentInput.from_path(pdf)
     try:
-        with build_llm_client(settings) as client:
+        with build_llm_client(settings) as client, build_vlm_client(settings) as vlm:
             lanes = {
                 backend: extract_document(document, backend, settings, client) for backend in (BACKEND_A, BACKEND_B)
             }
             report = compare_document(document, settings, client, lanes=lanes)
-        with build_vlm_client(settings) as vlm:
-            validation = validate_document(document, settings, vlm, lanes=lanes, report=report, force=force)
+            validation = validate_document(document, settings, vlm, lanes=lanes, report=report, llm=client, force=force)
     except REPORTABLE_ERRORS as exc:
         _fail("validate", exc)
     _echo_lines(render_validation(validation))

@@ -74,6 +74,7 @@ Read in this order. Each file's module docstring is written to be read first.
 
 > Answer before moving on: (a) what failure can the two-lane design not see? (b) why is the model asked to
 > *transcribe* rather than to *confirm*? (c) what does it mean that the selection rule is "lane-blind"?
+> (d) why do tables get checked exhaustively while prose gets only the disputed rule? (§4.1)
 
 ### B2. The new stage itself (20 min)
 
@@ -83,16 +84,19 @@ Read in this order. Each file's module docstring is written to be read first.
 |---|---|
 | module docstring | the three rules |
 | `Verdict`, `Reason`, the stored models | five verdicts kept apart; `ValueValidation.key` |
-| `value_key`, `owner_of`, `select_targets` | the lane-blind rule; why the owner is looked up in the lane rather than parsed from the scope string |
-| `region_for`, `CropStore` | union of cited blocks on one page; rendered once, kept under `crops/` |
+| `value_key`, `owner_of`, `cites_table`, `select_targets` | the lane-blind rule; the `tables` policy judges "cited from a table" in each lane's own artifact; why the owner is looked up in the lane rather than parsed from the scope string |
+| `region_for`, `region_of_blocks`, `CropStore` | union of cited blocks on one page **plus the sliding window** (`context_blocks` neighbours in reading order, figures skipped, never across a page); rendered once, kept under `crops/` |
 | `parse_reading`, `transcription_fold`, `adjudicate` | lenient about the JSON wrapper, strict about digits; **the verdict is `grounding.is_grounded`** |
-| `validate_lanes`, `_validate_one` | concurrency, one failed request = one `error` verdict, all failed = raise |
+| `validate_lanes`, `_validate_one` | concurrency, one failed request = one `error` verdict, all failed = raise; then the fill step |
+| `missing_fields`, `table_regions_of`, `fill_from_tables` | one table read per lane, one extractor question per table; the transcription is the only citable block; every quote is adjudicated against it; every drop is listed |
 
 Then the tests that pin each of those: `tests/test_validate.py`. The parametrised tables under
 `test_a_value_the_model_read_is_confirmed` / `..._is_contradicted` are the fastest way to see what the
 matcher accepts and refuses.
 
-> Check: find the test that proves the prompt never contains the value under check.
+> Check: find the test that proves the prompt never contains the value under check. Then find the one that
+> proves the fill step asks the extractor only for fields the sample *lacks*, and the one where a quote the
+> transcription does not contain is dropped.
 
 ### B3. The two seams into existing code (15 min)
 
@@ -109,8 +113,9 @@ pdfium lock. Tests: `tests/test_pdf_region.py`.
 ### B4. Where verdicts act — and where they must not (15 min)
 
 `src/paperfacts/dataset.py`, `_decide`. Read the module docstring first, then the three commented blocks
-inside `_decide` (contradicted set aside; `resolved`; the `trusted` filter). Everything else in the
-function is unchanged from upstream.
+inside `_decide` (contradicted set aside; `resolved`; the `trusted` filter), then the two lines where a
+fill is taken (`if not evidence` at the top; after every reading was contradicted) and `_commit_fill`.
+Everything else in the function is unchanged from upstream.
 
 Then `tests/test_dataset_validation.py`, which is organised as *entry point, then the neighbouring shape it
 does not apply to*:
@@ -120,15 +125,20 @@ does not apply to*:
 - agree + both contradicted → `vlm_contradicted` (the case the stage exists for)
 - ungrounded + confirmed → trusted; ungrounded + illegible → still `ungrounded`; no citation → never rescued
 - a verdict keyed to the wrong owner → ignored
+- blank cell + fill → `vlm_filled`; a lane value + a different fill → the lane value, untouched; a
+  conflict + a fill → still `conflict`; both readings contradicted + a fill → `vlm_filled`
 
 > Check: convince yourself a forged `confirmed` verdict cannot make the dataset commit a value that has no
-> citation. (It is the last test in the "appeal" block.)
+> citation. (It is the last test in the "appeal" block.) Then convince yourself a fill can never *replace*
+> a number a parser read — only the empty cell takes it.
 
 ### B5. Keys, config, storage (10 min)
 
 - `keys.py` → `validation_key`. It is its own key, and the tests in `tests/test_keys_validation.py` prove it
   is independent of the other two and that endpoint/concurrency settings are *not* in it.
-- `config.py` → the `vlm.*` constants and `Settings.vlm_*`; `require_vlm_api_key` falls back to the LLM key.
+- `config.py` → the `vlm.*` constants and `Settings.vlm_*` (`policy`, `context_blocks`, `fill_blanks` are the
+  three that shape *which* pixels are read and what is done with them); `require_vlm_api_key` falls back
+  to the LLM key.
   Note the one deliberate exception, `vlm_enabled`: shipped `true`, baseline `false`, pinned in
   `test_config_file.py::test_the_shipped_configuration_agrees_with_the_dataclass_defaults`.
 - `storage.py` → `validation_path` (three keys), `crops_dir`/`crop_path`, and `dataset_json_path` growing an
@@ -136,11 +146,13 @@ does not apply to*:
 
 ### B6. Wiring (10 min)
 
-- `workflow.py`: `build_vlm_client`, `read_validation`, `validate_document`, `_validate_stage`,
+- `workflow.py`: `build_vlm_client`, `read_validation`, `validate_document` (now handed the extractor's
+  client for the fill step, which is why `_validate_stage` runs inside the `build_llm_client` scope),
   `stage_names()` gaining `validate`, `export_document` reading a stored validation offline.
   Tests: `tests/test_workflow_validate.py`; the stage-order test in `tests/test_workflow_run.py` shows the
   skipped mark when the VLM is off.
-- `cli.py`: `paperfacts validate`, `--policy`. `report.py`: `render_validation`.
+- `cli.py`: `paperfacts validate`, `--policy disputed|tables|all`. `report.py`: `render_validation` (the
+  fills and the `fill dropped:` reasons print after the verdicts).
 - `web/documents.py`, `web/app.py`: `Library.validation`, `GET /api/documents/{id}/validation`, the
   three-key-then-two-key dataset lookup. `web/static/facts.js`: `ownerOf` + `verdictFor` rebuild
   `value_key` from a comparison row — the field order is a contract with `validate.value_key`.
@@ -167,8 +179,9 @@ uv run paperfacts fields              # the field table loaded
 Then, with an API key in `.env` and a paper that has already been compared:
 
 ```bash
-uv run paperfacts validate paper.pdf               # disputed values only
-uv run paperfacts validate paper.pdf --policy all  # every value: the "both lanes wrong" measurement
+uv run paperfacts validate paper.pdf                    # default: disputed + every table-cited value, then fill blanks
+uv run paperfacts validate paper.pdf --policy disputed  # the cheaper rule: disputed values only
+uv run paperfacts validate paper.pdf --policy all       # every value: the "both lanes wrong" measurement
 uv run paperfacts serve                            # badges in 事实对照, a 视觉确认 tile, the crop on hover
 ```
 
@@ -188,12 +201,18 @@ Things this fork decided that the group may want to decide differently. None is 
    answer. `PAPERFACTS_VLM_ENABLED=false` restores upstream behaviour byte for byte.
 3. **The `resolved` shape.** Requires every surviving side to be confirmed. A looser rule (one confirmed, one
    contradicted, others unchecked) would resolve more conflicts and trust the reader more.
-4. **The `disputed` policy's reach.** It includes every MISSING (one-sided) value, which on the corpus is
-   most of the requests. Dropping MISSING from the default would make the stage cheaper and leave
-   single-source values unchecked.
-5. **Scope.** Characters in a region only. Attribution errors (right number, wrong sample) need table-
+4. **The `disputed` rule's reach.** It includes every MISSING (one-sided) value, which on the corpus is
+   most of the requests. Dropping MISSING would make the stage cheaper and leave single-source values
+   unchecked.
+5. **Filling by default.** `fill_blanks = true` means a `vlm_filled` cell rests on one model's reading of
+   one crop with no second lane behind it. The workbook names it, the UI badges it, and the transcription
+   is stored — but a consumer who wants two-lane cells only must now filter on 最终决策. Turning the fill
+   off (`PAPERFACTS_VLM_FILL_BLANKS=false`) keeps every check and adds nothing.
+6. **The window width.** `context_blocks = 1` is enough for caption + footnote around a table. A second
+   neighbour catches multi-part captions but makes every crop bigger and the transcriptions longer.
+7. **Scope.** Characters in a region only. Attribution errors (right number, wrong sample) need table-
    structure reasoning and a different prompt; a third full lane needs `compare_lanes` redesigned. Both
    are arguable next steps once the "both lanes wrong" rate is measured.
-6. **The multiplication fold.** `transcription_fold` closes one spacing gap grounding refuses to close. Watch
+8. **The multiplication fold.** `transcription_fold` closes one spacing gap grounding refuses to close. Watch
    the `contradicted` verdicts on real papers for other spelling gaps between parser and model (thin
    spaces, `−` vs `-`, `·` vs `.`) before adding another fold — and add it to both sides.

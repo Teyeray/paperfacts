@@ -149,11 +149,24 @@ DEFAULT_VLM_CROP_PADDING = 0.01
 # here keeps the decision, and its cost to small digits, visible and testable.
 DEFAULT_VLM_CROP_MAX_PIXELS = 2_000_000
 # Which values are shown to the VLM. "disputed": everything the two lanes could not settle between them --
-# conflicts, ambiguities, one-sided values, and any value grounding could not locate. "all": every value in
-# both lanes, which is what measuring the "both lanes agree and both are wrong" rate needs.
-type ValidationPolicy = Literal["disputed", "all"]
+# conflicts, ambiguities, one-sided values, and any value grounding could not locate. "tables": the disputed
+# set plus every value cited from a table block, agreed or not -- tables are where a parser's layout model
+# fails silently (a shifted column reads as a clean number) and where the extractor sees only what the
+# parser gave it, so a value from a table is checked against the pixels even when both lanes agree; prose
+# earns a check only when disputed. "all": every value in both lanes, which is what measuring the "both
+# lanes agree and both are wrong" rate needs.
+type ValidationPolicy = Literal["disputed", "tables", "all"]
 VALIDATION_POLICIES: tuple[str, ...] = get_args(ValidationPolicy.__value__)
-DEFAULT_VLM_POLICY: ValidationPolicy = "disputed"
+DEFAULT_VLM_POLICY: ValidationPolicy = "tables"
+# Blocks before and after the cited block (same page, reading order) included in the crop -- the sliding
+# window. A table's caption sits in the block before it and its footnote in the block after; a value the
+# parser split across a block boundary lives in both. One on each side is what those cases need; a wider
+# window mostly adds prose the model has to read past.
+DEFAULT_VLM_CONTEXT_BLOCKS = 1
+# Fill blanks from tables: for the fields a lane's sample lacks, the VLM's transcription of the tables that
+# sample was cited from is handed to the extraction model, and a value it quotes from the transcription is
+# kept only when it grounds in it. Off, the stage only validates.
+DEFAULT_VLM_FILL_BLANKS = True
 # Vision requests in flight at once. Scheduling only, like llm.concurrency: absent from every key.
 DEFAULT_VLM_CONCURRENCY = 4
 
@@ -324,6 +337,8 @@ class Settings:
     vlm_crop_padding: float = DEFAULT_VLM_CROP_PADDING
     vlm_crop_max_pixels: int = DEFAULT_VLM_CROP_MAX_PIXELS
     vlm_policy: ValidationPolicy = DEFAULT_VLM_POLICY
+    vlm_context_blocks: int = DEFAULT_VLM_CONTEXT_BLOCKS
+    vlm_fill_blanks: bool = DEFAULT_VLM_FILL_BLANKS
     vlm_concurrency: int = DEFAULT_VLM_CONCURRENCY
 
     @classmethod
@@ -421,6 +436,10 @@ class Settings:
                 file.path,
             ),
             vlm_policy=_parse_policy(get("VLM_POLICY") or file.get("vlm.policy", str), file.path),
+            vlm_context_blocks=_non_negative(
+                number("VLM_CONTEXT_BLOCKS", file.get("vlm.context_blocks", int), int), "vlm.context_blocks", file.path
+            ),
+            vlm_fill_blanks=_parse_bool(get("VLM_FILL_BLANKS"), file.get("vlm.fill_blanks", bool), "VLM_FILL_BLANKS"),
             vlm_concurrency=_positive(
                 number("VLM_CONCURRENCY", file.get("vlm.concurrency", int), int), "vlm.concurrency", file.path
             ),
@@ -450,6 +469,15 @@ class Settings:
         ``PAPERFACTS_VLM_API_KEY``.
         """
         return self.vlm_api_key or self.require_llm_api_key()
+
+
+def _non_negative(value: int, dotted: str, source: Path) -> int:
+    """A count that may be zero (no context blocks) but not negative."""
+    if value < 0:
+        raise ConfigError(
+            f"{dotted} must not be negative, got {value} (set in {source} or the matching {ENV_PREFIX} variable)"
+        )
+    return value
 
 
 def _positive(value: int, dotted: str, source: Path) -> int:

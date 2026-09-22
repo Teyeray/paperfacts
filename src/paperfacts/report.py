@@ -70,6 +70,12 @@ def render_validation(validation: ValidationReport) -> Iterator[str]:
             f"  {value.verdict:<13} {value.backend:<13} {value.owner} {value.field} [{value.reason}] "
             f"{quoted!r} @ {where}: {read!r}  {value.detail}"
         )
+    for fill in validation.fills:
+        quoted = f"{fill.value_raw} {fill.unit_raw or ''}".strip()
+        where = f"p{fill.crop.page} {fill.crop.path}"
+        yield f"  {'filled':<13} {fill.backend:<13} {fill.owner} {fill.field} {quoted!r} @ {where}"
+    for reason in validation.fill_dropped:
+        yield f"  fill dropped: {reason}"
 
 
 def _value(field: FieldValue) -> str:

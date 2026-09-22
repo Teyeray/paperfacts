@@ -23,24 +23,32 @@ from paperfacts.normalize import normalize_lane
 from paperfacts.records import TargetRecord
 from paperfacts.storage import DataLayout
 from paperfacts.validate import (
+    FILL_SOURCE_PREFIX,
     CropStore,
     Reading,
     Region,
     ValidationReport,
     adjudicate,
+    cites_table,
+    fill_from_tables,
+    missing_fields,
     owner_of,
     parse_reading,
     region_for,
+    region_of_blocks,
     select_targets,
+    table_regions_of,
     validate_lanes,
     value_key,
 )
 from support.extraction import DEFAULT_EXTRACTOR_KEY, make_artifact, make_field, make_lane, make_sample
 from support.factories import DOC_ID, make_blank_pdf, make_block
-from support.llm import FakeVisionClient, VisionCall
+from support.llm import FakeLlmClient, FakeVisionClient, VisionCall
 
 BOX_A = NormalizedBBox(x1=0.1, y1=0.1, x2=0.9, y2=0.3)
 BOX_B = NormalizedBBox(x1=0.1, y1=0.4, x2=0.9, y2=0.6)
+BOX_C = NormalizedBBox(x1=0.1, y1=0.65, x2=0.9, y2=0.75)
+BOX_D = NormalizedBBox(x1=0.1, y1=0.8, x2=0.9, y2=0.9)
 
 
 def reading(transcription: str, legible: bool = True) -> str:
@@ -140,7 +148,7 @@ def test_a_conflict_puts_both_sides_on_the_list():
     lanes, report, _ = lanes_and_report("12.5", "125")
     assert [c.status for c in report.comparisons] == ["conflict"]
 
-    targets = select_targets(lanes, report)
+    targets = select_targets(lanes, report, policy="disputed")
 
     assert [(t.backend, t.value.value_raw, t.reason) for t in targets] == [
         ("mineru", "12.5", "conflict"),
@@ -152,7 +160,45 @@ def test_an_agreement_is_not_checked_under_the_disputed_policy():
     lanes, report, _ = lanes_and_report("12.5", "12.5")
     assert [c.status for c in report.comparisons] == ["agree"]
 
-    assert select_targets(lanes, report) == ()
+    assert select_targets(lanes, report, policy="disputed") == ()
+
+
+def test_the_tables_policy_adds_every_value_cited_from_a_table():
+    # The fixtures' values cite the table block b1: agreeing values the disputed policy leaves alone are
+    # checked under the default policy, with their own reason, and a conflict keeps its reason.
+    lanes, report, artifacts = lanes_and_report("12.5", "12.5")
+
+    targets = select_targets(lanes, report, policy="tables", artifacts=artifacts)
+
+    assert [(t.backend, t.reason) for t in targets] == [("mineru", "table"), ("paddleocr_vl", "table")]
+    disputed, disputed_report, _ = lanes_and_report("12.5", "125")
+    conflict = select_targets(disputed, disputed_report, policy="tables", artifacts=artifacts)
+    assert {t.reason for t in conflict} == {"conflict"}
+
+
+def test_the_tables_policy_leaves_text_cited_values_to_the_disputed_rule():
+    artifacts = {"mineru": artifact_for("mineru"), "paddleocr_vl": artifact_for("paddleocr_vl")}
+    lanes = {}
+    for backend in artifacts:
+        power = make_field("sputtering_power", "150", unit_raw="W", source_ids=[f"{backend}_p0_b0"])
+        lane = make_lane(backend=backend, samples=[make_sample("A", [power])])
+        blocks = {block.source_id: block.content for block in artifacts[backend].blocks}
+        lanes[backend] = normalize_lane(ground_lane(lane, blocks))
+    report = compare_lanes(lanes["mineru"], lanes["paddleocr_vl"], exact_match())
+    assert [c.status for c in report.comparisons] == ["agree"]
+
+    assert select_targets(lanes, report, policy="tables", artifacts=artifacts) == ()
+    assert not cites_table(lanes["mineru"].sample("A").fields[0], artifacts["mineru"])  # type: ignore[union-attr]
+
+
+def test_the_tables_policy_without_artifacts_degrades_to_disputed(caplog):
+    lanes, report, _ = lanes_and_report("12.5", "12.5")
+
+    with caplog.at_level("WARNING", logger="paperfacts.validate"):
+        targets = select_targets(lanes, report, policy="tables")
+
+    assert targets == ()
+    assert "without artifacts" in caplog.text
 
 
 def test_the_all_policy_checks_every_value_in_both_lanes():
@@ -176,7 +222,7 @@ def test_a_one_sided_value_is_checked_as_missing():
     )
     report = compare_lanes(lane_a, lane_b, matching)
 
-    targets = select_targets({"mineru": lane_a, "paddleocr_vl": lane_b}, report)
+    targets = select_targets({"mineru": lane_a, "paddleocr_vl": lane_b}, report, policy="disputed")
 
     assert [(t.backend, t.owner, t.reason) for t in targets] == [("mineru", "sample:A", "missing")]
 
@@ -191,7 +237,7 @@ def test_an_ungrounded_value_is_checked_whatever_the_comparison_said():
     bad = sample.fields[0].model_copy(update={"grounded": False})
     lanes["paddleocr_vl"] = flagged.model_copy(update={"samples": (sample.model_copy(update={"fields": (bad,)}),)})
 
-    targets = select_targets(lanes, report)
+    targets = select_targets(lanes, report, policy="disputed")
 
     assert [(t.backend, t.reason) for t in targets] == [("paddleocr_vl", "ungrounded")]
 
@@ -209,7 +255,7 @@ def test_the_same_value_is_listed_once_under_the_first_reason_that_named_it():
         }
     )
 
-    targets = select_targets(lanes, report)
+    targets = select_targets(lanes, report, policy="disputed")
 
     mineru = [t for t in targets if t.backend == "mineru"]
     assert len(mineru) == 1 and mineru[0].reason == "conflict"
@@ -233,10 +279,11 @@ def test_the_region_is_the_cited_block_padded():
     artifact = artifact_for("mineru")
     value = make_field("sheet_resistance", "12.5", source_ids=["mineru_p0_b1"])
 
-    region = region_for(value, artifact, padding=0.01)
+    region = region_for(value, artifact, padding=0.01, context=0)
 
     assert region is not None
     assert region.page == 0 and region.source_ids == ("mineru_p0_b1",)
+    assert region.context_ids == ()
     assert region.bbox == BOX_B.padded(0.01)
 
 
@@ -244,11 +291,109 @@ def test_two_cited_blocks_on_one_page_are_joined():
     artifact = artifact_for("mineru")
     value = make_field("sheet_resistance", "12.5", source_ids=["mineru_p0_b0", "mineru_p0_b1"])
 
-    region = region_for(value, artifact, padding=0.0)
+    region = region_for(value, artifact, padding=0.0, context=0)
 
     assert region is not None
     assert region.bbox == BOX_A.union(BOX_B)
     assert region.source_ids == ("mineru_p0_b0", "mineru_p0_b1")
+
+
+# ---- The sliding window: the neighbours before and after the cited block -------------------------------------
+
+
+def four_blocks(backend: str = "mineru") -> ParsedArtifact:
+    """Paragraph, table, caption, paragraph -- in reading order on page 0 -- plus a figure between the table
+    and its caption that carries no text."""
+    return make_artifact(
+        [
+            make_block(page=0, order=0, backend=backend, content="Sample A was deposited at 150 W.", bbox=BOX_A),
+            make_block(page=0, order=1, type="table", backend=backend, content="Rs | 12.5 Ω/sq", bbox=BOX_B),
+            make_block(
+                page=0,
+                order=2,
+                type="figure",
+                backend=backend,
+                content="",
+                bbox=NormalizedBBox(x1=0.1, y1=0.61, x2=0.9, y2=0.64),
+            ),
+            make_block(
+                page=0, order=3, type="caption", backend=backend, content="Table 1. Sheet resistance.", bbox=BOX_C
+            ),
+            make_block(page=0, order=4, backend=backend, content="The films were annealed.", bbox=BOX_D),
+        ],
+        backend=backend,
+    )
+
+
+def test_one_neighbour_on_each_side_joins_the_crop_and_is_named_as_context():
+    artifact = four_blocks()
+    value = make_field("sheet_resistance", "12.5", source_ids=["mineru_p0_b1"])
+
+    region = region_for(value, artifact, padding=0.0, context=1)
+
+    assert region is not None
+    assert region.source_ids == ("mineru_p0_b1",)
+    assert region.context_ids == ("mineru_p0_b0", "mineru_p0_b3")
+    assert region.bbox == BOX_A.union(BOX_B).union(BOX_C)
+
+
+def test_a_figure_is_skipped_over_and_not_counted_as_a_neighbour():
+    # The caption, not the figure, is the neighbour after the table: the window walks past blocks with no
+    # text to read, and the figure's box is not drawn into the crop.
+    artifact = four_blocks()
+    region = region_of_blocks([artifact.block("mineru_p0_b1")], artifact, padding=0.0, context=1)
+    assert "mineru_p0_b2" not in region.context_ids
+    assert region.bbox.y2 == BOX_C.y2
+
+
+def test_a_wider_window_takes_more_neighbours_and_stops_at_the_page_edge():
+    artifact = four_blocks()
+    region = region_of_blocks([artifact.block("mineru_p0_b1")], artifact, padding=0.0, context=5)
+    assert region.context_ids == ("mineru_p0_b0", "mineru_p0_b3", "mineru_p0_b4")
+    assert region.bbox == BOX_A.union(BOX_D)
+
+
+def test_a_window_of_zero_is_the_cited_block_alone():
+    artifact = four_blocks()
+    region = region_of_blocks([artifact.block("mineru_p0_b1")], artifact, padding=0.0, context=0)
+    assert region.context_ids == () and region.bbox == BOX_B
+
+
+def test_neighbours_never_come_from_another_page():
+    artifact = make_artifact(
+        [
+            make_block(page=0, order=0, content="page one", bbox=BOX_A),
+            make_block(page=1, order=0, type="table", content="Rs | 12.5", bbox=BOX_B),
+            make_block(page=1, order=1, content="page two text", bbox=BOX_C),
+        ]
+    )
+    region = region_of_blocks([artifact.block("mineru_p1_b0")], artifact, padding=0.0, context=1)
+    assert region.page == 1
+    assert region.context_ids == ("mineru_p1_b1",)
+
+
+def test_a_cited_neighbour_is_not_listed_twice():
+    artifact = four_blocks()
+    cited = [artifact.block("mineru_p0_b0"), artifact.block("mineru_p0_b1")]
+    region = region_of_blocks(cited, artifact, padding=0.0, context=1)
+    assert region.source_ids == ("mineru_p0_b0", "mineru_p0_b1")
+    assert region.context_ids == ("mineru_p0_b3",)
+
+
+def test_the_stage_shows_the_model_the_window_and_records_it(pdf: Path, layout: DataLayout):
+    lanes, report, _ = lanes_and_report("12.5", "125")
+    artifacts = {"mineru": four_blocks("mineru"), "paddleocr_vl": four_blocks("paddleocr_vl")}
+    client = FakeVisionClient(lambda call: reading("x"))
+
+    validation = run_stage(lanes, report, artifacts, client, pdf, layout, context_blocks=1)
+
+    crops = {value.backend: value.crop for value in validation.values}
+    assert crops["mineru"] is not None
+    assert crops["mineru"].source_ids == ("mineru_p0_b1",)
+    assert crops["mineru"].context_ids == ("mineru_p0_b0", "mineru_p0_b3")
+    # A wider crop is a different file: the window is part of what the model was shown.
+    narrow = run_stage(lanes, report, artifacts, client, pdf, layout, context_blocks=0)
+    assert {v.crop.path for v in narrow.values if v.crop} != {v.crop.path for v in validation.values if v.crop}
 
 
 def test_a_citation_on_another_page_is_left_out_of_the_box():
@@ -260,7 +405,7 @@ def test_a_citation_on_another_page_is_left_out_of_the_box():
     )
     value = make_field("thickness", "250", source_ids=["mineru_p0_b0", "mineru_p1_b0"])
 
-    region = region_for(value, artifact, padding=0.0)
+    region = region_for(value, artifact, padding=0.0, context=1)
 
     assert region == Region(page=0, bbox=BOX_A, source_ids=("mineru_p0_b0",))
 
@@ -375,6 +520,8 @@ def run_stage(lanes, report, artifacts, client, pdf, layout, **overrides) -> Val
         layout=layout,
         validation_key="vvvvvvvvvvvv",
         crop_dpi=72,
+        policy="disputed",
+        context_blocks=0,
     )
     kwargs.update(overrides)
     return validate_lanes(**kwargs)
@@ -546,3 +693,217 @@ def test_the_report_survives_a_round_trip_through_disk(pdf: Path, layout: DataLa
 
     assert ValidationReport.read(path) == validation
     assert set(ValidationReport.read(path).verdicts()) == {value.key for value in validation.values}
+
+
+# ---- Filling blanks from the tables ---------------------------------------------------------------------------
+
+
+TABLE_TEXT = "Table 1. Properties.\nSample | Rs (Ω/sq) | Thickness (nm)\nA | 12.5 | 250\nB | 40 | 310"
+
+
+def extractor_answer(fields_by_sample: dict[str, list[tuple[str, str, str | None]]]):
+    """A responder that cites the one source marker the fill prompt carries and answers per sample."""
+
+    def respond(system: str, user: str) -> str:
+        marker = user.split("<!-- source: ", 1)[1].split(" -->", 1)[0]
+        return json.dumps(
+            {
+                "samples": [
+                    {
+                        "sample_id": sample_id,
+                        "fields": [
+                            {"field": name, "value_raw": raw, "unit_raw": unit, "source_ids": [marker]}
+                            for name, raw, unit in fields
+                        ],
+                    }
+                    for sample_id, fields in fields_by_sample.items()
+                ]
+            }
+        )
+
+    return respond
+
+
+def table_lanes(*, with_b: bool = True):
+    """Both lanes read sheet_resistance for sample A (and B) from the table block b1; nothing else."""
+    artifacts = {"mineru": artifact_for("mineru"), "paddleocr_vl": artifact_for("paddleocr_vl")}
+    lanes = {}
+    for backend in artifacts:
+        cited = [f"{backend}_p0_b1"]
+        samples = [make_sample("A", [make_field("sheet_resistance", "12.5", unit_raw="Ω/sq", source_ids=cited)])]
+        if with_b:
+            samples.append(make_sample("B", [make_field("sheet_resistance", "40", unit_raw="Ω/sq", source_ids=cited)]))
+        lane = make_lane(backend=backend, samples=samples)
+        blocks = {block.source_id: block.content for block in artifacts[backend].blocks}
+        lanes[backend] = normalize_lane(ground_lane(lane, blocks))
+    return lanes, artifacts
+
+
+def test_missing_fields_are_the_sample_level_fields_the_sample_lacks():
+    sample = make_sample("A", [make_field("sheet_resistance", "12.5", unit_raw="Ω/sq")])
+    names = [spec.name for spec in missing_fields(sample)]
+    assert "sheet_resistance" not in names
+    assert "thickness" in names
+    assert all(spec.is_sample_level for spec in missing_fields(sample))
+
+
+def test_the_tables_a_lane_read_from_are_listed_once_with_their_samples():
+    lanes, artifacts = table_lanes()
+    regions = table_regions_of(lanes["mineru"], artifacts["mineru"], padding=0.0, context=0)
+    assert list(regions) == ["mineru_p0_b1"]
+    region, sample_ids = regions["mineru_p0_b1"]
+    assert sample_ids == ("A", "B")
+    assert region.bbox == BOX_B
+
+
+def test_a_value_quoted_from_the_transcription_fills_the_blank(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    store = CropStore(layout, DOC_ID, pdf, dpi=72)
+    vlm = FakeVisionClient(lambda call: reading(TABLE_TEXT))
+    llm = FakeLlmClient(extractor_answer({"A": [("thickness", "250", "nm")]}))
+
+    fills, dropped, usage = fill_from_tables(lanes, artifacts, store, vlm, llm, padding=0.0, context=0, refresh=False)
+
+    assert dropped == ()
+    assert [(f.backend, f.owner, f.field, f.value_raw, f.unit_raw) for f in fills] == [
+        ("mineru", "sample:A", "thickness", "250", "nm"),
+        ("paddleocr_vl", "sample:A", "thickness", "250", "nm"),
+    ]
+    assert all(f.source_id.startswith(FILL_SOURCE_PREFIX) and f.transcription == TABLE_TEXT for f in fills)
+    assert fills[0].key == value_key("mineru", "sample:A", fills[0].as_field_value())
+    assert fills[0].as_field_value().grounded is True
+    # One table per lane: the VLM read it once per lane and the extractor was asked once per lane.
+    assert vlm.call_count == 2 and llm.call_count == 2
+    assert usage
+
+
+def test_the_extractor_is_asked_only_for_the_missing_fields_of_the_cited_samples(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes()
+    store = CropStore(layout, DOC_ID, pdf, dpi=72)
+    vlm = FakeVisionClient(lambda call: reading(TABLE_TEXT))
+    llm = FakeLlmClient(extractor_answer({}))
+
+    fill_from_tables(lanes, artifacts, store, vlm, llm, padding=0.0, context=0, refresh=False)
+
+    user = llm.calls[0].user
+    assert "- id: A" in user and "- id: B" in user
+    assert "sheet_resistance" not in user.split("Table transcription:")[0].split("Fields still missing")[1]
+    assert "thickness" in user
+    assert TABLE_TEXT in user
+    # The table is asked for as a whole, no field named, so the transcription serves every blank.
+    assert "sheet_resistance" not in vlm.calls[0].user and "caption" in vlm.calls[0].user
+
+
+def test_a_fill_the_transcription_does_not_contain_is_dropped(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    store = CropStore(layout, DOC_ID, pdf, dpi=72)
+    vlm = FakeVisionClient(lambda call: reading(TABLE_TEXT))
+    llm = FakeLlmClient(extractor_answer({"A": [("thickness", "999", "nm")]}))
+
+    fills, dropped, _ = fill_from_tables(lanes, artifacts, store, vlm, llm, padding=0.0, context=0, refresh=False)
+
+    assert fills == ()
+    assert len(dropped) == 2 and all("is not in the transcription" in reason for reason in dropped)
+
+
+def test_a_field_the_lane_already_holds_or_a_sample_it_did_not_cite_is_refused(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    store = CropStore(layout, DOC_ID, pdf, dpi=72)
+    vlm = FakeVisionClient(lambda call: reading(TABLE_TEXT))
+    llm = FakeLlmClient(
+        extractor_answer({"A": [("sheet_resistance", "12.5", "Ω/sq")], "B": [("thickness", "310", "nm")]})
+    )
+
+    fills, dropped, _ = fill_from_tables(lanes, artifacts, store, vlm, llm, padding=0.0, context=0, refresh=False)
+
+    assert fills == ()
+    assert any("was not asked for" in reason for reason in dropped)
+    assert any("is not a sample cited from this table" in reason for reason in dropped)
+
+
+def test_an_illegible_table_asks_the_extractor_nothing(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    store = CropStore(layout, DOC_ID, pdf, dpi=72)
+    vlm = FakeVisionClient(lambda call: reading("", legible=False))
+    llm = FakeLlmClient(extractor_answer({"A": [("thickness", "250", "nm")]}))
+
+    fills, dropped, _ = fill_from_tables(lanes, artifacts, store, vlm, llm, padding=0.0, context=0, refresh=False)
+
+    assert fills == () and llm.call_count == 0
+    assert all("illegible" in reason for reason in dropped) and len(dropped) == 2
+
+
+def test_a_failed_table_read_drops_that_table_and_reads_the_next(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    store = CropStore(layout, DOC_ID, pdf, dpi=72)
+    calls = 0
+
+    def flaky(call: VisionCall) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise LlmError("HTTP 500: boom")
+        return reading(TABLE_TEXT)
+
+    llm = FakeLlmClient(extractor_answer({"A": [("thickness", "250", "nm")]}))
+    fills, dropped, _ = fill_from_tables(
+        lanes, artifacts, store, FakeVisionClient(flaky), llm, padding=0.0, context=0, refresh=False
+    )
+
+    assert [f.backend for f in fills] == ["paddleocr_vl"]
+    assert len(dropped) == 1 and "boom" in dropped[0] and dropped[0].startswith("mineru")
+
+
+def test_a_sample_with_nothing_missing_costs_no_request(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    full = {}
+    for backend, lane in lanes.items():
+        sample = lane.sample("A")
+        assert sample is not None
+        fields = tuple(sample.fields) + tuple(
+            make_field(spec.name, "1", source_ids=[f"{backend}_p0_b1"]) for spec in missing_fields(sample)
+        )
+        full[backend] = lane.model_copy(update={"samples": (sample.model_copy(update={"fields": fields}),)})
+    store = CropStore(layout, DOC_ID, pdf, dpi=72)
+    vlm, llm = FakeVisionClient([]), FakeLlmClient([])
+
+    fills, dropped, _ = fill_from_tables(full, artifacts, store, vlm, llm, padding=0.0, context=0, refresh=False)
+
+    assert fills == () and dropped == () and vlm.call_count == 0 and llm.call_count == 0
+
+
+def test_the_stage_carries_the_fills_and_counts_them(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    report = compare_lanes(lanes["mineru"], lanes["paddleocr_vl"], exact_match())
+    vlm = FakeVisionClient(lambda call: reading(TABLE_TEXT))
+    llm = FakeLlmClient(extractor_answer({"A": [("thickness", "250", "nm")]}))
+
+    validation = run_stage(lanes, report, artifacts, vlm, pdf, layout, llm=llm, fill_blanks=True)
+
+    assert validation.counts.filled == 2
+    assert set(validation.fills_by_cell()) == {
+        ("mineru", "sample:A", "thickness"),
+        ("paddleocr_vl", "sample:A", "thickness"),
+    }
+    assert validation.fill_dropped == ()
+    # The fills survive the file exactly like the verdicts.
+    path = layout.doc_dir(DOC_ID) / "v.json"
+    validation.write(path)
+    assert ValidationReport.read(path) == validation
+
+
+def test_filling_needs_the_extractor(pdf: Path, layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    report = compare_lanes(lanes["mineru"], lanes["paddleocr_vl"], exact_match())
+    with pytest.raises(ValueError, match="llm"):
+        run_stage(lanes, report, artifacts, FakeVisionClient([]), pdf, layout, fill_blanks=True)
+
+
+def test_without_a_pdf_nothing_is_filled_and_the_extractor_is_not_asked(layout: DataLayout):
+    lanes, artifacts = table_lanes(with_b=False)
+    report = compare_lanes(lanes["mineru"], lanes["paddleocr_vl"], exact_match())
+    llm = FakeLlmClient([])
+
+    validation = run_stage(lanes, report, artifacts, FakeVisionClient([]), None, layout, llm=llm, fill_blanks=True)
+
+    assert validation.fills == () and llm.call_count == 0

@@ -244,3 +244,62 @@ def validation_user_prompt(spec: FieldSpec) -> str:
         f"This region was cited as the source of a value of: {spec.name} ({spec.description}).\n"
         "Transcribe the whole region exactly as printed. Return the JSON object only."
     )
+
+
+def table_transcription_user_prompt() -> str:
+    """The question for a whole table region read for the fill step: no field is named, because the
+    transcription serves every field the table might hold, and the caption and footnote that the sliding
+    window brought along are asked for explicitly -- they carry the sample names and the units."""
+    return (
+        "This region contains a table from the paper, possibly with its caption above and notes below.\n"
+        "Transcribe everything exactly as printed: the caption, every header cell, every row (one row per "
+        'line, cells separated by " | "), and any footnote. Return the JSON object only.'
+    )
+
+
+# The fill question. The transcription is one block with one source id, so the model can cite nothing but
+# it; the sample ids are given so a value lands on a sample the lane already knows; the fields are limited
+# to the ones that sample lacks, so a value the lane already holds is never second-guessed here.
+_FILL_SYSTEM = """You are given the transcription of ONE table from a scientific paper about transparent conductive oxide (TCO) thin films, preceded by a provenance marker `<!-- source: <id> -->`. The table was read from the page image by a vision model; treat the transcription as the paper's own text.
+
+A list of film samples the paper reports is given, each with a stable `sample_id`. Your only job is to read, for those samples, the fields listed below that are still missing, and to quote them exactly as they appear in the transcription.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{
+  "samples": [
+    {"sample_id": "<one of the given sample ids, exactly>", "fields": [FIELD, ...]},
+    ...
+  ]
+}
+
+FIELD = {"field": "<field name from the table below>", "value_raw": "<exactly as written in the transcription>",
+         "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
+         "source_ids": ["<the marker id>"], "note": "<optional remark or null>"}
+
+Rules:
+1. `value_raw` must be copied verbatim from the transcription. Never convert units or round numbers.
+2. Use only the given sample ids. If a row of the table cannot be matched to one of them with confidence, leave it out.
+3. Report a field only when the transcription states it for that sample. Never guess, never fill defaults, never reuse a value from another row.
+4. Only the listed fields. A field that is not listed for a sample is not wanted for that sample.
+5. Units: put the unit in `unit_raw` exactly as written in the header or the cell. If a column header carries the unit, that is the unit of every value in the column.
+6. `source_ids` must be the marker id shown; there is no other.
+
+Fields that may be requested:
+{fields}
+
+Return the JSON object only."""
+
+
+def fill_system_prompt() -> str:
+    return _FILL_SYSTEM.replace("{fields}", render_field_table())
+
+
+def fill_user_prompt(sample_list: str, missing: str, markdown: str) -> str:
+    """``sample_list`` is the lane's own samples, ``missing`` names which fields each still lacks, and
+    ``markdown`` is the transcription behind its one source marker."""
+    return (
+        f"Samples (use these ids exactly):\n{sample_list}\n\n"
+        f"Fields still missing, per sample:\n{missing}\n\n"
+        f"Table transcription:\n{markdown}\n\nReturn the JSON object now."
+    )

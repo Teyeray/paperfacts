@@ -107,8 +107,18 @@ this file is the part that is easy to get wrong.
   that judges parser text judges the model's text -- same leniency, same strictness. Do not add a
   yes/no question to the prompt, and do not add a second matcher.
 - Which values are checked is a lane-blind rule in `validate.select_targets`, never a model call, and the
-  prompt, model, DPI and padding are identical for both lanes. Asymmetry here contaminates the same
-  disagreement signal the extraction rules protect.
+  prompt, model, DPI, padding and context window are identical for both lanes. Asymmetry here contaminates
+  the same disagreement signal the extraction rules protect. Under the default `tables` policy "cited from
+  a table" is judged in each lane's own artifact, by the same test.
+- The crop is the cited blocks plus `vlm.context_blocks` neighbours on each side in the page's reading
+  order (`region_of_blocks`): figures and page furniture are skipped over without being counted, and a
+  neighbour never comes from another page. The stored verdict names the context blocks apart from the
+  cited ones.
+- The fill step (`fill_from_tables`) is an *extraction*: the VLM transcribes a whole table, the
+  **extraction model** quotes the missing fields from that transcription, and every quote goes through
+  `response_to_records` and `adjudicate` against the transcription. Do not let the VLM answer the fill
+  question itself, and do not let a fill cite anything but its `vlm:<crop>` source. The fill step needs the
+  extractor's client, which is why `_validate_stage` runs inside the `build_llm_client` scope.
 - The validate stage always appears in `stage_names()`; disabled, it is marked `skipped` with the reason.
   Enabled, it opens its own `OpenAICompatibleClient` through `build_vlm_client` -- the extractor's client
   is never reused for images, and `VisionClient` is typed apart from `LlmClient` so the two cannot be
@@ -119,13 +129,16 @@ this file is the part that is easy to get wrong.
   confirmation resolves a conflict; a confirmed value counts as trusted despite failing grounding). A verdict
   never invents a value and never promotes a cell the two-lane rules refuse for another reason. Adding a
   fourth place needs a test in `test_dataset_validation.py` that shows the shape it does *not* apply to.
+- Fills reach the table in exactly one place: a cell no lane holds a value for (or whose every value was
+  contradicted) is committed as `vlm_filled`. A fill never replaces a lane's value and never settles a
+  conflict; when both lanes filled the same cell, `BACKENDS` order decides.
 - The vision cache key stands the image in by its sha256; the base64 is never hashed and never written to
   the cache entry. Crops live under `crops/`, named by page, box and DPI, so two values cited from one table
   share one render.
 - Every crop goes through `pdf.render_region`, behind the pdfium lock, with the viewer's own pixel mapping.
 - `validation_key` is its own key. It must never be folded into `extractor_key` or `comparison_key`: a
-  prompt tweak re-asks the VLM and nothing else. The dataset is stored under a three-key name only when
-  verdicts were consulted.
+  prompt tweak re-asks the VLM and nothing else. Both prompts, the policy, the context window and the fill
+  switch are in it. The dataset is stored under a three-key name only when verdicts were consulted.
 
 ## Testing
 

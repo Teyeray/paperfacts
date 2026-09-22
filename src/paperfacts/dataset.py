@@ -10,6 +10,10 @@ and nowhere else: a value the VLM contradicted is set aside before anything else
 which exactly the surviving side was confirmed is committed as ``vlm_resolved``; and a value grounding could
 not locate in parser text is trusted when the VLM located it on the page. A verdict never invents a value
 and never promotes a cell the two-lane rules would have refused for any other reason.
+
+Its fills -- values the extractor quoted from the VLM's transcription of a table -- land in exactly one
+place: a cell that would otherwise be blank because no lane holds a value for it (or every value it held was
+contradicted). Such a cell is committed as ``vlm_filled``. A fill never replaces a value a lane read.
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ from paperfacts.normalize import (
 )
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
-from paperfacts.validate import OWNER_TARGET, ValidationReport, ValueValidation, value_key
+from paperfacts.validate import OWNER_TARGET, FilledValue, ValidationReport, ValueValidation, value_key
 
 CellValue = str | float | int | bool | None
 Row = Mapping[str, CellValue]
@@ -246,6 +250,30 @@ def _verdict_lookup(validation: ValidationReport | None, owners: Mapping[Backend
     return lookup
 
 
+FillLookup = Callable[[str], FilledValue | None]
+
+
+def _no_fills(field: str) -> FilledValue | None:
+    return None
+
+
+def _fill_lookup(validation: ValidationReport | None, owners: Mapping[Backend, str | None]) -> FillLookup:
+    """A lookup bound to one scope: the first lane (in BACKENDS order) whose table produced a fill for the
+    field wins, so the choice is deterministic and the same for both lanes' readers."""
+    if validation is None or not validation.fills:
+        return _no_fills
+    cells = validation.fills_by_cell()
+
+    def lookup(field: str) -> FilledValue | None:
+        for backend in BACKENDS:
+            owner = owners.get(backend)
+            if owner is not None and (fill := cells.get((backend, owner, field))) is not None:
+                return fill
+        return None
+
+    return lookup
+
+
 def _vlm_summary(evidence: Sequence[tuple[Backend, FieldValue]], verdict_of: VerdictLookup) -> str:
     parts = []
     for backend, value in evidence:
@@ -345,6 +373,25 @@ def _commit(
     )
 
 
+def _commit_fill(spec: FieldSpec, fill: FilledValue, *, vlm: str) -> _Decision:
+    """A blank cell filled from a table transcription, through the same scalar rules as any other value."""
+    value = fill.as_field_value()
+    scalar, note = _scalar(value, spec)
+    if scalar is None:
+        raw = f"{fill.backend}: {fill.value_raw} {fill.unit_raw or ''}"
+        return _Decision(None, "non_scalar", value.condition or "", fill.source_id, _joined([note or "", raw]), vlm=vlm)
+    details = [f"由视觉核验的表格转写补全（{fill.backend} 通道引用的表格）", note or ""]
+    return _Decision(
+        scalar,
+        "vlm_filled",
+        value.condition or "",
+        fill.source_id,
+        _joined(details),
+        lanes=(fill.backend,),
+        vlm=_joined([vlm, f"{fill.backend}: filled"]),
+    )
+
+
 def _decide(
     spec: FieldSpec,
     evidence: Sequence[tuple[Backend, FieldValue]],
@@ -352,11 +399,13 @@ def _decide(
     *,
     scope: _Scope | None = None,
     verdict_of: VerdictLookup = _no_verdicts,
+    fill_of: FillLookup = _no_fills,
 ) -> _Decision:
     conditions = _joined([value.condition or "" for _, value in evidence])
     sources = _joined(sorted({source for _, value in evidence for source in value.source_ids}))
     details: list[str] = []
     vlm = _vlm_summary(evidence, verdict_of)
+    fill = fill_of(spec.name)
 
     def reject(status: str, reason: str) -> _Decision:
         raw = _joined([f"{backend}: {value.value_raw} {value.unit_raw or ''}" for backend, value in evidence])
@@ -366,11 +415,15 @@ def _decide(
         checked = verdict_of(backend, value)
         return None if checked is None else checked.verdict
 
-    if not evidence:
+    if not evidence and fill is None:
         return reject("missing", "未提取到该字段；留空，不填 0")
     blocked = _matching_blocked(scope)
     if blocked:
         return reject("ambiguous", blocked)
+    if not evidence:
+        # No lane read this cell; the extractor quoted it from the VLM's transcription of a table this
+        # sample was cited from. The only way a fill reaches the table: an otherwise blank cell.
+        return _commit_fill(spec, fill, vlm=vlm)
     # The VLM's contradictions come first: a value a third reader could not find in the region it was cited
     # from is set aside before the two-lane rules judge what is left, whatever those rules would have said.
     contradicted = [(backend, value) for backend, value in evidence if verdict(backend, value) == "contradicted"]
@@ -378,6 +431,8 @@ def _decide(
         details.append(f"视觉核验否定 {len(contradicted)} 个候选值，已排除")
         evidence = [(backend, value) for backend, value in evidence if verdict(backend, value) != "contradicted"]
         if not evidence:
+            if fill is not None:
+                return _commit_fill(spec, fill, vlm=vlm)
             return reject("vlm_contradicted", "视觉核验：在引用的页面区域中读不到任何候选值")
     disputed = any(c.status in {"conflict", "ambiguous"} for c in comparisons)
     resolved = False
@@ -558,13 +613,12 @@ def consolidate_document(
     sample_rows: list[Row] = []
     for scope in _scopes(lanes, report):
         scope_comparisons = _scope_comparisons(scope, report)
-        scope_verdicts = _verdict_lookup(
-            validation,
-            {
-                report.backend_a: None if scope.a is None else f"sample:{scope.a.sample_id}",
-                report.backend_b: None if scope.b is None else f"sample:{scope.b.sample_id}",
-            },
-        )
+        owners = {
+            report.backend_a: None if scope.a is None else f"sample:{scope.a.sample_id}",
+            report.backend_b: None if scope.b is None else f"sample:{scope.b.sample_id}",
+        }
+        scope_verdicts = _verdict_lookup(validation, owners)
+        scope_fills = _fill_lookup(validation, owners)
         decisions = dict(target)
         for spec in SAMPLE_FIELDS:
             evidence = [
@@ -580,6 +634,7 @@ def consolidate_document(
                 [c for c in scope_comparisons if c.field == spec.name],
                 scope=scope,
                 verdict_of=scope_verdicts,
+                fill_of=scope_fills,
             )
             decisions[spec.name] = decision
             record(scope.sample_id, spec, decision)

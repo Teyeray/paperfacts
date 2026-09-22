@@ -45,7 +45,9 @@
     "crop_dpi": 200,
     "crop_padding": 0.01,
     "crop_max_pixels": 2000000,
-    "policy": "disputed",
+    "policy": "tables",
+    "context_blocks": 1,
+    "fill_blanks": true,
     "concurrency": 4
   },
   "parsers": {

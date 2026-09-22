@@ -711,6 +711,8 @@ def test_the_vlm_block_is_read_from_the_file(tmp_path: Path):
             "vlm.crop_padding": 0.02,
             "vlm.crop_max_pixels": 1000000,
             "vlm.policy": "all",
+            "vlm.context_blocks": 2,
+            "vlm.fill_blanks": False,
             "vlm.concurrency": 2,
         },
     )
@@ -727,6 +729,8 @@ def test_the_vlm_block_is_read_from_the_file(tmp_path: Path):
     assert settings.vlm_crop_padding == 0.02
     assert settings.vlm_crop_max_pixels == 1_000_000
     assert settings.vlm_policy == "all"
+    assert settings.vlm_context_blocks == 2
+    assert settings.vlm_fill_blanks is False
     assert settings.vlm_concurrency == 2
 
 
@@ -745,6 +749,8 @@ def test_every_vlm_setting_has_an_environment_override(tmp_path: Path):
         PAPERFACTS_VLM_CROP_PADDING="0.0",
         PAPERFACTS_VLM_CROP_MAX_PIXELS="123456",
         PAPERFACTS_VLM_POLICY="all",
+        PAPERFACTS_VLM_CONTEXT_BLOCKS="0",
+        PAPERFACTS_VLM_FILL_BLANKS="false",
         PAPERFACTS_VLM_CONCURRENCY="1",
     )
 
@@ -755,6 +761,16 @@ def test_every_vlm_setting_has_an_environment_override(tmp_path: Path):
     assert (settings.vlm_timeout_s, settings.vlm_temperature, settings.vlm_max_tokens) == (7.0, 0.5, 99)
     assert (settings.vlm_crop_dpi, settings.vlm_crop_padding, settings.vlm_crop_max_pixels) == (96, 0.0, 123456)
     assert (settings.vlm_policy, settings.vlm_concurrency) == ("all", 1)
+    assert (settings.vlm_context_blocks, settings.vlm_fill_blanks) == (0, False)
+
+
+def test_a_negative_context_window_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"vlm.context_blocks": -1})
+    with pytest.raises(ConfigError, match=r"vlm\.context_blocks"):
+        Settings.from_env(env_for(path))
+    path = write_config(tmp_path / "config.json")
+    with pytest.raises(ConfigError, match=r"vlm\.context_blocks"):
+        Settings.from_env(env_for(path, PAPERFACTS_VLM_CONTEXT_BLOCKS="-2"))
 
 
 @pytest.mark.parametrize(
@@ -773,7 +789,7 @@ def test_a_misspelled_enabled_switch_names_itself(tmp_path: Path):
 
 def test_an_unknown_policy_names_the_policies_and_the_file(tmp_path: Path):
     path = write_config(tmp_path / "config.json", {"vlm.policy": "some"})
-    with pytest.raises(ConfigError, match=r"disputed, all.*config\.json"):
+    with pytest.raises(ConfigError, match=r"disputed, tables, all.*config\.json"):
         Settings.from_env(env_for(path))
 
 

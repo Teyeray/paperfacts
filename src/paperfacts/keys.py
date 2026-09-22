@@ -31,9 +31,11 @@ from paperfacts.config import (
     DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
+    DEFAULT_VLM_CONTEXT_BLOCKS,
     DEFAULT_VLM_CROP_DPI,
     DEFAULT_VLM_CROP_MAX_PIXELS,
     DEFAULT_VLM_CROP_PADDING,
+    DEFAULT_VLM_FILL_BLANKS,
     DEFAULT_VLM_MAX_TOKENS,
     DEFAULT_VLM_POLICY,
     DEFAULT_VLM_TEMPERATURE,
@@ -47,6 +49,7 @@ from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, CONDITION_KEYWORDS, FI
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
+    fill_system_prompt,
     inventory_system_prompt,
     matching_system_prompt,
     validation_system_prompt,
@@ -254,12 +257,19 @@ def validation_key(
     crop_padding: float = DEFAULT_VLM_CROP_PADDING,
     crop_max_pixels: int = DEFAULT_VLM_CROP_MAX_PIXELS,
     policy: ValidationPolicy = DEFAULT_VLM_POLICY,
+    context_blocks: int = DEFAULT_VLM_CONTEXT_BLOCKS,
+    fill_blanks: bool = DEFAULT_VLM_FILL_BLANKS,
 ) -> str:
     """What a stored validation depends on. Same baseline rule as the other two keys: a setting at its
-    built-in value stays out of the material, so tightening one knob renames only the files it affects."""
+    built-in value stays out of the material, so tightening one knob renames only the files it affects.
+
+    The fill prompt is hashed by value like the validation prompt: it decides what the extractor is asked
+    over a transcription, and a filled value is stored in this report and nowhere else.
+    """
     material: dict[str, object] = {
         "model": model,
         "validation_system": validation_system_prompt(),
+        "fill_system": fill_system_prompt(),
         "code": validation_code_fingerprint(),
     }
     if temperature != DEFAULT_VLM_TEMPERATURE:
@@ -274,6 +284,10 @@ def validation_key(
         material["crop_max_pixels"] = crop_max_pixels
     if policy != DEFAULT_VLM_POLICY:
         material["policy"] = policy  # which values were checked is part of what the report says
+    if context_blocks != DEFAULT_VLM_CONTEXT_BLOCKS:
+        material["context_blocks"] = context_blocks  # a wider window is a different picture
+    if fill_blanks != DEFAULT_VLM_FILL_BLANKS:
+        material["fill_blanks"] = fill_blanks  # a report with fills says more than one without
     return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
 
 
@@ -286,4 +300,6 @@ def validation_key_for(settings: Settings) -> str:
         crop_padding=settings.vlm_crop_padding,
         crop_max_pixels=settings.vlm_crop_max_pixels,
         policy=settings.vlm_policy,
+        context_blocks=settings.vlm_context_blocks,
+        fill_blanks=settings.vlm_fill_blanks,
     )
