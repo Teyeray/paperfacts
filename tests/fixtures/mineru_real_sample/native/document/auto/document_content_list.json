@@ -1,0 +1,376 @@
+[
+    {
+        "type": "text",
+        "text": "RESEARCH ARTICLE",
+        "bbox": [
+            72,
+            139,
+            359,
+            158
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Formation and Characterization of Transparent Conductive Oxide SnO :Ta Grown at Low Deposition Temperature",
+        "text_level": 1,
+        "bbox": [
+            70,
+            193,
+            833,
+            272
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Cecilia Bauden<sup>1</sup> | Justus Haag<sup>1</sup> | Alvaro Mendez<sup>1,2</sup> | Frans Munnik<sup>1</sup> | Fabian Ganss<sup>1</sup> | Ambiörn Wennberg<sup>2</sup> | Ivan Fernandez<sup>2</sup> | Ivan Kaban<sup>3</sup> | Harish Parala<sup>3</sup> | Anjana Devi<sup>3,4</sup> | Matthias Krause<sup>1</sup>",
+        "bbox": [
+            68,
+            282,
+            825,
+            312
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "<sup>1</sup>Institute of Ion Beam Physics and Materials Research, Helmholtz-Zentrum Dresden-Rossendorf, Dresden, Germany | <sup>2</sup>Nano4Energy S.L., Madrid, Spain | <sup>3</sup>Leibniz Institute for Solid State and Materials Research Dresden, Dresden, Germany | <sup>4</sup>Faculty of Chemistry and Biochemistry, Dresden University of Technology, Dresden, Germany",
+        "bbox": [
+            68,
+            324,
+            921,
+            368
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Correspondence: Matthias Krause (matthias.krause@hzdr.de)",
+        "bbox": [
+            70,
+            377,
+            420,
+            391
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Received: 14 November 2025 | Revised: 20 January 2026 | Accepted: 5 February 2026",
+        "bbox": [
+            70,
+            397,
+            563,
+            411
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Keywords: low-temperature processing | magnetron sputtering | Ta-doped tin oxide | TCOs | transparent conductive oxides",
+        "bbox": [
+            70,
+            419,
+            749,
+            433
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "ABSTRACT",
+        "text_level": 2,
+        "bbox": [
+            87,
+            455,
+            186,
+            469
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "The formation of the transparent conductive oxide $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ by reactive direct-current magnetron sputtering at a low temperature of $2 2 5 ^ { \\circ } \\mathrm { C }$ was studied as a function of the oxygen flow rate using a pilot-scale setup. Beginning with a mixture of β-Sn and SnO as majority phases and minority fractions of $\\mathrm { S n } _ { 3 } \\mathrm { O } _ { 4 }$ and $\\mathrm { S n O } _ { 2 }$ at very low $\\mathrm { O } _ { 2 }$ flows, up to the formation of phase-pure rutile-type $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ at higher flow rates, a systematic evolution of the phase structure is observed. The $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ (0.70 at.% Ta) film grown at optimized flow conditions exhibits a transmittance of >80% from 500 to 2500 nm and a specific resistivity of 0.3 Ω cm. While the transmittance is competitive, the resistivity is in the upper range of that reported for low-temperature-deposited $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ films in research lab studies. Based on X-ray diffraction, Raman spectroscopy, optical spectroscopy, and X-ray photoelectron spectroscopy, we conclude that the small crystallite size, microstrain, and point defects caused by the low growth temperature might prevent charge carrier activation, even though the Ta dopant is incorporated as $\\mathrm { T a } ^ { 5 + }$ in the rutile-type $\\mathrm { S n O } _ { 2 }$ lattice.",
+        "bbox": [
+            85,
+            471,
+            912,
+            622
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "1 | Introduction",
+        "text_level": 2,
+        "bbox": [
+            70,
+            650,
+            215,
+            664
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Among the three classical transparent conductive oxides (TCOs) such as $\\mathrm { I n } _ { 2 } \\mathrm { O } _ { 3 } ,$ ZnO, and $\\mathrm { S n O } _ { 2 } ,$ the latter is distinguished by a high chemical, mechanical, and thermal stability [1–3]. The most abundantly used dopant for SnO is fluorine [4–7]. $\\mathrm { S n O } _ { 2 } { : } \\mathrm { F }$ can be used as a transparent electrode in display technologies, as a low-emissivity glass coating to improve the energy efficiency of buildings by reducing the infrared heat transmission while still retaining the transparency for visible light, or as a spectrally selective coating for solar collectors [3, 8, 9]. Recently, the research focus for $\\mathrm { S n O } _ { 2 } .$ -based TCOs has shifted to the investigation of tantalum-doped $\\mathrm { S n O } _ { 2 }$ (TTO) thin films because of their superior electrical properties and higher thermal stability in vacuum and air [10–14]. This latter material property is especially critical as these films can find an application as a capacitor electrode in data storage devices, or as a solar-selective transmitter in concentrated solar power plants that require a heat resistance up to $8 0 0 ^ { \\circ } \\mathrm { C }$ [15, 16]. Because this material demonstrates the potential to be used in a wide range of applications, the necessary tunability to meet the different technical specifications requires the use of scalable low-temperature deposition techniques.",
+        "bbox": [
+            68,
+            672,
+            489,
+            869
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            507,
+            650,
+            927,
+            759
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "To date, TTO thin films exhibiting the best transport properties were pulsed-laser deposited. $\\mathrm { S n } _ { 0 . 9 5 } \\mathrm { T a } _ { 0 . 0 5 } \\mathrm { O } _ { 2 }$ films epitaxially grown on rutile $\\mathrm { T i O } _ { 2 } \\ ( 1 1 0 )$ single-crystal substrates at $8 0 0 ^ { \\circ } \\mathrm { C }$ showed a resistivity of $1 . 1 \\times 1 0 ^ { - 4 } \\Omega$ cm, and $\\mathrm { S n } _ { 0 . 9 9 7 } \\mathrm { T a } _ { 0 . 0 0 3 } \\mathrm { O } _ { 2 }$ films grown at $6 0 0 ^ { \\circ } \\mathrm { C }$ had the maximum charge carrier mobility for TTO with $1 3 0 \\mathrm { c m } ^ { 2 } \\left( \\mathrm { V s } \\right) ^ { - 1 } \\left[ 1 1 , 1 7 \\right]$ . The best magnetron-sputtered (MS) TTO films, $\\mathrm { S n O } _ { 2 } \\mathrm { : T a }$ (2.3 cat. %; cat. stands for cation concentration) were grown at $6 0 0 ^ { \\circ } \\mathrm { C }$ using a radiofrequency (RF) plasma and presented a resistivity value of $5 . 4 \\times 1 0 ^ { - 4 } \\Omega$ cm [12]. For the growth of $\\mathrm { S n O } _ { 2 } \\mathrm { : T a }$ at low temperatures between $2 5 ^ { \\circ } \\mathrm { C }$ and $3 0 0 ^ { \\circ } \\mathrm { C } ,$ , resistivities from $4 \\times 1 0 ^ { - 3 }$ to 1 Ω cm were reported. These studies have been performed so far at typical research lab conditions (Table 1). The sample sizes were, in the majority of cases, $\\mathrm { . } \\mathrm { c m } ^ { 2 } .$ . RF sputtering usually results in very good thin film properties, but has lower deposition rates than direct-current (DC) MS, is technically more challenging and expensive, requires higher voltages, and is sensitive to overheating. Therefore, the present study aims to develop an industry-adaptable thin film growth process for $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ . The transition step from research to industrial scale is crucial for any process implementation in a production line. As magnetron sputtering is a cost-effective, industrially scalable technique, an appropriate pilot-scale setup at Nano4Energy S.L. (Madrid, Spain) was used for the deposition of $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ at low temperature.",
+        "bbox": [
+            507,
+            763,
+            927,
+            869
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "header",
+        "text": "Check for updates",
+        "bbox": [
+            870,
+            0,
+            1000,
+            16
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "header",
+        "text": "physica status solidi (b)",
+        "bbox": [
+            70,
+            38,
+            263,
+            56
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "header",
+        "text": "status Sb",
+        "bbox": [
+            774,
+            38,
+            926,
+            80
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "page_footnote",
+        "text": "This is an open access article under the terms of the Creative Commons Attribution License, which permits use, distribution and reproduction in any medium, provided the original work is properly cited.",
+        "bbox": [
+            68,
+            898,
+            907,
+            925
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "page_number",
+        "text": "1 of 10",
+        "bbox": [
+            875,
+            956,
+            926,
+            970
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "page_footnote",
+        "text": "© 2026 The Author(s). physica status solidi (b) basic solid state physics published by Wiley-VCH GmbH.",
+        "bbox": [
+            70,
+            927,
+            608,
+            941
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "footer",
+        "text": "physica status solidi (b), 2026; 263:e202500625 https://doi.org/10.1002/pssb.202500625",
+        "bbox": [
+            70,
+            957,
+            309,
+            980
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            68,
+            39,
+            489,
+            294
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "X-ray diffraction and Raman spectroscopy were used to identify the phase structure evolution of a series o $\\mathrm { \\dot { \\Omega } S n O _ { x } { : } T a }$ thin film samples grown as a function of the oxygen flow rate. A distinct resistivity minimum was established at optimized conditions for samples of the composition $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ $( 0 . 7 \\pm 0 . 0 5 ~ \\mathrm { a t . } \\% ~ \\mathrm { T a } )$ . These films were then further characterized to build relationships between the deposition temperature, the phase and microstructure, and their electrical and optical properties.",
+        "bbox": [
+            68,
+            296,
+            489,
+            418
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "2 | Experimental and theoretical methodology",
+        "text_level": 2,
+        "bbox": [
+            70,
+            457,
+            455,
+            474
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "2.1 | Preparation of $\\mathbf { S n O } _ { \\mathbf { x } ^ { \\star } } ^ { \\star ^ { \\prime } }$ Ta Thin Films",
+        "text_level": 2,
+        "bbox": [
+            70,
+            480,
+            406,
+            496
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "SnO :Ta thin films were deposited by reactive DC–MS in a pilotscale sputter chamber of the company Nano4Energy [23]. The system setup consists of two rectangular industrial-size magnetrons $( 4 0 \\times 1 0 \\mathrm { c m }$ , one equipped with a Sn target, the other with a Sn/Ta target 95:5 wt.%) connected to two hiP-V 10 kW power supplies, which can be operated in DC or high-power impulse magnetron sputtering mode. It comprises a motorized twofold rotating system in the middle of the chamber as substrate holder, a shutter for masking the samples and a pair of vertical radiative heaters. Typically, three substrates of fused silica $( 3 0 \\times 3 0 \\times$ 3 mm), Corning glass (same size), and silicon $( 1 0 ~ \\times ~ 1 0 ~ \\times$ 1 mm) were simultaneously mounted onto the sample holder for the depositions. The centrally positioned oxygen inlets over the magnetrons ensure a homogeneous oxygen distribution in the plasma. Following a preoptimization with respect to oxygen flow rate and magnetrons’ powers, a systematic series of $\\mathrm { S n O } _ { x } \\mathrm { : T a }$ thin films was grown as a function of the oxygen flow rate at a deposition temperature of $2 2 5 ^ { \\circ } \\mathrm { C }$ with a working pressure of 1.1 Pa Ar. For the choice of the deposition temperature, two arguments were considered. First, in order to grow crystalline films, the substrate temperature had to be higher than $6 0 ^ { \\circ } \\mathrm { C } ,$ which is a realistic temperature for sputter deposition without heating. Secondly, the temperature should represent a kind of mean value between that of the previous low-temperature studies of $\\mathrm { S n O } _ { 2 } { : } \\mathrm { T a }$ thin films shown in (Table 1). The oxygen flow rate varied between 12 and 150 sccm, and was controlled using a mass flow controller operated with a GENCOA Speedflo system [24]. After presputtering for 15 min, typical sputter powers were 1000 W for both magnetrons, and the deposition rates were of the order of 1 μm/h. To ensure reproducibility, three depositions were carried under the finally established optimized conditions.",
+        "bbox": [
+            68,
+            503,
+            489,
+            728
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            507,
+            39,
+            927,
+            277
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "2.2 | Characterization of $\\mathbf { S n O _ { x } { : } T a }$ Thin Films",
+        "text_level": 2,
+        "bbox": [
+            509,
+            313,
+            882,
+            328
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "A combination of X-ray diffraction and Raman spectroscopy was used to analyze the films’ phase structure. Grazing incidence XRD measurements were performed on a Rigaku SmartLab diffractometer in the diffraction angle range $1 5 ^ { \\circ } \\leq 2 \\theta \\leq 1 2 0 ^ { \\circ }$ with Cu-K radiation $( \\lambda _ { \\alpha 1 } = 1 . 5 4 0 5 9 \\mathring { \\mathrm { A } }$ and $\\lambda _ { \\alpha 2 } = 1 . 5 4 4 4 1 \\mathrm { \\AA }$ with the intensity ratio $\\mathrm { C u - K } _ { \\alpha 2 } / \\mathrm { C u - K } _ { \\alpha 1 } = 0 . 5 )$ . The diffractometer was equipped, on the incident side, with a parallel beam mirror, a Soller slit (2.5°), an incident slit (1 mm), and a length-limiting slit (10 mm). The receiving side consisted of a parallel slit analyzer (0.5°) and another Soller slit $( 2 . 5 ^ { \\circ } )$ . The incidence angle was $2 ^ { \\circ } { \\mathrm { : } }$ , and the measurement was carried out with a step width of $\\cdot 0 . 0 5 ^ { \\circ }$ and a speed of 1.00°/min. The PDF cards 00-004−0673, 04-008−7671, and 00-041−1445 for $\\beta { \\cdot } \\mathbf { S } \\mathbf { n } ,$ SnO, and $\\mathrm { S n O } _ { 2 } ,$ respectively, from the PDF-5+ database were used as references for the identification of structural phases in the studied sample series [25].",
+        "bbox": [
+            507,
+            336,
+            927,
+            558
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "The size of the crystallites (D) in the phase-pure $\\mathrm { S n O } _ { 2 } \\mathrm { : T a }$ thin films was calculated using two methods: the Scherrer equation itself and the Williamson–Hall (WH) plot. The direct use of the Scherrer equation presupposes a strain-free state. With Lorentzian broadening of the diffraction peak, its full width at half maximum (FWHM) $\\beta _ { e x p }$ is then the sum of size broadening $\\beta _ { s i z e }$ and instrumental broadening $\\beta _ { i n s t r } .$ , or $\\beta _ { s i z e } = \\beta _ { e x p } - \\beta _ { i n s t r } . ~ D$ is then linked to $\\beta _ { s i z e }$ in the Scherrer equation [26–29] The latter is based on the Scherrer constant $K _ { S } = 0 . 9$ for crystallites without a defined shape, the (average) X-ray wavelength $\\lambda { = } 0 . 1 5 4 1 9$ nm, and the Bragg angle θ",
+        "bbox": [
+            507,
+            561,
+            927,
+            728
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "table",
+        "img_path": "images/ce4ee1c06d42e8a84dabb6a9e8d9932361860b7febc48d5dab0741ead35a9e5d.jpg",
+        "table_caption": [
+            "TABLE 1 | Deposition parameters and resistivities of SnO<sub>2</sub>:Ta thin films grown at low temperature in previous studies."
+        ],
+        "table_footnote": [],
+        "table_body": "<table><tr><td> $\\mathbf { \\theta } _ { \\mathbf { \\theta } } \\mathbf { \\Lambda } ^ { \\mathsf { e } } \\mathbf { C }$ </td><td>Technique</td><td>Sample size/cm²</td><td> $\\rho / \\Omega$  cm</td><td>Reference</td></tr><tr><td>200</td><td>RF-MS of  $\\mathrm { S n O } _ { 2 } \\mathrm { : T a }$  target (1 at. % Ta)</td><td>?</td><td>0.01</td><td>Yamada et al. [18]</td></tr><tr><td>200</td><td>pulsed-MS of SnTa targets</td><td> $1 \\times 1$ </td><td> $6 . 4 \\times 1 0 ^ { - 3 }$ </td><td>Muto et al. [19]</td></tr><tr><td>300</td><td>RF-MS, ceramic targets</td><td> $1 \\times 1$ </td><td>1</td><td>Weidner et al. [12, 20]</td></tr><tr><td>150</td><td> $\\mathrm { R F - M S } , \\mathrm { S n O } _ { 2 } + \\mathrm { T a } _ { 2 } \\mathrm { O } _ { 5 }$  targets</td><td> $5 \\times 5$ </td><td>0.05</td><td>Featherstone et al. [21]</td></tr><tr><td>25</td><td>reactive MS, ceramic  $\\mathrm { S n O } _ { 2 } \\mathrm { : T a }$  target</td><td> $1 \\times 1$ </td><td> $4 \\times 1 0 ^ { - 3 }$ </td><td>Mientus et al. [22].</td></tr><tr><td>225</td><td>reactive  $\\mathrm { D C - M S ; \\thinspace S n + S n T a }$  targets</td><td> $2 \\times ( 3 \\times 3 ) +$   $1 \\times ( 1 \\times 1 )$  in one batch</td><td>0.3</td><td>This work</td></tr></table>",
+        "bbox": [
+            73,
+            772,
+            922,
+            928
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "page_number",
+        "text": "2 of 10",
+        "bbox": [
+            72,
+            956,
+            124,
+            970
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "footer",
+        "text": "physica status solidi (b), 2026",
+        "bbox": [
+            763,
+            957,
+            926,
+            971
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "aside_text",
+        "text": "15213951, 2026, 3, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/pssb.202500625, Wiley Online Library on [07/09/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License",
+        "bbox": [
+            966,
+            20,
+            983,
+            979
+        ],
+        "page_idx": 1
+    }
+]

@@ -1,0 +1,57 @@
+[
+  {
+    "type": "text",
+    "page_idx": 0,
+    "bbox": [100, 80, 900, 120],
+    "text": "Transparent conducting oxides for flexible electronics",
+    "text_level": 1
+  },
+  {
+    "type": "text",
+    "page_idx": 0,
+    "bbox": [100, 140, 900, 260],
+    "text": "We report ITO films deposited at 25 °C with a sheet resistance of 32 ohm/sq."
+  },
+  {
+    "type": "image",
+    "page_idx": 0,
+    "bbox": [120, 300, 880, 620],
+    "img_path": "images/fig1.jpg",
+    "image_caption": ["Figure 1. XRD patterns of the as-deposited films.", "Inset: rocking curve."],
+    "image_footnote": []
+  },
+  {
+    "type": "text",
+    "page_idx": 0,
+    "bbox": [10, 10, 10, 10],
+    "text": "zero-area bbox, must be skipped"
+  },
+  {
+    "type": "table",
+    "page_idx": 1,
+    "bbox": [90, 100, 910, 400],
+    "img_path": "images/tab1.jpg",
+    "table_body": "<table><tr><td>ITO</td><td>32</td></tr></table>",
+    "table_caption": ["Table 1. Sheet resistance of the TCO films."],
+    "table_footnote": ["a Measured at 25 °C in air.", "   "]
+  },
+  {
+    "type": "header",
+    "page_idx": 0,
+    "bbox": [-5, 0, 1005, 30],
+    "text": "ACS Applied Materials & Interfaces"
+  },
+  {
+    "type": "equation",
+    "page_idx": 1,
+    "bbox": [200, 450, 800, 520],
+    "text": "\\sigma = n e \\mu",
+    "text_format": "latex"
+  },
+  {
+    "type": "sparkle",
+    "page_idx": 1,
+    "bbox": [100, 560, 900, 600],
+    "text": "block type MinerU never documented"
+  }
+]

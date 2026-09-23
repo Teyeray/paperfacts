@@ -1,0 +1,208 @@
+# PaperFacts — parser service orchestration for the Linux 8-GPU server (Route A: Docker, recommended)
+#
+# Architecture:
+#
+#   paperfacts orchestrator (pure python, runs on the host or any other machine)
+#        │  HTTP
+#        ├──→ mineru-router        :8002   POST /file_parse    (GPU 4, 5)
+#        └──→ paddleocr-vl-api     :8080   POST /layout-parsing (GPU 6)
+#                  │ HTTP inside the container network (not published externally)
+#                  └──→ paddleocr-vlm-server  vLLM service for the 0.9B VLM (GPU 6, shares the card above)
+#
+# Hard GPU constraint: this server has 8 GPUs; PaperFacts **may only use 4, 5, 6, 7**
+# (0-3 belong to other projects).
+# This file only allocates 4, 5, 6; GPU 7 is currently unused/free.
+#
+# Usage:
+#   cd deploy && cp .env.example .env
+#   docker compose build mineru-router      # first build pre-downloads MinerU pipeline models; slow
+#   docker compose up -d
+#
+# Note: GPU allocation is always pinned via device_ids under
+# deploy.resources.reservations.devices, rather than `runtime: nvidia` + NVIDIA_VISIBLE_DEVICES —
+# the former is the standard, more explicit compose v2 approach.
+# The numbers in device_ids are the **host's** physical GPU ids (matching nvidia-smi); once
+# inside the container they get renumbered to 0, 1, ... — this is normal
+# nvidia-container-toolkit behavior.
+
+name: paperfacts
+
+services:
+  # ---------------------------------------------------------------------------
+  # MinerU 3.4.5 (pipeline backend) -- first parser route, uses GPU 4, 5
+  # ---------------------------------------------------------------------------
+  # MinerU doesn't publish a ready-to-use prebuilt image (their official Dockerfile is based on
+  # vllm/vllm-openai:v0.21.0, a heavy CUDA 13.0 image with strict driver requirements), so we
+  # build our own here -- see deploy/mineru.Dockerfile.
+  #
+  # `mineru-router` is MinerU's built-in load-balancing entrypoint: it spins up one
+  # `mineru-api` worker process (actually `python -m mineru.cli.fast_api`) per GPU **visible
+  # inside the container**, then round-robins /file_parse requests across those workers.
+  # We expose only the host's GPUs 4 and 5 via device_ids, which become 0 and 1 inside the
+  # container, so `--local-gpus auto` starts exactly 2 workers, one per GPU.
+  # To pin them explicitly you can also write `--local-gpus 0,1` (note: **container-local**
+  # ids, not host ids).
+  mineru-router:
+    build:
+      # context is the repo root (..), so any repo file can be COPYed into the image later if
+      # needed; the current Dockerfile doesn't COPY anything, and the paired
+      # mineru.Dockerfile.dockerignore empties the build context so hundreds of MB of local
+      # corpus under template_files/ and data/ aren't sent to the docker daemon.
+      context: ..
+      dockerfile: deploy/mineru.Dockerfile
+      args:
+        # Empty by default = use the PyPI torch wheel with its bundled CUDA runtime.
+        # If the host driver is too old, set this in .env to something like
+        # https://download.pytorch.org/whl/cu126.
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-}
+    image: paperfacts-mineru:3.4.5
+    container_name: paperfacts-mineru-router
+    restart: unless-stopped
+    # entrypoint / command are kept separate: the image doesn't hardcode ENTRYPOINT, so every
+    # argument stays visible and editable here.
+    entrypoint: ["mineru-router"]
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8002"
+      - "--local-gpus"
+      - "auto"
+    environment:
+      # local = only read models already downloaded into the image; never touch the network.
+      # The image build already ran mineru-models-download and wrote the model root path into
+      # /root/mineru.json.
+      MINERU_MODEL_SOURCE: local
+    ports:
+      - "8002:8002"
+    # ipc: host -- torch DataLoader's multiprocess shared memory goes through /dev/shm; the
+    # default 64MB container shm makes workers randomly fail with
+    # "unable to write to file /torch_xxx".
+    ipc: host
+    ulimits:
+      memlock: -1        # unlimited locked memory, avoids CUDA pinned-memory allocation failures
+      stack: 67108864    # 64MB stack, needed by CUDA/OpenMP threads
+    volumes:
+      # Runtime cache (HuggingFace lock files, font cache, etc). Optional -- safe to delete.
+      # Note: models are **not** here -- they live at /opt/mineru/models inside the image,
+      # specifically so this volume can't shadow the weights already baked into the image.
+      - paperfacts-mineru-cache:/root/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # After the router comes up, both workers still need to load their layout/OCR/table
+      # models, so a cold start of a few minutes is normal.
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["4", "5"]
+              capabilities: ["gpu"]
+
+  # ---------------------------------------------------------------------------
+  # PaddleOCR-VL's VLM inference service -- uses GPU 6 (shares the card with paddleocr-vl-api)
+  # ---------------------------------------------------------------------------
+  # This container does exactly one thing: serve the 0.9B PaddleOCR-VL model behind an
+  # OpenAI-compatible interface via vLLM. An official prebuilt image exists (with model weights
+  # and the vLLM plugin baked in), so we use it directly instead of building our own.
+  #
+  # Port 8080 is exposed **only on the compose-internal network** and not published to the
+  # host -- only paddleocr-vl-api's 8080 is exposed externally, which avoids a port clash and
+  # keeps the raw VLM from being reachable from outside.
+  # Within the same compose network, paddleocr-vl-api reaches it by service name
+  # `paddleocr-vlm-server`.
+  paddleocr-vlm-server:
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND}-server:${VLM_IMAGE_TAG_SUFFIX}
+    container_name: paperfacts-paddleocr-vlm-server
+    restart: unless-stopped
+    # The official image requires root: the built-in models and vLLM compilation cache are
+    # written under root's home directory.
+    user: root
+    # vLLM's multiprocess/NCCL communication goes through /dev/shm; the default 64MB is nowhere
+    # near enough -- 64g is the value the official image recommends.
+    shm_size: 64g
+    # Override the image's default command to mount in our own vLLM args file (caps per-GPU
+    # memory usage). Flag names match `paddlex_genai_server --help`: --model_name / --host /
+    # --port / --backend / --backend_config.
+    command: >
+      /bin/bash -c "paddleocr genai_server
+      --model_name PaddleOCR-VL-1.6-0.9B
+      --host 0.0.0.0
+      --port 8080
+      --backend ${VLM_BACKEND}
+      --backend_config /home/paddleocr/vlm_server_config.yaml"
+    volumes:
+      # vLLM startup args. Caps gpu-memory-utilization at 0.5 by default, because GPU 6 also
+      # runs paddleocr-vl-api's layout detection model (PP-DocLayoutV2).
+      - ./vllm_config.yaml:/home/paddleocr/vlm_server_config.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      # First startup has to load the 0.9B weights and compile the CUDA graph; 300s is the
+      # official recommended value.
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["6"]
+              capabilities: ["gpu"]
+
+  # ---------------------------------------------------------------------------
+  # PaddleOCR-VL's pipeline / API layer -- second parser route, uses GPU 6 (shares the card with the VLM)
+  # ---------------------------------------------------------------------------
+  # This layer handles layout detection (PP-DocLayoutV2, small memory footprint), chunking, and
+  # scheduling; actual vision recognition is forwarded to paddleocr-vlm-server above.
+  # External interface:
+  #   POST /layout-parsing   GET /health
+  #
+  # Why it shares a GPU with the VLM: the layout detection model only needs 1-2GB, and the VLM
+  # is capped at 50% of GPU memory, so combined they still fit comfortably -- which leaves
+  # GPU 7 free.
+  #
+  # The image ships a built-in pipeline_config_vllm.yaml whose VLM server_url points at the
+  # service name `paddleocr-vlm-server` -- so that service above **must not be renamed**, or
+  # this layer won't be able to reach it. To check what the built-in config looks like:
+  #   docker compose run --rm --entrypoint cat paddleocr-vl-api /home/paddleocr/pipeline_config_vllm.yaml
+  paddleocr-vl-api:
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX}
+    container_name: paperfacts-paddleocr-vl-api
+    restart: unless-stopped
+    user: root
+    shm_size: 64g
+    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_${VLM_BACKEND}.yaml"
+    ports:
+      - "8080:8080"
+    depends_on:
+      # Must wait for the VLM service to be healthy first: pipeline initialization calls
+      # /v1/models to fetch the model name, and startup fails outright if the VLM isn't up yet.
+      paddleocr-vlm-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["6"]
+              capabilities: ["gpu"]
+
+  # ---------------------------------------------------------------------------
+  # GPU 7 is currently unused and not allocated to any service.
+  # ---------------------------------------------------------------------------
+
+volumes:
+  paperfacts-mineru-cache:
+    name: paperfacts-mineru-cache

@@ -1,0 +1,13 @@
+# Build-context ignore rules specific to deploy/mineru.Dockerfile.
+#
+# BuildKit looks for `<Dockerfile path>.dockerignore` first, falling back to the
+# `.dockerignore` at the build context root only if that's not found. Since compose sets the
+# context to the repo root (..), and this Dockerfile doesn't actually COPY any file, we ignore
+# everything outright here --
+# otherwise docker would package up template_files/ (hundreds of MB of copyrighted PDFs) and
+# data/ and ship them to the daemon for nothing, wasting several minutes.
+#
+# If a repo file ever genuinely needs to be COPYed into the image, add a negation rule here,
+# e.g.:
+#   !runners/mineru_runner.py
+*

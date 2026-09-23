@@ -1,0 +1,81 @@
+{
+  "parser": "mineru",
+  "parser_version": "3.4.5",
+  "backend": "pipeline",
+  "source": {
+    "pdf": "<sample.pdf>",
+    "sha256": "5c10f7a0128f15e06358cdfcb9fd2d36337fe35dafb670e31a00149274414fbd",
+    "page_count": 10,
+    "page_range": [
+      0,
+      1
+    ],
+    "parsed_page_count": 2
+  },
+  "pages": [
+    {
+      "index": 0,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 1,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 2,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 3,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 4,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 5,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 6,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 7,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 8,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    },
+    {
+      "index": 9,
+      "width_pt": 595.2760009765625,
+      "height_pt": 782.3619995117188
+    }
+  ],
+  "files": {
+    "content_list": "native/document/auto/document_content_list.json",
+    "middle_json": "native/document/auto/document_middle.json"
+  },
+  "runner": {
+    "script": "runners/mineru_runner.py",
+    "argv": [],
+    "python": "3.13.14",
+    "platform": "darwin",
+    "device_mode": null,
+    "model_source": "huggingface",
+    "started_at": "2026-09-09T08:58:14.111068+00:00",
+    "duration_s": 1053.59
+  }
+}

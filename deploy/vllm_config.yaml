@@ -1,0 +1,42 @@
+# Startup args for PaddleOCR-VL's VLM service (vLLM backend)
+#
+# This file is passed to `paddlex_genai_server --backend_config <this file>`:
+#   - Docker route: compose mounts it into the container at
+#     /home/paddleocr/vlm_server_config.yaml
+#   - Host route: deploy/host/start_paddle_vlm.sh uses this path in the repo directly
+#
+# Format (verified against the paddlex 3.7.2 source; see
+# paddlex/inference/genai/configs/utils.py):
+#   a flat key: value mapping, where `_` in each key is replaced with `-` and the result is
+#   passed straight through as vLLM command-line flags.
+#   In other words, the two lines below are equivalent to adding to vLLM:
+#       --gpu-memory-utilization 0.5 --max-num-seqs 64
+#   A boolean `true` becomes a flag with no value (e.g. `trust-remote-code: true` becomes
+#   `--trust-remote-code`).
+#
+# Values set here **override** paddlex's built-in defaults
+# (default is trust-remote-code / gpu-memory-utilization 0.5 / max-model-len 16384 /
+#   max-num-batched-tokens 131072 / api-server-count 4); any key not set here keeps its
+#   default.
+
+
+# Per-GPU memory cap (fraction of total GPU memory).
+#
+# Why 0.5: GPU 6 runs two things at once -- this VLM service, and paddleocr-vl-api's layout
+# detection model PP-DocLayoutV2. vLLM reserves the entire gpu-memory-utilization share as KV
+# cache up front, so without headroom the layout detection side would OOM. 0.5 gives vLLM
+# roughly 40GB on an 80GB card, which is plenty.
+#
+# On smaller cards (e.g. 24GB), if startup reports insufficient KV cache, raise this to
+# 0.6-0.7 and also lower max-model-len to 8192.
+gpu-memory-utilization: 0.5
+
+# Maximum number of concurrently decoded sequences.
+#
+# Why 64 (below vLLM's default of 256): PaddleOCR-VL recognizes one layout block at a time,
+# and a single paper page can break into dozens of blocks, so requests are inherently small
+# and numerous. Capping concurrency lower significantly reduces peak KV cache usage at a small
+# throughput cost -- the bottleneck is upstream PDF rendering and layout detection anyway.
+# If GPU 6 only runs this one service and you want to maximize throughput, raise this to 128
+# or 256.
+max-num-seqs: 64

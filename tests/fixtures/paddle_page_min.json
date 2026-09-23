@@ -1,0 +1,71 @@
+{
+  "res": {
+    "input_path": "pages/page_000.png",
+    "page_index": null,
+    "parsing_res_list": [
+      {
+        "block_id": 1,
+        "block_order": 0,
+        "block_label": "header",
+        "block_bbox": [100, 40, 1550, 90],
+        "block_content": "ACS Applied Materials & Interfaces"
+      },
+      {
+        "block_id": 0,
+        "block_order": 1,
+        "block_label": "doc_title",
+        "block_bbox": [200, 150, 1450, 260],
+        "block_content": "  Transparent conducting oxides for flexible electronics  "
+      },
+      {
+        "block_id": 2,
+        "block_order": 2,
+        "block_label": "text",
+        "block_bbox": [200, 300, 1450, 700],
+        "block_content": "We report ITO films deposited at 25 °C with a sheet resistance of 32 ohm/sq."
+      },
+      {
+        "block_id": 3,
+        "block_order": null,
+        "block_label": "footer",
+        "block_bbox": [760, 2250, 900, 2300],
+        "block_content": "1"
+      },
+      {
+        "block_id": 4,
+        "block_order": 3,
+        "block_label": "table",
+        "block_bbox": [180, 800, 1470, 1400],
+        "block_content": "<table><tr><td>ITO</td><td>32</td></tr></table>"
+      },
+      {
+        "block_id": 5,
+        "block_order": 4,
+        "block_label": "table_title",
+        "block_bbox": [180, 740, 1470, 795],
+        "block_content": "Table 1. Sheet resistance of the TCO films."
+      },
+      {
+        "block_id": 6,
+        "block_order": 5,
+        "block_label": "sparkle_label",
+        "block_bbox": [200, 1500, 1450, 1560],
+        "block_content": "label PP-DocLayoutV2 never documented"
+      },
+      {
+        "block_id": 7,
+        "block_order": 6,
+        "block_label": "text",
+        "block_bbox": [10, 10, 10, 10],
+        "block_content": "zero-area bbox, must be skipped"
+      },
+      {
+        "block_id": 8,
+        "block_order": 7,
+        "block_label": "text",
+        "block_bbox": [-20, 1600, 1700, 1700],
+        "block_content": "bbox overflows the rendered page on both sides"
+      }
+    ]
+  }
+}

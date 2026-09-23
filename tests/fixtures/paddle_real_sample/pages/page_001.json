@@ -1,0 +1,209 @@
+{
+ "page_index": null,
+ "page_count": null,
+ "width": 1654,
+ "height": 2174,
+ "model_settings": {
+  "use_doc_preprocessor": false,
+  "use_layout_detection": true,
+  "use_chart_recognition": false,
+  "use_seal_recognition": false,
+  "use_ocr_for_image_block": false,
+  "format_block_content": false,
+  "merge_layout_blocks": true,
+  "markdown_ignore_labels": [
+   "number",
+   "footnote",
+   "header",
+   "header_image",
+   "footer",
+   "footer_image",
+   "aside_text"
+  ],
+  "return_layout_polygon_points": true
+ },
+ "parsing_res_list": [
+  {
+   "block_label": "text",
+   "block_content": "concentration) were grown at 600°C using a radiofrequency (RF) plasma and presented a resistivity value of  $ 5.4 \\times 10^{-4} \\ \\Omega \\text{cm} $ [12]. For the growth of SnO₂:Ta at low temperatures between 25°C and 300°C, resistivities from  $ 4 \\times 10^{-3} $ to  $ 1 \\ \\Omega \\text{cm} $ were reported. These studies have been performed so far at typical research lab conditions (Table 1). The sample sizes were, in the majority of cases,  $ 1 \\ \\text{cm}^2 $. RF sputtering usually results in very good thin film properties, but has lower deposition rates than direct-current (DC) MS, is technically more challenging and expensive, requires higher voltages, and is sensitive to overheating. Therefore, the present study aims to develop an industry-adaptable thin film growth process for SnO₂:Ta. The transition step from research to industrial scale is crucial for any process implementation in a production line. As magnetron sputtering is a cost-effective, industrially scalable technique, an appropriate pilot-scale setup at Nano4Energy S.L. (Madrid, Spain) was used for the deposition of SnO₂:Ta at low temperature.",
+   "block_bbox": [
+    116,
+    89,
+    809,
+    639
+   ],
+   "block_id": 0,
+   "block_order": 1,
+   "group_id": 0
+  },
+  {
+   "block_label": "text",
+   "block_content": "X-ray diffraction and Raman spectroscopy were used to identify the phase structure evolution of a series of SnOₓ:Ta thin film samples grown as a function of the oxygen flow rate. A distinct resistivity minimum was established at optimized conditions for samples of the composition SnO₂:Ta (0.7 ± 0.05 at.% Ta). These films were then further characterized to build relationships between the deposition temperature, the phase and microstructure, and their electrical and optical properties.",
+   "block_bbox": [
+    118,
+    648,
+    809,
+    909
+   ],
+   "block_id": 1,
+   "block_order": 2,
+   "group_id": 1
+  },
+  {
+   "block_label": "paragraph_title",
+   "block_content": "2 | Experimental and theoretical methodology",
+   "block_bbox": [
+    117,
+    998,
+    753,
+    1032
+   ],
+   "block_id": 2,
+   "block_order": 3,
+   "group_id": 2
+  },
+  {
+   "block_label": "paragraph_title",
+   "block_content": "2.1 | Preparation of  $ SnO_{x} $: Ta Thin Films",
+   "block_bbox": [
+    117,
+    1046,
+    673,
+    1080
+   ],
+   "block_id": 3,
+   "block_order": 4,
+   "group_id": 3
+  },
+  {
+   "block_label": "text",
+   "block_content": "SnOₓ:Ta thin films were deposited by reactive DC–MS in a pilot-scale sputter chamber of the company Nano4Energy [23]. The system setup consists of two rectangular industrial-size magnetrons (40 × 10 cm, one equipped with a Sn target, the other with a Sn/Ta target 95:5 wt.%) connected to two hiP-V 10 kW power supplies, which can be operated in DC or high-power impulse magnetron sputtering mode. It comprises a motorized twofold rotating system in the middle of the chamber as substrate holder, a shutter for masking the samples and a pair of vertical radiative heaters. Typically, three substrates of fused silica (30 × 30 × 3 mm), Corning glass (same size), and silicon (10 × 10 × 1 mm) were simultaneously mounted onto the sample holder for the depositions. The centrally positioned oxygen inlets over the magnetrons ensure a homogeneous oxygen distribution in the plasma. Following a preoptimization with respect to oxygen flow rate and magnetrons’ powers, a systematic series of SnOₓ:Ta thin films was grown as a function of the oxygen flow rate at a deposition temperature of 225°C with a working pressure of 1.1 Pa Ar. For the choice of the deposition temperature, two arguments were considered. First, in order to grow crystalline films, the substrate temperature had to be higher than 60°C, which is a realistic temperature for sputter deposition without heating. Secondly, the temperature should represent a kind of mean value between that of the previous low-temperature studies of SnO₂:Ta thin films shown in (Table 1). The oxygen flow rate varied between 12 and 150 sccm, and was controlled using a mass flow controller operated with a GENCOA Speedflo system [24]. After presputtering for 15 min, typical sputter powers were 1000 W for both magnetrons, and the deposition rates were of the order of 1 μm/h. To ensure reproducibility, three depositions were carried under the finally established optimized conditions.",
+   "block_bbox": [
+    117,
+    1096,
+    810,
+    1584
+   ],
+   "block_id": 4,
+   "block_order": 5,
+   "group_id": 4
+  },
+  {
+   "block_label": "text",
+   "block_content": "",
+   "block_bbox": [
+    841,
+    89,
+    1535,
+    602
+   ],
+   "block_id": 5,
+   "block_order": 6,
+   "group_id": 4
+  },
+  {
+   "block_label": "paragraph_title",
+   "block_content": "2.2 | Characterization of  $ SnO_{x} $: Ta Thin Films",
+   "block_bbox": [
+    842,
+    683,
+    1459,
+    716
+   ],
+   "block_id": 6,
+   "block_order": 7,
+   "group_id": 6
+  },
+  {
+   "block_label": "text",
+   "block_content": "A combination of X-ray diffraction and Raman spectroscopy was used to analyze the films’ phase structure. Grazing incidence XRD measurements were performed on a Rigaku SmartLab diffractometer in the diffraction angle range  $ 15^\\circ \\leq 2\\theta \\leq 120^\\circ $ with  $ \\mathrm{Cu}-\\mathrm{K}_\\alpha $ radiation ( $ \\lambda_{\\alpha1} = 1.54059\\ \\mathrm{\\AA} $ and  $ \\lambda_{\\alpha2} = 1.54441\\ \\mathrm{\\AA} $ with the intensity ratio  $ \\mathrm{Cu}-\\mathrm{K}_{\\alpha2}/\\mathrm{Cu}-\\mathrm{K}_{\\alpha1} = 0.5 $). The diffractometer was equipped, on the incident side, with a parallel beam mirror, a Soller slit ( $ 2.5^\\circ $), an incident slit (1 mm), and a length-limiting slit (10 mm). The receiving side consisted of a parallel slit analyzer ( $ 0.5^\\circ $) and another Soller slit ( $ 2.5^\\circ $). The incidence angle was  $ 2^\\circ $, and the measurement was carried out with a step width of  $ 0.05^\\circ $ and a speed of  $ 1.00^\\circ/\\mathrm{min} $. The PDF cards 00-004-0673, 04-008-7671, and 00-041-1445 for  $ \\beta $-Sn, SnO, and  $ \\mathrm{SnO}_2 $, respectively, from the PDF-5+ database were used as references for the identification of structural phases in the studied sample series [25].",
+   "block_bbox": [
+    839,
+    734,
+    1535,
+    1216
+   ],
+   "block_id": 7,
+   "block_order": 8,
+   "group_id": 7
+  },
+  {
+   "block_label": "text",
+   "block_content": "The size of the crystallites (D) in the phase-pure  $ SnO_{2} $:Ta thin films was calculated using two methods: the Scherrer equation itself and the Williamson–Hall (WH) plot. The direct use of the Scherrer equation presupposes a strain-free state. With Lorentzian broadening of the diffraction peak, its full width at half maximum (FWHM)  $ \\beta_{exp} $ is then the sum of size broadening  $ \\beta_{size} $ and instrumental broadening  $ \\beta_{instr} $, or  $ \\beta_{size} = \\beta_{exp} - \\beta_{instr} $. D is then linked to  $ \\beta_{size} $ in the Scherrer equation [26–29]. The latter is based on the Scherrer constant  $ K_{S} = 0.9 $ for crystallites without a defined shape, the (average) X-ray wavelength  $ \\lambda = 0.15419 $ nm, and the Bragg angle  $ \\theta $",
+   "block_bbox": [
+    841,
+    1224,
+    1535,
+    1585
+   ],
+   "block_id": 8,
+   "block_order": 9,
+   "group_id": 8
+  },
+  {
+   "block_label": "figure_title",
+   "block_content": "TABLE 1 | Deposition parameters and resistivities of  $ SnO_{2} $:Ta thin films grown at low temperature in previous studies.",
+   "block_bbox": [
+    117,
+    1645,
+    1298,
+    1674
+   ],
+   "block_id": 9,
+   "block_order": null,
+   "group_id": 9
+  },
+  {
+   "block_label": "table",
+   "block_content": "<table><tr><td>$ \\theta/°C $</td><td>Technique</td><td>Sample size/ $ cm^{{2}} $</td><td>$ \\rho/\\Omega $ cm</td><td>Reference</td></tr><tr><td>200</td><td>RF-MS of  $ SnO_{{2}} $:Ta target (1 at. % Ta)</td><td>?</td><td>0.01</td><td>Yamada et al. [18]</td></tr><tr><td>200</td><td>pulsed-MS of SnTa targets</td><td>$ 1 \\times 1 $</td><td>$ 6.4 \\times 10^{{-3}} $</td><td>Muto et al. [19]</td></tr><tr><td>300</td><td>RF-MS, ceramic targets</td><td>$ 1 \\times 1 $</td><td>1</td><td>Weidner et al. [12, 20]</td></tr><tr><td>150</td><td>RF-MS,  $ SnO_{{2}} $ +  $ Ta_{{2}}O_{{5}} $ targets</td><td>$ 5 \\times 5 $</td><td>0.05</td><td>Featherstone et al. [21]</td></tr><tr><td>25</td><td>reactive MS, ceramic  $ SnO_{{2}} $:Ta target</td><td>$ 1 \\times 1 $</td><td>$ 4 \\times 10^{{-3}} $</td><td>Mientus et al. [22].</td></tr><tr><td>225</td><td>reactive DC-MS; Sn + SnTa targets</td><td>$ 2 \\times (3 \\times 3) + $\\n $ 1 \\times (1 \\times 1) $ in one batch</td><td>0.3</td><td>This work</td></tr></table>",
+   "block_bbox": [
+    126,
+    1681,
+    1525,
+    2018
+   ],
+   "block_id": 10,
+   "block_order": null,
+   "group_id": 10
+  },
+  {
+   "block_label": "number",
+   "block_content": "2 of 10",
+   "block_bbox": [
+    121,
+    2081,
+    206,
+    2109
+   ],
+   "block_id": 11,
+   "block_order": null,
+   "group_id": 11
+  },
+  {
+   "block_label": "footer",
+   "block_content": "physica status solidi (b), 2026",
+   "block_bbox": [
+    1264,
+    2082,
+    1531,
+    2111
+   ],
+   "block_id": 12,
+   "block_order": null,
+   "group_id": 12
+  },
+  {
+   "block_label": "aside_text",
+   "block_content": "15213951, 2026, 3, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/pssb.202500625, Wiley Online Library on [07/09/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License",
+   "block_bbox": [
+    1601,
+    41,
+    1626,
+    2131
+   ],
+   "block_id": 13,
+   "block_order": null,
+   "group_id": 13
+  }
+ ]
+}
