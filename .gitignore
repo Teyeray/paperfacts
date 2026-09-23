@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# macOS
+.DS_Store
+
+# Local literature corpus (copyrighted publisher PDFs, >100 MB) — keep out of git
+template_files/
+data/
+output/
+
+
+# Claude Code / oh-my-claudecode local state
+.omc/
+.claude/settings.local.json
+.claude/**/.omc/
+
+# Secrets
+.env
+.env.*
+
+# deploy/.env.example is a template with no secrets and must be committed; the .env.* rule above
+# would otherwise exclude it.
+!.env.example
+!deploy/.env.example
+
+# Test and lint artifacts
+.coverage*
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
+# API key files: local only, never committed. The code reads PAPERFACTS_LLM_API_KEY,
+# DEEPSEEK_API_KEY, or one of these files.
+deepseek_api_key
+*_api_key
+*.key
