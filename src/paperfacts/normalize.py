@@ -38,6 +38,8 @@ _REPLACEMENTS = {
     "×": "x",  # multiplication sign
     "⋅": ".",  # dot operator U+22C5
     "·": ".",  # middle dot U+00B7
+    "•": ".",  # bullet U+2022, read off a chart axis as "Ω•cm"
+    "∙": ".",  # bullet operator U+2219
     "’": "'",
     "∼": "~",  # tilde operator U+223C, what papers actually print for "approximately"
 }
