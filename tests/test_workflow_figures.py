@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import paperfacts.workflow as workflow
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, LlmError
 from paperfacts.figures import FigureReadings
@@ -261,3 +262,31 @@ def test_an_unreadable_panel_is_asked_again_next_run_past_the_cache(document: Do
     assert first.panels[0].status == "unreadable"
     assert [call.refresh for call in retry.calls] == [True]
     assert second.complete and second.readings
+
+
+def test_a_page_is_rendered_once_for_all_its_panels(monkeypatch, document: DocumentInput, settings: Settings):
+    blocks = [
+        make_block(page=0, order=i, type="figure", content="x.jpg", bbox=BOX, document_id=document.document_id)
+        for i in range(3)
+    ]
+    caption = "Fig. 1 Sheet resistance."
+    blocks.append(make_block(page=0, order=3, type="caption", content=caption, document_id=document.document_id))
+    ParsedArtifact(
+        document_id=document.document_id,
+        backend="mineru",
+        backend_version="x",
+        pages=(PageGeometry(index=0, width_pt=595, height_pt=842),),
+        blocks=tuple(blocks),
+    ).write(DataLayout(settings.data_root).artifact_path(document.document_id, "mineru"))
+    renders: list[int] = []
+    real = workflow.render_page
+
+    def counting(path, page, *, dpi):
+        renders.append(page)
+        return real(path, page, dpi=dpi)
+
+    monkeypatch.setattr(workflow, "render_page", counting)
+
+    readings = read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+
+    assert len(readings.panels) == 3 and renders == [0]

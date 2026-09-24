@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from paperfacts.models import NormalizedBBox
-from paperfacts.pdf import PDF_POINTS_PER_INCH, png_bytes, read_geometry, render_page, render_region
+from paperfacts.pdf import PDF_POINTS_PER_INCH, crop_region, png_bytes, read_geometry, render_page, render_region
 from support.factories import PAGE_SIZES_PT, make_blank_pdf
 
 
@@ -198,3 +198,24 @@ def test_render_region_shrinks_a_crop_over_the_pixel_bound_keeping_its_shape(two
 
 def test_png_bytes_is_a_png(two_page_pdf: Path):
     assert png_bytes(render_page(two_page_pdf, 0, dpi=36)).startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        NormalizedBBox(x1=0.9999, y1=0.9999, x2=1.0, y2=1.0),
+        NormalizedBBox(x1=0.0, y1=0.0, x2=0.0001, y2=0.0001),
+        NormalizedBBox(x1=0.5, y1=0.9995, x2=0.6, y2=1.0),
+    ],
+)
+def test_a_box_at_the_page_edge_or_thinner_than_a_pixel_still_yields_an_image(two_page_pdf: Path, bbox):
+    crop = render_region(two_page_pdf, 0, bbox, dpi=36)
+
+    assert crop.width >= 1 and crop.height >= 1
+
+
+def test_crop_region_matches_render_region(two_page_pdf: Path):
+    bbox = NormalizedBBox(x1=0.2, y1=0.2, x2=0.7, y2=0.6)
+    page = render_page(two_page_pdf, 1, dpi=72)
+
+    assert crop_region(page, bbox).size == render_region(two_page_pdf, 1, bbox, dpi=72).size

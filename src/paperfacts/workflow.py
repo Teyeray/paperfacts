@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from PIL import Image
+
 from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
@@ -33,7 +35,7 @@ from paperfacts.matching import match_samples
 from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
-from paperfacts.pdf import png_bytes, read_geometry, render_region
+from paperfacts.pdf import crop_region, png_bytes, read_geometry, render_page
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity
 
@@ -392,11 +394,14 @@ def read_document_figures(
     if not document.pdf_path.is_file():
         raise FileNotFoundError("PDF not available; figure reading crops the charts from it, re-upload to read them")
 
+    # Panels of one figure share a page; rendering it once per page rather than once per panel saves a
+    # 200-dpi render (and a turn at the PDFium lock) for every panel after the first.
+    pages: dict[int, Image.Image] = {}
+
     def render(page: int, bbox: NormalizedBBox) -> bytes:
-        crop = render_region(
-            document.pdf_path, page, bbox, dpi=settings.figures_dpi, max_pixels=settings.figures_max_pixels
-        )
-        return png_bytes(crop)
+        if page not in pages:
+            pages[page] = render_page(document.pdf_path, page, dpi=settings.figures_dpi)
+        return png_bytes(crop_region(pages[page], bbox, max_pixels=settings.figures_max_pixels))
 
     previous = None if force else _stored_file(path)
     readings = read_figures(
