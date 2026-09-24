@@ -877,3 +877,10 @@ def test_a_string_where_the_figures_switch_belongs_names_the_key(tmp_path: Path)
 
     with pytest.raises(ConfigError, match=r"figures\.enabled must be bool"):
         Settings.from_env(env_for(path))
+
+
+def test_a_figures_timeout_of_zero_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"figures.timeout_s": 0})
+
+    with pytest.raises(ConfigError, match=r"figures\.timeout_s must be positive"):
+        Settings.from_env(env_for(path))

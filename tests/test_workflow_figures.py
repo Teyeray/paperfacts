@@ -213,3 +213,39 @@ def test_switched_off_the_stage_asks_nothing_but_stored_readings_still_reach_the
     assert client.calls == []
     assert len(result.dataset.figure_rows) == 2
     assert stored_figures(document.document_id, off) is not None
+
+
+def test_a_corrupt_stored_file_is_read_again(document: DocumentInput, settings: Settings):
+    store_artifact(document, settings)
+    path = figures_file(document, settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ torn", encoding="utf-8")
+    client = FakeVisionClient(chart_answer())
+
+    readings = read_document_figures(document, settings, client)
+
+    assert len(client.calls) == 1 and readings.readings
+
+
+def test_readings_of_another_parse_are_read_again(document: DocumentInput, settings: Settings):
+    # Read from PaddleOCR-VL's boxes first; once a MinerU parse exists, those citations belong to no block
+    # of the artifact the readings would be shown with.
+    store_artifact(document, settings, backend="paddleocr_vl")
+    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    store_artifact(document, settings, backend="mineru")
+    client = FakeVisionClient(chart_answer())
+
+    readings = read_document_figures(document, settings, client)
+
+    assert len(client.calls) == 1
+    assert readings.backend == "mineru" and {r.source_id for r in readings.readings} == {"mineru_p0_b0"}
+
+
+def test_the_stored_file_is_named_after_what_the_client_actually_sends(document: DocumentInput, settings: Settings):
+    store_artifact(document, settings)
+
+    read_document_figures(document, settings, FakeVisionClient(chart_answer(), temperature=0.5))
+
+    expected = figure_key_for(settings, "fake-vl", temperature=0.5)
+    assert DataLayout(settings.data_root).figures_path(document.document_id, expected).is_file()
+    assert not figures_file(document, settings).is_file()

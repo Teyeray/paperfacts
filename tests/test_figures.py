@@ -173,7 +173,7 @@ def test_a_double_slash_inside_a_string_is_not_a_comment():
 
 
 def test_an_answer_without_an_object_is_refused():
-    with pytest.raises(ValueError, match="no JSON object"):
+    with pytest.raises(ValueError, match="no chart answer"):
         parse_answer("I cannot read this chart.")
 
 
@@ -373,3 +373,89 @@ def test_the_figure_key_moves_when_a_film_field_keyword_changes(monkeypatch):
 def test_the_figure_key_reads_its_settings():
     assert figure_key_for(Settings()) == key()
     assert figure_key_for(Settings(figures_dpi=100)) == key(dpi=100)
+
+
+# ---- Answers that must not be cached as something they are not -------------------------------------------
+
+
+def test_a_nan_reading_is_refused_rather_than_stored_as_null():
+    with pytest.raises(ValueError, match="no chart answer"):
+        parse_answer('{"chart_type": "property_vs_condition", "points": [{"y": NaN}]}')
+
+
+def test_a_broken_outer_object_is_unreadable_not_an_inner_object_read_as_a_refusal():
+    reply = '{"chart_type": "property_vs_condition", "x_axis": {"quantity": "P"}, "points": [oops]}'
+
+    with pytest.raises(ValueError, match="no chart answer"):
+        parse_answer(reply)
+    assert run(artifact(*SELECTED), FakeVisionClient(reply)).panels[0].status == "unreadable"
+
+
+def test_a_trailing_comma_is_dropped_but_a_comma_inside_a_string_is_kept():
+    answer = parse_answer('{"chart": false, "reason": "a, ]",}')
+
+    assert answer == {"chart": False, "reason": "a, ]"}
+
+
+def test_a_variant_spelling_of_the_chart_type_is_still_a_chart():
+    answer = chart_answer()
+    answer["chart_type"] = "property-vs-condition"
+
+    result = run(artifact(*SELECTED), FakeVisionClient(answer))
+
+    assert result.panels[0].status == "read" and len(result.readings) == 2
+
+
+def test_a_null_in_an_axis_or_series_does_not_cost_the_axis():
+    answer = chart_answer()
+    answer["y_axes"][0]["scale"] = None
+    answer["series"][0]["marker"] = None
+
+    readings = run(artifact(*SELECTED), FakeVisionClient(answer)).readings
+
+    assert len(readings) == 2 and {r.scale for r in readings} == {"linear"}
+
+
+def test_a_crop_or_client_failure_other_than_an_llm_error_is_one_panel_error():
+    blocks = [fig(0, 0), fig(0, 1), cap(0, 2, "Fig. 3 Sheet resistance")]
+
+    def render(page, bbox):
+        raise OSError("disk gone")
+
+    client = FakeVisionClient(chart_answer())
+    cropped = read_figures(artifact(*blocks), render, client, figure_key="k", max_per_document=12)
+
+    def responder(user, image):
+        raise RuntimeError("socket closed")
+
+    asked = run(artifact(*blocks), FakeVisionClient(responder))
+
+    assert [p.status for p in cropped.panels] == ["error", "error"] and "disk gone" in cropped.panels[0].detail
+    assert [p.status for p in asked.panels] == ["error", "error"] and not asked.complete
+
+
+# ---- MinerU's own block order ------------------------------------------------------------------------------
+
+
+def test_a_figure_caption_attached_to_the_first_panel_still_covers_the_later_panels():
+    # MinerU hangs "Fig. N" under whichever image it was attached to, which may be the first of three.
+    groups = figure_groups(
+        [
+            fig(0, 0),
+            cap(0, 1, "Fig. 6 (a) Sheet resistance, (b) resistivity, (c) mobility."),
+            fig(0, 2),
+            cap(0, 3, "(b)"),
+            fig(0, 4),
+            text(0, 5),
+        ]
+    )
+
+    assert len(groups) == 1
+    assert [block.order for block in groups[0].panels] == [0, 2, 4]
+    assert groups[0].label == "Fig. 6"
+
+
+def test_an_uncaptioned_run_after_prose_is_not_merged_into_the_previous_figure():
+    groups = figure_groups([fig(0, 0), cap(0, 1, "Fig. 1 Sheet resistance."), text(0, 2), fig(0, 3)])
+
+    assert [(g.label, len(g.panels)) for g in groups] == [("Fig. 1", 1), (None, 1)]

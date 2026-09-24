@@ -381,14 +381,14 @@ def read_document_figures(
     cache for free, and only the failed ones cost a request. ``force`` re-asks every panel.
     """
     layout = DataLayout(settings.data_root)
-    key = figure_key_for(settings, client.model)
+    key = figure_key_for(settings, client.model, temperature=client.temperature, max_tokens=client.max_tokens)
     path = layout.figures_path(document.document_id, key)
-    if not force and path.is_file():
-        stored = FigureReadings.read(path)
-        if stored.complete:
+    artifact = _figure_artifact(document, settings)
+    if not force:
+        stored = _usable(path, artifact)
+        if stored is not None:
             logger.info("figures cache_hit doc=%s", document.document_id[:16])
             return stored
-    artifact = _figure_artifact(document, settings)
     if not document.pdf_path.is_file():
         raise FileNotFoundError("PDF not available; figure reading crops the charts from it, re-upload to read them")
 
@@ -409,6 +409,27 @@ def read_document_figures(
     )
     readings.write(path)
     return readings
+
+
+def _usable(path: Path, artifact: ParsedArtifact) -> FigureReadings | None:
+    """The stored readings, when they are complete and still cite blocks of the parse they would be shown
+    with. A re-parse, or a MinerU parse arriving after the paper was read from PaddleOCR-VL's boxes, leaves
+    readings behind whose citations point at blocks that are no longer there; those are read again, which
+    costs nothing for an unchanged crop because the vision cache is keyed by the image."""
+    if not path.is_file():
+        return None
+    try:
+        stored = FigureReadings.read(path)
+    except (OSError, ValueError) as exc:
+        logger.warning("stored figure readings at %s are unreadable (%s); reading the charts again", path, exc)
+        return None
+    boxes = {block.source_id: block.bbox for block in artifact.blocks if block.type == "figure"}
+    current = (
+        stored.backend == artifact.backend
+        and all(panel.source_id in boxes for panel in stored.panels)
+        and all(boxes.get(reading.source_id) == reading.bbox for reading in stored.readings)
+    )
+    return stored if stored.complete and current else None
 
 
 def _figures_detail(readings: FigureReadings) -> str:

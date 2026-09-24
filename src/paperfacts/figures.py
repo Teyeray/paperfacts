@@ -27,6 +27,7 @@ tuned. This module's source is hashed into ``figure_key`` instead.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -38,7 +39,6 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from paperfacts.errors import LlmError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.llm import VisionClient
 from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
@@ -245,24 +245,38 @@ def figure_groups(blocks: Sequence[SourceBlock]) -> tuple[FigureGroup, ...]:
     it; that caption belongs to the panels before it. A "Fig. N" caption that arrives before any panel (a
     caption placed above its figure) opens the group instead, and the next one closes it. Anything else on
     the page -- except a short panel label like "(b)" -- ends the run, and so does a page break.
+
+    MinerU hangs every caption under the image it was attached to, so "Fig. N" may follow the *first* panel
+    and the remaining panels arrive after it with only "(b)"-style captions. A run with no figure caption
+    that directly follows a closed figure on the same page, with nothing but figures and captions between
+    them, is therefore the rest of that figure and joins it.
     """
     groups: list[FigureGroup] = []
     panels: list[SourceBlock] = []
     captions: list[SourceBlock] = []
     whole: SourceBlock | None = None
     page: int | None = None
+    # Whether the last group was closed by its own caption with nothing after it yet but figure blocks.
+    continues_last = False
 
-    def close() -> None:
-        nonlocal panels, captions, whole
-        if panels:
+    def close(*, by_caption: bool = False) -> None:
+        nonlocal panels, captions, whole, continues_last
+        if panels and whole is None and continues_last and groups and groups[-1].page == panels[0].page:
+            last = groups[-1]
+            groups[-1] = dataclasses.replace(
+                last, panels=last.panels + tuple(panels), captions=last.captions + tuple(captions)
+            )
+        elif panels:
             groups.append(
                 FigureGroup(page=panels[0].page, panels=tuple(panels), captions=tuple(captions), figure_caption=whole)
             )
+        continues_last = by_caption
         panels, captions, whole = [], [], None
 
     for block in blocks:
         if block.page != page:
             close()
+            continues_last = False
             page = block.page
         if block.type == "figure":
             panels.append(block)
@@ -273,11 +287,12 @@ def figure_groups(blocks: Sequence[SourceBlock]) -> tuple[FigureGroup, ...]:
             captions.append(block)
             whole = block
             if below_its_panels:
-                close()
+                close(by_caption=True)
         elif block.type == "caption":
             captions.append(block)
         elif not _is_panel_label(block):
             close()
+            continues_last = False
     close()
     return tuple(groups)
 
@@ -319,11 +334,11 @@ def user_prompt(caption: str, fields: Sequence[FieldSpec]) -> str:
 
 _FENCE = re.compile(r"```[a-zA-Z]*")
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
-_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
 
 def _strip_comments(text: str) -> str:
-    """Remove ``//`` and ``/* */`` comments outside strings; qwen3-vl-plus put ``//`` notes in its JSON."""
+    """Remove ``//`` and ``/* */`` comments and trailing commas outside strings; qwen3-vl-plus put ``//``
+    notes in its JSON."""
     out: list[str] = []
     index, in_string = 0, False
     while index < len(text):
@@ -346,6 +361,8 @@ def _strip_comments(text: str) -> str:
             end = text.find("*/", index + 2)
             index = len(text) if end == -1 else end + 2
             continue
+        elif char in "}]" and (trimmed := "".join(out).rstrip()).endswith(","):
+            out = [trimmed[:-1], char]
         else:
             out.append(char)
         index += 1
@@ -356,11 +373,13 @@ def parse_answer(text: str) -> dict[str, Any]:
     """The first JSON object in the reply, read leniently.
 
     No JSON mode is requested (not every vision endpoint accepts it), so the reply may come fenced, with
-    reasoning before it, with comments inside it or with a trailing comma. Anything that still is not an
-    object is a :class:`ValueError`.
+    reasoning before it, with comments inside it or with a trailing comma. Only an object that says what it
+    is (``chart_type`` or ``chart``) counts: when the outer object is broken, the first inner one that parses
+    is an axis or a point, and reading that as the answer would file a real chart as refused, for good.
+    ``NaN`` and ``Infinity`` are refused too; they would be stored as ``null`` and break the file.
     """
-    cleaned = _TRAILING_COMMA.sub(r"\1", _strip_comments(_FENCE.sub("", _THINK.sub("", text))))
-    decoder = json.JSONDecoder()
+    cleaned = _strip_comments(_FENCE.sub("", _THINK.sub("", text)))
+    decoder = json.JSONDecoder(parse_constant=_no_constant)
     start = cleaned.find("{")
     while start != -1:
         try:
@@ -368,20 +387,25 @@ def parse_answer(text: str) -> dict[str, Any]:
         except ValueError:
             start = cleaned.find("{", start + 1)
             continue
-        if isinstance(value, dict):
+        if isinstance(value, dict) and ("chart_type" in value or "chart" in value):
             return value
         start = cleaned.find("{", start + 1)
-    raise ValueError(f"no JSON object in the answer: {text[:200]!r}")
+    raise ValueError(f"no chart answer in the reply: {text[:200]!r}")
+
+
+def _no_constant(name: str) -> float:
+    raise ValueError(f"{name} is not a reading")
 
 
 class _Axis(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
-    id: str = "left"
+    # Everything optional: a null in one key must not cost the whole axis.
+    id: str | None = None
     field: str | None = None
     quantity: str | None = None
     unit: str | None = None
-    scale: str = "linear"
+    scale: str | None = None
     broken: bool | None = None
 
 
@@ -396,7 +420,7 @@ class _XAxis(BaseModel):
 class _Series(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
-    label: str = ""
+    label: str | None = None
     y_axis: str | None = None
 
 
@@ -406,16 +430,21 @@ class _Point(BaseModel):
     series: str | None = None
     x: float | str | None = None
     x_on_tick: bool | None = None
-    y: float
-    y_error: float | None = None
+    y: float = Field(allow_inf_nan=False)
+    y_error: float | None = Field(default=None, allow_inf_nan=False)
     confidence: float | None = None
 
 
 def is_refusal(answer: dict[str, Any]) -> bool:
-    """The tested refusal is ``chart_type: not_property_vs_condition``; ``{"chart": false}`` is accepted too."""
+    """The tested refusal is ``chart_type: not_property_vs_condition``; ``{"chart": false}`` is accepted too.
+
+    Only an explicit refusal counts: a variant spelling of the chart type ("property-vs-condition") on an
+    answer that carries points is still a chart, and refusing it would be cached for good.
+    """
     if answer.get("chart") is False:
         return True
-    return answer.get("chart_type") != "property_vs_condition"
+    kind = re.sub(r"[^a-z]", "", str(answer.get("chart_type") or "").lower())
+    return kind.startswith("not") or (kind != "propertyvscondition" and not answer.get("points"))
 
 
 def _items[M: BaseModel](answer: dict[str, Any], key: str, model: type[M]) -> list[M]:
@@ -450,8 +479,8 @@ def precision_for(scale: str, series_count: int) -> float:
 def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple[FigureReading, ...]:
     """Turn a chart answer into readings: only for the fields asked about, y converted, precision labelled."""
     specs = {spec.name.lower(): spec for spec in request.fields}
-    axes = {axis.id: axis for axis in _items(answer, "y_axes", _Axis)}
-    series = {entry.label: entry for entry in _items(answer, "series", _Series)}
+    axes = {axis.id or "left": axis for axis in _items(answer, "y_axes", _Axis)}
+    series = {entry.label or "": entry for entry in _items(answer, "series", _Series)}
     points = _items(answer, "points", _Point)
     try:
         x_axis = _XAxis.model_validate(answer.get("x_axis") or {})
@@ -496,8 +525,8 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
                 y_error_raw=point.y_error,
                 y=value,
                 unit=unit if value is not None else None,
-                scale="log" if axis.scale.lower().startswith("log") else "linear",
-                precision=precision_for(axis.scale, series_count),
+                scale="log" if (axis.scale or "").lower().startswith("log") else "linear",
+                precision=precision_for(axis.scale or "linear", series_count),
                 confidence=point.confidence,
                 note="; ".join(notes) or None,
             )
@@ -512,7 +541,7 @@ CropRenderer = Callable[[int, NormalizedBBox], bytes]
 
 
 def _read_panel(
-    request: PanelRequest, image: bytes, client: VisionClient, *, refresh: bool
+    request: PanelRequest, image: bytes | Exception, client: VisionClient, *, refresh: bool
 ) -> tuple[FigurePanel, tuple[FigureReading, ...]]:
     block, group = request.block, request.group
     base = {
@@ -522,13 +551,15 @@ def _read_panel(
         "caption": group.caption,
         "fields": tuple(spec.name for spec in request.fields),
     }
+    if isinstance(image, Exception):
+        return FigurePanel(**base, status="error", detail=f"crop failed: {image}"[:500]), ()
     try:
         result = client.complete_vision(
             system=SYSTEM_PROMPT, user=user_prompt(group.caption, request.fields), image_png=image, refresh=refresh
         )
-    except LlmError as exc:
+    except Exception as exc:  # any failure is this panel's alone; LlmError is the usual one
         logger.warning("figure %s: the vision request failed: %s", block.source_id, exc)
-        return FigurePanel(**base, status="error", detail=str(exc)[:500]), ()
+        return FigurePanel(**base, status="error", detail=f"{type(exc).__name__}: {exc}"[:500]), ()
     try:
         answer = parse_answer(result.text)
     except ValueError as exc:
@@ -536,8 +567,20 @@ def _read_panel(
     if is_refusal(answer):
         reason = str(answer.get("reason") or "not a property-vs-condition chart")
         return FigurePanel(**base, status="not_chart", detail=reason[:500], usage=result.usage), ()
-    readings = readings_from_answer(answer, request)
+    try:
+        readings = readings_from_answer(answer, request)
+    except (ValueError, TypeError) as exc:
+        return FigurePanel(**base, status="unreadable", detail=str(exc)[:500], usage=result.usage), ()
     return FigurePanel(**base, status="read", readings=len(readings), usage=result.usage), readings
+
+
+def _crop(render: CropRenderer, request: PanelRequest) -> bytes | Exception:
+    """The panel's PNG, or the error that stopped it: one bad box must not cost the other panels."""
+    try:
+        return render(request.block.page, request.block.bbox)
+    except Exception as exc:
+        logger.warning("figure %s: the crop failed: %s", request.block.source_id, exc)
+        return exc
 
 
 def read_figures(
@@ -556,13 +599,13 @@ def read_figures(
     anyway; the requests then overlap, ``concurrency`` at a time, since each spends a minute waiting.
     """
     requests = select_panels(artifact.blocks, limit=max_per_document)
-    images = [render(request.block.page, request.block.bbox) for request in requests]
+    images = [_crop(render, request) for request in requests]
     with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
-        results = list(
-            pool.map(
-                lambda pair: _read_panel(pair[0], pair[1], client, refresh=refresh), zip(requests, images, strict=True)
-            )
-        )
+        futures = [
+            pool.submit(_read_panel, request, image, client, refresh=refresh)
+            for request, image in zip(requests, images, strict=True)
+        ]
+        results = [future.result() for future in futures]
     usage: dict[str, int] = {}
     for panel, _ in results:
         for key, value in panel.usage.items():

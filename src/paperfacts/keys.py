@@ -294,10 +294,20 @@ def figure_key(
     return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
 
 
-def figure_key_for(settings: Settings, model: str | None = None) -> str:
-    """The key a figures run with these settings writes, so the reader and the writer cannot disagree."""
+def figure_key_for(
+    settings: Settings,
+    model: str | None = None,
+    *,
+    temperature: float = figures.TEMPERATURE,
+    max_tokens: int = figures.MAX_TOKENS,
+) -> str:
+    """The key a figures run with these settings writes, so the reader and the writer cannot disagree. The
+    writer passes its client's model and sampling, which is what was actually asked; a reader without a
+    client gets the values the stage's own client is built with."""
     return figure_key(
         model or settings.figures_model,
+        temperature=temperature,
+        max_tokens=max_tokens,
         dpi=settings.figures_dpi,
         max_pixels=settings.figures_max_pixels,
         max_per_document=settings.figures_max_per_document,

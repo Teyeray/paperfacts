@@ -389,7 +389,9 @@ class Settings:
                 "figures.max_pixels",
                 file.path,
             ),
-            figures_timeout_s=number("FIGURES_TIMEOUT_S", file.get("figures.timeout_s", float), float),
+            figures_timeout_s=_positive_seconds(
+                number("FIGURES_TIMEOUT_S", file.get("figures.timeout_s", float), float), "figures.timeout_s", file.path
+            ),
         )
 
     def require_llm_api_key(self) -> str:
@@ -414,6 +416,15 @@ def _positive(value: int, dotted: str, source: Path) -> int:
     if value < 1:
         raise ConfigError(
             f"{dotted} must be at least 1, got {value} (set in {source} or the matching {ENV_PREFIX} variable)"
+        )
+    return value
+
+
+def _positive_seconds(value: float, dotted: str, source: Path) -> float:
+    """A timeout of zero makes every request fail at once, which reads as a broken endpoint, not a setting."""
+    if value <= 0:
+        raise ConfigError(
+            f"{dotted} must be positive, got {value} (set in {source} or the matching {ENV_PREFIX} variable)"
         )
     return value
 
