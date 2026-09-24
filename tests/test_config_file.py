@@ -685,3 +685,111 @@ def test_a_non_integer_concurrency_still_names_the_key(tmp_path: Path):
 
     with pytest.raises(ConfigError, match=r"llm\.concurrency must be int"):
         Settings.from_env(env_for(path))
+
+
+# ---- valid_range -------------------------------------------------------------------------
+
+RANGED_FIELD: dict[str, Any] = MINIMAL_FIELD | {"canonical_unit": "nm"}
+
+
+def test_a_field_without_a_range_accepts_every_value():
+    spec = load_field_specs(document({"fields": [RANGED_FIELD]}))[0]
+
+    assert spec.valid_range == (None, None)
+    assert spec.describe_range() is None
+    assert spec.in_range(1e9)
+
+
+@pytest.mark.parametrize(
+    ("bounds", "described", "inside", "outside"),
+    [
+        pytest.param({"max": 500}, "at most 500 nm", 500.0, 501.0, id="ceiling"),
+        pytest.param({"min": 60}, "at least 60 nm", 60.0, 59.9, id="floor"),
+        pytest.param({"min": 1, "max": 2.5}, "between 1 and 2.5 nm", 2.0, 3.0, id="both"),
+    ],
+)
+def test_a_range_is_read_in_the_canonical_unit_with_either_end_open(bounds, described, inside, outside):
+    spec = load_field_specs(document({"fields": [RANGED_FIELD | {"valid_range": bounds}]}))[0]
+
+    assert spec.describe_range() == described
+    assert spec.in_range(inside)
+    assert not spec.in_range(outside)
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        pytest.param(RANGED_FIELD | {"valid_range": [0, 500]}, "object", id="not-an-object"),
+        pytest.param(RANGED_FIELD | {"valid_range": {"maximum": 500}}, "object", id="unknown-bound"),
+        pytest.param(RANGED_FIELD | {"valid_range": {}}, "at least one", id="empty"),
+        pytest.param(RANGED_FIELD | {"valid_range": {"max": "500"}}, "valid_range.max", id="bound-as-text"),
+        pytest.param(RANGED_FIELD | {"valid_range": {"max": True}}, "valid_range.max", id="bound-as-boolean"),
+        pytest.param(RANGED_FIELD | {"valid_range": {"min": 5, "max": 5}}, "below", id="empty-interval"),
+        pytest.param(MINIMAL_FIELD | {"valid_range": {"max": 5}}, "canonical_unit", id="no-unit"),
+    ],
+)
+def test_a_malformed_range_names_the_field_and_the_problem(entry, expected):
+    with pytest.raises(ConfigError, match=expected) as excinfo:
+        load_field_specs(document({"fields": [entry]}))
+
+    assert "thickness" in str(excinfo.value)
+
+
+def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(monkeypatch):
+    # It changes what the model is told and which values survive, so it must re-extract; but a table that
+    # declares no range has to keep the keys it had before ranges existed.
+    plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
+    ranged = load_field_specs(document({"fields": [RANGED_FIELD | {"valid_range": {"max": 500}}]}))
+
+    def keys_for(specs):
+        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
+        keys.schema_fingerprint.cache_clear()
+        return keys.schema_fingerprint(), keys.extractor_key("a-model"), keys.comparison_key()
+
+    try:
+        schema, extraction, comparison = keys_for(plain)
+        without_the_cell = [
+            {k: v for k, v in dataclasses.asdict(spec).items() if k not in keys._SCHEMA_EXCLUDED | {"valid_range"}}
+            for spec in plain
+        ]
+        assert schema == keys.content_fingerprint(json.dumps(without_the_cell, ensure_ascii=False, sort_keys=True))
+        ranged_schema, ranged_extraction, ranged_comparison = keys_for(ranged)
+        assert ranged_schema != schema
+        assert ranged_extraction != extraction and ranged_comparison != comparison
+    finally:
+        keys.schema_fingerprint.cache_clear()
+
+
+# ---- condition_preference -----------------------------------------------------------------
+
+
+def test_a_condition_preference_is_read_in_order():
+    spec = load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": ["400-800", "550"]}]}))[0]
+
+    assert spec.condition_preference == ("400-800", "550")
+
+
+@pytest.mark.parametrize("bad", ["400-800", [""], ["visible"], [550]])
+def test_a_condition_preference_must_be_a_list_of_entries_naming_numbers(bad):
+    with pytest.raises(ConfigError, match="condition_preference"):
+        load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": bad}]}))
+
+
+def test_a_condition_preference_moves_only_the_comparison_key(monkeypatch):
+    # It picks a dataset cell among values already extracted; the model never hears of it.
+    plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
+    preferring = load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": ["550"]}]}))
+
+    def keys_for(specs):
+        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
+        for cached in (keys.schema_fingerprint, keys.preference_fingerprint):
+            cached.cache_clear()
+        return keys.extractor_key("a-model"), keys.comparison_key()
+
+    try:
+        (extraction, comparison), (extraction_after, comparison_after) = keys_for(plain), keys_for(preferring)
+        assert extraction == extraction_after
+        assert comparison != comparison_after
+    finally:
+        for cached in (keys.schema_fingerprint, keys.preference_fingerprint):
+            cached.cache_clear()

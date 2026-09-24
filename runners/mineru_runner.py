@@ -35,7 +35,8 @@ Environment variables passed through to MinerU (this script doesn't interpret th
 
 - ``MINERU_MODEL_SOURCE``  ``huggingface`` / ``modelscope`` / ``local`` — where model weights come from
 - ``MINERU_DEVICE_MODE``   ``cpu`` / ``mps`` / ``cuda`` / ``cuda:0`` — auto-detected if unset
-- ``CUDA_VISIBLE_DEVICES`` restricts visible GPUs on Linux (pinned to 4,5,6,7 in the deployment scripts)
+- ``CUDA_VISIBLE_DEVICES`` restricts visible GPUs on Linux (set per service in the deployment scripts,
+  default GPU 0)
 """
 
 from __future__ import annotations

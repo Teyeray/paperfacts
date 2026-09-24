@@ -259,10 +259,23 @@ def test_a_neighbour_on_a_different_page_is_not_tried():
     assert is_grounded(value, blocks, adjacency=adjacency) is False
 
 
-def test_block_adjacency_reports_same_page_neighbours_only():
+def test_a_sentence_cut_by_a_page_break_grounds_across_the_break():
+    # The halves of one sentence: the page break is the parser's cut, not a gap in the text.
     seq = [
-        make_block(page=0, order=0, content="one"),
-        make_block(page=0, order=1, content="two"),
+        make_block(page=4, order=9, content="The film deposited with 0.6% hydrogen had a transmittance of"),
+        make_block(page=5, order=0, content="92.1% in the visible range."),
+    ]
+    blocks = {b.source_id: b.content for b in seq}
+    value = make_field("transmittance", "of 92.1", source_ids=("mineru_p5_b0",))
+
+    assert is_grounded(value, blocks, adjacency=block_adjacency(seq)) is True
+
+
+def test_block_adjacency_reports_same_page_neighbours_only():
+    # Finished sentences, so no page-break continuation links the page-1 block in.
+    seq = [
+        make_block(page=0, order=0, content="One."),
+        make_block(page=0, order=1, content="Two."),
         make_block(page=1, order=0, content="three"),
     ]
 

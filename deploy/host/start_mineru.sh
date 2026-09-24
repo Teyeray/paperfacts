@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 # PaperFacts -- start the MinerU router (Route B: bare-metal host install)
 #
-# ============================================================================
-# Hard GPU constraint: this server has 8 GPUs; PaperFacts may only use ids 4, 5, 6, 7.
-# This script uses GPU 4 and 5 (one worker per GPU).
-#   GPU 6 → PaddleOCR-VL (start_paddle_vlm.sh + start_paddle_api.sh)
-#   GPU 7 → currently unused
-# ============================================================================
-#
 # Usage (recommended to run long-lived in a tmux window):
 #   bash deploy/host/start_mineru.sh
 #
@@ -18,9 +11,9 @@
 #   those workers.
 #   `--local-gpus auto` probes in this order: read CUDA_VISIBLE_DEVICES first, and only fall
 #   back to torch's own detection if that's unset.
-#   So once CUDA_VISIBLE_DEVICES=4,5 is set below, it starts exactly two workers, bound to
-#   GPU 4 and GPU 5 respectively.
-#   To pin them explicitly you can also use `--local-gpus 4,5` (in host mode these are
+#   So once CUDA_VISIBLE_DEVICES is set below, it starts one worker per listed GPU (default
+#   is a single GPU 0).
+#   To pin them explicitly you can also use `--local-gpus <ids>` (in host mode these are
 #   physical ids).
 #
 # External interface:
@@ -30,18 +23,17 @@
 # Tunable environment variables:
 #   PAPERFACTS_MINERU_HOST   listen address, default 0.0.0.0
 #   PAPERFACTS_MINERU_PORT   listen port, default 8002
-#   PAPERFACTS_MINERU_GPUS   GPUs to use, default 4,5 (must be within 4-7)
+#   PAPERFACTS_MINERU_GPUS   GPUs to use, default 0
 #   PAPERFACTS_ENV_ROOT      venv root directory, default ~/.paperfacts/envs
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 MINERU_HOST="${PAPERFACTS_MINERU_HOST:-0.0.0.0}"
 MINERU_PORT="${PAPERFACTS_MINERU_PORT:-8002}"
-MINERU_GPUS="${PAPERFACTS_MINERU_GPUS:-4,5}"
+MINERU_GPUS="${PAPERFACTS_MINERU_GPUS:-0}"
 
-# Check the GPU whitelist first: this is a hard constraint and should be reported before
-# checking whether the environment is even installed.
-require_allowed_gpus "${MINERU_GPUS}"
+# Check a GPU was actually specified before checking whether the environment is installed.
+require_gpus "${MINERU_GPUS}"
 require_venv_bin "${PF_MINERU_ENV}" mineru-router
 warn_if_port_busy "${MINERU_PORT}"
 

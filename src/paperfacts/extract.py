@@ -47,7 +47,7 @@ from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import extractor_key, schema_fingerprint
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
-from paperfacts.normalize import normalize_key
+from paperfacts.normalize import drop_implausible, normalize_key
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -108,7 +108,7 @@ class ExtractionDocument:
 
 def build_extraction_document(artifact: ParsedArtifact) -> ExtractionDocument:
     """Render the artifact for the prompt, dropping page furniture and the bibliography."""
-    kept = _informative_blocks(artifact.blocks)
+    kept = informative_blocks(artifact.blocks)
     document = ExtractionDocument(
         markdown=render_markdown(kept),
         blocks={block.source_id: block.content for block in kept},
@@ -126,7 +126,8 @@ def build_extraction_document(artifact: ParsedArtifact) -> ExtractionDocument:
     return document
 
 
-def _informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
+def informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
+    """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography."""
     kept: list[SourceBlock] = []
     for block in blocks:
         if block.type == "title" and _END_SECTION.match(block.content.lstrip("# ").strip()):
@@ -175,7 +176,7 @@ def extract_lane(
         raise ValueError(f"concurrency must be at least 1, got {concurrency}")
     if mode not in EXTRACTION_MODES:
         raise ValueError(f"unknown extraction mode: {mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
-    blocks = _informative_blocks(artifact.blocks)
+    blocks = informative_blocks(artifact.blocks)
     document = build_extraction_document(artifact) if mode == "document" else None
 
     results: list[ExtractedRecords] = []
@@ -229,7 +230,7 @@ def extract_lane(
         raw_response = raw_response or text
         _add_usage(usage, pass_usage)
 
-    records = deduplicate(merge_passes(results))
+    records = drop_implausible(deduplicate(merge_passes(results)))
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,
@@ -364,6 +365,8 @@ def _extract_passages(
     usage: dict[str, int] = {}
 
     sample_list = _render_sample_list(inventory.response.samples)
+    # What the inventory cited as describing the samples: the recipe paragraph every field question needs.
+    sample_blocks = frozenset(source_id for sample in inventory.response.samples for source_id in sample.source_ids)
     field_system = field_system_prompt()
 
     # Which fields get asked, and with which blocks, is decided here in FIELD_SPECS order and nowhere else.
@@ -372,7 +375,17 @@ def _extract_passages(
     questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
     for spec in FIELD_SPECS:
-        candidates = fit_budget(candidate_blocks(spec, blocks, limit=candidate_limit), budget_chars=budget_chars)
+        if spec.is_sample_level and inventory.response.no_tco_film and not inventory.response.samples:
+            # A device paper on purchased ITO glass: asking anyway only harvests the absorber's thickness and
+            # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
+            # empty for any other reason -- it missed the sample text -- still gets every question, so one
+            # missed inventory cannot cost the lane all its sample-level values.
+            dropped.append(f"{spec.name}: the paper deposits no TCO film of its own, so it was not asked about")
+            continue
+        candidates = fit_budget(
+            candidate_blocks(spec, blocks, limit=candidate_limit, sample_blocks=sample_blocks),
+            budget_chars=budget_chars,
+        )
         if not candidates:
             # Not an error: a paper that never mentions a target's density simply has none to find. Recorded
             # so that "the model missed it" and "we never asked" stay distinguishable.

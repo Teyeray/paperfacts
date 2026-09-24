@@ -1,17 +1,17 @@
-# PaperFacts — parser service orchestration for the Linux 8-GPU server (Route A: Docker, recommended)
+# PaperFacts — parser service orchestration for the Linux GPU server (Route A: Docker, recommended)
 #
 # Architecture:
 #
 #   paperfacts orchestrator (pure python, runs on the host or any other machine)
 #        │  HTTP
-#        ├──→ mineru-router        :8002   POST /file_parse    (GPU 4, 5)
-#        └──→ paddleocr-vl-api     :8080   POST /layout-parsing (GPU 6)
+#        ├──→ mineru-router        :8002   POST /file_parse    (GPU 0)
+#        └──→ paddleocr-vl-api     :8080   POST /layout-parsing (GPU 0)
 #                  │ HTTP inside the container network (not published externally)
-#                  └──→ paddleocr-vlm-server  vLLM service for the 0.9B VLM (GPU 6, shares the card above)
+#                  └──→ paddleocr-vlm-server  vLLM service for the 0.9B VLM (GPU 0, shares the card above)
 #
-# Hard GPU constraint: this server has 8 GPUs; PaperFacts **may only use 4, 5, 6, 7**
-# (0-3 belong to other projects).
-# This file only allocates 4, 5, 6; GPU 7 is currently unused/free.
+# All three services default to GPU 0 (the current server has a single GPU). GPU ids are set
+# per service via device_ids below; on a multi-GPU host, edit them to spread the services
+# across cards.
 #
 # Usage:
 #   cd deploy && cp .env.example .env
@@ -29,7 +29,7 @@ name: paperfacts
 
 services:
   # ---------------------------------------------------------------------------
-  # MinerU 3.4.5 (pipeline backend) -- first parser route, uses GPU 4, 5
+  # MinerU 3.4.5 (pipeline backend) -- first parser route, uses GPU 0
   # ---------------------------------------------------------------------------
   # MinerU doesn't publish a ready-to-use prebuilt image (their official Dockerfile is based on
   # vllm/vllm-openai:v0.21.0, a heavy CUDA 13.0 image with strict driver requirements), so we
@@ -38,9 +38,10 @@ services:
   # `mineru-router` is MinerU's built-in load-balancing entrypoint: it spins up one
   # `mineru-api` worker process (actually `python -m mineru.cli.fast_api`) per GPU **visible
   # inside the container**, then round-robins /file_parse requests across those workers.
-  # We expose only the host's GPUs 4 and 5 via device_ids, which become 0 and 1 inside the
-  # container, so `--local-gpus auto` starts exactly 2 workers, one per GPU.
-  # To pin them explicitly you can also write `--local-gpus 0,1` (note: **container-local**
+  # We expose only the host's GPU 0 via device_ids, which becomes 0 inside the container too,
+  # so `--local-gpus auto` starts exactly 1 worker. On a multi-GPU host, list more ids in
+  # device_ids below to start one worker per GPU.
+  # To pin them explicitly you can also write `--local-gpus 0` (note: **container-local**
   # ids, not host ids).
   mineru-router:
     build:
@@ -100,11 +101,11 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["4", "5"]
+              device_ids: ["0"]
               capabilities: ["gpu"]
 
   # ---------------------------------------------------------------------------
-  # PaddleOCR-VL's VLM inference service -- uses GPU 6 (shares the card with paddleocr-vl-api)
+  # PaddleOCR-VL's VLM inference service -- uses GPU 0 (shares the card with paddleocr-vl-api)
   # ---------------------------------------------------------------------------
   # This container does exactly one thing: serve the 0.9B PaddleOCR-VL model behind an
   # OpenAI-compatible interface via vLLM. An official prebuilt image exists (with model weights
@@ -136,7 +137,7 @@ services:
       --backend ${VLM_BACKEND}
       --backend_config /home/paddleocr/vlm_server_config.yaml"
     volumes:
-      # vLLM startup args. Caps gpu-memory-utilization at 0.5 by default, because GPU 6 also
+      # vLLM startup args. Caps gpu-memory-utilization at 0.5 by default, because GPU 0 also
       # runs paddleocr-vl-api's layout detection model (PP-DocLayoutV2).
       - ./vllm_config.yaml:/home/paddleocr/vlm_server_config.yaml:ro
     healthcheck:
@@ -152,11 +153,11 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["6"]
+              device_ids: ["0"]
               capabilities: ["gpu"]
 
   # ---------------------------------------------------------------------------
-  # PaddleOCR-VL's pipeline / API layer -- second parser route, uses GPU 6 (shares the card with the VLM)
+  # PaddleOCR-VL's pipeline / API layer -- second parser route, uses GPU 0 (shares the card with the VLM)
   # ---------------------------------------------------------------------------
   # This layer handles layout detection (PP-DocLayoutV2, small memory footprint), chunking, and
   # scheduling; actual vision recognition is forwarded to paddleocr-vlm-server above.
@@ -164,8 +165,7 @@ services:
   #   POST /layout-parsing   GET /health
   #
   # Why it shares a GPU with the VLM: the layout detection model only needs 1-2GB, and the VLM
-  # is capped at 50% of GPU memory, so combined they still fit comfortably -- which leaves
-  # GPU 7 free.
+  # is capped at 50% of GPU memory, so combined they still fit comfortably on one card.
   #
   # The image ships a built-in pipeline_config_vllm.yaml whose VLM server_url points at the
   # service name `paddleocr-vlm-server` -- so that service above **must not be renamed**, or
@@ -196,12 +196,8 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["6"]
+              device_ids: ["0"]
               capabilities: ["gpu"]
-
-  # ---------------------------------------------------------------------------
-  # GPU 7 is currently unused and not allocated to any service.
-  # ---------------------------------------------------------------------------
 
 volumes:
   paperfacts-mineru-cache:

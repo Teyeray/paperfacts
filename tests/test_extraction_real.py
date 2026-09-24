@@ -129,10 +129,14 @@ def test_the_real_source_ids_all_exist_in_the_artifact(real_artifact):
     assert {ABSTRACT_ID, TABLE_ID, METHOD_ID} <= {block.source_id for block in real_artifact.blocks}
 
 
-def test_nothing_from_the_real_response_is_dropped_by_the_cleaning_rules(real_artifact):
+def test_only_the_substrate_thickness_is_dropped_from_the_real_response(real_artifact):
+    # The model filed the 3 mm fused-silica substrate as the film's thickness; the plausible range is what
+    # catches it. Nothing else in a real answer may trip a cleaning rule.
     lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document")
 
-    assert lane.dropped == ()
+    assert len(lane.dropped) == 1
+    # Converted before it is judged: 3 mm is 3e6 nm.
+    assert lane.dropped[0].startswith("thickness: '3' mm is 3e+06 nm")
     assert len(lane.samples) == 3
     assert lane.target is not None
 
@@ -215,14 +219,6 @@ def test_spaces_between_digits_are_only_merged_inside_latex():
     from paperfacts.normalize import parse_number
 
     assert parse_number("10 20") == (10.0, "2 numbers found, first used")
-
-
-def test_the_thickness_in_millimetres_converts_to_nanometres(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
-
-    field = lane.sample("this-work-225C").get("thickness")
-    assert field.value == pytest.approx(3e6)
-    assert field.unit == "nm"
 
 
 def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_artifact):

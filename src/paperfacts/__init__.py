@@ -9,6 +9,7 @@ Flat modules, in pipeline order:
 - ``adapters``    native parser output -> blocks -> Markdown with provenance markers
 - ``overlay``     block boxes drawn on page images, to check provenance by eye
 - ``fields``      the target field table: units, tolerances, bare-number policy
+- ``continuation`` paragraphs a page or column break cut in two, linked across the break
 - ``prompts``     the extraction and matching prompts
 - ``llm``         OpenAI-compatible client with a request cache and one repair round
 - ``records``     the model's response schema, the stored records, and the cleaning between them

@@ -42,3 +42,5 @@ htmlcov/
 deepseek_api_key
 *_api_key
 *.key
+# macOS Finder duplicates ("name 3.py")
+* [0-9].py

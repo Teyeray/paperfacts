@@ -16,7 +16,7 @@ from collections.abc import Callable
 from functools import cache
 
 from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FieldSpec
-from paperfacts.records import FieldValue, LaneExtraction, TargetRecord
+from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord
 
 # ---- Text ------------------------------------------------------------------------------------------------
 # Superscript digits are folded **before** NFKC, which would collapse "10⁻⁴" to "10-4" and lose the exponent.
@@ -38,6 +38,8 @@ _REPLACEMENTS = {
     "×": "x",  # multiplication sign
     "⋅": ".",  # dot operator U+22C5
     "·": ".",  # middle dot U+00B7
+    "•": ".",  # bullet U+2022, read off a chart axis as "Ω•cm"
+    "∙": ".",  # bullet operator U+2219
     "’": "'",
     "∼": "~",  # tilde operator U+223C, what papers actually print for "approximately"
 }
@@ -171,6 +173,12 @@ _SPACED_DIGITS = re.compile(r"(?<![0-9.])[0-9.](?: [0-9.])+(?![0-9.])")
 _CARET_GAP = re.compile(r"\^\s*([-+]?)\s*(?=\d)")
 
 
+# Formatting commands that survive delatex and split what they wrap: MinerU writes the unit Ω·cm as
+# "\Omega { \cdot } \mathrm { c m }" and the formula SnO2 as "\mathrm { S n O } _ { 2 }".
+_WRAPPED_DIGITS = re.compile(r"(?<=[0-9.] )\s*\{\s*([0-9.])\s*\}")
+LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
+
+
 def delatex(text: str) -> str:
     """Undo the LaTeX MinerU produces for numbers in tables and formulas.
 
@@ -178,6 +186,9 @@ def delatex(text: str) -> str:
     prompt's "verbatim" rule keeps it that way. Spaces between digits are collapsed only when the text
     carries a LaTeX marker, so ordinary "10 20" is left alone.
     """
+    # A digit wrapped in a formatting command ("2 3 \\mathbf { 0 }", MinerU bolding a table cell's last digit)
+    # is unwrapped first, so the run of spaced digits below still reads as one number.
+    text = _WRAPPED_DIGITS.sub(r"\1", LATEX_WRAPPERS.sub("", text)) if "\\" in text else text
     text = re.sub(r"\^\s*\{\s*([-+]?\s*\d+)\s*\}", lambda m: "^" + m.group(1).replace(" ", ""), text)
     # MinerU drops the LaTeX markers from some cells ("4 0 0 °C", "1 0 ^ { - 4 }"), so this run has to be
     # collapsed on its own signature rather than on the presence of "$" or a backslash.
@@ -306,6 +317,15 @@ _FLOW = {"sccm": 1.0, "cm3/min": 1.0}
 _ROTATION = {"rpm": 1.0, "r/min": 1.0, "rev/min": 1.0}
 # Power prefixes are case-sensitive (mW ≠ MW), so the table's lowercasing cannot be used here.
 _POWER = re.compile(r"^(?P<p>[kKMmμn]?)[Ww]$")
+# Working pressure in Pa. "mPa" and "MPa" differ only in case, so those two are looked up as written and
+# everything else case-folded.
+_PRESSURE_EXACT = {"mPa": 1e-3, "MPa": 1e6}
+_PRESSURE = {"pa": 1.0, "hpa": 100.0, "kpa": 1e3, "mbar": 100.0, "bar": 1e5, "torr": 133.322, "mtorr": 0.133322}
+
+
+def _pressure(unit: str) -> float | None:
+    return _PRESSURE_EXACT.get(unit, _PRESSURE.get(unit.lower()) if unit.lower() != "mpa" else None)
+
 
 Converter = Callable[[str], float | None]
 
@@ -338,6 +358,7 @@ CONVERTERS: dict[str, Converter] = {
     "sccm": _by_table(_FLOW),
     "rpm": _by_table(_ROTATION),
     "W": _by_pattern(_POWER),
+    "Pa": _pressure,
 }
 
 # Fail at import time rather than with a KeyError buried in normalisation, field by field.
@@ -358,7 +379,7 @@ def split_scale_factor(unit_raw: str) -> tuple[float, str]:
     Papers head a table column "ρ (×10⁻⁴ Ω·cm)" and the model transcribes the whole parenthesis as the unit,
     leaving the value a bare "19.4". Without this the unit is unrecognised and the fact is lost.
     """
-    unit = clean_unit(delatex(normalize_text(unit_raw)))
+    unit = clean_unit(LATEX_WRAPPERS.sub(" ", delatex(normalize_text(unit_raw))))
     match = _SCALE_FACTOR.match(unit)
     if match is None:
         return 1.0, unit
@@ -447,3 +468,46 @@ def normalize_lane(lane: LaneExtraction) -> LaneExtraction:
     # raw would silently turn every such comparison into "unparsed" and bury real agreements.
     unattributed = _normalize_fields(lane.unattributed)
     return lane.model_copy(update={"target": target, "samples": samples, "unattributed": unattributed})
+
+
+def drop_implausible(records: ExtractedRecords) -> ExtractedRecords:
+    """Drop every value whose converted number falls outside its field's ``valid_range``, with the reason.
+
+    The range lives in the canonical unit, so this has to run on the converted value: "2 μm" is outside a
+    500 nm ceiling although its digits are not. A value that cannot be converted is kept, since there is no
+    number to judge and the comparison already reports it as unparsed.
+    """
+    dropped: list[str] = []
+
+    def plausible(value: FieldValue) -> bool:
+        spec = FIELD_BY_NAME.get(value.field)
+        if spec is None or spec.describe_range() is None:
+            return True
+        number = normalize_field(value, spec).value
+        if number is None or spec.in_range(number):
+            return True
+        unit = f" {value.unit_raw}" if value.unit_raw else ""
+        dropped.append(
+            f"{spec.name}: {value.value_raw!r}{unit} is {number:g} {spec.canonical_unit}, "
+            f"outside the plausible range ({spec.describe_range()})"
+        )
+        return False
+
+    def kept(values: tuple[FieldValue, ...]) -> tuple[FieldValue, ...]:
+        return tuple(value for value in values if plausible(value))
+
+    target = records.target
+    if target is not None:
+        target = target.model_copy(update={"fields": kept(target.fields)})
+    samples = tuple(sample.model_copy(update={"fields": kept(sample.fields)}) for sample in records.samples)
+    unattributed = kept(records.unattributed)
+    if not dropped:
+        return records
+    return records.model_copy(
+        update={
+            "target": target,
+            "samples": samples,
+            "unattributed": unattributed,
+            "dropped": (*records.dropped, *dropped),
+        }
+    )

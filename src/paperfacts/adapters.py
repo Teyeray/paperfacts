@@ -175,7 +175,16 @@ MINERU_TYPES: dict[str, BlockType] = {
     "page_number": "unknown",
     "discarded": "unknown",
 }
-MINERU_ATTACHED_TEXT: tuple[str, ...] = ("image_caption", "image_footnote", "table_caption", "table_footnote")
+# MinerU 3.x files a plotted chart as type "chart" with its own chart_caption / chart_footnote keys. Missing
+# them silently cost lane A about 70% of the corpus's figure captions while lane B kept them.
+MINERU_ATTACHED_TEXT: tuple[str, ...] = (
+    "image_caption",
+    "image_footnote",
+    "chart_caption",
+    "chart_footnote",
+    "table_caption",
+    "table_footnote",
+)
 
 
 def convert_mineru(raw: RawParseOutput, document: DocumentInput, geometry: DocumentGeometry) -> ParsedArtifact:
