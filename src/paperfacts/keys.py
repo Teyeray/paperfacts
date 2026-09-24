@@ -47,6 +47,10 @@ _PACKAGE_DIR = Path(__file__).parent
 # ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
 # verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
 _SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh"}
+# Cells added after stored results existed: left out of the material while at their default, so a field that
+# does not use one keeps the fingerprint it had before the cell was introduced.
+_SCHEMA_OMITTED_AT_DEFAULT = {"valid_range": (None, None)}
+_NO_DEFAULT = object()
 
 
 def content_fingerprint(material: str) -> str:
@@ -74,7 +78,11 @@ def schema_fingerprint() -> str:
     :func:`category_fingerprint` folds it into ``comparison_key`` alone.
     """
     table = [
-        {name: value for name, value in dataclasses.asdict(spec).items() if name not in _SCHEMA_EXCLUDED}
+        {
+            name: value
+            for name, value in dataclasses.asdict(spec).items()
+            if name not in _SCHEMA_EXCLUDED and _SCHEMA_OMITTED_AT_DEFAULT.get(name, _NO_DEFAULT) != value
+        }
         for spec in FIELD_SPECS
     ]
     return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))

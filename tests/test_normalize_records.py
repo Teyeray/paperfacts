@@ -11,8 +11,8 @@ from __future__ import annotations
 import pytest
 
 from paperfacts.fields import FIELD_BY_NAME
-from paperfacts.normalize import normalize_field, normalize_lane
-from paperfacts.records import FieldValue, TargetRecord
+from paperfacts.normalize import drop_implausible, normalize_field, normalize_lane
+from paperfacts.records import ExtractedRecords, FieldValue, TargetRecord
 from support.extraction import make_field, make_lane, make_sample
 
 # ---- normalize_field ----------------------------------------------------------------
@@ -150,3 +150,64 @@ def test_normalizing_twice_changes_nothing_further():
     lane = normalize_lane(make_lane(samples=[make_sample("A", [make_field("thickness", "1.2", unit_raw="μm")])]))
 
     assert normalize_lane(lane) == lane
+
+
+# ---- drop_implausible --------------------------------------------------------------------
+
+
+def _records(*, samples=(), unattributed=()) -> ExtractedRecords:
+    return ExtractedRecords(
+        target=None, samples=tuple(samples), invalid_source_ids=(), dropped=(), unattributed=tuple(unattributed)
+    )
+
+
+def test_a_value_outside_its_range_is_dropped_with_the_reason():
+    # Shipped range: thickness below 500 nm. A perovskite absorber's 600 nm is the observed confusion.
+    records = _records(samples=(make_sample("S1", [make_field("thickness", "600", unit_raw="nm")]),))
+
+    kept = drop_implausible(records)
+
+    assert kept.samples[0].fields == ()
+    assert len(kept.dropped) == 1
+    assert "thickness" in kept.dropped[0] and "600" in kept.dropped[0] and "below 500 nm" in kept.dropped[0]
+
+
+def test_the_range_is_judged_after_conversion_to_the_canonical_unit():
+    # "0.6" has digits well under 500, but in μm it is 600 nm.
+    inside = make_field("thickness", "0.3", unit_raw="μm")
+    outside = make_field("thickness", "0.6", unit_raw="μm")
+    records = _records(samples=(make_sample("S1", [inside, outside]),))
+
+    assert drop_implausible(records).samples[0].fields == (inside,)
+
+
+def test_unattributed_values_are_held_to_the_same_range():
+    records = _records(unattributed=(make_field("rotation_speed", "3000", unit_raw="rpm"),))
+
+    kept = drop_implausible(records)
+
+    assert kept.unattributed == ()
+    assert "rotation_speed" in kept.dropped[0]
+
+
+def test_a_value_that_cannot_be_converted_is_kept_since_there_is_nothing_to_judge():
+    unconvertible = make_field("thickness", "600", unit_raw="furlongs")
+    records = _records(samples=(make_sample("S1", [unconvertible]),))
+
+    assert drop_implausible(records) == records
+
+
+def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_were():
+    records = _records(
+        samples=(
+            make_sample(
+                "S1",
+                [
+                    make_field("sheet_resistance", "1e6", unit_raw="Ω/sq"),
+                    make_field("transmittance", "85", unit_raw="%"),
+                ],
+            ),
+        )
+    )
+
+    assert drop_implausible(records) is records

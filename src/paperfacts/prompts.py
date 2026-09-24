@@ -120,7 +120,12 @@ Rules:
 
 Return the JSON object only."""
 
-_FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{condition}"
+_FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{condition}{plausible}"
+# Told to the model so it checks what it is quoting before it answers; the code drops what still falls outside.
+_PLAUSIBLE = (
+    " Plausible values are {range}; a number outside that range almost always belongs to a different layer,"
+    " process step or quantity, so check before reporting it."
+)
 
 
 def render_field_table(specs: tuple[FieldSpec, ...] = FIELD_SPECS) -> str:
@@ -128,6 +133,8 @@ def render_field_table(specs: tuple[FieldSpec, ...] = FIELD_SPECS) -> str:
     for spec in specs:
         unit = f", canonical unit: {spec.canonical_unit}" if spec.canonical_unit else ""
         condition = f" Condition: {spec.condition_hint}." if spec.condition_hint else ""
+        described = spec.describe_range()
+        plausible = _PLAUSIBLE.format(range=described) if described else ""
         lines.append(
             _FIELD_LINE.format(
                 name=spec.name,
@@ -136,6 +143,7 @@ def render_field_table(specs: tuple[FieldSpec, ...] = FIELD_SPECS) -> str:
                 unit=unit,
                 description=spec.description,
                 condition=condition,
+                plausible=plausible,
             )
         )
     return "\n".join(lines)

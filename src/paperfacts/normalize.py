@@ -16,7 +16,7 @@ from collections.abc import Callable
 from functools import cache
 
 from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FieldSpec
-from paperfacts.records import FieldValue, LaneExtraction, TargetRecord
+from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord
 
 # ---- Text ------------------------------------------------------------------------------------------------
 # Superscript digits are folded **before** NFKC, which would collapse "10⁻⁴" to "10-4" and lose the exponent.
@@ -447,3 +447,47 @@ def normalize_lane(lane: LaneExtraction) -> LaneExtraction:
     # raw would silently turn every such comparison into "unparsed" and bury real agreements.
     unattributed = _normalize_fields(lane.unattributed)
     return lane.model_copy(update={"target": target, "samples": samples, "unattributed": unattributed})
+
+
+def drop_implausible(records: ExtractedRecords) -> ExtractedRecords:
+    """Drop every value whose converted number falls outside its field's ``valid_range``, with the reason.
+
+    The range lives in the canonical unit, so this has to run on the converted value: "2 μm" is outside a
+    500 nm ceiling although its digits are not. A value that cannot be converted is kept, since there is no
+    number to judge and the comparison already reports it as unparsed.
+    """
+    dropped: list[str] = []
+
+    def plausible(value: FieldValue) -> bool:
+        spec = FIELD_BY_NAME.get(value.field)
+        if spec is None or spec.describe_range() is None:
+            return True
+        number = normalize_field(value, spec).value
+        if number is None or spec.in_range(number):
+            return True
+        unit = f" {value.unit_raw}" if value.unit_raw else ""
+        dropped.append(
+            f"{spec.name}: {value.value_raw!r}{unit} is {number:g} {spec.canonical_unit}, "
+            f"outside the plausible range ({spec.describe_range()})"
+        )
+        return False
+
+    def kept(values: tuple[FieldValue, ...]) -> tuple[FieldValue, ...]:
+        return tuple(value for value in values if plausible(value))
+
+    target = records.target
+    if target is not None:
+        fields = kept(target.fields)
+        target = target.model_copy(update={"fields": fields}) if fields else None
+    samples = tuple(sample.model_copy(update={"fields": kept(sample.fields)}) for sample in records.samples)
+    unattributed = kept(records.unattributed)
+    if not dropped:
+        return records
+    return records.model_copy(
+        update={
+            "target": target,
+            "samples": samples,
+            "unattributed": unattributed,
+            "dropped": (*records.dropped, *dropped),
+        }
+    )

@@ -47,7 +47,7 @@ from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import extractor_key, schema_fingerprint
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
-from paperfacts.normalize import normalize_key
+from paperfacts.normalize import drop_implausible, normalize_key
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -229,7 +229,7 @@ def extract_lane(
         raw_response = raw_response or text
         _add_usage(usage, pass_usage)
 
-    records = deduplicate(merge_passes(results))
+    records = drop_implausible(deduplicate(merge_passes(results)))
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,

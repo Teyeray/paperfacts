@@ -231,7 +231,18 @@
       "keywords": [
         "Ar flow rate",
         "argon flow rate",
-        "Ar flow"
+        "Ar flow",
+        "gas ratio",
+        "flow ratio",
+        "working pressure",
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "H2/Ar",
+        "H2/(Ar+H2)",
+        "Pa",
+        "mTorr",
+        "mbar",
+        "Torr"
       ],
       "canonical_unit": "sccm",
       "rel_tol": 0.02,
@@ -249,7 +260,18 @@
       "keywords": [
         "O2 flow rate",
         "oxygen flow rate",
-        "O2 flow"
+        "O2 flow",
+        "gas ratio",
+        "flow ratio",
+        "working pressure",
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "H2/Ar",
+        "H2/(Ar+H2)",
+        "Pa",
+        "mTorr",
+        "mbar",
+        "Torr"
       ],
       "canonical_unit": "sccm",
       "rel_tol": 0.02,
@@ -267,7 +289,18 @@
       "keywords": [
         "H2 flow rate",
         "hydrogen flow rate",
-        "H2 flow"
+        "H2 flow",
+        "gas ratio",
+        "flow ratio",
+        "working pressure",
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "H2/Ar",
+        "H2/(Ar+H2)",
+        "Pa",
+        "mTorr",
+        "mbar",
+        "Torr"
       ],
       "canonical_unit": "sccm",
       "rel_tol": 0.02,
@@ -389,7 +422,10 @@
       "rel_tol": 0.02,
       "abs_tol": 0.5,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "valid_range": {
+        "max": 100
+      }
     },
     {
       "name": "sheet_resistance",
@@ -402,7 +438,9 @@
         "sheet resistance",
         "sheet resistivity",
         "Rs",
-        "R_s"
+        "R_s",
+        "Rsq",
+        "Rsheet"
       ],
       "canonical_unit": "Ω/sq",
       "rel_tol": 0.02,
@@ -434,7 +472,7 @@
       "label": "透光率",
       "group": "film",
       "kind": "numeric",
-      "description": "Optical transmittance of the film (%). Always record the wavelength or range it refers to.",
+      "description": "Optical transmittance (%) of the transparent electrode or transparent conductive film -- not of a perovskite film, an absorber layer or a complete device. Always record the wavelength or range it refers to.",
       "description_zh": "所选样品的透光率，数值 85 表示 85%；测量波段见条件及数据质量。",
       "keywords": [
         "transmittance",
@@ -442,13 +480,24 @@
         "transparency",
         "UV-vis",
         "%T",
-        "AVT"
+        "AVT",
+        "optical transmittance",
+        "visible transmittance",
+        "average transmittance",
+        "Tvis",
+        "Tavg",
+        "T550nm",
+        "T%",
+        "Tir"
       ],
       "canonical_unit": "%",
       "rel_tol": 0.0,
       "abs_tol": 1.0,
       "condition_hint": "wavelength or spectral range, e.g. '550 nm' or 'average 400-800 nm'",
-      "bare_number": "percent_or_fraction"
+      "bare_number": "percent_or_fraction",
+      "valid_range": {
+        "min": 60
+      }
     },
     {
       "name": "thickness",
@@ -468,7 +517,10 @@
       "rel_tol": 0.05,
       "abs_tol": 0.0,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "valid_range": {
+        "max": 500
+      }
     }
   ]
 }

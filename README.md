@@ -417,7 +417,8 @@ to count as the same fact.
   "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
   "abs_tol": 0.0,
   "condition_hint": null,                   // what to record alongside, e.g. a wavelength
-  "bare_number": "reject"                   // reject | assume_canonical | percent_or_fraction
+  "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction
+  "valid_range": {"max": 500}               // optional plausible range in canonical_unit; min and/or max
 }
 ```
 
@@ -430,6 +431,15 @@ accepts, spelled the way the output should spell them: with `"categories": ["DC"
 and stop being judged two different modes, while "DC" and "RF" stay apart. A value naming no category is
 compared as ordinary text, never rounded to the nearest one. `categories` changes only verdicts, so adding
 one re-compares the stored facts instead of re-extracting them.
+
+A numeric field may declare `valid_range`, the plausible values in its `canonical_unit`, with either end
+open. The model is told the range with its field question, and a value whose converted number still falls
+outside it is dropped with the reason in the lane's `dropped` audit (the web's 清洗记录). It is meant for
+the confusions a unit cannot catch: the spin-coating rpm of an absorber read as the substrate rotation, the
+thickness of a perovskite layer or a glass substrate read as the electrode's. The shipped table caps
+`rotation_speed` at 100 rpm and `thickness` at 500 nm and floors `transmittance` at 60 %. A value that
+cannot be converted is kept, since there is no number to judge. A range changes the prompt and which values
+survive, so it moves both cache keys; a field without one keeps the keys it had.
 
 A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
 `W`, `sccm`, `rpm`) or startup fails rather than guessing. Adding a field is one table entry; the prompt,

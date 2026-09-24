@@ -61,10 +61,31 @@ class FieldSpec:
     # comparison goes through paperfacts.normalize.canonical_category instead of raw text equality, so
     # "DC and RF magnetron co-sputtering" and "DC and RF" stop reading as two different modes.
     categories: tuple[str, ...] = ()
+    # Plausible (min, max) in canonical_unit, either end open. A value outside it is almost always a
+    # different quantity the model mistook for this one -- the spin-coating rpm of an absorber read as the
+    # substrate rotation, a perovskite layer's thickness read as the electrode's -- so the model is told the
+    # range and a converted value outside it is dropped with an audited reason.
+    valid_range: tuple[float | None, float | None] = (None, None)
 
     @property
     def is_sample_level(self) -> bool:
         return self.group != "target"
+
+    def describe_range(self) -> str | None:
+        """The plausible range in words, e.g. "below 100 rpm", or None when the field declares none."""
+        low, high = self.valid_range
+        unit = self.canonical_unit or ""
+        if low is not None and high is not None:
+            return f"between {low:g} and {high:g} {unit}"
+        if high is not None:
+            return f"below {high:g} {unit}"
+        if low is not None:
+            return f"above {low:g} {unit}"
+        return None
+
+    def in_range(self, value: float) -> bool:
+        low, high = self.valid_range
+        return (low is None or value >= low) and (high is None or value <= high)
 
 
 def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
@@ -137,7 +158,27 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         condition_hint=text_or_none("condition_hint"),
         bare_number=choice("bare_number", get_args(BareNumberPolicy)) if "bare_number" in entry else "reject",  # type: ignore[arg-type]
         categories=tuple(categories),
+        valid_range=_valid_range(entry, where),
     )
+
+
+def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, float | None]:
+    if "valid_range" not in entry:
+        return (None, None)
+    bounds = entry["valid_range"]
+    if not isinstance(bounds, Mapping) or not set(bounds) <= {"min", "max"}:
+        raise ConfigError(f"{where}: valid_range must be an object with 'min' and/or 'max', got {bounds!r}")
+    if entry.get("kind") != "numeric" or entry.get("canonical_unit") is None:
+        raise ConfigError(f"{where}: valid_range needs a numeric field with a canonical_unit to be read in")
+    low, high = bounds.get("min"), bounds.get("max")
+    for key, value in (("min", low), ("max", high)):
+        if value is not None and type(value) not in (int, float):
+            raise ConfigError(f"{where}: valid_range.{key} must be a number or null, got {value!r}")
+    if low is None and high is None:
+        raise ConfigError(f"{where}: valid_range needs at least one of 'min' and 'max'")
+    if low is not None and high is not None and low >= high:
+        raise ConfigError(f"{where}: valid_range.min ({low}) must be below valid_range.max ({high})")
+    return (None if low is None else float(low), None if high is None else float(high))
 
 
 def load_field_specs(document: ConfigDocument) -> tuple[FieldSpec, ...]:
