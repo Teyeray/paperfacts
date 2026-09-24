@@ -291,12 +291,41 @@ def _commit(
     )
 
 
+def _co_cited_condition(
+    trusted: Sequence[tuple[Backend, FieldValue]], row_sources: frozenset[str]
+) -> list[tuple[Backend, FieldValue]] | None:
+    """Per lane, the one condition whose values cite a block the rest of the row also cites, or None.
+
+    A sentence such as "resistivity of 5.74e-4 Ω·cm and a transmittance of 83.5 % (400-1800 nm)" ties one
+    of a sample's several transmittances to the rest of its row; that is the one a reader expects in the
+    cell. A lane with a single condition keeps it; a lane where no condition, or more than one, shares a
+    block with the row leaves the cell refused.
+    """
+    kept: list[tuple[Backend, FieldValue]] = []
+    for backend in BACKENDS:
+        groups: dict[str, list[FieldValue]] = {}
+        for lane, value in trusted:
+            if lane == backend:
+                groups.setdefault(normalize_key(value.condition), []).append(value)
+        if len(groups) > 1:
+            groups = {
+                key: values
+                for key, values in groups.items()
+                if any(row_sources.intersection(value.source_ids) for value in values)
+            }
+            if len(groups) != 1:
+                return None
+        kept += [(backend, value) for values in groups.values() for value in values]
+    return kept
+
+
 def _decide(
     spec: FieldSpec,
     evidence: Sequence[tuple[Backend, FieldValue]],
     comparisons: Sequence[FieldComparison],
     *,
     scope: _Scope | None = None,
+    row_sources: frozenset[str] = frozenset(),
 ) -> _Decision:
     conditions = _joined([value.condition or "" for _, value in evidence])
     sources = _joined(sorted({source for _, value in evidence for source in value.source_ids}))
@@ -327,10 +356,16 @@ def _decide(
     # "after deposition"), so only a lane disagreeing with itself is evidence of several measurements.
     # The key is normalize_key, the same one compare.py and extract.py judge conditions by, so a
     # condition the comparison report called one thing is never two here.
+    narrowed = False
     if any(
         len({normalize_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
     ):
-        return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
+        co_cited = _co_cited_condition(trusted, row_sources)
+        if co_cited is None:
+            return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
+        trusted, narrowed = co_cited, True
+        conditions = _joined([value.condition or "" for _, value in trusted])
+        details.append("该样品有多种测量条件；采用与本行其他字段引用同一原文块的条件")
     parsed: list[tuple[Backend, FieldValue, CellValue]] = []
     for backend, value in trusted:
         scalar, note = _scalar(value, spec)
@@ -347,6 +382,12 @@ def _decide(
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
     chosen = min(parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw))
     agreed = any(c.status == "agree" for c in comparisons) and len({backend for backend, _, _ in parsed}) == 2
+    if narrowed:
+        # The comparison's "agree" may have been about a condition that was just set aside; only the values
+        # that remain can vouch for each other.
+        agreed = len({backend for backend, _, _ in parsed}) == 2 and all(
+            _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed
+        )
     if not agreed and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
     return _commit(spec, chosen, parsed, agreed=agreed, conditions=conditions, sources=sources, details=details)
@@ -451,7 +492,21 @@ def consolidate_document(
                 for field in sample.fields
                 if field.field == spec.name
             ]
-            decision = _decide(spec, evidence, [c for c in scope_comparisons if c.field == spec.name], scope=scope)
+            row_sources = frozenset(
+                source
+                for sample in (scope.a, scope.b)
+                if sample is not None
+                for field in sample.fields
+                if field.field != spec.name and field.grounded
+                for source in field.source_ids
+            )
+            decision = _decide(
+                spec,
+                evidence,
+                [c for c in scope_comparisons if c.field == spec.name],
+                scope=scope,
+                row_sources=row_sources,
+            )
             decisions[spec.name] = decision
             record(scope.sample_id, spec, decision)
         samples = [sample for sample in (scope.a, scope.b) if sample is not None]

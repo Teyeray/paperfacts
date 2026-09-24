@@ -172,6 +172,52 @@ def test_one_lane_with_two_conditions_is_still_refused():
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
 
 
+def _cited(field, source):
+    return field.model_copy(update={"source_ids": (source,)})
+
+
+def test_the_condition_stated_in_the_same_block_as_the_rest_of_the_row_fills_the_cell():
+    # GM1: "5.74e-4 Ω·cm ... 83.5 % (400-1800 nm)" in one abstract sentence, other ranges elsewhere.
+    def lane(backend):
+        return [
+            _cited(value("resistivity", "5.74e-4", "Ω·cm", backend=backend), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "81.6", "%", condition="400-800 nm"), f"{backend}_p3_b2"),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (83.5, "agree")
+    assert row["conditions"] == "400-1800 nm"
+
+
+def test_several_conditions_sharing_the_rows_block_stay_refused():
+    fields = [
+        _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "81.6", "%", condition="400-800 nm"), "mineru_p0_b9"),
+    ]
+
+    result = paired(fields, [])
+
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def test_a_narrowed_lane_that_disagrees_with_the_other_lane_is_not_called_agreement():
+    a = [
+        _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "81.6", "%", condition="400-800 nm"), "mineru_p3_b2"),
+    ]
+    b = [_cited(value("transmittance", "81.6", "%", condition="400-800 nm"), "paddleocr_vl_p3_b2")]
+
+    result = paired(a, b)
+
+    assert result.paper_row["transmittance"] is None
+    assert decision(result, "transmittance")["decision"] == "multiple_values"
+
+
 def test_one_mode_quoted_two_ways_is_one_answer_not_a_refusal():
     """A closed category set is judged on the category, so the paper's phrasing cannot manufacture a
     multiple_values refusal out of a single co-sputtering run."""
