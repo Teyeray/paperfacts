@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -18,10 +19,10 @@ from typing import Literal
 from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
-from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset
-from paperfacts.errors import ConfigError, PaperFactsError
+from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
+from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.extract import build_extraction_document, extract_lane
-from paperfacts.grounding import ground_lane
+from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.llm import LlmClient, OpenAICompatibleClient
 from paperfacts.matching import match_samples
@@ -105,6 +106,38 @@ class ParseReport:
     type_counts: dict[str, int]
     artifact_path: Path
     markdown_path: Path
+    # The raw parser output was gone and the stored artifact stood in for it, so no adapter ran this time.
+    from_artifact: bool = False
+
+
+def _stored_artifact_for_missing_raw(
+    parser: Parser,
+    document: DocumentInput,
+    backend: Backend,
+    artifact_path: Path,
+    raw_dir: Path,
+    *,
+    force: bool,
+) -> ParsedArtifact | None:
+    """The stored artifact when the raw output it came from is gone, otherwise ``None``.
+
+    Raw output is bulky and gets pruned or moved; the artifact is the small file worth keeping. Re-parsing
+    a paper costs GPU minutes, so when only the raw output is missing the artifact stands in for it. The
+    cost is that adapter changes are not re-applied — hence the warning and ``--force``.
+    """
+    if force or not artifact_path.is_file() or parser.is_cached(raw_dir):
+        return None
+    try:
+        artifact = ParsedArtifact.read(artifact_path)
+    except (OSError, ValueError) as exc:
+        logger.warning("stored %s artifact at %s is unreadable (%s); re-parsing", backend, artifact_path, exc)
+        return None
+    logger.warning(
+        "raw parser output missing for backend=%s doc=%s; using the stored artifact — run with --force to re-parse",
+        backend,
+        document.document_id[:16],
+    )
+    return artifact
 
 
 def parse_document(
@@ -119,27 +152,40 @@ def parse_document(
     ensure_identity(layout, document)  # written the moment the directory exists; readers only read it
     parser = build_parser(backend, settings)
 
-    clock = time.monotonic()
-    raw = parser.parse(document, layout.raw_dir(document.document_id, backend), force=force)
-    artifact = convert(raw, document, read_geometry(document.pdf_path))
-    runtime_s = time.monotonic() - clock
-
     markdown_path = layout.markdown_path(document.document_id, backend)
     artifact_path = layout.artifact_path(document.document_id, backend)
+    raw_dir = layout.raw_dir(document.document_id, backend)
+
+    stored = _stored_artifact_for_missing_raw(parser, document, backend, artifact_path, raw_dir, force=force)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
-    markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
-    artifact.write(artifact_path)  # last: its existence means parsed/ is complete
+    if stored is not None:
+        artifact, cache_hit, runtime_s = stored, True, 0.0
+        if not markdown_path.is_file():
+            # The artifact alone is not a complete document directory; re-render rather than leave a hole.
+            markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+    else:
+        if not document.pdf_path.is_file():
+            # Only the real parse path needs the file; say so plainly instead of failing inside the parser.
+            raise ParserError(backend, "input", "PDF not available; re-upload to re-parse")
+        clock = time.monotonic()
+        raw = parser.parse(document, raw_dir, force=force)
+        artifact = convert(raw, document, read_geometry(document.pdf_path))
+        runtime_s = time.monotonic() - clock
+        cache_hit = raw.cache_hit
+        markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+        artifact.write(artifact_path)  # last: its existence means parsed/ is complete
 
     report = ParseReport(
         backend=backend,
         backend_version=artifact.backend_version,
-        cache_hit=raw.cache_hit,
+        cache_hit=cache_hit,
         runtime_s=runtime_s,
         page_count=artifact.page_count,
         block_count=len(artifact.blocks),
         type_counts=artifact.type_counts(),
         artifact_path=artifact_path,
         markdown_path=markdown_path,
+        from_artifact=stored is not None,
     )
     logger.info("parsed %s", report)
     return artifact, report
@@ -165,6 +211,7 @@ def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
         cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
+        reasoning_effort=settings.llm_reasoning_effort,
         retry_attempts=settings.llm_retry_attempts,
         retry_backoff_s=settings.llm_retry_backoff_s,
     )
@@ -188,7 +235,7 @@ def read_lane(
     if artifact is None and artifact_path.is_file():
         artifact = ParsedArtifact.read(artifact_path)
     if artifact is not None:
-        lane = ground_lane(lane, build_extraction_document(artifact).blocks)
+        lane = ground_lane(lane, build_extraction_document(artifact).blocks, adjacency=block_adjacency(artifact.blocks))
     return normalize_lane(lane)
 
 
@@ -221,6 +268,8 @@ def extract_document(
         passes=settings.extraction_passes,
         context_tokens=settings.llm_context_tokens,
         candidate_limit=settings.candidate_limit,
+        concurrency=settings.llm_concurrency,
+        inventory_reasoning_effort=settings.llm_inventory_reasoning_effort,
         refresh=force,
     )
     lane.write(layout.extraction_path(document.document_id, backend, key))
@@ -233,12 +282,17 @@ def compare_document(
     client: LlmClient,
     *,
     force: bool = False,
+    lanes: Mapping[Backend, LaneExtraction] | None = None,
 ) -> ComparisonReport:
-    """Extract both lanes, match samples with the model, compare fields by rule, store the report.
+    """Match samples with the model, compare fields by rule, store the report.
 
     The report path carries both keys, so changing a tolerance recomputes the comparison without paying for
     extraction again and cannot serve a stale verdict. ``force`` redoes matching and comparison only;
     extraction has its own cache and its own force.
+
+    ``lanes`` lets a caller that already holds both extractions hand them over instead of having them
+    loaded again; without it the lanes are read through :func:`extract_document`, whose cached path
+    rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader.
     """
     layout = DataLayout(settings.data_root)
     path = layout.comparison_path(
@@ -250,8 +304,9 @@ def compare_document(
         logger.info("comparison cache_hit doc=%s", document.document_id[:16])
         return ComparisonReport.read(path)
 
-    lane_a = extract_document(document, BACKEND_A, settings, client)
-    lane_b = extract_document(document, BACKEND_B, settings, client)
+    if lanes is None:
+        lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
+    lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
     matching = match_samples(lane_a, lane_b, client, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching)
     report.write(path)
@@ -277,6 +332,18 @@ class PipelineResult:
     report: ComparisonReport
     dataset: DocumentDataset
     excel_path: Path
+    dataset_json_path: Path
+
+
+def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
+    """The web UI reads the consolidated table from disk, so every path that produces one writes it.
+
+    The dataset carries the keys it was built under, which is what the JSON file is named after: an
+    export made with different settings lands beside the old one instead of overwriting it.
+    """
+    path = layout.dataset_json_path(dataset.document_id, dataset.extractor_key, dataset.comparison_key)
+    write_dataset_json(dataset, path)
+    return path
 
 
 def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
@@ -301,15 +368,44 @@ def run_document(
 
     lanes: dict[Backend, LaneExtraction] = {}
     with build_llm_client(settings) as client:
+        # The two lanes are independent and both spend their time waiting on the model, so they overlap.
+        # Nothing here touches pdf.py: extraction reads the stored artifact JSON and never opens the PDF,
+        # so PDFium's process-wide lock is not involved. Both lanes are handed the same `settings` and the
+        # same client, so they still ask the same model the same prompts at the same temperature -- only
+        # the text differs, which is the measurement. Every on_stage call is made from this thread:
+        # results are collected in BACKENDS order, so a caller's callback needs no locking of its own and
+        # the stage marks stay in a fixed order. (web/jobs.JobManager would tolerate worker threads anyway
+        # -- it replaces the frozen Job under its lock on every transition -- but not every caller is it.)
         for backend in BACKENDS:
             on_stage(f"extract:{backend}", "running", "")
-            lane = extract_document(document, backend, settings, client, force=force)
-            lanes[backend] = lane
-            ungrounded = len(lane.ungrounded())
-            detail = f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
-            on_stage(f"extract:{backend}", "done", detail)
+        with ThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
+            futures: dict[Backend, Future[LaneExtraction]] = {
+                backend: pool.submit(extract_document, document, backend, settings, client, force=force)
+                for backend in BACKENDS
+            }
+            # Every lane's outcome is collected before any of them is acted on, so an exception nobody
+            # asked for is logged rather than dropped by the garbage collector. A BaseException (a
+            # KeyboardInterrupt, say) still propagates straight out, as it always did; leaving the `with`
+            # then waits for the other lane.
+            extracted: dict[Backend, LaneExtraction] = {}
+            failures: list[tuple[Backend, Exception]] = []
+            for backend in BACKENDS:
+                try:
+                    extracted[backend] = futures[backend].result()
+                except Exception as exc:
+                    failures.append((backend, exc))
+            if failures:
+                # In BACKENDS order, so the first lane's failure wins as before; the rest are explanations.
+                for backend, exc in failures[1:]:
+                    logger.warning("extraction lane %s also failed with %s", backend, exc)
+                raise failures[0][1]
+            for backend, lane in extracted.items():
+                lanes[backend] = lane
+                ungrounded = len(lane.ungrounded())
+                detail = f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
+                on_stage(f"extract:{backend}", "done", detail)
         on_stage("compare", "running", "")
-        report = compare_document(document, settings, client, force=force)
+        report = compare_document(document, settings, client, force=force, lanes=lanes)
     counts = report.counts
     on_stage(
         "compare",
@@ -318,11 +414,18 @@ def run_document(
     )
     on_stage("export", "running", "")
     dataset = consolidate_document(document, lanes, report)
-    excel_path = DataLayout(settings.data_root).dataset_path(document.document_id)
+    layout = DataLayout(settings.data_root)
+    excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path)
+    dataset_json_path = _store_dataset(layout, dataset)
     on_stage("export", "done", str(excel_path))
     return PipelineResult(
-        parse_reports=parse_reports, lanes=lanes, report=report, dataset=dataset, excel_path=excel_path
+        parse_reports=parse_reports,
+        lanes=lanes,
+        report=report,
+        dataset=dataset,
+        excel_path=excel_path,
+        dataset_json_path=dataset_json_path,
     )
 
 
@@ -356,17 +459,20 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
     key = extractor_key_for(settings)
     report_path = layout.comparison_path(document.document_id, key, comparison_key())
     if not report_path.is_file():
-        raise FileNotFoundError(f"no current comparison for {document.pdf_path.name}; run `paperfacts run` first")
+        raise FileNotFoundError(f"no current comparison for {document.display_filename}; run `paperfacts run` first")
     report = ComparisonReport.read(report_path)
     lanes: dict[Backend, LaneExtraction] = {}
     for backend in BACKENDS:
         lane = read_lane(layout, document.document_id, backend, key)
         if lane is None:
-            raise FileNotFoundError(f"no current {backend} extraction for {document.pdf_path.name}")
+            raise FileNotFoundError(f"no current {backend} extraction for {document.display_filename}")
         lanes[backend] = lane
     # Grounding is rechecked on read, so comparison must use those same refreshed values.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
-    return consolidate_document(document, lanes, report)
+    dataset = consolidate_document(document, lanes, report)
+    # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
+    _store_dataset(layout, dataset)
+    return dataset
 
 
 def run_batch(

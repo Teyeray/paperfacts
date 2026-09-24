@@ -343,6 +343,8 @@ uv run paperfacts serve --host 0.0.0.0 --port 8000
 ```
 
 Recommended to run long-lived in tmux. The web UI is intended for local-network use only and
-has no authentication; add a reverse proxy and access control before exposing it externally.
+is protected by HTTP Basic auth once `PAPERFACTS_WEB_PASSWORD` is set in the server's `.env` (the
+username is `web.username` in config.json); every route, `/api` included, answers 401 without it. Set it
+before exposing the port, and still keep a reverse proxy with TLS in front of it.
 Uploaded PDFs and all derived artifacts live under `data/docs/<sha>/`, sharing the same
 directory layout as documents processed from the command line.

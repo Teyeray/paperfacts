@@ -82,7 +82,10 @@ def test_produce_result_is_written_as_meta_json_and_loaded_back(tmp_path: Path, 
     assert raw.backend_version == "fake-1.0"
     assert raw.cache_hit is False
     assert raw.out_dir == out_dir
-    assert parser.calls == [out_dir]
+    # _produce writes into a staging sibling; only a complete run is renamed onto out_dir.
+    assert parser.calls != [out_dir]
+    assert parser.calls[0].parent == out_dir.parent
+    assert parser.calls[0].name.startswith(f".{out_dir.name}.new.")
 
 
 def test_returning_none_means_meta_json_was_written_by_the_subclass(tmp_path: Path, document: DocumentInput):
@@ -179,16 +182,17 @@ def test_force_wipes_the_directory_before_rerunning(tmp_path: Path, document: Do
 # ---- Failure paths -----------------------------------------------------------------------
 
 
-def test_a_failing_produce_leaves_no_meta_json_behind(tmp_path: Path, document: DocumentInput):
-    # The other half of "meta.json's existence means output is complete": it must be absent
-    # when a run fails.
+def test_a_failing_produce_leaves_nothing_behind(tmp_path: Path, document: DocumentInput):
+    # The other half of "meta.json's existence means output is complete". The partial output is
+    # thrown away with its staging directory: keeping it would mean a failed forced rerun had
+    # already destroyed the previous good parse.
     out_dir = tmp_path / "raw"
 
     with pytest.raises(ParserError):
         FakeParser(fail=True).parse(document, out_dir)
 
-    assert not (out_dir / META_FILENAME).exists()
-    assert (out_dir / "native.json").is_file()  # the partial output stays, which helps debugging
+    assert not out_dir.exists()
+    assert list(tmp_path.glob(".raw*")) == []
 
 
 def test_a_failed_run_is_not_mistaken_for_a_cache_hit_next_time(tmp_path: Path, document: DocumentInput):

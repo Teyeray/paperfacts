@@ -46,11 +46,21 @@ class FieldSpec:
     description: str
     keywords: tuple[str, ...]
     canonical_unit: str | None = None
+    # A short Chinese name for the column header. Display only: it reaches no prompt and no verdict, so it
+    # stays out of the cache keys (see keys._SCHEMA_EXCLUDED). Empty means the UI falls back to ``name``.
+    label: str = ""
+    # The Chinese explanation of the field, for the web header tooltip and the Excel field sheet. Display
+    # only, like ``label``: no prompt and no verdict reads it, so it stays out of the cache keys.
+    description_zh: str = ""
     # Numeric tolerance: |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
     rel_tol: float = 0.0
     abs_tol: float = 0.0
     condition_hint: str | None = None
     bare_number: BareNumberPolicy = "reject"
+    # A closed set of canonical answers for a text field, e.g. ("DC", "RF", "DC+RF"). When a field has one,
+    # comparison goes through paperfacts.normalize.canonical_category instead of raw text equality, so
+    # "DC and RF magnetron co-sputtering" and "DC and RF" stop reading as two different modes.
+    categories: tuple[str, ...] = ()
 
     @property
     def is_sample_level(self) -> bool:
@@ -97,6 +107,22 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
     if not isinstance(description, str) or not description.strip():
         raise ConfigError(f"{where} needs a non-empty 'description'; it is what the model is told to look for")
 
+    label = entry.get("label", "")
+    if not isinstance(label, str) or ("label" in entry and not label.strip()):
+        raise ConfigError(f"{where}: label must be a non-empty string when present, got {entry.get('label')!r}")
+
+    description_zh = entry.get("description_zh", "")
+    if not isinstance(description_zh, str) or ("description_zh" in entry and not description_zh.strip()):
+        raise ConfigError(
+            f"{where}: description_zh must be a non-empty string when present, got {entry.get('description_zh')!r}"
+        )
+
+    categories = entry.get("categories", [])
+    if not isinstance(categories, list) or not all(isinstance(word, str) and word.strip() for word in categories):
+        raise ConfigError(f"{where}: categories must be a list of non-empty strings")
+    if categories and entry.get("kind") != "text":
+        raise ConfigError(f"{where}: categories is only meaningful for a text field, not a {entry.get('kind')!r} one")
+
     return FieldSpec(
         name=name,
         group=choice("group", get_args(FieldGroup)),  # type: ignore[arg-type]
@@ -104,10 +130,13 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         description=description,
         keywords=tuple(keywords),
         canonical_unit=text_or_none("canonical_unit"),
+        label=label,
+        description_zh=description_zh,
         rel_tol=number("rel_tol", 0.0),
         abs_tol=number("abs_tol", 0.0),
         condition_hint=text_or_none("condition_hint"),
         bare_number=choice("bare_number", get_args(BareNumberPolicy)) if "bare_number" in entry else "reject",  # type: ignore[arg-type]
+        categories=tuple(categories),
     )
 
 

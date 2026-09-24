@@ -5,15 +5,22 @@ Endpoints (all under ``/api``, JSON)::
 
     GET  /api/health
     GET  /api/documents                            document list (stage reached, counts)
+    GET  /api/dataset                              corpus results table (one paper_row per document)
+    GET  /api/dataset.xlsx                         the whole library as one Excel workbook
     POST /api/documents  (multipart file, ?force)  upload a PDF and queue it -> {document, job}
+    POST /api/documents/run-all?force=             queue every unfinished document (or all, with
+                                                    force) -> {submitted, skipped}
     POST /api/documents/{id}/run?force=            reprocess an existing document (reuses the
                                                     running job if the same document is active)
     GET  /api/documents/{id}                       single document summary
     GET  /api/documents/{id}/report                ComparisonReport
     GET  /api/documents/{id}/extraction/{backend}  normalized LaneExtraction
     GET  /api/documents/{id}/artifact/{backend}    ParsedArtifact (blocks + Markdown + page geometry)
+    GET  /api/documents/{id}/dataset               consolidated per-sample table (rows + field list)
+    GET  /api/documents/{id}/dataset.xlsx          the same data as the Excel workbook
     GET  /api/documents/{id}/pages/{page}.png?dpi= rendered page image (cached)
     GET  /api/documents/{id}/jobs                  this document's job list
+    GET  /api/jobs                                 every job of this process, newest first
     GET  /api/jobs/{job_id}                        job snapshot (stages, log)
 
 All business logic lives in :mod:`paperfacts.workflow` (the job body is ``run_document``); this
@@ -26,10 +33,11 @@ import base64
 import binascii
 import logging
 import secrets
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -39,10 +47,12 @@ from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
+from paperfacts.dataset import DatasetPayload, write_dataset
 from paperfacts.models import Backend, ParsedArtifact
+from paperfacts.parsers import install_runner_cleanup
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
-from paperfacts.web.documents import DocumentSummary, Library
+from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobManager, JobRunner
 from paperfacts.workflow import run_document, stage_names
 
@@ -50,6 +60,7 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_CHUNK_BYTES = 1 << 20
+EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class UploadAccepted(BaseModel):
@@ -57,6 +68,23 @@ class UploadAccepted(BaseModel):
 
     document: DocumentSummary
     job: Job
+
+
+class SkippedDocument(BaseModel):
+    """One document the bulk run did not queue, and why."""
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str
+    name: str
+    reason: str
+
+
+class RunAllAccepted(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    submitted: list[Job]
+    skipped: list[SkippedDocument]
 
 
 def pipeline_runner(settings: Settings, library: Library) -> JobRunner:
@@ -92,6 +120,9 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Jobs run on a worker thread, where signal handlers cannot be installed: arm the runner cleanup
+        # here, on the main thread, so a SIGTERM to the server takes the parser subprocesses with it.
+        install_runner_cleanup()
         yield
         manager.shutdown()  # stop accepting new jobs on shutdown; a job already running ends with the process
 
@@ -134,6 +165,29 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     def list_documents() -> list[DocumentSummary]:
         return library.list()
 
+    @app.get("/api/dataset")
+    def get_corpus() -> CorpusPayload:
+        """The home view's table: every document that has a dataset under the current keys. Reading N small
+        JSON files is cheap enough that a cache would only be a way to serve a stale table."""
+        return library.corpus()
+
+    @app.get("/api/dataset.xlsx")
+    def get_corpus_excel() -> Response:
+        """The same corpus, rebuilt into one workbook. It is built on demand rather than read from disk:
+        the per-document workbooks are not key-stamped, so only the datasets are a trustworthy source."""
+        datasets = library.corpus_datasets()
+        if not datasets:
+            raise HTTPException(status_code=404, detail="No consolidated dataset yet")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "paperfacts.xlsx"
+            write_dataset(datasets, path)
+            content = path.read_bytes()
+        return Response(
+            content=content,
+            media_type=EXCEL_MEDIA_TYPE,
+            headers={"content-disposition": 'attachment; filename="paperfacts-corpus.xlsx"'},
+        )
+
     @app.post("/api/documents", status_code=202)
     async def upload_document(
         file: Annotated[UploadFile, File()], force: Annotated[bool, Query()] = False
@@ -149,12 +203,44 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         job = manager.submit(key, force=force)
         return UploadAccepted(document=library.summary(key), job=job)
 
+    # Registration order matters: FastAPI matches in order, so this literal route must stay above the
+    # ``/api/documents/{document_id}`` routes, or "run-all" is read as a document id and answered with 404.
+    @app.post("/api/documents/run-all", status_code=202)
+    def run_all(force: Annotated[bool, Query()] = False) -> RunAllAccepted:
+        """Queue every document that is not finished yet (or every document at all, with force).
+
+        Same submission path as ``run_existing``, once per document in library order: a document
+        already queued or running simply gets its existing job back, so pressing the button twice
+        costs nothing.
+        """
+        submitted: list[Job] = []
+        skipped: list[SkippedDocument] = []
+        for summary in library.list():
+            if not library.runnable(summary.document_id):
+                skipped.append(
+                    SkippedDocument(
+                        document_id=summary.document_id, name=summary.name, reason="No PDF and no cached parse"
+                    )
+                )
+                continue
+            if summary.compared and not force:
+                skipped.append(
+                    SkippedDocument(
+                        document_id=summary.document_id, name=summary.name, reason="Already processed under these keys"
+                    )
+                )
+                continue
+            submitted.append(manager.submit(summary.document_id, force=force))
+        logger.info("run-all force=%s submitted=%d skipped=%d", force, len(submitted), len(skipped))
+        return RunAllAccepted(submitted=submitted, skipped=skipped)
+
     @app.post("/api/documents/{document_id}/run", status_code=202)
     def run_existing(document_id: str, force: Annotated[bool, Query()] = False) -> Job:
         require_document(document_id)
-        if library.pdf_path(document_id) is None:
+        if not library.runnable(document_id):
+            # A stored parse for both lanes is enough: extraction, comparison and export never open the PDF.
             raise HTTPException(
-                status_code=409, detail="This document has no available PDF to reprocess; please re-upload"
+                status_code=409, detail="No PDF and no cached parse for this document; re-upload it to process it"
             )
         return manager.submit(document_id, force=force)
 
@@ -186,6 +272,27 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
             raise HTTPException(status_code=404, detail=f"No parsed artifact yet for {backend}")
         return artifact
 
+    @app.get("/api/documents/{document_id}/dataset")
+    def get_dataset(document_id: str) -> DatasetPayload:
+        require_document(document_id)
+        dataset = library.dataset(document_id)
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="No consolidated dataset yet")
+        return dataset
+
+    @app.get("/api/documents/{document_id}/dataset.xlsx")
+    def get_dataset_excel(document_id: str) -> FileResponse:
+        summary = require_document(document_id)
+        path = library.dataset_excel(document_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="No Excel export yet")
+        return FileResponse(
+            path,
+            media_type=EXCEL_MEDIA_TYPE,
+            # The upload name is user input; the id is the safe, stable download name.
+            filename=f"paperfacts-{summary.document_id}.xlsx",
+        )
+
     @app.get("/api/documents/{document_id}/pages/{page}.png")
     def get_page_image(
         document_id: str,
@@ -210,6 +317,12 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         require_document(document_id)
         return manager.for_document(document_id)
 
+    @app.get("/api/jobs")
+    def list_all_jobs() -> list[Job]:
+        """Every job of this process, newest first: one request tells the library list which
+        documents are busy."""
+        return manager.all_jobs()
+
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> Job:
         job = manager.get(job_id)
@@ -217,8 +330,23 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
             raise HTTPException(status_code=404, detail=f"No job {job_id}")
         return job
 
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    app.mount("/", _RevalidatedStaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    """Static files that browsers must revalidate on every load.
+
+    There is no build step and no hashed filenames, so after a deploy the only thing standing between a
+    user and last week's modules is the browser's heuristic freshness on a Last-Modified header -- which
+    was observed serving a stale index.html for minutes. ``no-cache`` still allows caching; it only forces
+    the conditional request, which the ETag answers with a 304.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["cache-control"] = "no-cache"
+        return response
 
 
 async def _read_limited(file: UploadFile, limit: int) -> bytes:

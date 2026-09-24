@@ -101,6 +101,9 @@ class ResponseValue(BaseModel):
     condition: str | None = None
     source_ids: list[str] = Field(default_factory=list)
     note: str | None = None
+    applies_to_all_samples: bool = Field(
+        default=False, description="the excerpt states this value holds for every sample in the list"
+    )
 
 
 class FieldResponse(BaseModel):
@@ -124,6 +127,10 @@ class FieldValue(BaseModel):
     source_ids: tuple[str, ...] = ()
     note: str | None = None
     grounded: bool = Field(default=True, description="value_raw was located in the text of one of its cited blocks")
+    series: bool = Field(
+        default=False,
+        description="the paper stated this for the whole sample series; attached to this sample by fan-out",
+    )
     agreement: float = Field(
         default=1.0, ge=0.0, le=1.0, description="fraction of extraction passes that produced this value"
     )
@@ -250,6 +257,7 @@ class ResponseCleaning:
         source_ids: Sequence[str],
         note: str | None,
         known_ids: frozenset[str],
+        series: bool = False,
     ) -> FieldValue | None:
         """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
         text = value_raw.strip()
@@ -263,6 +271,7 @@ class ResponseCleaning:
             condition=_clean(condition),
             source_ids=self.keep_ids(source_ids, known_ids),
             note=_clean(note),
+            series=series,
         )
 
 

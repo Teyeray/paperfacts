@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from paperfacts.cli import BackendOption, app
 from paperfacts.errors import ParserError
+from paperfacts.fields import FIELD_SPECS
 from paperfacts.models import Backend, DocumentInput, RawParseOutput
 from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
@@ -242,3 +243,14 @@ def test_no_arguments_shows_help_instead_of_a_traceback():
 
     assert result.exit_code != 0
     assert "Usage" in result.output
+
+
+def test_fields_lists_every_field_the_package_loaded():
+    # The table lives in config.json; this is the one-glance check that an edit did what it was meant to.
+    result = runner.invoke(app, ["fields"])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    for spec in FIELD_SPECS:
+        assert any(line.startswith(spec.name) for line in lines)
+        assert any(f"keywords: {', '.join(spec.keywords)}" in line for line in lines)

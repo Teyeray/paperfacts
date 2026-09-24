@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.grounding import ground_lane, ground_values, grounding_key, is_grounded
+from paperfacts.grounding import block_adjacency, ground_lane, ground_values, grounding_key, is_grounded
 from paperfacts.records import FieldValue, TargetRecord
 from support.extraction import make_field, make_lane, make_sample
+from support.factories import make_block
 
 # ---- grounding_key: what gets folded away ----------------------------------------------
 
@@ -201,3 +202,106 @@ def test_how_strictly_a_value_must_appear_in_the_block_it_cites(value_raw, block
     value = FieldValue(field="inch", value_raw=value_raw, source_ids=("b1",))
 
     assert is_grounded(value, {"b1": block}) is grounded, why
+
+
+# ---- grounding across a block boundary -----------------------------------------------
+
+
+def make_blocks(*contents: str, page: int = 0) -> tuple[dict, dict]:
+    """A same-page run of blocks plus its two derived inputs: the text map and the adjacency map."""
+    seq = [make_block(page=page, order=order, content=content) for order, content in enumerate(contents)]
+    return {b.source_id: b.content for b in seq}, block_adjacency(seq)
+
+
+def test_a_quote_straddling_the_cited_block_and_its_next_neighbour_grounds():
+    # The README's observed failure: the model quoted a sentence that continues into the next block,
+    # citing only the first. Without adjacency the verdict is a false "ungrounded".
+    blocks, adjacency = make_blocks("The film consists of SnO2 and", "Sb2O3 in a 95:5 ratio.")
+    value = make_field("component", "and Sb2O3", source_ids=("mineru_p0_b0",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is True
+    assert is_grounded(value, blocks) is False
+
+
+def test_a_quote_straddling_a_previous_neighbour_and_the_cited_block_grounds():
+    # Same failure, mirrored: only the second half of the sentence was cited.
+    blocks, adjacency = make_blocks("The film consists of SnO2 and", "Sb2O3 in a 95:5 ratio.")
+    value = make_field("component", "SnO2 and", source_ids=("mineru_p0_b1",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is True
+    assert is_grounded(value, blocks) is False
+
+
+def test_a_quote_living_entirely_inside_the_neighbour_does_not_ground():
+    # The model cited a block that carries none of the quote; the neighbour merely happens to contain
+    # the words. Accepting that would replace grounding with "somewhere near the citation".
+    blocks, adjacency = make_blocks("The film consists of SnO2 and", "Sb2O3 in a 95:5 ratio.")
+    value = make_field("component", "consists of SnO2", source_ids=("mineru_p0_b1",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is False
+
+
+def test_a_neighbour_on_a_different_page_is_not_tried():
+    # A sentence broken by a page break is not one sentence; joining the two blocks would manufacture
+    # text that appears nowhere in the PDF.
+    first, _ = make_blocks("The film consists of SnO2 and", page=0)
+    second, _ = make_blocks("Sb2O3 in a 95:5 ratio.", page=1)
+    blocks = {**first, **second}
+    # The adjacency built from the actual page-split sequence has no same-page neighbours to offer.
+    adjacency = block_adjacency(
+        [
+            make_block(page=0, order=0, content="The film consists of SnO2 and"),
+            make_block(page=1, order=0, content="Sb2O3 in a 95:5 ratio."),
+        ]
+    )
+    value = make_field("component", "and Sb2O3", source_ids=("mineru_p0_b0",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is False
+
+
+def test_block_adjacency_reports_same_page_neighbours_only():
+    seq = [
+        make_block(page=0, order=0, content="one"),
+        make_block(page=0, order=1, content="two"),
+        make_block(page=1, order=0, content="three"),
+    ]
+
+    adjacency = block_adjacency(seq)
+
+    assert adjacency["mineru_p0_b0"] == (None, "mineru_p0_b1")
+    assert adjacency["mineru_p0_b1"] == ("mineru_p0_b0", None)  # the next entry is on page 1
+    assert adjacency["mineru_p1_b0"] == (None, None)
+
+
+def test_a_latex_mangled_formula_split_across_two_blocks_grounds_via_the_squeezed_straddle():
+    # MinerU shattered the formula across a block boundary; the squeezed join is the only place the
+    # full composition still exists contiguously.
+    blocks, adjacency = make_blocks(
+        r"target $\mathrm { S n O } _ { 2 } :", r"\mathrm { S b } _ { 2 } \mathrm { O } _ { 3 }$"
+    )
+    value = make_field("component", "SnO2:Sb2O3", source_ids=("mineru_p0_b0",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is True
+    assert is_grounded(value, blocks) is False
+
+
+def test_the_digit_rule_still_applies_across_the_junction():
+    # "for 4" + "0 min" is really "for 40 min" split by the parser; a needle "4" ending exactly at the
+    # junction must not count as its own number. The check has to run in squeezed coordinates, because
+    # the join's space is an artefact we inserted, not spacing the PDF had.
+    blocks, adjacency = make_blocks("the films were deposited for 4", "0 min at room temperature")
+    value = make_field("sputtering_time", "4", source_ids=("mineru_p0_b1",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is False
+
+
+def test_ground_lane_with_adjacency_flips_a_straddled_value_to_grounded_end_to_end():
+    blocks, adjacency = make_blocks("The film is made of SnO2", "and Sb2O3 in a 95:5 ratio.")
+    cited = "mineru_p0_b0"
+    lane = make_lane(samples=[make_sample("A", [make_field("component", "SnO2 and", source_ids=(cited,))])])
+
+    without = ground_lane(lane, blocks)
+    with_adjacency = ground_lane(lane, blocks, adjacency=adjacency)
+
+    assert without.sample("A").get("component").grounded is False
+    assert with_adjacency.sample("A").get("component").grounded is True

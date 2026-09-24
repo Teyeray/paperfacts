@@ -16,9 +16,12 @@ const ACTIVE_JOB_STATUS = new Set(["queued", "running"]);
 
 export const state = {
   docs: [],        // document library list (DocumentSummary[])
+  activeDocs: new Set(), // document_ids with a queued or running job (from GET /api/jobs)
   current: null,   // the open document_id (16 chars)
   summary: null,   // the current document's DocumentSummary
   report: null,    // ComparisonReport | null
+  dataset: null,   // the consolidated per-sample table (DocumentDataset.as_dict) | null
+  corpus: null,    // the home view's library-wide table ({ fields, rows }) | null
   lanes: {},       // { mineru: LaneExtraction | null, paddleocr_vl: ... }
   artifacts: {},   // { mineru: ParsedArtifact | null, paddleocr_vl: ... }
   job: null,       // the current document's most recent job snapshot (this process only)

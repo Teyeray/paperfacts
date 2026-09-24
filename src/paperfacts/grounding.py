@@ -13,8 +13,9 @@ differently -- MinerU emits ``$( 4 0 \\times 1 0 \\mathrm { c m }$`` where Paddl
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
+from paperfacts.models import SourceBlock
 from paperfacts.normalize import KEY_CHARACTERS, delatex, normalize_text
 from paperfacts.records import FieldValue, LaneExtraction
 
@@ -41,7 +42,30 @@ def grounding_key(text: str) -> str:
 _MIN_SQUEEZED_LENGTH = 4
 
 
-def is_grounded(value: FieldValue, blocks: Mapping[str, str]) -> bool:
+def block_adjacency(blocks: Sequence[SourceBlock]) -> dict[str, tuple[str | None, str | None]]:
+    """Map each block's source_id to ``(previous_id, next_id)`` within the given sequence.
+
+    A neighbour is the adjacent entry in reading order *on the same page* -- a sentence broken by a page
+    break is not a sentence split across two adjacent blocks, but two blocks from two different regions
+    of the document, and joining them would manufacture text that appears nowhere in the PDF.
+    """
+    adjacency: dict[str, tuple[str | None, str | None]] = {}
+    for index, block in enumerate(blocks):
+        previous = blocks[index - 1] if index > 0 and blocks[index - 1].page == block.page else None
+        nxt = blocks[index + 1] if index + 1 < len(blocks) and blocks[index + 1].page == block.page else None
+        adjacency[block.source_id] = (
+            previous.source_id if previous is not None else None,
+            nxt.source_id if nxt is not None else None,
+        )
+    return adjacency
+
+
+def is_grounded(
+    value: FieldValue,
+    blocks: Mapping[str, str],
+    *,
+    adjacency: Mapping[str, tuple[str | None, str | None]] | None = None,
+) -> bool:
     """True when ``value.value_raw`` appears in at least one of the blocks it cites."""
     needle = grounding_key(value.value_raw)
     if not needle or not value.source_ids:
@@ -51,8 +75,10 @@ def is_grounded(value: FieldValue, blocks: Mapping[str, str]) -> bool:
         return True
     squeezed = _squeeze(needle)
     if not _may_be_squeezed(squeezed):
-        return False
-    return any(squeezed in _squeeze(haystack) for haystack in cited)
+        return _grounded_across_boundary(needle, squeezed, False, value.source_ids, blocks, adjacency)
+    if any(squeezed in _squeeze(haystack) for haystack in cited):
+        return True
+    return _grounded_across_boundary(needle, squeezed, True, value.source_ids, blocks, adjacency)
 
 
 def _squeeze(text: str) -> str:
@@ -89,12 +115,99 @@ def _contains(haystack: str, needle: str) -> bool:
     return False
 
 
-def ground_values(values: tuple[FieldValue, ...], blocks: Mapping[str, str]) -> tuple[FieldValue, ...]:
+def _grounded_across_boundary(
+    needle: str,
+    squeezed: str,
+    squeezable: bool,
+    source_ids: tuple[str, ...],
+    blocks: Mapping[str, str],
+    adjacency: Mapping[str, tuple[str | None, str | None]] | None,
+) -> bool:
+    """Grounding across a block boundary, tried only after both in-block checks have failed.
+
+    The README documents a real failure this repairs: the model quoted "95% SnO2 and 5% Sb2O3" citing one
+    block, but the sentence straddles two adjacent blocks and only the second was cited -- the value is
+    real, yet was flagged ungrounded. A quote found in the join of the cited block and a same-page
+    neighbour, crossing the junction between them, is therefore accepted.
+
+    A quote lying entirely inside the neighbour is *not* accepted: the model cited a block that carries
+    none of the quote, and the neighbour merely happens to contain the words.
+    """
+    if adjacency is None:
+        return False
+    for source_id in source_ids:
+        cited = grounding_key(blocks.get(source_id, ""))
+        for neighbour_id in adjacency.get(source_id, (None, None)):
+            # A neighbour absent from the block map (e.g. pruned) has no text to join.
+            if neighbour_id is None or neighbour_id not in blocks:
+                continue
+            neighbour = grounding_key(blocks[neighbour_id])
+            # The cited block's side comes second for a previous neighbour, first for a next one, so the
+            # junction sits where the cited block's text begins/ends in the join.
+            pairs = (
+                (neighbour + " " + cited, len(neighbour)),
+                (cited + " " + neighbour, len(cited)),
+            )
+            for joined, junction in pairs:
+                if _straddles(joined, needle, junction):
+                    return True
+                if squeezable and _straddles(_squeeze(joined), squeezed, len(_squeeze(joined[:junction]))):
+                    return True
+    return False
+
+
+def _straddles(joined: str, needle: str, junction: int) -> bool:
+    """Whether ``needle`` crosses the junction between two joined blocks, obeying the digit rule.
+
+    Strictly one side is not enough: a match must reach from one block's text into the other's
+    (``start < junction <= end`` -- a needle ending exactly at the junction already touches both).
+    The digit-boundary strictness of :func:`_contains` applies in the joined text too, or a thickness
+    of "4" would ground via "deposited for 4" + "0 min" reading as "40".
+    """
+    for match in re.finditer(re.escape(needle), joined):
+        before = joined[match.start() - 1] if match.start() else ""
+        after = joined[match.end()] if match.end() < len(joined) else ""
+        if before.isdigit() or after.isdigit():
+            continue
+        if not (match.start() < junction <= match.end()):
+            continue
+        # The digit rule again, in squeezed coordinates: the space at the junction is an artefact of the
+        # join, not spacing the PDF had, so "4" ending at the junction of "…for 4" + "0 min…" is really
+        # the "4" of "40" and must not ground. Position mapping is a space count because squeezing only
+        # removes spaces; when ``joined`` is already squeezed the mapping is the identity. Only a needle
+        # that itself begins/ends with a digit can merge into a longer number, so the check is gated on
+        # that -- otherwise "and" following "SnO2" in the squeeze would be rejected as a digit run.
+        squeezed = _squeeze(joined)
+        start = match.start() - joined[: match.start()].count(" ")
+        end = match.end() - joined[: match.end()].count(" ")
+        squeezed_before = squeezed[start - 1] if start else ""
+        squeezed_after = squeezed[end] if end < len(squeezed) else ""
+        if needle[0].isdigit() and squeezed_before.isdigit():
+            continue
+        if needle[-1].isdigit() and squeezed_after.isdigit():
+            continue
+        return True
+    return False
+
+
+def ground_values(
+    values: tuple[FieldValue, ...],
+    blocks: Mapping[str, str],
+    *,
+    adjacency: Mapping[str, tuple[str | None, str | None]] | None = None,
+) -> tuple[FieldValue, ...]:
     """Return ``values`` with :attr:`FieldValue.grounded` filled in."""
-    return tuple(value.model_copy(update={"grounded": is_grounded(value, blocks)}) for value in values)
+    return tuple(
+        value.model_copy(update={"grounded": is_grounded(value, blocks, adjacency=adjacency)}) for value in values
+    )
 
 
-def ground_lane(lane: LaneExtraction, blocks: Mapping[str, str]) -> LaneExtraction:
+def ground_lane(
+    lane: LaneExtraction,
+    blocks: Mapping[str, str],
+    *,
+    adjacency: Mapping[str, tuple[str | None, str | None]] | None = None,
+) -> LaneExtraction:
     """Re-check every value in ``lane`` against ``blocks``.
 
     Grounding needs no model, so it is redone whenever a lane is read rather than trusted from the stored
@@ -103,13 +216,14 @@ def ground_lane(lane: LaneExtraction, blocks: Mapping[str, str]) -> LaneExtracti
     """
     target = lane.target
     if target is not None:
-        target = target.model_copy(update={"fields": ground_values(target.fields, blocks)})
+        target = target.model_copy(update={"fields": ground_values(target.fields, blocks, adjacency=adjacency)})
     return lane.model_copy(
         update={
             "target": target,
             "samples": tuple(
-                sample.model_copy(update={"fields": ground_values(sample.fields, blocks)}) for sample in lane.samples
+                sample.model_copy(update={"fields": ground_values(sample.fields, blocks, adjacency=adjacency)})
+                for sample in lane.samples
             ),
-            "unattributed": ground_values(lane.unattributed, blocks),
+            "unattributed": ground_values(lane.unattributed, blocks, adjacency=adjacency),
         }
     )

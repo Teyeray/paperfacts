@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
+from paperfacts.dataset import CellValue, DatasetPayload, DocumentDataset, FieldColumn
 from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
@@ -48,6 +50,28 @@ class DocumentSummary(BaseModel):
     compared: bool
     counts: ComparisonCounts | None = None
     uploaded_at: str | None = None
+
+
+class CorpusRow(BaseModel):
+    """One paper on the home view's library-wide table: its selected sample row and how many it had."""
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str
+    name: str
+    paper_row: dict[str, CellValue]
+    sample_count: int
+
+
+class CorpusPayload(BaseModel):
+    """The home view's table. The field list travels once at the top level rather than on every row --
+    it is the same list for every document, because a dataset written under a different field table
+    lives under a different extractor_key and is simply not read here."""
+
+    model_config = ConfigDict(frozen=True)
+
+    fields: tuple[FieldColumn, ...] = ()
+    rows: tuple[CorpusRow, ...] = ()
 
 
 class Library:
@@ -115,6 +139,66 @@ class Library:
         # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.
         return read_lane(self.layout, document_id, backend, self.extractor_key)
 
+    def dataset(self, document_id: str) -> DatasetPayload | None:
+        """The consolidated per-sample table, or ``None`` until the export ran under the current keys.
+
+        Validation happens here, at the disk boundary: a file in the wrong shape raises
+        ``ValidationError`` rather than travelling on as an untyped dict.
+        """
+        path = self.layout.dataset_json_path(document_id, self.extractor_key, self.comparison_key)
+        if not path.is_file():
+            return None
+        return DatasetPayload.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def corpus(self) -> CorpusPayload:
+        """The library-wide results table: one row per document that has a dataset under the current keys.
+
+        A document without a dataset is absent, not an empty row: the home view shows what has been
+        mined, not what is missing.
+        """
+        fields: tuple[FieldColumn, ...] = ()
+        rows: list[CorpusRow] = []
+        for summary, dataset in self._corpus_entries():
+            if not fields:
+                fields = dataset.fields
+            rows.append(
+                CorpusRow(
+                    document_id=summary.document_id,
+                    name=summary.name,
+                    paper_row=dataset.paper_row,
+                    sample_count=len(dataset.sample_rows),
+                )
+            )
+        return CorpusPayload(fields=fields, rows=tuple(rows))
+
+    def corpus_datasets(self) -> list[DocumentDataset]:
+        """The same documents as :meth:`corpus`, rebuilt as datasets so the whole library can be exported
+        as one workbook."""
+        return [DocumentDataset.from_payload(dataset) for _, dataset in self._corpus_entries()]
+
+    def _corpus_entries(self) -> Iterator[tuple[DocumentSummary, DatasetPayload]]:
+        """Every document that has a usable dataset under the current keys, in library order.
+
+        The corpus spans every document, so one corrupt, unreadable or wrongly shaped file must cost
+        exactly that one row -- never the whole table. A single-document read still raises, because
+        there the caller asked for *that* file and deserves the error.
+        """
+        for summary in self.list():
+            try:
+                dataset = self.dataset(summary.document_id)
+            except (OSError, ValidationError):
+                logger.warning("ignoring unusable dataset for doc=%s in the corpus listing", summary.document_id)
+                continue
+            if dataset is None:
+                continue
+            yield summary, dataset
+
+    def dataset_excel(self, document_id: str) -> Path | None:
+        """The workbook ``run`` wrote for this document. Unlike the JSON it is not key-stamped, so it is
+        whatever the last run produced -- good enough for a download, never for the table on screen."""
+        path = self.layout.dataset_path(document_id)
+        return path if path.is_file() else None
+
     def artifact(self, document_id: str, backend: Backend) -> ParsedArtifact | None:
         path = self.layout.artifact_path(document_id, backend)
         return ParsedArtifact.read(path) if path.is_file() else None
@@ -140,6 +224,19 @@ class Library:
             raise FileNotFoundError("This document has no available PDF to render pages from")
         return render_page_cached(pdf, page, dpi=dpi, cache_dir=self.layout.page_cache_dir(document_id, dpi))
 
+    def has_cached_parse(self, document_id: str) -> bool:
+        """Whether both lanes' artifacts are on disk, so the pipeline can run without ever opening the PDF."""
+        self._require_key(document_id)
+        return all(self.layout.artifact_path(document_id, backend).is_file() for backend in BACKENDS)
+
+    def runnable(self, document_id: str) -> bool:
+        """Whether ``run_document`` can be asked to process this document at all.
+
+        A PDF is only needed for a real parse. A document parsed on another machine arrives here with both
+        artifacts and no PDF, and extraction, comparison and export need nothing else.
+        """
+        return self.pdf_path(document_id) is not None or self.has_cached_parse(document_id)
+
     def document(self, document_id: str) -> DocumentInput:
         identity = self.identity(document_id)
         if identity is None:
@@ -148,10 +245,17 @@ class Library:
             )
         pdf = self.pdf_path(document_id)
         if pdf is None:
-            raise FileNotFoundError(
-                f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
-            )
-        return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256)
+            if not self.has_cached_parse(document_id):
+                raise FileNotFoundError(
+                    f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
+                )
+            # Both artifacts are stored, so nothing downstream opens the file. A path is carried anyway,
+            # pointing at where this document's PDF would live if it had one: the export names its
+            # workbook from ``display_name`` (set below), so no path has to be invented to name it.
+            pdf = self.layout.source_pdf(identity.sha256)
+        return DocumentInput(
+            document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name
+        )
 
     def register_upload(self, filename: str, data: bytes) -> DocumentInput:
         """Store an uploaded PDF in its document directory (re-uploading the same content is
@@ -164,14 +268,16 @@ class Library:
         """
         sha = hashlib.sha256(data).hexdigest()
         pdf = self.layout.source_pdf(sha)
-        document = DocumentInput(document_id=sha, pdf_path=pdf, sha256=sha)
         name = Path(filename).name or f"{document_key(sha)}.pdf"
+        document = DocumentInput(document_id=sha, pdf_path=pdf, sha256=sha)
         identity = ensure_identity(self.layout, document, name=name, uploaded=True)
         if not pdf.is_file() or pdf.stat().st_size != len(data):
             write_bytes_atomic(pdf, data)
-        mark_uploaded(self.layout, identity, name=name)
+        identity = mark_uploaded(self.layout, identity, name=name)
         logger.info("registered upload doc=%s name=%s bytes=%d", document_key(sha), filename, len(data))
-        return document
+        # The stored PDF is always source.pdf, so the name a user sees can only come from the identity --
+        # the one already on disk, so a re-upload of the same bytes returns exactly what the first did.
+        return document.model_copy(update={"display_name": identity.name})
 
     # ---- internal -----------------------------------------------------------------------
 

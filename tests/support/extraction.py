@@ -100,6 +100,7 @@ def make_lane(
     model: str = DEFAULT_MODEL,
     invalid_source_ids: Sequence[str] = (),
     dropped: Sequence[str] = (),
+    unattributed: Iterable[FieldValue] = (),
     usage: Mapping[str, int] | None = None,
     raw_response: str = "",
 ) -> LaneExtraction:
@@ -113,6 +114,7 @@ def make_lane(
         samples=tuple(samples),
         invalid_source_ids=tuple(invalid_source_ids),
         dropped=tuple(dropped),
+        unattributed=tuple(unattributed),
         usage=dict(usage or {}),
         raw_response=raw_response,
     )

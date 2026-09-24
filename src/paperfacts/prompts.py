@@ -44,7 +44,8 @@ Output ONLY a JSON object with this exact shape (no prose):
 
 FIELD = {"field": "<field name from the table below>", "value_raw": "<exactly as written in the paper>",
          "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
-         "source_ids": ["<id of the block where this value appears>", ...], "note": "<optional remark or null>"}
+         "source_ids": ["<id of the block where this value appears>", ...], "note": "<optional remark or null>",
+         "applies_to_all_samples": <true|false>}
 
 Rules:
 1. `value_raw` must be copied verbatim from the paper (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
@@ -101,19 +102,21 @@ Output ONLY a JSON object with this exact shape (no prose):
 
 VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exactly as written in the paper>",
          "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
-         "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>"}
+         "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>",
+         "applies_to_all_samples": <true|false>}
 
 Rules:
 1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
 2. Put the unit in `unit_raw` exactly as written (e.g. "Ω/sq", "μm", "sccm"). If the number and unit are fused, split them.
 3. `source_ids` must be copied from the `<!-- source: ... -->` markers shown here. Never invent ids and never cite an excerpt you were not shown. Prefer the most specific excerpt (a table over the surrounding paragraph).
 4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
-5. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
+5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, "all films", "for all samples". Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ("the sputtered films", when one listed sample is not sputtered) is false: give the individual sample ids the excerpt names.
+6. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
    For a numeric field `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
-6. If the same field has several values -- one per sample, or the same sample under different conditions (e.g. transmittance at 550 nm and averaged) -- report them as separate entries with `condition` set.
-7. For `transmittance` always fill `condition` with the wavelength or spectral range.
-8. Every value is verified against the excerpt you cite for it: if `value_raw` cannot be found in that excerpt's text, the value is recorded as unverified. Cite the excerpt that literally contains the characters you copied, and copy them exactly.
-9. If the excerpts do not state this field at all, return {"values": []}. An empty answer is a correct answer.
+7. If the same field has several values -- one per sample, or the same sample under different conditions (e.g. transmittance at 550 nm and averaged) -- report them as separate entries with `condition` set.
+8. For `transmittance` always fill `condition` with the wavelength or spectral range.
+9. Every value is verified against the excerpt you cite for it: if `value_raw` cannot be found in that excerpt's text, the value is recorded as unverified. Cite the excerpt that literally contains the characters you copied, and copy them exactly.
+10. If the excerpts do not state this field at all, return {"values": []}. An empty answer is a correct answer.
 
 Return the JSON object only."""
 

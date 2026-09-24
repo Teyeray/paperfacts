@@ -4,7 +4,7 @@
 import { api } from "./api.js";
 import { escapeHtml, toast } from "./html.js";
 import { documentHash, navigate } from "./router.js";
-import { LANES, LANE_LABEL, state } from "./state.js";
+import { LANES, LANE_LABEL, isActive, state } from "./state.js";
 
 export async function loadLibrary() {
   try {
@@ -13,7 +13,22 @@ export async function loadLibrary() {
     toast(`读取文档库失败：${error.message}`, true);
     return;
   }
+  await loadActiveDocs();
   renderLibrary();
+}
+
+// Which documents are busy right now. DocumentSummary knows nothing about jobs, so this is one
+// extra request for the whole list — never one per row.
+async function loadActiveDocs() {
+  try {
+    const jobs = await api("/api/jobs");
+    state.activeDocs = new Set(jobs.filter(isActive).map((job) => job.document_id));
+  } catch (error) {
+    // The marker is a nicety; a failure here must not hide the library — but it must not vanish
+    // without trace either, or a broken /api/jobs looks like "nothing is running".
+    console.warn("读取任务列表失败：", error);
+    state.activeDocs = new Set();
+  }
 }
 
 export function renderLibrary() {
@@ -30,7 +45,8 @@ export function renderLibrary() {
     button.className = "doc-item" + (doc.document_id === state.current ? " active" : "");
     button.innerHTML = `
       <div class="name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</div>
-      <div class="sub"><span class="dots">${progressDots(doc)}</span>${miniCounts(doc)}<code>${doc.document_id.slice(0, 8)}</code></div>`;
+      <div class="sub"><span class="dots">${progressDots(doc)}</span>${queuedMark(doc)}<code>${escapeHtml(doc.document_id.slice(0, 8))}</code></div>
+      ${miniCounts(doc)}`;
     button.addEventListener("click", () => navigate(documentHash(doc.document_id)));
     li.append(button);
     list.append(li);
@@ -49,9 +65,27 @@ function progressDots(doc) {
     .join("");
 }
 
+function queuedMark(doc) {
+  return state.activeDocs.has(doc.document_id)
+    ? `<span class="queued" role="img" title="排队或处理中" aria-label="排队或处理中">\u23f3</span>`
+    : "";
+}
+
+// The comparison tally as four small badges. Each keeps its status colour but always carries the
+// count and a word, so the row stays readable without relying on colour.
 function miniCounts(doc) {
   const c = doc.counts;
-  return c ? `<span class="mini-counts" title="agree / conflict / ambiguous / missing">${c.agree}✓ ${c.conflict}✗ ${c.ambiguous}? ${c.missing}–</span>` : "";
+  if (!c) return "";
+  const items = [
+    ["agree", "一致", c.agree],
+    ["conflict", "冲突", c.conflict],
+    ["ambiguous", "不确定", c.ambiguous],
+    ["missing", "缺失", c.missing],
+  ];
+  const badges = items
+    .map(([kind, label, n]) => `<span class="tally-item ${kind}${n ? "" : " zero"}" title="${label}：${n}"><i></i>${n}<em>${label}</em></span>`)
+    .join("");
+  return `<div class="tally">${badges}</div>`;
 }
 
 export function setupUpload() {
@@ -80,4 +114,26 @@ async function upload(file) {
   } finally {
     zone.classList.remove("busy");
   }
+}
+
+// Queue everything that is not finished yet. The backend decides what counts as unfinished; here we
+// only report how many went in and how many were left out.
+export function setupRunAll() {
+  const button = document.getElementById("run-all");
+  button.addEventListener("click", async () => {
+    const force = document.getElementById("upload-force").checked;
+    // A forced bulk run re-parses every PDF as well, which on a laptop without the MLX service is hours per
+    // paper on a single worker: worth one question before it is queued.
+    if (force && !window.confirm(`将忽略缓存、强制重跑全部 ${state.docs.length} 篇（含重新解析 PDF），确定？`)) return;
+    button.disabled = true;
+    try {
+      const result = await api(`/api/documents/run-all?force=${force}`, { method: "POST" });
+      toast(`已排队 ${result.submitted.length} 篇，跳过 ${result.skipped.length} 篇`);
+      await loadLibrary();
+    } catch (error) {
+      toast(`批量处理失败：${error.message}`, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
 }

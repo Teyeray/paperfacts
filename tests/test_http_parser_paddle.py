@@ -270,9 +270,9 @@ def test_missing_markdown_in_the_response_writes_an_empty_page_markdown(tmp_path
     assert (markdown_dir / f"page_{0:03d}.md").read_text(encoding="utf-8") == ""
 
 
-def test_a_page_failing_midway_leaves_no_meta_json_behind(tmp_path: Path, document: DocumentInput):
-    # Page 0 succeeds, page 1 fails: the directory holds half a set of native output, but there
-    # must never be a meta.json.
+def test_a_page_failing_midway_leaves_nothing_behind(tmp_path: Path, document: DocumentInput):
+    # Page 0 succeeds, page 1 fails. The half-written pages go into a staging directory that is
+    # discarded, so the target never exists and a previous good parse would have survived.
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -288,4 +288,5 @@ def test_a_page_failing_midway_leaves_no_meta_json_behind(tmp_path: Path, docume
         parser.parse(document, out_dir)
 
     assert not (out_dir / META_FILENAME).exists()
-    assert parsers.paddle_page_files(parsers.paddle_pages_dir(out_dir), 0)[1].is_file()
+    assert not out_dir.exists()
+    assert list(tmp_path.glob(".raw*")) == []

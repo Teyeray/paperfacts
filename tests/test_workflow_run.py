@@ -9,6 +9,10 @@ client is shared and then closed.
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +38,13 @@ class PipelineSpy:
     compare: list[bool] = field(default_factory=list)
     clients: list[object] = field(default_factory=list)
     client: FakeLlmClient = field(default_factory=lambda: FakeLlmClient([]))
+    # The lanes each compare_document call was handed, so a test can prove they are the extracted ones.
+    compare_lanes: list[Mapping[Backend, LaneExtraction] | None] = field(default_factory=list)
+    # Both lanes record themselves from their own thread, so the recorder needs a lock of its own.
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    # How many lanes were inside the fake extract at once: 2 proves they really overlapped.
+    peak_concurrent_lanes: int = 0
+    _in_flight: int = 0
 
 
 def install_fake_pipeline(
@@ -65,8 +76,15 @@ def install_fake_pipeline(
     def fake_extract(
         document: DocumentInput, backend: Backend, settings: Settings, client: object, *, force: bool = False
     ) -> LaneExtraction:
-        spy.extract.append((backend, force))
-        spy.clients.append(client)
+        with spy.lock:
+            spy.extract.append((backend, force))
+            spy.clients.append(client)
+            spy._in_flight += 1
+            spy.peak_concurrent_lanes = max(spy.peak_concurrent_lanes, spy._in_flight)
+        # Long enough that a sequential implementation could not show two lanes in flight at once.
+        time.sleep(0.05)
+        with spy.lock:
+            spy._in_flight -= 1
         return make_lane(
             backend=backend,
             document_id=document.document_id,
@@ -74,10 +92,16 @@ def install_fake_pipeline(
         )
 
     def fake_compare(
-        document: DocumentInput, settings: Settings, client: object, *, force: bool = False
+        document: DocumentInput,
+        settings: Settings,
+        client: object,
+        *,
+        force: bool = False,
+        lanes: Mapping[Backend, LaneExtraction] | None = None,
     ) -> ComparisonReport:
         spy.compare.append(force)
         spy.clients.append(client)
+        spy.compare_lanes.append(lanes)
         return ComparisonReport(
             document_id=document.document_id,
             extractor_key="0123456789ab",
@@ -134,16 +158,18 @@ def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: Docum
         ("parse:mineru", "done", "11 blocks"),
         ("parse:paddleocr_vl", "running", ""),
         ("parse:paddleocr_vl", "done", "11 blocks"),
+        # The two lanes run as a pair, so both are announced before either can finish; their "done"
+        # marks are still emitted in BACKENDS order, from the calling thread.
         ("extract:mineru", "running", ""),
-        ("extract:mineru", "done", "2 samples"),
         ("extract:paddleocr_vl", "running", ""),
+        ("extract:mineru", "done", "2 samples"),
         ("extract:paddleocr_vl", "done", "2 samples"),
         ("compare", "running", ""),
         ("compare", "done", "agree 3 · conflict 1 · ambiguous 2 · missing 4"),
         ("export", "running", ""),
         ("export", "done", str(settings.data_root / "docs" / document.document_id[:16] / "dataset.xlsx")),
     ]
-    assert [name for name, _, _ in marks[::2]] == list(stage_names())
+    assert [name for name, status, _ in marks if status == "running"] == list(stage_names())
 
 
 def test_a_cached_parse_says_so_in_the_stage_detail(monkeypatch, document: DocumentInput, settings: Settings):
@@ -164,6 +190,9 @@ def test_the_result_carries_every_intermediate_product(monkeypatch, document: Do
     assert {backend: len(lane.samples) for backend, lane in result.lanes.items()} == {b: 3 for b in BACKENDS}
     assert result.report.counts.agree == 3
     assert result.excel_path.is_file()
+    # The web UI reads the consolidated table from this file, so the run must leave one behind.
+    assert result.dataset_json_path.is_file()
+    assert result.dataset_json_path.name == f"{result.dataset.extractor_key}.{result.dataset.comparison_key}.json"
     assert result.dataset.document_id == document.document_id
 
 
@@ -173,7 +202,8 @@ def test_force_reaches_every_step(monkeypatch, document: DocumentInput, settings
     run(document, settings, force=True)
 
     assert spy.parse == [("mineru", True), ("paddleocr_vl", True)]
-    assert spy.extract == [("mineru", True), ("paddleocr_vl", True)]
+    # Lane order is a race now that they run together, so it is the set that carries the meaning.
+    assert sorted(spy.extract) == [("mineru", True), ("paddleocr_vl", True)]
     assert spy.compare == [True]
 
 
@@ -183,7 +213,7 @@ def test_nothing_is_forced_by_default(monkeypatch, document: DocumentInput, sett
     run(document, settings)
 
     assert spy.parse == [("mineru", False), ("paddleocr_vl", False)]
-    assert spy.extract == [("mineru", False), ("paddleocr_vl", False)]
+    assert sorted(spy.extract) == [("mineru", False), ("paddleocr_vl", False)]
     assert spy.compare == [False]
 
 
@@ -219,7 +249,13 @@ def test_the_running_stage_is_the_last_mark_when_a_step_blows_up(
     with pytest.raises(RuntimeError, match="not return JSON"):
         run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
 
-    assert marks[-1] == ("extract:mineru", "running", "")
+    # Both lanes were announced and neither finished, so the job layer marks both failed -- which is
+    # right: the run stopped there.
+    assert [m for m in marks if m[0].startswith("extract:")] == [
+        ("extract:mineru", "running", ""),
+        ("extract:paddleocr_vl", "running", ""),
+    ]
+    assert marks[-1][1] == "running"
 
 
 def test_the_stage_callback_is_optional(monkeypatch, document: DocumentInput, settings: Settings):
@@ -228,3 +264,107 @@ def test_the_stage_callback_is_optional(monkeypatch, document: DocumentInput, se
     result = run_document(document, settings)
 
     assert result.report.counts.total == 10
+
+
+# ---- The two lanes overlap ----------------------------------------------------------------
+
+
+def test_both_lanes_extract_at_the_same_time(monkeypatch, document: DocumentInput, settings: Settings):
+    """The lanes are independent and both spend their time waiting on the model, so they must overlap.
+
+    Run one after the other, a paper costs the sum of the two lanes instead of the slower one.
+    """
+    spy = install_fake_pipeline(monkeypatch)
+
+    marks, result = run(document, settings)
+
+    assert spy.peak_concurrent_lanes == 2
+    assert set(result.lanes) == set(BACKENDS)
+    for backend in BACKENDS:
+        assert (f"extract:{backend}", "done", "2 samples") in marks
+
+
+def test_a_lane_failure_still_surfaces_as_itself(monkeypatch, document: DocumentInput, settings: Settings):
+    """Running the lanes together must not wrap, swallow or reorder the error one of them raises."""
+    install_fake_pipeline(monkeypatch)
+
+    def failing_extract(document, backend, settings, client, *, force: bool = False):
+        if backend == BACKENDS[1]:
+            raise RuntimeError("paddle lane exploded")
+        return make_lane(backend=backend, samples=(make_sample("A"),))
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
+
+    with pytest.raises(RuntimeError, match="paddle lane exploded"):
+        run_document(document, settings)
+
+
+def test_the_client_is_closed_even_when_a_lane_fails(monkeypatch, document: DocumentInput, settings: Settings):
+    """The other lane is awaited on the way out, so the shared client is never closed underneath it."""
+    spy = install_fake_pipeline(monkeypatch)
+
+    def failing_extract(document, backend, settings, client, *, force: bool = False):
+        raise RuntimeError("both lanes exploded")
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
+
+    with pytest.raises(RuntimeError, match="both lanes exploded"):
+        run_document(document, settings)
+
+    assert spy.client.closed is True
+
+
+def test_the_report_is_built_from_the_lanes_that_were_extracted(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    """The comparison must not re-load what the run already holds: one extraction per backend per run,
+    and the very objects it produced are the ones compare_document is handed."""
+    spy = install_fake_pipeline(monkeypatch)
+
+    result = run_document(document, settings)
+
+    assert [backend for backend, _ in spy.extract] == list(BACKENDS)  # exactly one extraction per lane
+    assert spy.compare_lanes == [result.lanes]
+    for backend in BACKENDS:
+        assert spy.compare_lanes[0][backend] is result.lanes[backend]
+
+
+def test_the_first_lane_in_backends_order_wins_when_both_fail(
+    monkeypatch, document: DocumentInput, settings: Settings, caplog
+):
+    """Both lanes are collected before either is acted on: the first in BACKENDS order is raised and the
+    other one's exception is logged rather than dropped."""
+    install_fake_pipeline(monkeypatch)
+
+    def failing_extract(document, backend, settings, client, *, force: bool = False):
+        raise RuntimeError(f"{backend} lane exploded")
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
+
+    with caplog.at_level(logging.WARNING, logger="paperfacts.workflow"):
+        with pytest.raises(RuntimeError, match=f"{BACKENDS[0]} lane exploded"):
+            run_document(document, settings)
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"{BACKENDS[1]} lane exploded" in logged
+    assert f"{BACKENDS[0]} lane exploded" not in logged  # the one that was raised is not also logged
+
+
+def test_a_surviving_lane_is_not_reported_as_a_failure(
+    monkeypatch, document: DocumentInput, settings: Settings, caplog
+):
+    """Only the lane that raised is explained; the one that succeeded has nothing to say."""
+    install_fake_pipeline(monkeypatch)
+
+    def failing_extract(document, backend, settings, client, *, force: bool = False):
+        if backend == BACKENDS[0]:
+            raise RuntimeError("mineru lane exploded")
+        return make_lane(backend=backend, samples=(make_sample("A"),))
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
+
+    with caplog.at_level(logging.WARNING, logger="paperfacts.workflow"):
+        with pytest.raises(RuntimeError, match="mineru lane exploded"):
+            run_document(document, settings)
+
+    assert [record for record in caplog.records if "also failed" in record.getMessage()] == []
