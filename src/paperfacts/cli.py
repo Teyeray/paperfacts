@@ -102,6 +102,14 @@ ModeOpt = Annotated[
     ModeOption | None,
     typer.Option("--mode", help="how to ask the model: the whole paper at once, or one question per field"),
 ]
+FiguresOpt = Annotated[
+    bool | None,
+    typer.Option(
+        "--figures/--no-figures",
+        help="read property-vs-condition charts with the vision model (about a minute per chart); "
+        "default: figures.enabled in config.json",
+    ),
+]
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="ignore caches and redo this step (extraction re-calls the LLM, which costs)")
 ]
@@ -110,9 +118,16 @@ ForceOpt = Annotated[
 REPORTABLE_ERRORS = (PaperFactsError, FileNotFoundError)
 
 
-def _settings(data_root: Path | None, passes: int | None = None, mode: ModeOption | None = None) -> Settings:
+def _settings(
+    data_root: Path | None,
+    passes: int | None = None,
+    mode: ModeOption | None = None,
+    figures: bool | None = None,
+) -> Settings:
     settings = Settings.from_env()
     changes: dict[str, object] = {}
+    if figures is not None:
+        changes["figures_enabled"] = figures
     if data_root is not None:
         changes["data_root"] = data_root
     if passes is not None:
@@ -241,12 +256,13 @@ def run(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    figures: FiguresOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Parse, extract, compare and automatically save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode)
+    settings = _settings(data_root, passes, mode, figures)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -261,6 +277,8 @@ def run(
     for lane in result.lanes.values():
         _echo_lines(render_lane(lane))
     _echo_lines(render_report(result.report))
+    if result.figures is not None and result.figures.readings:
+        typer.echo(f"figure readings: {len(result.figures.readings)} (approximate; sheet 图中读数)")
     typer.echo(f"Excel -> {result.excel_path}")
 
 
@@ -288,12 +306,13 @@ def batch(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    figures: FiguresOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
-    _batch_summary(source, _settings(data_root, passes, mode), output, force=force, export_only=False)
+    _batch_summary(source, _settings(data_root, passes, mode, figures), output, force=force, export_only=False)
 
 
 @app.command()

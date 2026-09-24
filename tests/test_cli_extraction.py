@@ -442,3 +442,34 @@ def test_a_missing_pdf_is_rejected_before_any_work(command, tmp_path: Path, data
     result = runner.invoke(app, [command, str(tmp_path / "nope.pdf"), "--data-root", str(data_root)])
 
     assert result.exit_code == 2
+
+
+@pytest.mark.parametrize(("flag", "expected"), [("--figures", True), ("--no-figures", False), (None, False)])
+def test_the_figures_flag_reaches_run(monkeypatch, two_page_pdf: Path, data_root: Path, flag, expected):
+    monkeypatch.delenv("PAPERFACTS_FIGURES_ENABLED", raising=False)
+    captured: list[Settings] = []
+
+    def fake_run_document(document: DocumentInput, settings: Settings, *, force: bool = False, on_stage=None):
+        captured.append(settings)
+        raise ParserError("mineru", "run", "stop here, the flag has already been observed")
+
+    monkeypatch.setattr("paperfacts.cli.run_document", fake_run_document)
+
+    runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), *([flag] if flag else [])])
+
+    assert captured[0].figures_enabled is expected
+
+
+@pytest.mark.parametrize(("flag", "expected"), [("--figures", True), ("--no-figures", False)])
+def test_the_figures_flag_reaches_batch(monkeypatch, two_page_pdf: Path, data_root: Path, flag, expected):
+    captured: list[Settings] = []
+
+    def fake_run_batch(source: Path, settings: Settings, **kwargs):
+        captured.append(settings)
+        raise ParserError("mineru", "run", "stop here")
+
+    monkeypatch.setattr("paperfacts.cli.run_batch", fake_run_batch)
+
+    runner.invoke(app, ["batch", str(two_page_pdf.parent), "--data-root", str(data_root), flag])
+
+    assert captured[0].figures_enabled is expected

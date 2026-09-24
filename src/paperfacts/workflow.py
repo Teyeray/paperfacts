@@ -1,4 +1,4 @@
-"""Orchestration: parser -> adapter -> disk, then extraction, then comparison.
+"""Orchestration: parser -> adapter -> disk, then figure reading (opt-in), extraction, comparison, export.
 
 This is the only place that decides which parser implementation runs: a configured ``*_url`` means an HTTP
 service (a GPU server), an empty one means the ``runners/`` script as a subprocess (a workstation).
@@ -22,14 +22,18 @@ from paperfacts.config import Settings
 from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.extract import extract_lane, informative_blocks
+from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
+from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
+from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
+from paperfacts.figures import FigureReadings, read_figures
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import comparison_key, extractor_key_for
-from paperfacts.llm import LlmClient, OpenAICompatibleClient
+from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
+from paperfacts.llm import LlmClient, OpenAICompatibleClient, VisionClient
 from paperfacts.matching import match_samples
-from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
+from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
-from paperfacts.pdf import read_geometry
+from paperfacts.pdf import png_bytes, read_geometry, render_region
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity
 
@@ -319,6 +323,130 @@ def compare_document(
     return report
 
 
+# ---- Figure reading ------------------------------------------------------------------------------------
+
+
+def build_vision_client(settings: Settings) -> OpenAICompatibleClient:
+    """The figures stage's own client: the LLM's endpoint and key, the vision model, one retry.
+
+    A separate client rather than the extraction one, so the vision model can never answer an extraction
+    question by accident and its long timeout never applies to one.
+    """
+    return OpenAICompatibleClient(
+        settings.llm_base_url,
+        settings.require_llm_api_key(),
+        settings.figures_model,
+        timeout_s=settings.figures_timeout_s,
+        cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
+        temperature=FIGURE_TEMPERATURE,
+        max_tokens=FIGURE_MAX_TOKENS,
+        reasoning_effort=None,
+        retry_attempts=FIGURE_RETRY_ATTEMPTS,
+        retry_backoff_s=settings.llm_retry_backoff_s,
+    )
+
+
+def _figure_artifact(document: DocumentInput, settings: Settings) -> ParsedArtifact:
+    """Whose figure blocks are cropped: MinerU's, else PaddleOCR-VL's. Both parsers box the same chart, so
+    one is enough, and a fixed preference keeps the citations of a document stable run to run."""
+    for backend in BACKENDS:
+        path = DataLayout(settings.data_root).artifact_path(document.document_id, backend)
+        if path.is_file():
+            return ParsedArtifact.read(path)
+    raise FileNotFoundError(f"no parse artifact for {document.display_filename}; run `paperfacts parse` first")
+
+
+def stored_figures(document_id: str, settings: Settings) -> FigureReadings | None:
+    """The readings stored under the current settings, whether or not the stage is switched on.
+
+    Switching the stage off stops the asking, not the showing: a paper read once keeps its readings in the
+    dataset when a later run (say, the web job, where the stage is off) exports it again.
+    """
+    path = DataLayout(settings.data_root).figures_path(document_id, figure_key_for(settings))
+    if not path.is_file():
+        return None
+    try:
+        return FigureReadings.read(path)
+    except (OSError, ValueError) as exc:
+        logger.warning("stored figure readings at %s are unreadable (%s); ignoring them", path, exc)
+        return None
+
+
+def read_document_figures(
+    document: DocumentInput, settings: Settings, client: VisionClient, *, force: bool = False
+) -> FigureReadings:
+    """Read the charts of one document, or return the stored readings.
+
+    A stored file with a failed request in it is read again: the panels that did answer replay from the LLM
+    cache for free, and only the failed ones cost a request. ``force`` re-asks every panel.
+    """
+    layout = DataLayout(settings.data_root)
+    key = figure_key_for(settings, client.model)
+    path = layout.figures_path(document.document_id, key)
+    if not force and path.is_file():
+        stored = FigureReadings.read(path)
+        if stored.complete:
+            logger.info("figures cache_hit doc=%s", document.document_id[:16])
+            return stored
+    artifact = _figure_artifact(document, settings)
+    if not document.pdf_path.is_file():
+        raise FileNotFoundError("PDF not available; figure reading crops the charts from it, re-upload to read them")
+
+    def render(page: int, bbox: NormalizedBBox) -> bytes:
+        crop = render_region(
+            document.pdf_path, page, bbox, dpi=settings.figures_dpi, max_pixels=settings.figures_max_pixels
+        )
+        return png_bytes(crop)
+
+    readings = read_figures(
+        artifact,
+        render,
+        client,
+        figure_key=key,
+        max_per_document=settings.figures_max_per_document,
+        concurrency=settings.llm_concurrency,
+        refresh=force,
+    )
+    readings.write(path)
+    return readings
+
+
+def _figures_detail(readings: FigureReadings) -> str:
+    counts: dict[str, int] = {}
+    for panel in readings.panels:
+        counts[panel.status] = counts.get(panel.status, 0) + 1
+    detail = f"{len(readings.readings)} readings from {len(readings.panels)} panels"
+    if counts.get("not_chart"):
+        detail += f", {counts['not_chart']} not a chart"
+    if counts.get("unreadable"):
+        detail += f", {counts['unreadable']} unreadable"
+    if counts.get("error"):
+        detail += f", {counts['error']} requests failed"
+    return detail
+
+
+def _run_figures(
+    document: DocumentInput, settings: Settings, *, force: bool, on_stage: StageCallback
+) -> FigureReadings | None:
+    """The figures stage of :func:`run_document`. Never raises: it is an opt-in extra, and a chart the
+    vision model could not read must not cost the paper its extraction."""
+    if not settings.figures_enabled:
+        stored = stored_figures(document.document_id, settings)
+        kept = f"; {len(stored.readings)} stored readings kept" if stored is not None else ""
+        on_stage("figures", "skipped", f"figures.enabled is false{kept}")
+        return stored
+    on_stage("figures", "running", "")
+    try:
+        with build_vision_client(settings) as client:
+            readings = read_document_figures(document, settings, client, force=force)
+    except Exception as exc:  # isolation is the point: any failure here is this stage's alone
+        logger.exception("figure reading failed for %s", document.display_filename)
+        on_stage("figures", "failed", f"{type(exc).__name__}: {exc}"[:300])
+        return stored_figures(document.document_id, settings)
+    on_stage("figures", "done" if readings.complete else "failed", _figures_detail(readings))
+    return readings
+
+
 # ---- The whole pipeline, shared by the CLI and the web job ------------------------------------------------------
 
 StageStatus = Literal["pending", "running", "done", "failed", "skipped"]
@@ -327,7 +455,13 @@ StageCallback = Callable[[str, StageStatus, str], None]
 
 
 def stage_names() -> tuple[str, ...]:
-    return (*(f"parse:{b}" for b in BACKENDS), *(f"extract:{b}" for b in BACKENDS), "compare", "export")
+    return (
+        *(f"parse:{b}" for b in BACKENDS),
+        "figures",
+        *(f"extract:{b}" for b in BACKENDS),
+        "compare",
+        "export",
+    )
 
 
 @dataclass(frozen=True)
@@ -338,6 +472,7 @@ class PipelineResult:
     dataset: DocumentDataset
     excel_path: Path
     dataset_json_path: Path
+    figures: FigureReadings | None = None
 
 
 def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
@@ -370,6 +505,8 @@ def run_document(
         parse_reports[backend] = parse_report
         cached = " (cached)" if parse_report.cache_hit else ""
         on_stage(f"parse:{backend}", "done", f"{parse_report.block_count} blocks{cached}")
+
+    figures = _run_figures(document, settings, force=force, on_stage=on_stage)
 
     lanes: dict[Backend, LaneExtraction] = {}
     with build_llm_client(settings) as client:
@@ -418,7 +555,7 @@ def run_document(
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
     )
     on_stage("export", "running", "")
-    dataset = consolidate_document(document, lanes, report)
+    dataset = consolidate_document(document, lanes, report, figures=figures)
     layout = DataLayout(settings.data_root)
     excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path)
@@ -431,6 +568,7 @@ def run_document(
         dataset=dataset,
         excel_path=excel_path,
         dataset_json_path=dataset_json_path,
+        figures=figures,
     )
 
 
@@ -474,7 +612,7 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
         lanes[backend] = lane
     # Grounding is rechecked on read, so comparison must use those same refreshed values.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
-    dataset = consolidate_document(document, lanes, report)
+    dataset = consolidate_document(document, lanes, report, figures=stored_figures(document.document_id, settings))
     # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
     _store_dataset(layout, dataset)
     return dataset
