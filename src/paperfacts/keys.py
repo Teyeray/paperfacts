@@ -9,6 +9,8 @@ Two keys name the files under a document directory:
 - :func:`comparison_key` covers the tolerances, the normalisation rules and the sample-matching prompt.
   Changing a tolerance recomputes the comparison without paying for extraction again.
 
+A third, :func:`figure_key`, names the figure readings, which belong to neither lane.
+
 Module sources are hashed instead of versioned by hand, so nobody has to remember to bump a number.
 """
 
@@ -20,6 +22,7 @@ import json
 from functools import cache
 from pathlib import Path
 
+from paperfacts import figures
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONTEXT_TOKENS,
@@ -242,4 +245,60 @@ def comparison_key() -> str:
             ensure_ascii=False,
             sort_keys=True,
         )
+    )
+
+
+@cache
+def figure_field_fingerprint() -> str:
+    """The part of the field table figure reading uses: which fields a caption can name (the keywords),
+    what the model is told about them, and how a reading is converted."""
+    table = [
+        {
+            "name": spec.name,
+            "description": spec.description,
+            "keywords": list(spec.keywords),
+            "canonical_unit": spec.canonical_unit,
+            "bare_number": spec.bare_number,
+        }
+        for spec in figures.figure_fields()
+    ]
+    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+
+
+def figure_key(
+    model: str,
+    *,
+    temperature: float = figures.TEMPERATURE,
+    max_tokens: int = figures.MAX_TOKENS,
+    dpi: int,
+    max_pixels: int,
+    max_per_document: int,
+) -> str:
+    """Everything the stored figure readings depend on. A new key with no stored files behind it yet, so
+    nothing here is omitted at a baseline: every input is in the material from the start.
+
+    ``dpi`` and ``max_pixels`` change the image the model is shown; ``max_per_document`` which charts are
+    read. ``figures.py`` holds the prompt, the selection and the conversion into readings; ``normalize.py``
+    the unit arithmetic; ``passages.py`` the keyword matching that selects a chart.
+    """
+    material = {
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "dpi": dpi,
+        "max_pixels": max_pixels,
+        "max_per_document": max_per_document,
+        "fields": figure_field_fingerprint(),
+        "code": source_fingerprint("figures.py", "normalize.py", "passages.py"),
+    }
+    return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
+
+
+def figure_key_for(settings: Settings, model: str | None = None) -> str:
+    """The key a figures run with these settings writes, so the reader and the writer cannot disagree."""
+    return figure_key(
+        model or settings.figures_model,
+        dpi=settings.figures_dpi,
+        max_pixels=settings.figures_max_pixels,
+        max_per_document=settings.figures_max_per_document,
     )
