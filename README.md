@@ -113,18 +113,17 @@ producing byte-identical output to the subprocess path used on a Mac. Everything
 built locally, `vllm_config.yaml` for the VLM's memory and concurrency, and `host/*.sh` for the
 bare-metal route when Docker is unavailable. `deploy/README.md` is the long form; this is the shape of it.
 
-**The server has 8 GPUs and PaperFacts may only use 4, 5, 6 and 7.** GPUs 0–3 belong to other projects
-and must never be touched. Do not widen that range.
+**The current server has a single GPU (id 0).** All three services default to it; GPU ids are set per
+service by env var (Docker Compose's `device_ids`, or `CUDA_VISIBLE_DEVICES` for the host scripts), so a
+multi-GPU host can spread them out instead.
 
 | GPU | Runs | Port |
 |---|---|---|
-| 4, 5 | `mineru-router`, one `mineru-api` worker per GPU, load balanced | 8002, `POST /file_parse` |
-| 6 | `paddleocr-vl-api` and the `paddleocr-vlm-server` vLLM service it calls, sharing the card | 8080 `POST /layout-parsing`; vLLM on 8118, local only |
-| 7 | unused, free | — |
+| 0 | `mineru-router` (one `mineru-api` worker per visible GPU), `paddleocr-vl-api` and the `paddleocr-vlm-server` vLLM service it calls, sharing the card | 8002 `POST /file_parse`; 8080 `POST /layout-parsing`; vLLM on 8118, local only |
 
 Docker Compose pins the allocation with `device_ids`; the host scripts pin it with `CUDA_VISIBLE_DEVICES`
-and validate the id in `deploy/host/_common.sh` before anything loads, so a typo exits immediately
-instead of being discovered after a model has grabbed someone else's card. Do not publish port 8118: it
+and `deploy/host/_common.sh` checks it's actually set before anything loads, so a missing id exits
+immediately instead of being discovered after a model has half-loaded. Do not publish port 8118: it
 is the VLM's raw OpenAI-compatible endpoint, meant only for the API layer beside it.
 
 ```bash
@@ -651,7 +650,7 @@ re-rendered for the viewer.
 changed.
 
 **A service will not come up on the server.** Cold starts are minutes, not seconds. Read
-`docker compose logs -f` before restarting anything, and check that only GPUs 4, 5 and 6 show usage.
+`docker compose logs -f` before restarting anything, and check GPU usage with `nvidia-smi`.
 
 ## Development
 

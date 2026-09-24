@@ -1,4 +1,4 @@
-# PaperFacts Deployment (Linux 8-GPU Server)
+# PaperFacts Deployment (Linux GPU Server)
 
 This directory does exactly one thing: **run the two parser services** so the main package
 (the orchestrator) can call them over HTTP.
@@ -9,11 +9,11 @@ This directory does exactly one thing: **run the two parser services** so the ma
 paperfacts orchestrator (pure python, no torch / paddle installed)
      │
      │  HTTP
-     ├──→ mineru-router            :8002   POST /file_parse       GPU 4, 5
+     ├──→ mineru-router            :8002   POST /file_parse       GPU 0
      │       └─ internally: one mineru-api worker per GPU, load-balanced by the router
      │
-     └──→ paddleocr-vl-api         :8080   POST /layout-parsing   GPU 6
-             └─ internal HTTP ──→ paddleocr-vlm-server (vLLM service for the 0.9B VLM) GPU 6
+     └──→ paddleocr-vl-api         :8080   POST /layout-parsing   GPU 0
+             └─ internal HTTP ──→ paddleocr-vlm-server (vLLM service for the 0.9B VLM) GPU 0
 ```
 
 The main package `src/paperfacts` only depends on pure-python packages like pydantic / httpx /
@@ -37,15 +37,15 @@ There are two deployment routes:
 | Item | Requirement | Check command |
 |---|---|---|
 | NVIDIA driver | Supports **CUDA 12.6 or newer** (driver ≥ 560). Hard requirement of the official PaddleOCR-VL image. | `nvidia-smi` (the CUDA Version shown top-right is the driver's upper bound) |
-| GPU | ids 4, 5, 6, 7 available and idle | `nvidia-smi` |
+| GPU | at least one GPU available and idle (default id 0) | `nvidia-smi` |
 | Docker | Engine 20.10+, **docker compose v2** (`docker compose`, not `docker-compose`) | `docker compose version` |
 | nvidia-container-toolkit | installed and configured as a docker runtime | see below |
 | Disk | at least 80GB free (MinerU image + two official Paddle images + model weights) | `df -h /var/lib/docker` |
 
-Verify GPUs are usable inside a container (**test GPU 4 only — do not touch 0-3**):
+Verify GPUs are usable inside a container:
 
 ```bash
-docker run --rm --gpus '"device=4"' nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus '"device=0"' nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
 ```
 
 Seeing that GPU's info means nvidia-container-toolkit is working. If you get
@@ -86,8 +86,7 @@ curl http://localhost:8002/health      # MinerU router
 curl http://localhost:8080/health      # PaddleOCR-VL API
 ```
 
-Check GPU usage — **only GPUs 4, 5, 6 should show any usage; 7 must be idle, and 0-3 must have
-none of our processes**:
+Check GPU usage:
 
 ```bash
 nvidia-smi
@@ -131,13 +130,13 @@ Once installed, start all three services. They're all long-running foreground pr
 ```bash
 tmux new -s paperfacts
 
-# Window 1: MinerU (GPU 4,5 → :8002)
+# Window 1: MinerU (GPU 0 → :8002)
 bash deploy/host/start_mineru.sh
 
-# Window 2: PaddleOCR-VL's VLM service (GPU 6 → :8118, local only)
+# Window 2: PaddleOCR-VL's VLM service (GPU 0 → :8118, local only)
 bash deploy/host/start_paddle_vlm.sh
 
-# Window 3: PaddleOCR-VL's API layer (GPU 6 → :8080) — must start after window 2 is ready
+# Window 3: PaddleOCR-VL's API layer (GPU 0 → :8080) — must start after window 2 is ready
 bash deploy/host/start_paddle_api.sh
 ```
 
@@ -182,21 +181,19 @@ hardcoding a constant.
 
 ## GPU allocation table
 
-The server has 8 GPUs total. **PaperFacts may only use 4, 5, 6, 7 — 0-3 belong to other
-projects and must never be touched.**
+The current server has a single GPU (id 0), shared by all three services below. On a
+multi-GPU host, each service's GPU id is configurable independently (see the env vars in the
+next section).
 
 | GPU | Purpose | Owner | Memory policy |
 |---|---|---|---|
-| 0-3 | **Someone else's** — do not use | — | — |
-| 4 | MinerU pipeline worker #1 | `mineru-api`, spawned by `mineru-router` | one worker per GPU, allocated on demand |
-| 5 | MinerU pipeline worker #2 | same as above | same as above |
-| 6 | PaddleOCR-VL (both layers share this GPU) | `paddleocr-vlm-server` + `paddleocr-vl-api` | vLLM capped at `gpu-memory-utilization: 0.5`, leaving the rest for the layout detection model PP-DocLayoutV2 (1-2GB) |
-| 7 | **Unused, currently free** | — | — |
+| 0 | MinerU pipeline worker(s) | `mineru-api`, spawned by `mineru-router` | one worker per GPU listed in `device_ids` / `CUDA_VISIBLE_DEVICES` |
+| 0 | PaddleOCR-VL (both layers share this GPU) | `paddleocr-vlm-server` + `paddleocr-vl-api` | vLLM capped at `gpu-memory-utilization: 0.5`, leaving the rest for the layout detection model PP-DocLayoutV2 (1-2GB) |
 
-Route A enforces this via compose's `device_ids`; Route B enforces it via
-`CUDA_VISIBLE_DEVICES` in each script, and `require_allowed_gpus` in
-`deploy/host/_common.sh` validates the id before startup — a typo exits immediately instead
-of being discovered only after a model has loaded and grabbed someone else's GPU.
+Route A sets this via compose's `device_ids`; Route B sets it via `CUDA_VISIBLE_DEVICES` in
+each script, and `require_gpus` in `deploy/host/_common.sh` checks it's actually set before
+startup — a missing id exits immediately instead of being discovered only after a model has
+half-loaded.
 
 ---
 
@@ -263,7 +260,7 @@ max-model-len: 8192           # add this on a small GPU (default is 16384)
 Restart after editing: `docker compose restart paddleocr-vlm-server` (on Route B, just re-run
 `start_paddle_vlm.sh`).
 
-Conversely, if GPU 6 has memory to spare and you want more throughput, raise `max-num-seqs`
+Conversely, if the GPU has memory to spare and you want more throughput, raise `max-num-seqs`
 to 128 or 256.
 
 ### 3. Offline / air-gapped machines

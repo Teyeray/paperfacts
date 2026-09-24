@@ -151,7 +151,7 @@ EXPOSE 8002
 # startup args (--host / --port / --local-gpus) are entirely declared in compose, so changing
 # GPU allocation doesn't require rebuilding the image.
 # When using docker run directly, supply them yourself, e.g.:
-#   docker run --rm --gpus '"device=4,5"' --ipc=host -p 8002:8002 \
+#   docker run --rm --gpus '"device=0"' --ipc=host -p 8002:8002 \
 #     paperfacts-mineru:3.4.5 mineru-router --host 0.0.0.0 --port 8002 --local-gpus auto
 #
 # HEALTHCHECK is also not defined here; it's already in compose, to avoid two definitions

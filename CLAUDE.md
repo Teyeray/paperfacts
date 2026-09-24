@@ -116,6 +116,6 @@ this file is the part that is easy to get wrong.
 
 ## Deployment
 
-`deploy/` targets a Linux GPU server and is restricted to **GPUs 4–7**; do not widen that. Development
+`deploy/` targets a Linux GPU server. GPU ids are set per service by env var, default 0. Development
 happens on macOS, is pushed to GitHub, and pulled on the server — do not try to operate the server over
 ssh from here.
