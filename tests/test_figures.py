@@ -459,3 +459,56 @@ def test_an_uncaptioned_run_after_prose_is_not_merged_into_the_previous_figure()
     groups = figure_groups([fig(0, 0), cap(0, 1, "Fig. 1 Sheet resistance."), text(0, 2), fig(0, 3)])
 
     assert [(g.label, len(g.panels)) for g in groups] == [("Fig. 1", 1), (None, 1)]
+
+
+# ---- Geometry: which "Fig. N" caption owns which panel -------------------------------------------------
+
+
+def box(x1: float, y1: float, x2: float, y2: float) -> NormalizedBBox:
+    return NormalizedBBox(x1=x1, y1=y1, x2=x2, y2=y2)
+
+
+def placed(order: int, kind: str, content: str, bbox: NormalizedBBox):
+    return make_block(page=0, order=order, type=kind, content=content, bbox=bbox)  # type: ignore[arg-type]
+
+
+def test_adjacent_figures_on_one_page_keep_their_own_panels_in_mineru_order():
+    # MinerU gives a caption the box of the image it hangs under. Fig. 3's three panels share the top row
+    # and its caption hangs under the first; Fig. 4 sits below with its caption under its only panel.
+    p3a, p3b, p3c = box(0.05, 0.10, 0.32, 0.35), box(0.35, 0.10, 0.62, 0.35), box(0.65, 0.10, 0.95, 0.35)
+    p4a = box(0.20, 0.50, 0.80, 0.75)
+    blocks = [
+        placed(0, "figure", "3a.jpg", p3a),
+        placed(1, "caption", "Fig. 3 Sheet resistance of the films.", p3a),
+        placed(2, "figure", "3b.jpg", p3b),
+        placed(3, "caption", "(b)", p3b),
+        placed(4, "figure", "3c.jpg", p3c),
+        placed(5, "caption", "(c)", p3c),
+        placed(6, "figure", "4a.jpg", p4a),
+        placed(7, "caption", "Fig. 4 XRD patterns.", p4a),
+    ]
+
+    groups = figure_groups(blocks)
+
+    assert [(g.label, [b.order for b in g.panels]) for g in groups] == [("Fig. 3", [0, 2, 4]), ("Fig. 4", [6])]
+
+
+def test_a_caption_above_then_a_caption_below_on_one_page():
+    # Fig. 5's caption is printed above its two panels; Fig. 6 below them has its caption underneath.
+    blocks = [
+        placed(0, "caption", "Fig. 5 Resistivity of the films.", box(0.1, 0.05, 0.9, 0.08)),
+        placed(1, "figure", "5a.jpg", box(0.1, 0.10, 0.45, 0.40)),
+        placed(2, "figure", "5b.jpg", box(0.55, 0.10, 0.9, 0.40)),
+        placed(3, "figure", "6a.jpg", box(0.2, 0.45, 0.8, 0.80)),
+        placed(4, "caption", "Fig. 6 Thickness of the films.", box(0.1, 0.82, 0.9, 0.85)),
+    ]
+
+    groups = figure_groups(blocks)
+
+    assert [(g.label, [b.order for b in g.panels]) for g in groups] == [("Fig. 5", [1, 2]), ("Fig. 6", [3])]
+
+
+def test_without_distinguishing_geometry_document_order_decides():
+    groups = figure_groups([fig(0, 0), cap(0, 1, "Fig. 1 Rs."), fig(0, 2), fig(0, 3), cap(0, 4, "Fig. 2 Rs.")])
+
+    assert [(g.label, [b.order for b in g.panels]) for g in groups] == [("Fig. 1", [0]), ("Fig. 2", [2, 3])]

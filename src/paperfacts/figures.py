@@ -27,7 +27,6 @@ tuned. This module's source is hashed into ``figure_key`` instead.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 import re
@@ -238,63 +237,96 @@ def _is_panel_label(block: SourceBlock) -> bool:
     return block.type in {"text", "unknown"} and len(block.content.strip()) <= _PANEL_LABEL_CHARS
 
 
+def _page_runs(blocks: Sequence[SourceBlock]) -> list[list[SourceBlock]]:
+    """Runs of figure and caption blocks on one page. Prose ends a run -- a short panel label like "(b)"
+    does not -- and so does a page break."""
+    runs: list[list[SourceBlock]] = [[]]
+    for block in blocks:
+        if runs[-1] and block.page != runs[-1][-1].page:
+            runs.append([])
+        if block.type in {"figure", "caption"}:
+            runs[-1].append(block)
+        elif not _is_panel_label(block) and runs[-1]:
+            runs.append([])
+    return [run for run in runs if any(block.type == "figure" for block in run)]
+
+
+def _vertical_gap(a: NormalizedBBox, b: NormalizedBBox) -> float:
+    """How far apart two boxes are vertically; 0 when they share a row."""
+    return max(0.0, max(a.y1, b.y1) - min(a.y2, b.y2))
+
+
+def _horizontal_gap(a: NormalizedBBox, b: NormalizedBBox) -> float:
+    return max(0.0, max(a.x1, b.x1) - min(a.x2, b.x2))
+
+
+def _owner(panel_index: int, run: Sequence[SourceBlock], captions: Sequence[int], below: dict[int, bool]) -> int:
+    """The index in ``run`` of the "Fig. N" caption that describes the panel at ``panel_index``.
+
+    A caption is on the side of its figure it was written on: below when panels precede it in the run
+    (since the previous "Fig. N" caption), above otherwise. Of the captions on the right side of the panel,
+    the vertically nearest wins; a shared row counts as distance 0, which matters because MinerU gives a
+    caption the box of the image it hangs under. Ties go to the horizontally nearest, then to document
+    order. Only when no caption is on the right side does document order alone decide.
+    """
+    panel = run[panel_index].bbox
+
+    def on_its_side(index: int) -> bool:
+        caption = run[index].bbox
+        if _vertical_gap(panel, caption) == 0.0:
+            return True
+        return caption.y1 >= panel.y2 if below[index] else caption.y2 <= panel.y1
+
+    def order_rank(index: int) -> tuple[int, int]:
+        expected = index > panel_index if below[index] else index < panel_index
+        return (0 if expected else 1, abs(index - panel_index))
+
+    eligible = [index for index in captions if on_its_side(index)] or list(captions)
+    return min(
+        eligible,
+        key=lambda index: (
+            _vertical_gap(panel, run[index].bbox),
+            _horizontal_gap(panel, run[index].bbox),
+            *order_rank(index),
+        ),
+    )
+
+
 def figure_groups(blocks: Sequence[SourceBlock]) -> tuple[FigureGroup, ...]:
-    """Group a document's blocks into figures, in document order.
+    """Group a document's blocks into figures, in document order of their first panel.
 
-    A run of figure and caption blocks on one page is one figure until a caption that starts "Fig. N" ends
-    it; that caption belongs to the panels before it. A "Fig. N" caption that arrives before any panel (a
-    caption placed above its figure) opens the group instead, and the next one closes it. Anything else on
-    the page -- except a short panel label like "(b)" -- ends the run, and so does a page break.
-
-    MinerU hangs every caption under the image it was attached to, so "Fig. N" may follow the *first* panel
-    and the remaining panels arrive after it with only "(b)"-style captions. A run with no figure caption
-    that directly follows a closed figure on the same page, with nothing but figures and captions between
-    them, is therefore the rest of that figure and joins it.
+    A page is cut into runs of figure and caption blocks (see :func:`_page_runs`). Within a run, every panel
+    is assigned to one "Fig. N" caption by geometry (:func:`_owner`): reading order alone cannot do it,
+    because MinerU hangs a figure's caption under whichever panel it was attached to, and the next figure's
+    panels follow straight on. A run without any "Fig. N" caption is one figure with the captions it has.
     """
     groups: list[FigureGroup] = []
-    panels: list[SourceBlock] = []
-    captions: list[SourceBlock] = []
-    whole: SourceBlock | None = None
-    page: int | None = None
-    # Whether the last group was closed by its own caption with nothing after it yet but figure blocks.
-    continues_last = False
-
-    def close(*, by_caption: bool = False) -> None:
-        nonlocal panels, captions, whole, continues_last
-        if panels and whole is None and continues_last and groups and groups[-1].page == panels[0].page:
-            last = groups[-1]
-            groups[-1] = dataclasses.replace(
-                last, panels=last.panels + tuple(panels), captions=last.captions + tuple(captions)
-            )
-        elif panels:
+    for run in _page_runs(blocks):
+        panels = [index for index, block in enumerate(run) if block.type == "figure"]
+        captions = [index for index, block in enumerate(run) if _is_figure_caption(block)]
+        if not captions:
             groups.append(
-                FigureGroup(page=panels[0].page, panels=tuple(panels), captions=tuple(captions), figure_caption=whole)
+                FigureGroup(
+                    page=run[0].page,
+                    panels=tuple(run[index] for index in panels),
+                    captions=tuple(block for block in run if block.type == "caption"),
+                )
             )
-        continues_last = by_caption
-        panels, captions, whole = [], [], None
-
-    for block in blocks:
-        if block.page != page:
-            close()
-            continues_last = False
-            page = block.page
-        if block.type == "figure":
-            panels.append(block)
-        elif _is_figure_caption(block):
-            if whole is not None:
-                close()  # the previous figure was opened by its caption; this one starts the next
-            below_its_panels = bool(panels)
-            captions.append(block)
-            whole = block
-            if below_its_panels:
-                close(by_caption=True)
-        elif block.type == "caption":
-            captions.append(block)
-        elif not _is_panel_label(block):
-            close()
-            continues_last = False
-    close()
-    return tuple(groups)
+            continue
+        below: dict[int, bool] = {}
+        previous = -1
+        for index in captions:
+            below[index] = any(previous < panel < index for panel in panels)
+            previous = index
+        owned: dict[int, list[SourceBlock]] = {}
+        for index in panels:
+            owned.setdefault(_owner(index, run, captions, below), []).append(run[index])
+        for caption_index, members in owned.items():
+            caption = run[caption_index]
+            groups.append(
+                FigureGroup(page=caption.page, panels=tuple(members), captions=(caption,), figure_caption=caption)
+            )
+    return tuple(sorted(groups, key=lambda group: (group.page, group.panels[0].order)))
 
 
 @dataclass(frozen=True)
