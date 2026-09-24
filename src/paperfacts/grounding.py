@@ -17,14 +17,11 @@ from collections.abc import Mapping, Sequence
 
 from paperfacts.continuation import continuation_pairs
 from paperfacts.models import SourceBlock
-from paperfacts.normalize import KEY_CHARACTERS, delatex, normalize_text
+from paperfacts.normalize import KEY_CHARACTERS, LATEX_WRAPPERS, delatex, normalize_text
 from paperfacts.records import FieldValue, LaneExtraction
 
 # LaTeX expands to " x ", Unicode papers use "×"; fold both so the two spellings compare equal.
 _MULTIPLICATION = re.compile(r"[×✕✖⋅·]")
-# Formatting commands that survive delatex and would otherwise split a chemical formula: a table cell
-# holding "$\mathrm { S n O } _ { 2 } : \mathrm { S b } _ { 2 }$" has to match a quoted "SnO2:Sb2O3".
-_LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
 
 
 # Decoration collapses to a single space rather than vanishing. `normalize_key` deletes it, which is right
@@ -35,7 +32,7 @@ _DECORATION = re.compile(f"[^{KEY_CHARACTERS}]+")
 
 def grounding_key(text: str) -> str:
     """Reduce text to the form used for the containment test: no LaTeX, no case, no decoration."""
-    folded = _LATEX_WRAPPERS.sub(" ", delatex(normalize_text(text)))
+    folded = LATEX_WRAPPERS.sub(" ", delatex(normalize_text(text)))
     folded = _MULTIPLICATION.sub("x", folded).lower().replace("ω", "Ω")
     return _DECORATION.sub(" ", folded).strip()
 

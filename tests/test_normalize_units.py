@@ -53,7 +53,21 @@ def test_prefix_case_distinguishes_milli_from_mega():
 # ---- Resistivity Ω·cm -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("unit", ["Ω·cm", "Ω cm", "ohm cm", "Ω.cm", "Ωcm", "Ωxcm", "Ω-cm", "ohm-cm"])
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "Ω·cm",
+        "Ω cm",
+        "ohm cm",
+        "Ω.cm",
+        "Ωcm",
+        "Ωxcm",
+        "Ω-cm",
+        "ohm-cm",
+        # MinerU's LaTeX, formatting commands and all.
+        "\\Omega { \\cdot } \\mathrm { c m }",
+    ],
+)
 def test_every_spelling_of_ohm_centimetre_is_the_canonical_unit_itself(unit):
     assert convert("resistance", 0.3, unit) == (0.3, "Ω·cm", None)
 

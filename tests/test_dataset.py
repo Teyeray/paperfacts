@@ -124,7 +124,16 @@ def test_lossy_numeric_interpretations_are_never_exported(raw):
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"), [("~300", 300), ("300 ± 2", 300), ("1e-4 ± 2e-5", 1e-4), ("300 ± 2e-1", 300)]
+    ("raw", "expected"),
+    [
+        ("~300", 300),
+        ("300 ± 2", 300),
+        ("1e-4 ± 2e-5", 1e-4),
+        ("300 ± 2e-1", 300),
+        # The uncertainty in parentheses after the unit, as GM1's PaddleOCR-VL lane quotes it.
+        ("300 nm (± 5 nm)", 300),
+        ("300 nm (  $ \\pm $ 5 nm)", 300),
+    ],
 )
 def test_approximation_and_uncertainty_keep_documented_center(raw, expected):
     result = paired([value("thickness", raw, "nm")], [value("thickness", raw, "nm", backend="paddleocr_vl")])

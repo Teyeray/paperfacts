@@ -44,6 +44,10 @@ Row = Mapping[str, CellValue]
 _NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
 _ATOM = rf"(?:{_NUMBER}\s*x\s*10\s*\^?\s*[-+]?\d+|10\s*\^\s*[-+]?\d+|{_NUMBER}(?:[eE][-+]?\d+)?)"
 _SCALAR = re.compile(rf"^(?P<center>{_ATOM})(?:\s*(?:±|\+/-|\+-|\\pm)\s*(?P<uncertainty>{_ATOM}))?(?P<tail>.*)$")
+# "100 nm (± 5 nm)": the uncertainty in parentheses after the unit, read as "100 ± 5 nm" when both units agree.
+_PARENTHESISED_UNCERTAINTY = re.compile(
+    rf"^(?P<center>{_ATOM})\s*(?P<unit>[^\d\s(±][^(±]*?)?\s*\(\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_ATOM})\s*(?P<again>[^)]*)\)$"
+)
 # The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
 _APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -214,6 +218,11 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     approx = _APPROX.match(text)
     if approx:
         text = text[approx.end() :].strip()
+    parenthesised = _PARENTHESISED_UNCERTAINTY.fullmatch(text)
+    if parenthesised:
+        center, unit, uncertainty, again = parenthesised.group("center", "unit", "uncertainty", "again")
+        if clean_unit(unit or "") == clean_unit(again):
+            text = f"{center} ± {uncertainty} {unit or ''}"
     match = _SCALAR.fullmatch(text)
     if match is None:
         return None, "不是唯一精确标量（含上下界、区间、尺寸组合或无法解析的文字）"

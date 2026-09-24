@@ -171,6 +171,11 @@ _SPACED_DIGITS = re.compile(r"(?<![0-9.])[0-9.](?: [0-9.])+(?![0-9.])")
 _CARET_GAP = re.compile(r"\^\s*([-+]?)\s*(?=\d)")
 
 
+# Formatting commands that survive delatex and split what they wrap: MinerU writes the unit Ω·cm as
+# "\Omega { \cdot } \mathrm { c m }" and the formula SnO2 as "\mathrm { S n O } _ { 2 }".
+LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
+
+
 def delatex(text: str) -> str:
     """Undo the LaTeX MinerU produces for numbers in tables and formulas.
 
@@ -358,7 +363,7 @@ def split_scale_factor(unit_raw: str) -> tuple[float, str]:
     Papers head a table column "ρ (×10⁻⁴ Ω·cm)" and the model transcribes the whole parenthesis as the unit,
     leaving the value a bare "19.4". Without this the unit is unrecognised and the fact is lost.
     """
-    unit = clean_unit(delatex(normalize_text(unit_raw)))
+    unit = clean_unit(LATEX_WRAPPERS.sub(" ", delatex(normalize_text(unit_raw))))
     match = _SCALE_FACTOR.match(unit)
     if match is None:
         return 1.0, unit
