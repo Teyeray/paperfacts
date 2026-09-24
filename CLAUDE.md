@@ -95,6 +95,18 @@ this file is the part that is easy to get wrong.
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
   re-derives records for free as long as the rendered document and prompts stay byte-identical.
 
+## Figures
+
+- `figures.py` is the opt-in `figures` stage (after parse, before extract): a vision model reads
+  property-vs-condition charts selected by deterministic code (the whole-figure caption names a film field
+  by its keywords). It is paper-level, not a lane: its readings are approximate (±10 % / ±20 %), never
+  create or identify a sample (chart x snaps to ticks), never fill a dataset cell and never join the
+  two-lane comparison — they live only in `figure_rows`, the 图中读数 sheet and their own web section.
+  A failure in it marks only its own stage failed. Its prompt lives in `figures.py`, not `prompts.py`, so
+  tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
+- Vision requests go through `llm.complete_vision` on a `VisionClient`, never the extraction client;
+  crops come from `pdf.render_region`.
+
 ## Testing
 
 - `uv run pytest` — no models, no network, no real papers. Temporary PDFs are generated with pypdfium2.
@@ -105,11 +117,12 @@ this file is the part that is easy to get wrong.
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
   offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `table`, `fieldpicker`, `tsv`,
-  `corpus`, `facts`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
+  `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
 - Background jobs are a single worker. A `Job` is a frozen value in a lock-guarded dict, replaced whole on
   every transition, so a poller never sees a half-applied state. Submitting the same document twice while
   it is active returns the same job.
-- Lane colours are fixed: blue for MinerU, orange for PaddleOCR-VL. Status colours always accompany text,
+- Lane colours are fixed: blue for MinerU, orange for PaddleOCR-VL. Chart readings belong to neither lane
+  and use the neutral colour. Status colours always accompany text,
   never carry meaning alone.
 - The UI copy is Chinese; code comments are English.
 - The selected fact is in the URL (`#/doc/<id>/fact/<n>`) so a link survives a reload.
