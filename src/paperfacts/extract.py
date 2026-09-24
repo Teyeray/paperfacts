@@ -108,7 +108,7 @@ class ExtractionDocument:
 
 def build_extraction_document(artifact: ParsedArtifact) -> ExtractionDocument:
     """Render the artifact for the prompt, dropping page furniture and the bibliography."""
-    kept = _informative_blocks(artifact.blocks)
+    kept = informative_blocks(artifact.blocks)
     document = ExtractionDocument(
         markdown=render_markdown(kept),
         blocks={block.source_id: block.content for block in kept},
@@ -126,7 +126,8 @@ def build_extraction_document(artifact: ParsedArtifact) -> ExtractionDocument:
     return document
 
 
-def _informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
+def informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
+    """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography."""
     kept: list[SourceBlock] = []
     for block in blocks:
         if block.type == "title" and _END_SECTION.match(block.content.lstrip("# ").strip()):
@@ -175,7 +176,7 @@ def extract_lane(
         raise ValueError(f"concurrency must be at least 1, got {concurrency}")
     if mode not in EXTRACTION_MODES:
         raise ValueError(f"unknown extraction mode: {mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
-    blocks = _informative_blocks(artifact.blocks)
+    blocks = informative_blocks(artifact.blocks)
     document = build_extraction_document(artifact) if mode == "document" else None
 
     results: list[ExtractedRecords] = []

@@ -37,7 +37,7 @@ from collections.abc import Sequence
 from paperfacts.config import DEFAULT_CANDIDATE_LIMIT
 from paperfacts.fields import CONDITION_KEYWORDS, FieldSpec
 from paperfacts.models import SourceBlock
-from paperfacts.normalize import normalize_text
+from paperfacts.normalize import delatex, normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,8 @@ DENSE_SCORE = 1
 # Lowercase omega, not the ohm sign: _searchable() lowercases, and "Ω".lower() is "ω". normalize_key has to
 # undo the same fold for the same reason. Spelling it uppercase here would silently match only "ohm".
 _OHM = r"(?:ohms?|ω)"
+# Every pattern runs on _searchable() text, which is lower case: an upper-case letter in one never matches.
+# "W" was written that way once, and sputtering_power went unasked in 22 of 54 lanes that said "60 W".
 UNIT_PATTERNS: dict[str, re.Pattern[str]] = {
     "Ω/sq": re.compile(rf"{_OHM}\s*(?:/|per)?\s*(?:sq|square|□)"),
     "Ω·cm": re.compile(rf"{_OHM}\s*[.x*·-]?\s*cm"),
@@ -75,9 +77,9 @@ UNIT_PATTERNS: dict[str, re.Pattern[str]] = {
     # K is admitted as a retrieval signal even though the converter refuses it: a block saying "annealed
     # at 573 K" belongs in the prompt, and the honest ambiguous verdict is the comparison's job, not
     # retrieval's.
-    "℃": re.compile(r"\d\s*(?:°\s*[CcK]\b|℃|[Cc]\b|K\b)"),
+    "℃": re.compile(r"\d\s*(?:°\s*[ck]\b|℃|c\b|k\b)"),
     "cm": re.compile(r"\d\s*(?:cm|mm|m|µm|μm|um)\b"),
-    "W": re.compile(r"\d\s*[kKMm]?W\b"),
+    "W": re.compile(r"\d\s*[km]?w\b"),
     "sccm": re.compile(r"\d\s*(?:sccm|slm)\b"),
     "rpm": re.compile(r"\d\s*(?:rpm|r/min)\b"),
 }
@@ -98,12 +100,20 @@ CONDITION_UNIT = re.compile(
 _PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
 
 
+# MinerU drops one letter of a doubled pair on some papers ("transmitance", "resistivty" is not this, but
+# "transmitance" and "sheet" -> "shet" are): 410 words across 15 papers, none in the other lane. Keywords are
+# matched with every run of a repeated letter squeezed to one on both sides, so the two spellings meet.
+_DOUBLED_LETTER = re.compile(r"([a-z])\1+")
+# A LaTeX command left over after delatex (\text, \mathrm) splits a unit: "\Omega\cdot\text{cm}".
+_LATEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
+
+
 def _pattern(keyword: str) -> re.Pattern[str]:
     """Match a keyword as a whole token. A keyword ending in punctuation (``d =``, ``%T``) keeps that edge
     open, since ``\\b`` would demand a word character that is not there."""
     cached = _PATTERN_CACHE.get(keyword)
     if cached is None:
-        folded = normalize_text(keyword).lower()
+        folded = _DOUBLED_LETTER.sub(r"\1", normalize_text(keyword).lower())
         prefix = r"\b" if folded[:1].isalnum() else ""
         suffix = r"\b" if folded[-1:].isalnum() else ""
         cached = _PATTERN_CACHE[keyword] = re.compile(prefix + re.escape(folded) + suffix)
@@ -111,7 +121,14 @@ def _pattern(keyword: str) -> re.Pattern[str]:
 
 
 def _searchable(block: SourceBlock) -> str:
-    return normalize_text(block.content).lower()
+    """The block as units are searched for: folded, LaTeX undone, lower case."""
+    return _LATEX_COMMAND.sub(" ", delatex(normalize_text(block.content))).lower()
+
+
+def _names(keywords: Sequence[str], text: str) -> int:
+    """How many of ``keywords`` occur in ``text`` (a :func:`_searchable` string) as whole tokens."""
+    squeezed = _DOUBLED_LETTER.sub(r"\1", text)
+    return sum(1 for keyword in keywords if _pattern(keyword).search(squeezed))
 
 
 def inventory_blocks(blocks: Sequence[SourceBlock]) -> list[SourceBlock]:
@@ -121,9 +138,10 @@ def inventory_blocks(blocks: Sequence[SourceBlock]) -> list[SourceBlock]:
     reading; tables and captions because samples are usually enumerated there; prose only when it mentions a
     deposition condition. Document order is preserved, so the model sees the paper's own narrative.
     """
-    kept = [block for block in blocks if _is_inventory_block(block)]
-    logger.debug("inventory blocks %d/%d", len(kept), len(blocks))
-    return kept
+    chosen = {index for index, block in enumerate(blocks) if _is_inventory_block(block)}
+    chosen |= _continuation_partners(chosen, blocks)
+    logger.debug("inventory blocks %d/%d", len(chosen), len(blocks))
+    return [blocks[index] for index in sorted(chosen)]
 
 
 def _is_inventory_block(block: SourceBlock) -> bool:
@@ -136,7 +154,7 @@ def _is_inventory_block(block: SourceBlock) -> bool:
     # Paired with a number it is almost always the sentence that states how a sample was made.
     if not any(character.isdigit() for character in text):
         return False
-    return any(_pattern(keyword).search(text) for keyword in CONDITION_KEYWORDS)
+    return _names(CONDITION_KEYWORDS, text) > 0
 
 
 def candidate_blocks(
@@ -150,20 +168,30 @@ def candidate_blocks(
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
     unit = UNIT_PATTERNS.get(spec.canonical_unit or "")
-    scored: list[tuple[int, int]] = []
+    named: set[int] = set()
+    unit_only: list[tuple[int, int]] = []
     for index, block in enumerate(blocks):
         score = _score(spec, block, unit)
-        if score is not None:
-            scored.append((score, index))
+        if score is None:
+            continue
+        if score >= KEYWORD_SCORE:
+            named.add(index)
+        else:
+            unit_only.append((score, index))
 
+    # Every block that names the field is shown: ranking named blocks against each other cut the later
+    # pages of a paper (ties break on document order), which is where the results section is. Only the
+    # blocks that qualified on a unit alone compete, for the places the named ones left.
     # Ties break on document order, so the selection is reproducible run to run.
-    chosen = {index for _, index in sorted(scored, key=lambda item: (-item[0], item[1]))[:limit]}
+    spare = max(limit - len(named), 0)
+    chosen = named | {index for _, index in sorted(unit_only, key=lambda item: (-item[0], item[1]))[:spare]}
     chosen |= _dense_neighbours(chosen, blocks)
+    chosen |= _continuation_partners(chosen, blocks)
     selected = [blocks[index] for index in sorted(chosen)]
     logger.debug(
         "candidates field=%s matched=%d selected=%d chars=%d",
         spec.name,
-        len(scored),
+        len(named) + len(unit_only),
         len(selected),
         sum(len(block.content) for block in selected),
     )
@@ -175,7 +203,7 @@ def _score(spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None) ->
     text = _searchable(block)
     if spec.kind == "numeric" and not any(character.isdigit() for character in text):
         return None  # a number cannot be quoted from a block that has none
-    names = sum(1 for keyword in spec.keywords if _pattern(keyword).search(text))
+    names = _names(spec.keywords, text)
     has_unit = unit is not None and bool(unit.search(text))
     if not names and not has_unit:
         return None
@@ -205,6 +233,68 @@ def _dense_neighbours(chosen: set[int], blocks: Sequence[SourceBlock]) -> set[in
                 extra.add(neighbour)
             elif page_gap == 1 and {blocks[index].type, blocks[neighbour].type} == DENSE_TYPES:
                 extra.add(neighbour)
+    return extra
+
+
+# ---- Paragraphs a page or column break cut in two ---------------------------------------------------------
+#
+# Parsers cut a block wherever the page (or column) ends, so the sentence naming a sample can sit on one page
+# and the value it has on the next. The halves are linked, never merged: each keeps its own source_id and its
+# single-page bbox, and retrieval brings one along whenever it picks the other.
+
+# Body text interrupted by something that is not part of it: footnotes and sidebars are "text" to the
+# adapters, so only the parser's own label tells them apart.
+_NOT_BODY_LABELS: frozenset[str] = frozenset({"page_footnote", "footnote", "aside_text"})
+# A block that ends one of these finished its sentence.
+_SENTENCE_END = re.compile(r"[.!?。](?:[\s\"'”’)\]]|\$)*$")
+# How a continuation may start: lower case ("... the films | were annealed"), a number or formula
+# ("... composed of | 95% SnO2"), or a parenthesis ("... sputtered | (Ar 20 sccm)").
+_CONTINUATION_START = re.compile(r"^[a-z0-9$(]")
+# ...but not a sub-figure label "(a)" or a numbered heading "3 Results", which start something new.
+_NEW_START = re.compile(r"^(?:\([a-z]\)|\d+(?:\.\d+)*\.?\s+[A-Z])")
+
+
+def _is_body(block: SourceBlock) -> bool:
+    return block.type == "text" and block.raw_label not in _NOT_BODY_LABELS
+
+
+def continuation_pairs(blocks: Sequence[SourceBlock]) -> list[tuple[int, int]]:
+    """``(i, j)`` index pairs where body block ``j`` continues the sentence body block ``i`` left unfinished.
+
+    ``j`` is the next body block after ``i`` in reading order; figures, captions, tables, formulas and
+    footnotes between them are skipped, a title is not (a heading starts a new section). Conservative on
+    purpose: 49 of 50 sampled pairs found this way were real continuations.
+    """
+    pairs: list[tuple[int, int]] = []
+    previous: int | None = None
+    for index, block in enumerate(blocks):
+        if block.type == "title":
+            previous = None
+            continue
+        if not _is_body(block):
+            continue
+        if previous is not None and _continues(blocks[previous].content, block.content):
+            pairs.append((previous, index))
+        previous = index
+    return pairs
+
+
+def _continues(before: str, after: str) -> bool:
+    head, tail = after.lstrip(), before.rstrip()
+    if not head or not tail or _SENTENCE_END.search(tail):
+        return False
+    return bool(_CONTINUATION_START.match(head)) and not _NEW_START.match(head)
+
+
+def _continuation_partners(chosen: set[int], blocks: Sequence[SourceBlock]) -> set[int]:
+    """The other half of every chosen block that was cut in two. One step only: a partner's own partner
+    stays out, so a long run of continuations never drags in a whole section."""
+    extra: set[int] = set()
+    for first, second in continuation_pairs(blocks):
+        if first in chosen and second not in chosen:
+            extra.add(second)
+        elif second in chosen and first not in chosen:
+            extra.add(first)
     return extra
 
 

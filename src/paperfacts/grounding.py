@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 
 from paperfacts.models import SourceBlock
 from paperfacts.normalize import KEY_CHARACTERS, delatex, normalize_text
+from paperfacts.passages import continuation_pairs
 from paperfacts.records import FieldValue, LaneExtraction
 
 # LaTeX expands to " x ", Unicode papers use "×"; fold both so the two spellings compare equal.
@@ -45,19 +46,23 @@ _MIN_SQUEEZED_LENGTH = 4
 def block_adjacency(blocks: Sequence[SourceBlock]) -> dict[str, tuple[str | None, str | None]]:
     """Map each block's source_id to ``(previous_id, next_id)`` within the given sequence.
 
-    A neighbour is the adjacent entry in reading order *on the same page* -- a sentence broken by a page
-    break is not a sentence split across two adjacent blocks, but two blocks from two different regions
-    of the document, and joining them would manufacture text that appears nowhere in the PDF.
+    A neighbour is the adjacent entry in reading order *on the same page*, or the other half of a sentence
+    :func:`paperfacts.passages.continuation_pairs` found cut by a page or column break. Any other pair of
+    blocks across a page break comes from two different regions of the document, and joining them would
+    manufacture text that appears nowhere in the PDF.
     """
-    adjacency: dict[str, tuple[str | None, str | None]] = {}
+    adjacency: dict[str, list[str | None]] = {}
     for index, block in enumerate(blocks):
         previous = blocks[index - 1] if index > 0 and blocks[index - 1].page == block.page else None
         nxt = blocks[index + 1] if index + 1 < len(blocks) and blocks[index + 1].page == block.page else None
-        adjacency[block.source_id] = (
+        adjacency[block.source_id] = [
             previous.source_id if previous is not None else None,
             nxt.source_id if nxt is not None else None,
-        )
-    return adjacency
+        ]
+    for first, second in continuation_pairs(blocks):
+        adjacency[blocks[first].source_id][1] = blocks[second].source_id
+        adjacency[blocks[second].source_id][0] = blocks[first].source_id
+    return {source_id: (previous, nxt) for source_id, (previous, nxt) in adjacency.items()}
 
 
 def is_grounded(
