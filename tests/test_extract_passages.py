@@ -304,6 +304,18 @@ def test_a_value_naming_no_sample_goes_to_the_only_sample_of_a_single_sample_pap
     assert lane.unattributed == ()
 
 
+def test_with_no_sample_in_the_inventory_only_paper_level_fields_are_asked():
+    # A device paper that deposits no TCO film of its own gets an empty inventory; its sample-level answers
+    # could only be some other layer's values.
+    client = FakeLlmClient(responder(inventory=inventory_json([])))
+
+    lane = extract(client)
+
+    assert client.call_count == 1
+    assert lane.samples == () and lane.unattributed == ()
+    assert any(entry.startswith(f"{ASKED_FIELD}: the inventory found no sample") for entry in lane.dropped)
+
+
 def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattributed():
     client = FakeLlmClient(responder(sheet_resistance=values_json({"sample_id": "Z", "value_raw": "12.5"})))
 
@@ -819,10 +831,11 @@ def test_a_series_value_and_a_quote_naming_the_sample_become_one_sample_specific
 
 
 def test_a_series_value_with_no_samples_to_place_it_on_is_unattributed_and_unflagged():
-    # Nothing to fan out to, so the flag would claim a placement the record does not have.
+    # Nothing to fan out to, so the flag would claim a placement the record does not have. The inventory's
+    # only entry has a blank id and is dropped, which leaves the field questions asked but no sample to use.
     client = FakeLlmClient(
         responder(
-            inventory=inventory_json([]),
+            inventory=inventory_json([{"sample_id": "  ", "label": "unnamed"}]),
             sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5", "applies_to_all_samples": True}),
         )
     )

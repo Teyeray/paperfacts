@@ -144,6 +144,31 @@ def test_image_captions_become_separate_blocks_sharing_the_figure_bbox(artifact:
     assert caption_a.raw_label == "image_caption"
 
 
+def test_chart_captions_and_footnotes_become_caption_blocks_too(
+    raw_output_factory: RawOutputFactory, document: DocumentInput, geometry: DocumentGeometry
+):
+    # MinerU 3.x gives a line chart type "chart" and its own caption keys; the conditions a sample is
+    # named by are often only in that caption.
+    chart = {
+        "type": "chart",
+        "page_idx": 0,
+        "bbox": [100, 100, 500, 400],
+        "img_path": "images/chart.jpg",
+        "chart_caption": ["Fig. 2. Transmittance spectra of films sputtered at 50-200 W."],
+        "chart_footnote": ["Inset: average T in 400-800 nm."],
+    }
+
+    blocks = convert(raw_output_factory.mineru([chart]), document, geometry).blocks
+
+    assert [(block.type, block.raw_label) for block in blocks] == [
+        ("figure", "chart"),
+        ("caption", "chart_caption"),
+        ("caption", "chart_footnote"),
+    ]
+    assert blocks[1].content == "Fig. 2. Transmittance spectra of films sputtered at 50-200 W."
+    assert blocks[1].bbox == blocks[0].bbox
+
+
 def test_table_caption_and_footnote_become_caption_blocks_sharing_the_table_bbox(artifact: ParsedArtifact):
     table = artifact.block("mineru_p1_b0")
     caption = artifact.block("mineru_p1_b1")

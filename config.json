@@ -370,7 +370,7 @@
       "label": "退火温度",
       "group": "process",
       "kind": "numeric",
-      "description": "Temperature of the thermal treatment performed after deposition is complete (°C).",
+      "description": "Temperature of the thermal treatment of the TCO film performed after its deposition is complete (°C) -- not the annealing of an absorber, active or transport layer.",
       "description_zh": "沉积后退火处理的温度（°C）。",
       "keywords": [
         "post-annealing temperature",
@@ -390,7 +390,7 @@
       "label": "退火时间",
       "group": "process",
       "kind": "numeric",
-      "description": "Duration of the thermal treatment performed after deposition is complete (min).",
+      "description": "Duration of the thermal treatment of the TCO film performed after its deposition is complete (min) -- not the annealing of an absorber, active or transport layer.",
       "description_zh": "沉积后退火处理的时长（min）。",
       "keywords": [
         "post-annealing duration",
@@ -409,7 +409,7 @@
       "label": "转速",
       "group": "process",
       "kind": "numeric",
-      "description": "Rotation speed of the substrate holder during film deposition (rpm).",
+      "description": "Rotation speed of the substrate holder during sputter deposition of the film (rpm). The spin-coating speed of any layer is never a rotation speed.",
       "description_zh": "沉积时样品台的旋转速度（rpm）。",
       "keywords": [
         "rotation speed",
@@ -504,7 +504,7 @@
       "label": "厚度",
       "group": "film",
       "kind": "numeric",
-      "description": "Film thickness (e.g. from SEM cross section or profilometry).",
+      "description": "Thickness of the TCO / transparent-electrode film itself (e.g. from SEM cross section or profilometry) -- not of an absorber or active layer, a transport layer, the substrate or a whole device.",
       "description_zh": "所选样品的薄膜厚度。",
       "keywords": [
         "thickness",
