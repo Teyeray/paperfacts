@@ -78,6 +78,16 @@
       <div class="table-empty hidden" data-slot="results-empty">还没有结果表，处理完成后会出现在这里。</div>
     </div>
   </section>
+  <section class="figures hidden" data-slot="figures" aria-label="图中读数">
+    <div class="results-head"><h2>图中读数</h2></div>
+    <p class="results-note muted">视觉模型从“性质—条件”图上读出的近似值：线性轴 ±10%，对数轴或 4 条以上系列 ±20%。只作参考，不进结果表，也不参与两路比较；横轴读数会被取整到刻度，不用来判断是哪个样品。点击一行，在页面上定位这张图。</p>
+    <div class="table-wrap">
+      <table class="facts-table figures-table">
+        <thead><tr><th>图</th><th>字段</th><th>系列</th><th>横轴（参考）</th><th>读数</th><th>图中原始读数</th><th>说明</th></tr></thead>
+        <tbody data-slot="figure-rows"></tbody>
+      </table>
+    </div>
+  </section>
   <div class="workbench">
     <section class="facts" aria-label="事实对照">
       <div class="facts-head">

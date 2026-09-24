@@ -370,6 +370,19 @@ def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library:
     assert body["paper_row"] == {}
     assert body["quality_rows"] == []
     assert body["fields"] == []
+    assert body["figure_rows"] == []
+
+
+def test_the_dataset_carries_the_chart_readings_apart_from_the_sample_rows(
+    client: TestClient, library: Library, parsed_only: str
+):
+    figure_row = {"source_id": "mineru_p2_b4", "field": "sheet_resistance", "value": 2500.0, "precision": "±10%"}
+    seed_dataset(library, parsed_only, {"document_id": parsed_only, "figure_rows": [figure_row]})
+
+    body = client.get(f"/api/documents/{parsed_only}/dataset").json()
+
+    assert body["figure_rows"] == [figure_row]
+    assert body["sample_rows"] == []
 
 
 def test_a_dataset_written_under_other_keys_is_not_served(client: TestClient, library: Library, parsed_only: str):
@@ -754,7 +767,20 @@ def test_the_index_page_is_served_at_the_root(client: TestClient):
     ["/app.css"]
     + [
         f"/{m}.js"
-        for m in ("app", "state", "api", "html", "router", "library", "document", "facts", "samples", "job", "viewer")
+        for m in (
+            "app",
+            "state",
+            "api",
+            "html",
+            "router",
+            "library",
+            "document",
+            "facts",
+            "figures",
+            "samples",
+            "job",
+            "viewer",
+        )
     ],
 )
 def test_the_front_end_assets_are_served(client: TestClient, asset: str):

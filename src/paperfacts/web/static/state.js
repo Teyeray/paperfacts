@@ -10,6 +10,7 @@ export const STAGE_LABEL = {
   "parse:paddleocr_vl": "解析 PaddleOCR-VL",
   "extract:mineru": "抽取 MinerU",
   "extract:paddleocr_vl": "抽取 PaddleOCR-VL",
+  figures: "读图",
   compare: "对齐比较",
 };
 const ACTIVE_JOB_STATUS = new Set(["queued", "running"]);

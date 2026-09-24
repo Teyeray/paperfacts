@@ -212,6 +212,13 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 
 /* ---------- results table: the consolidated per-sample deliverable, above the workbench ---------- */
 .results { margin: 0 0 var(--gap-section); }
+.figures { margin: 0 0 var(--gap-section); }
+.figures-table tr { cursor: pointer; }
+.figures-table td small { display: block; font-size: 10.5px; color: var(--ink-3); }
+.figures-table td.val { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+.figures-table td.val .unit { color: var(--ink-3); font-size: 11px; }
+.figures-table td.x, .figures-table td.note { color: var(--ink-2); font-size: 12px; }
+.flag.approx { color: var(--neutral); }
 .results-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .results-head h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.003em; }
 .results-note { font-size: 12px; margin: 0 0 10px; }
@@ -265,6 +272,8 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .page rect.hl { opacity: 1; stroke-width: 3; animation: glow 1.4s ease-in-out infinite; }
 .page rect.a.hl { fill: color-mix(in oklab, var(--lane-a) 18%, transparent); }
 .page rect.b.hl { fill: color-mix(in oklab, var(--lane-b) 18%, transparent); }
+.page rect.region { stroke: var(--neutral); stroke-dasharray: 6 3; }
+.page rect.region.hl { fill: color-mix(in oklab, var(--neutral) 18%, transparent); }
 .page.dim rect:not(.hl) { opacity: .12; }
 .page rect:hover { opacity: 1; stroke-width: 2; }
 @keyframes glow { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: .45; } }
