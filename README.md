@@ -353,6 +353,19 @@ visibly weaker than a 3/3 one. Measured on three papers, a second pass reproduce
 pass's values at temperature 0. Two passes are therefore a reproducibility filter at twice the model cost,
 not a way to find more.
 
+### `figures`
+
+Reading property-vs-condition charts with a vision model; see [Reading figures](#reading-figures).
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Run the `figures` stage. Default `false`: it costs about a minute of the vision model per chart |
+| `model` | The vision model. Default `qwen3.7-plus`, the only one measured accurate enough; it uses the `llm` endpoint and key |
+| `max_per_document` | At most this many chart panels are read per paper. Default 12 |
+| `dpi` | DPI the chart is cropped from the page at. Default 200 |
+| `max_pixels` | Largest crop area sent; bigger crops are shrunk here, not by the endpoint. Default 2000000 |
+| `timeout_s` | Per request. Default 300; one failed request is retried once |
+
 ### `parsers`, `server`, `web`, `overlay`, `comparison`
 
 | Key | Meaning |
@@ -388,7 +401,9 @@ points at its own services without editing the shared file:
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`,
-`PAPERFACTS_WEB_PASSWORD`.
+`PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
+`PAPERFACTS_FIGURES_MAX_PER_DOCUMENT`, `PAPERFACTS_FIGURES_DPI`, `PAPERFACTS_FIGURES_MAX_PIXELS`,
+`PAPERFACTS_FIGURES_TIMEOUT_S`.
 
 `PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
 and a value that will not parse as a number names the variable in the error.

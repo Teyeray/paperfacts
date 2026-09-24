@@ -793,3 +793,87 @@ def test_a_condition_preference_moves_only_the_comparison_key(monkeypatch):
     finally:
         for cached in (keys.schema_fingerprint, keys.preference_fingerprint):
             cached.cache_clear()
+
+
+# ---- figures: the opt-in chart-reading stage ------------------------------------------------
+
+
+def test_figure_reading_ships_switched_off_with_the_measured_model():
+    # Opt-in: about a minute of a vision model per chart is not something an upload should pay by surprise.
+    settings = Settings.from_env({})
+
+    assert settings.figures_enabled is False
+    assert settings.figures_model == "qwen3.7-plus"
+    assert settings.figures_timeout_s == 300.0
+    assert settings.figures_max_per_document == 12
+
+
+def test_the_figure_settings_come_from_the_file(tmp_path: Path):
+    path = write_config(
+        tmp_path / "config.json",
+        {
+            "figures.enabled": True,
+            "figures.model": "qwen3.6-plus",
+            "figures.max_per_document": 3,
+            "figures.dpi": 150,
+            "figures.max_pixels": 1000,
+            "figures.timeout_s": 60,
+        },
+    )
+
+    settings = Settings.from_env(env_for(path))
+
+    assert settings.figures_enabled is True
+    assert settings.figures_model == "qwen3.6-plus"
+    assert settings.figures_max_per_document == 3
+    assert settings.figures_dpi == 150
+    assert settings.figures_max_pixels == 1000
+    assert settings.figures_timeout_s == 60.0
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("true", True), ("1", True), ("ON", True), ("false", False), ("0", False)]
+)
+def test_the_environment_switches_figure_reading(tmp_path: Path, raw: str, expected: bool):
+    path = write_config(tmp_path / "config.json", {"figures.enabled": not expected})
+
+    assert Settings.from_env(env_for(path, PAPERFACTS_FIGURES_ENABLED=raw)).figures_enabled is expected
+
+
+def test_an_unreadable_figures_switch_names_the_variable(tmp_path: Path):
+    path = write_config(tmp_path / "config.json")
+
+    with pytest.raises(ConfigError, match="PAPERFACTS_FIGURES_ENABLED"):
+        Settings.from_env(env_for(path, PAPERFACTS_FIGURES_ENABLED="ture"))
+
+
+def test_the_environment_overrides_the_figure_model_and_limits(tmp_path: Path):
+    path = write_config(tmp_path / "config.json")
+
+    settings = Settings.from_env(
+        env_for(
+            path,
+            PAPERFACTS_FIGURES_MODEL="other-vl",
+            PAPERFACTS_FIGURES_MAX_PER_DOCUMENT="2",
+            PAPERFACTS_FIGURES_DPI="100",
+            PAPERFACTS_FIGURES_MAX_PIXELS="5000",
+            PAPERFACTS_FIGURES_TIMEOUT_S="30",
+        )
+    )
+
+    assert (settings.figures_model, settings.figures_max_per_document, settings.figures_dpi) == ("other-vl", 2, 100)
+    assert (settings.figures_max_pixels, settings.figures_timeout_s) == (5000, 30.0)
+
+
+def test_a_figure_limit_below_one_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"figures.max_per_document": 0})
+
+    with pytest.raises(ConfigError, match=r"figures\.max_per_document must be at least 1"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_string_where_the_figures_switch_belongs_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"figures.enabled": "yes"})
+
+    with pytest.raises(ConfigError, match=r"figures\.enabled must be bool"):
+        Settings.from_env(env_for(path))
