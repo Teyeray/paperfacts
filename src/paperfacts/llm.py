@@ -7,10 +7,16 @@ the key changes with it.
 
 ``refresh=True`` skips reading the cache but still writes it -- that is how ``--force`` genuinely re-asks
 the model instead of replaying an answer.
+
+Vision requests (:meth:`OpenAICompatibleClient.complete_vision`) carry one PNG as an OpenAI-style
+``image_url`` content part. Their cache key hashes the request with the image replaced by its sha256: the
+same bytes on the wire are still the same key, but a megabyte of base64 never lands in the key material or
+in the cache entry.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -73,8 +79,24 @@ class LlmClient(Protocol):
     ) -> LlmResult: ...
 
 
+class VisionClient(Protocol):
+    """What figure reading needs from a vision model: one image plus a question in, text out.
+
+    Deliberately a separate protocol from :class:`LlmClient`. Extraction must never be handed an image (the
+    two lanes are compared on the *text* the parsers produced, and an image would be a third source), and
+    figure reading must never be handed a text-only client. The attributes decide what the model was asked,
+    so the figures stage reads them into ``figure_key`` from the client rather than from settings.
+    """
+
+    model: str
+    temperature: float
+    max_tokens: int
+
+    def complete_vision(self, *, system: str, user: str, image_png: bytes, refresh: bool = False) -> LlmResult: ...
+
+
 class OpenAICompatibleClient:
-    """Talks to ``POST {base_url}/chat/completions``."""
+    """Talks to ``POST {base_url}/chat/completions``; text-only JSON requests and single-image vision requests."""
 
     def __init__(
         self,
@@ -166,6 +188,64 @@ class OpenAICompatibleClient:
         if effort is not None:
             body["reasoning_effort"] = effort
         return body
+
+    def complete_vision(self, *, system: str, user: str, image_png: bytes, refresh: bool = False) -> LlmResult:
+        """Ask about one PNG. No JSON mode: not every vision endpoint accepts ``response_format``, and the
+        figures stage parses the reply leniently anyway."""
+        if not image_png:
+            raise ValueError("complete_vision needs a non-empty PNG")
+        payload = self.vision_payload(system=system, user=user, image_png=image_png)
+        key = self.vision_cache_key(payload, image_png)
+        if not refresh:
+            cached = self._read_cache(key)
+            if cached is not None:
+                return cached
+        data = self._post_with_retry(payload)
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LlmError(f"response has no choices[0].message.content: {str(data)[:300]}") from exc
+        if not text or not text.strip():
+            raise LlmError("the vision model returned empty content")
+        result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
+        self._write_cache(key, result)
+        return result
+
+    def vision_payload(self, *, system: str, user: str, image_png: bytes) -> dict[str, Any]:
+        """The multimodal request body: the image first, then the question, as the OpenAI vision API and its
+        Model Studio imitation both accept it."""
+        data_url = "data:image/png;base64," + base64.b64encode(image_png).decode("ascii")
+        return {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": user},
+                    ],
+                },
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+
+    def vision_cache_key(self, payload: dict[str, Any], image_png: bytes) -> str:
+        """The request hashed with the image stood in for by its digest.
+
+        Hashing the base64 itself would be correct but wasteful: the key material would be the size of the
+        image. The digest is exact -- the same PNG bytes give the same key, one different pixel another.
+        """
+        digest = hashlib.sha256(image_png).hexdigest()
+        stripped = json.loads(json.dumps(payload))
+        for message in stripped["messages"]:
+            if isinstance(message.get("content"), list):
+                for part in message["content"]:
+                    if part.get("type") == "image_url":
+                        part["image_url"] = {"sha256": digest}
+        material = {"base_url": self.base_url, "payload": stripped, "vision": True}
+        return hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
     def cache_key(self, payload: dict[str, Any], *, cache_salt: str = "") -> str:
         """Key for this request.

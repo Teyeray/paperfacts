@@ -552,3 +552,59 @@ def test_a_failed_call_leaves_no_cache_entry(tmp_path: Path):
         llm.complete_json(system="S", user="U")
 
     assert not cache_dir.exists()
+
+
+# ---- Vision requests -----------------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\nfake-image"
+
+
+def test_a_vision_request_carries_the_image_first_and_no_json_mode():
+    client, requests = recording_client(lambda request: httpx.Response(200, json=chat_response("{}")))
+    llm = OpenAICompatibleClient(BASE_URL, API_KEY, "qwen3.7-plus", timeout_s=5.0, client=client, temperature=0.0)
+
+    result = llm.complete_vision(system="sys", user="read it", image_png=PNG)
+
+    body = json.loads(requests[0].content)
+    assert result.text == "{}"
+    assert "response_format" not in body
+    parts = body["messages"][1]["content"]
+    assert parts[0]["type"] == "image_url"
+    assert parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert parts[1] == {"type": "text", "text": "read it"}
+
+
+def test_a_vision_answer_is_cached_by_the_image_bytes(tmp_path: Path):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json=chat_response("{}"))
+
+    llm = make_llm(handler, cache_dir=tmp_path)
+    llm.complete_vision(system="s", user="u", image_png=PNG)
+    again = llm.complete_vision(system="s", user="u", image_png=PNG)
+    llm.complete_vision(system="s", user="u", image_png=PNG + b"x")
+
+    assert again.cached
+    assert len(calls) == 2  # one new image, one repeat served from the cache
+    entry = next(tmp_path.iterdir()).read_text(encoding="utf-8")
+    assert "base64" not in entry
+
+
+def test_the_vision_cache_key_does_not_carry_the_image_itself():
+    llm = make_llm()
+    payload = llm.vision_payload(system="s", user="u", image_png=PNG)
+    assert llm.vision_cache_key(payload, PNG) != llm.vision_cache_key(payload, PNG + b"x")
+    assert llm.vision_cache_key(payload, PNG) != llm.cache_key(payload)
+
+
+def test_an_empty_vision_answer_is_an_error():
+    llm = make_llm(lambda request: httpx.Response(200, json=chat_response("  ")))
+    with pytest.raises(LlmError, match="empty"):
+        llm.complete_vision(system="s", user="u", image_png=PNG)
+
+
+def test_a_vision_request_needs_an_image():
+    with pytest.raises(ValueError):
+        make_llm().complete_vision(system="s", user="u", image_png=b"")

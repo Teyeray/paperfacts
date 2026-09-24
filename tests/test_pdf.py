@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.pdf import PDF_POINTS_PER_INCH, read_geometry, render_page
+from paperfacts.models import NormalizedBBox
+from paperfacts.pdf import PDF_POINTS_PER_INCH, png_bytes, read_geometry, render_page, render_region
 from support.factories import PAGE_SIZES_PT, make_blank_pdf
 
 
@@ -174,3 +175,26 @@ def test_pdfium_calls_from_many_threads_never_overlap(two_page_pdf: Path, monkey
 
     assert peak == 1
     assert len(sizes) == 12 and geometries == [2] * 6
+
+
+# ---- Region crops for the vision model -----------------------------------------------------
+
+
+def test_render_region_cuts_the_box_out_of_the_page_render(two_page_pdf: Path):
+    page = render_page(two_page_pdf, 0, dpi=72)
+    bbox = NormalizedBBox(x1=0.1, y1=0.2, x2=0.6, y2=0.5)
+    crop = render_region(two_page_pdf, 0, bbox, dpi=72)
+    x1, y1, x2, y2 = bbox.to_pixels(width_px=page.width, height_px=page.height)
+    assert crop.size == (x2 - x1, y2 - y1)
+
+
+def test_render_region_shrinks_a_crop_over_the_pixel_bound_keeping_its_shape(two_page_pdf: Path):
+    bbox = NormalizedBBox(x1=0.0, y1=0.0, x2=1.0, y2=0.5)
+    full = render_region(two_page_pdf, 0, bbox, dpi=144)
+    small = render_region(two_page_pdf, 0, bbox, dpi=144, max_pixels=10_000)
+    assert small.width * small.height <= 10_000
+    assert abs(small.width / small.height - full.width / full.height) < 0.05
+
+
+def test_png_bytes_is_a_png(two_page_pdf: Path):
+    assert png_bytes(render_page(two_page_pdf, 0, dpi=36)).startswith(b"\x89PNG\r\n\x1a\n")
