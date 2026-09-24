@@ -99,6 +99,39 @@ def test_a_range_collapses_to_its_midpoint_with_a_note():
     assert "range" in note
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected", "token"),
+    [
+        ("15.6 to 16.3 nm", 15.95, "nm"),
+        ("15.6-16.3nm", 15.95, "nm"),
+        ("5-10 percent", 7.5, "percent"),
+        ("1.2-1.5%", 1.35, "%"),
+    ],
+)
+def test_a_range_with_a_trailing_unit_still_collapses_to_its_midpoint(raw, expected, token):
+    # Papers write "15.6 to 16.3 nm" with the unit inside the value; the README promises the midpoint, not
+    # the first bound with a "2 numbers" note.
+    value, note = parse_number(raw)
+
+    assert value == pytest.approx(expected)
+    assert f"trailing unit {token!r} in value ignored" in note
+    assert "range" in note
+
+
+def test_a_qualified_range_with_a_trailing_unit_records_both_readings():
+    value, note = parse_number("~15.6-16.3 nm")
+
+    assert value == pytest.approx(15.95)
+    assert "qualifier '~' dropped" in note
+    assert "trailing unit 'nm' in value ignored" in note
+
+
+def test_a_multi_number_value_with_x_keeps_the_first_number_path():
+    # "40 x 10 cm" ends in a unit, but the "x" in front of it disqualifies stripping: the multiplier
+    # reading must survive untouched.
+    assert parse_number("40 x 10 cm") == (40.0, "2 numbers found, first used")
+
+
 @pytest.mark.parametrize("raw", ["10-20", "10 to 20", "10~20"])
 def test_every_range_separator_is_recognised(raw):
     value, note = parse_number(raw)
@@ -157,3 +190,77 @@ def test_notes_accumulate_when_several_rules_fire():
 
     assert value == 12.0
     assert note == "qualifier '~' dropped; parenthesized alternative ignored"
+
+
+# ---- MinerU's LaTeX spacing ------------------------------------------------------------------
+# A table cell rendered through LaTeX arrives with a space between every character, and the prompt's
+# "verbatim" rule keeps it that way. Some cells lose the "$" and the backslash on the way, so the run has
+# to be recognised by its own signature: every token a single digit, or a lone "." between digits.
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("4 0 0 °C", 400.0),
+        ("4 5 0 °C", 450.0),
+        ("8 . 4", 8.4),
+        ("1 0 ^ { - 4 }", 1e-4),
+        ("9 . 1 \\times 1 0 ^ { - 4 }", 9.1e-4),
+    ],
+)
+def test_digits_spaced_out_by_latex_are_read_as_one_number(raw, expected):
+    value, _ = parse_number(raw)
+
+    assert value == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "note"),
+    [
+        ("8 . 4 \\pm 0 . 1", 8.4, "uncertainty dropped"),
+        ("1 0 . 1 \\pm 0 . 5", 10.1, "uncertainty dropped"),
+    ],
+)
+def test_a_spaced_out_measurement_keeps_its_centre_value(raw, expected, note):
+    assert parse_number(raw) == (pytest.approx(expected), note)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "note"),
+    [
+        # Two multi-digit numbers never look like the LaTeX signature, so neither of these may be merged.
+        ("300 500", 300.0, "2 numbers found, first used"),
+        ("40 x 10 cm", 40.0, "2 numbers found, first used"),
+        ("10 20", 10.0, "2 numbers found, first used"),
+    ],
+)
+def test_two_separate_numbers_are_never_joined(raw, expected, note):
+    assert parse_number(raw) == (expected, note)
+
+
+# ---- Approximation markers -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "marker"),
+    [
+        ("around 100 nm", 100.0, "around"),
+        ("roughly 100", 100.0, "roughly"),
+        ("circa 100", 100.0, "circa"),
+        ("approximately 100", 100.0, "approximately"),
+        ("∼83.6 %", 83.6, "~"),  # tilde operator U+223C
+        ("~86.0 %", 86.0, "~"),
+        ("≈ 100", 100.0, "≈"),  # U+2248
+    ],
+)
+def test_approximation_markers_are_dropped_and_recorded(raw, expected, marker):
+    value, note = parse_number(raw)
+
+    assert value == pytest.approx(expected)
+    assert note.startswith(f"qualifier '{marker}' dropped")
+
+
+def test_two_single_digit_numbers_are_read_as_one_two_digit_number():
+    # The accepted trade-off of the LaTeX-spacing collapse: "2 5" is indistinguishable from a spaced-out
+    # "25", and in a table cell 25 is the reading that is almost always right.
+    assert parse_number("2 5") == (25.0, None)

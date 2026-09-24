@@ -76,7 +76,10 @@ this file is the part that is easy to get wrong.
   deterministic code, never a model call. Passage is the default; `.omc/research/extraction-modes.md` has
   the measurement that decided it.
 - A sample-level value the model cannot place on a sample goes to `LaneExtraction.unattributed`: kept,
-  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour.
+  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour. The two
+  exceptions are explicit, never inferred: a paper with exactly one sample owns every unplaced value, and a
+  value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
+  every sample with `series=True`.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
 - Four guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
@@ -86,7 +89,7 @@ this file is the part that is easy to get wrong.
 - Cache keys live in `keys.py`. `extractor_key` hashes the model, the field schema, the prompts, the
   sampling settings and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its
   two prompts plus `retrieval_fingerprint` (the keywords and `passages.py`). `comparison_key` hashes
-  tolerances, `normalize.py`, `compare.py`, `matching.py` and the matching prompt. Anything that is at its built-in
+  tolerances, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt. Anything that is at its built-in
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
   re-derives records for free as long as the rendered document and prompts stay byte-identical.
@@ -100,8 +103,8 @@ this file is the part that is easy to get wrong.
 ## Web interface
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
-  offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `facts`, `samples`, `job`,
-  `viewer`; `app.js` is only the entry point.
+  offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `table`, `fieldpicker`, `tsv`,
+  `corpus`, `facts`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
 - Background jobs are a single worker. A `Job` is a frozen value in a lock-guarded dict, replaced whole on
   every transition, so a poller never sees a half-applied state. Submitting the same document twice while
   it is active returns the same job.

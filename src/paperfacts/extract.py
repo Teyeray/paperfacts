@@ -16,7 +16,7 @@ Two ways of asking, chosen by ``mode``:
 What the model returns is a claim, not a result. Cleaning and citation validation happen in
 :mod:`paperfacts.records`, grounding in :mod:`paperfacts.grounding`, and attribution to a sample here in
 :func:`passage_records`. Optionally the whole thing runs several times and only what a majority of passes
-agree on is kept (:func:`merge_passes`).
+agree on is kept, which :mod:`paperfacts.voting` decides.
 
 What the model reads is an LLM input only; the artifact remains the source of truth for the viewer. Every
 piece of code that shapes it -- here, ``adapters.render_markdown`` and ``passages`` -- is hashed into
@@ -27,25 +27,27 @@ from __future__ import annotations
 
 import logging
 import re
-from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from enum import Enum
 
 from paperfacts.adapters import render_markdown
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
+    DEFAULT_LLM_CONCURRENCY,
     DEFAULT_LLM_CONTEXT_TOKENS,
+    DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     EXTRACTION_MODES,
     ExtractionMode,
+    InventoryReasoningEffort,
 )
 from paperfacts.errors import ContextBudgetError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
-from paperfacts.grounding import ground_lane, grounding_key
+from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import extractor_key, schema_fingerprint
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
-from paperfacts.normalize import clean_unit, normalize_key
+from paperfacts.normalize import normalize_key
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -70,6 +72,7 @@ from paperfacts.records import (
     TargetRecord,
     response_to_records,
 )
+from paperfacts.voting import deduplicate, merge_passes
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +140,12 @@ def _informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
 # ---- Extraction ---------------------------------------------------------------------------------------------
 
 
+def _add_usage(total: dict[str, int], part: Mapping[str, int]) -> None:
+    """Accumulate one call's token counts into the lane's total."""
+    for key, value in part.items():
+        total[key] = total.get(key, 0) + value
+
+
 def extract_lane(
     artifact: ParsedArtifact,
     client: LlmClient,
@@ -145,11 +154,25 @@ def extract_lane(
     passes: int = 1,
     context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
+    concurrency: int = DEFAULT_LLM_CONCURRENCY,
+    inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     refresh: bool = False,
 ) -> LaneExtraction:
-    """Extract one parser lane, whole-document or question by question."""
+    """Extract one parser lane, whole-document or question by question.
+
+    ``concurrency`` only decides how many of passage mode's field questions wait on the network at once.
+    Every request is the one the sequential loop would have sent, so it stays out of ``extractor_key``.
+
+    ``inventory_reasoning_effort`` overrides the client's effort for the inventory question alone -- the
+    one question that reasons for far longer than the field questions after it. ``INHERIT`` leaves the
+    request exactly as the client builds it, ``None`` sends that question with no such parameter at all,
+    a value sends that effort. It does change what is sent, so it is in ``extractor_key``. Both lanes get
+    the same value, so the disagreement signal stays a comparison of two identically-asked lanes.
+    """
     if passes < 1:
         raise ValueError(f"passes must be at least 1, got {passes}")
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be at least 1, got {concurrency}")
     if mode not in EXTRACTION_MODES:
         raise ValueError(f"unknown extraction mode: {mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
     blocks = _informative_blocks(artifact.blocks)
@@ -158,11 +181,36 @@ def extract_lane(
     results: list[ExtractedRecords] = []
     usage: dict[str, int] = {}
     raw_response = ""
+
+    # Passage mode asks which samples exist exactly once for the whole lane, however many passes follow.
+    # Repeating that question let the model name the same sample differently in each pass
+    # ("ITO-O2-0.0sccm-480C" against "ITO-0.0sccm-480C"), and since a sample id is the scope its values are
+    # voted under, no sample reached a majority and two passes returned an empty lane. One inventory makes
+    # the sample list rendered into every pass's field questions byte-identical, so the ids match across
+    # passes by construction and the sample vote in `merge_passes` becomes unanimous rather than useless.
+    # What the passes repeat is what they are meant to measure: the field questions, whose noise is the
+    # noise the vote exists to filter.
+    inventory = (
+        None
+        if document is not None
+        else _take_inventory(
+            blocks,
+            client,
+            backend=artifact.backend,
+            context_tokens=context_tokens,
+            inventory_reasoning_effort=inventory_reasoning_effort,
+            refresh=refresh,
+        )
+    )
+    if inventory is not None:
+        # One call, counted once: charging it to every pass would misreport what the lane cost.
+        _add_usage(usage, inventory.usage)
+
     for index in range(passes):
         # Every pass asks exactly the same question; only the cache key differs, so a repeat costs a call
         # but never a different prompt.
         cache_salt = "" if index == 0 else f"pass-{index}"
-        if document is not None:
+        if inventory is None:
             records, pass_usage, text = _extract_whole_document(
                 document, client, context_tokens=context_tokens, refresh=refresh, cache_salt=cache_salt
             )
@@ -170,18 +218,18 @@ def extract_lane(
             records, pass_usage, text = _extract_passages(
                 blocks,
                 client,
-                backend=artifact.backend,
+                inventory=inventory,
                 context_tokens=context_tokens,
                 candidate_limit=candidate_limit,
+                concurrency=concurrency,
                 refresh=refresh,
                 cache_salt=cache_salt,
             )
         results.append(records)
         raw_response = raw_response or text
-        for key, value in pass_usage.items():
-            usage[key] = usage.get(key, 0) + value
+        _add_usage(usage, pass_usage)
 
-    records = _deduplicate(merge_passes(results))
+    records = deduplicate(merge_passes(results))
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,
@@ -191,6 +239,8 @@ def extract_lane(
             mode=mode,
             temperature=client.temperature,
             max_tokens=client.max_tokens,
+            reasoning_effort=client.reasoning_effort,
+            inventory_reasoning_effort=inventory_reasoning_effort,
             candidate_limit=candidate_limit,
         ),
         model=client.model,
@@ -204,7 +254,7 @@ def extract_lane(
         usage=usage,
         raw_response=raw_response,
     )
-    lane = ground_lane(lane, {block.source_id: block.content for block in blocks})
+    lane = ground_lane(lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks))
     _log_outcome(lane)
     return lane
 
@@ -246,38 +296,81 @@ class FieldHarvest:
     known_ids: frozenset[str]
 
 
-def _extract_passages(
+@dataclass(frozen=True)
+class SampleInventory:
+    """Which samples the paper has, asked once and reused by every pass of one lane."""
+
+    response: InventoryResponse
+    raw_text: str
+    usage: Mapping[str, int]
+    source_ids: frozenset[str]
+
+
+def _budget_chars(client: LlmClient, context_tokens: int) -> int:
+    """How much rendered markdown one question may carry, once the reply and the prompt are paid for."""
+    return int(max(context_tokens - client.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
+
+
+def _take_inventory(
     blocks: Sequence[SourceBlock],
     client: LlmClient,
     *,
     backend: Backend,
     context_tokens: int,
-    candidate_limit: int,
+    inventory_reasoning_effort: InventoryReasoningEffort,
     refresh: bool,
-    cache_salt: str,
-) -> tuple[ExtractedRecords, dict[str, int], str]:
-    """Passage mode: one question about the samples, then one question per field."""
-    budget_chars = int(max(context_tokens - client.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
-    selection = fit_budget(inventory_blocks(blocks), budget_chars=budget_chars)
+) -> SampleInventory:
+    """Ask which samples exist -- once per lane.
+
+    The salt is empty, the salt pass 0 would have used, so a lane re-run with more passes still hits the
+    inventory entry the earlier run cached.
+    """
+    selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(client, context_tokens))
     system = inventory_system_prompt()
     user = inventory_user_prompt(render_markdown(selection))
     _check_context_budget(system, user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
-    inventory, raw_text, usage = complete_validated(
+    response, raw_text, usage = complete_validated(
         client,
         InventoryResponse,
         system=system,
         user=user,
         repair=lambda previous, error: repair_prompt(user, previous, error),
         refresh=refresh,
-        cache_salt=cache_salt,
+        cache_salt="",
+        reasoning_effort=inventory_reasoning_effort,
     )
-    logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(inventory.samples), len(selection))
+    logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(response.samples), len(selection))
+    return SampleInventory(
+        response=response,
+        raw_text=raw_text,
+        usage=usage,
+        source_ids=frozenset(block.source_id for block in selection),
+    )
 
-    sample_list = _render_sample_list(inventory.samples)
+
+def _extract_passages(
+    blocks: Sequence[SourceBlock],
+    client: LlmClient,
+    *,
+    inventory: SampleInventory,
+    context_tokens: int,
+    candidate_limit: int,
+    concurrency: int,
+    refresh: bool,
+    cache_salt: str,
+) -> tuple[ExtractedRecords, dict[str, int], str]:
+    """Passage mode, one pass: one question per field against the lane's single inventory."""
+    budget_chars = _budget_chars(client, context_tokens)
+    usage: dict[str, int] = {}
+
+    sample_list = _render_sample_list(inventory.response.samples)
     field_system = field_system_prompt()
-    harvests: list[FieldHarvest] = []
+
+    # Which fields get asked, and with which blocks, is decided here in FIELD_SPECS order and nowhere else.
+    # Retrieval and the budget check stay on this thread, so the questions -- and the "never asked" reasons
+    # recorded beside them -- are the same bytes in the same order whatever `concurrency` is.
+    questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
-    raw_parts = [f"# inventory\n{raw_text}"]
     for spec in FIELD_SPECS:
         candidates = fit_budget(candidate_blocks(spec, blocks, limit=candidate_limit), budget_chars=budget_chars)
         if not candidates:
@@ -287,6 +380,11 @@ def _extract_passages(
             continue
         field_user = field_user_prompt(spec, sample_list, render_markdown(candidates))
         _check_context_budget(field_system, field_user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+        questions.append((spec, tuple(candidates), field_user))
+
+    def ask(question: tuple[FieldSpec, tuple[SourceBlock, ...], str]) -> tuple[FieldHarvest, str, dict[str, int]]:
+        """One field question. Returns everything it produced; it shares no mutable state with its peers."""
+        spec, candidates, field_user = question
         response, text, field_usage = complete_validated(
             client,
             FieldResponse,
@@ -297,61 +395,41 @@ def _extract_passages(
             refresh=refresh,
             cache_salt=cache_salt,
         )
-        harvests.append(
-            FieldHarvest(
-                spec=spec,
-                values=tuple(response.values),
-                known_ids=frozenset(block.source_id for block in candidates),
-            )
+        harvest = FieldHarvest(
+            spec=spec,
+            values=tuple(response.values),
+            known_ids=frozenset(block.source_id for block in candidates),
         )
-        raw_parts.append(f"# {spec.name}\n{text}")
-        for key, value in field_usage.items():
-            usage[key] = usage.get(key, 0) + value
+        return harvest, text, field_usage
+
+    # The questions are independent and the wait is the network, so they overlap. `complete_validated` is a
+    # pure function of its arguments and `OpenAICompatibleClient` keeps nothing mutable on `self` -- the
+    # httpx.Client underneath is safe for concurrent requests, and cache entries land through
+    # `write_text_atomic`, whose temp names are unique. `pool.map` hands the answers back in submission
+    # order and re-raises the earliest failure in that order, so the first failure wins exactly as the
+    # sequential loop's would, and every usage dict is merged here on one thread rather than by the workers.
+    if concurrency == 1 or len(questions) <= 1:
+        answers = [ask(question) for question in questions]
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(concurrency, len(questions)), thread_name_prefix="paperfacts-field"
+        ) as pool:
+            answers = list(pool.map(ask, questions))
+
+    harvests: list[FieldHarvest] = []
+    raw_parts = [f"# inventory\n{inventory.raw_text}"]
+    for harvest, text, field_usage in answers:
+        harvests.append(harvest)
+        raw_parts.append(f"# {harvest.spec.name}\n{text}")
+        _add_usage(usage, field_usage)
 
     records = passage_records(
-        inventory,
+        inventory.response,
         harvests,
-        inventory_ids=frozenset(block.source_id for block in selection),
+        inventory_ids=inventory.source_ids,
         dropped=dropped,
     )
     return records, usage, "\n\n".join(raw_parts)
-
-
-def _deduplicate(records: ExtractedRecords) -> ExtractedRecords:
-    """Collapse repeats of the same fact, keeping every citation they brought.
-
-    One field question routinely gets the same number back more than once: quoted from the table, and again
-    from the sentence discussing it. They are one fact with two citations. Keeping both inflates every count
-    and, worse, hands the comparison layer a duplicate to pair against -- it keeps the first value per
-    condition, so a second, genuinely different reading of the same quantity (``10^-2`` against ``10^2``,
-    a real OCR disagreement) can be silently dropped behind a duplicate of the first.
-    """
-    target = records.target
-    if target is not None:
-        target = target.model_copy(update={"fields": _merge_repeats(target.fields)})
-    return records.model_copy(
-        update={
-            "target": target,
-            "samples": tuple(
-                sample.model_copy(update={"fields": _merge_repeats(sample.fields)}) for sample in records.samples
-            ),
-            "unattributed": _merge_repeats(records.unattributed),
-        }
-    )
-
-
-def _merge_repeats(values: Sequence[FieldValue]) -> tuple[FieldValue, ...]:
-    """One entry per distinct fact, in first-seen order, with the citations of its repeats merged in."""
-    merged: dict[ValueKey, FieldValue] = {}
-    for value in values:
-        key = _value_key(value)
-        previous = merged.get(key)
-        if previous is None:
-            merged[key] = value
-            continue
-        citations = tuple(dict.fromkeys((*previous.source_ids, *value.source_ids)))
-        merged[key] = previous.model_copy(update={"source_ids": citations})
-    return tuple(merged.values())
 
 
 def _render_sample_list(samples: Sequence[InventorySample]) -> str:
@@ -377,7 +455,12 @@ def passage_records(
     Attribution is by normalised sample id -- the same key that pairs samples across lanes -- so the model
     only has to repeat an id it was given. A sample-level value naming no sample, or one the inventory does
     not have, is kept in ``unattributed`` rather than attached to a plausible neighbour: an unplaced value
-    is visible in the report, a misplaced one is indistinguishable from a real measurement.
+    is visible in the report, a misplaced one is indistinguishable from a real measurement. The one
+    exception is a paper with a single sample, where a value naming no sample has only one possible owner.
+
+    A value the model flagged ``applies_to_all_samples`` is the other kind of null id: the paper stated it
+    once for the whole series ("all films were RF sputtered"), so it is written onto every sample with
+    ``series=True``. The flag is the model's explicit claim about the excerpt; the code never infers it.
     """
     cleaning = ResponseCleaning()
     cleaning.dropped.extend(dropped)
@@ -410,6 +493,8 @@ def passage_records(
     target_fields: list[FieldValue] = []
     target_ids: list[str] = []
     unattributed: list[FieldValue] = []
+    single_sample_attributed = 0
+    series_fanned_out = 0
     for harvest in harvests:
         for item in harvest.values:
             value = cleaning.value(
@@ -420,6 +505,7 @@ def passage_records(
                 source_ids=item.source_ids,
                 note=item.note,
                 known_ids=harvest.known_ids,
+                series=bool(item.applies_to_all_samples) and not item.sample_id,
             )
             if value is None:
                 continue
@@ -430,10 +516,49 @@ def passage_records(
                 target_ids.extend(value.source_ids)
                 continue
             index = index_by_key.get(normalize_key(item.sample_id)) if item.sample_id else None
+            if item.applies_to_all_samples and item.sample_id:
+                # An id and the series flag contradict each other. The id is the more specific claim and
+                # the one the prompt asks to be copied verbatim, so it wins; the flag is noise.
+                logger.debug(
+                    "ignoring applies_to_all_samples on %s: the value names sample %r",
+                    harvest.spec.name,
+                    item.sample_id,
+                )
+            elif value.series and not samples:
+                # Nothing to fan out to; the flag would claim a placement the record does not have.
+                value = value.model_copy(update={"series": False})
+            elif value.series:
+                # The paper states this once for the whole series ("all films were RF sputtered"). That is
+                # not an unplaceable value, it is a value the paper placed on every sample at once, so it
+                # is written onto each of them -- explicitly flagged, never inferred from the text by code.
+                for fields in sample_fields:
+                    fields.append(value)
+                series_fanned_out += 1
+                continue
+            if index is None and not item.sample_id and len(samples) == 1:
+                # The prompt allows a null sample_id when the excerpts do not say which sample a value
+                # belongs to. With exactly one sample in the inventory there is nothing to say: the lone
+                # sample is not a plausible neighbour, it is the only possible owner.
+                index = 0
+                single_sample_attributed += 1
             if index is None:
                 unattributed.append(value)
                 continue
             sample_fields[index].append(value)
+
+    if series_fanned_out:
+        logger.info(
+            "fanned out %d series value(s) stated for the whole sample list to each of %d sample(s)",
+            series_fanned_out,
+            len(samples),
+        )
+
+    if single_sample_attributed:
+        logger.info(
+            "attributed %d value(s) with no sample_id to the paper's only sample %r",
+            single_sample_attributed,
+            samples[0].sample_id,
+        )
 
     return ExtractedRecords(
         target=(
@@ -497,97 +622,3 @@ def _log_outcome(lane: LaneExtraction) -> None:
         len(lane.dropped),
         lane.usage,
     )
-
-
-# ---- Majority vote over repeated passes ----------------------------------------------------------------------
-# Even at temperature 0 the model is not deterministic across runs: repeated extractions drop or add the
-# occasional value, and with one pass that noise is indistinguishable from parser disagreement. Each
-# surviving value records the fraction of passes that produced it.
-
-
-class Scope(Enum):
-    """The two scopes a value can have that are not a sample.
-
-    A sample's scope is its normalised id, a plain string, so these members cannot collide with one whatever
-    a paper calls its samples -- a promise a reserved string like ``"__target__"`` could not make.
-    """
-
-    TARGET = "target"
-    UNATTRIBUTED = "unattributed"
-
-
-type ScopeKey = str | Scope
-type ValueKey = tuple[str, str, str, str]
-
-
-def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
-    """Keep the values a majority of ``results`` agree on, annotated with their agreement."""
-    if len(results) == 1:
-        return results[0]
-    passes = len(results)
-    majority = passes // 2 + 1
-
-    counts: Counter[tuple[ScopeKey, ValueKey]] = Counter()
-    exemplars: dict[tuple[ScopeKey, ValueKey], FieldValue] = {}
-    sample_counts: Counter[str] = Counter()
-    samples: dict[str, SampleRecord] = {}
-    target_ids: tuple[str, ...] = ()
-    for records in results:
-        for key in {(scope, _value_key(value)) for scope, value in _values(records)}:
-            counts[key] += 1
-        for scope, value in _values(records):
-            exemplars.setdefault((scope, _value_key(value)), value)
-        for scope in {normalize_key(sample.sample_id) for sample in records.samples}:
-            sample_counts[scope] += 1
-        for sample in records.samples:
-            samples.setdefault(normalize_key(sample.sample_id), sample)
-        if records.target is not None and not target_ids:
-            target_ids = records.target.source_ids
-
-    kept: dict[ScopeKey, list[FieldValue]] = {}
-    dropped = [entry for records in results for entry in records.dropped]
-    for (scope, value_key), value in exemplars.items():
-        count = counts[(scope, value_key)]
-        if count < majority:
-            dropped.append(f"{value.field}: only {count}/{passes} passes produced {value.value_raw!r}")
-            continue
-        kept.setdefault(scope, []).append(value.model_copy(update={"agreement": count / passes}))
-
-    # Sample identity is voted on separately from its values: "this sample exists, under these conditions"
-    # is itself a finding, kept even when none of its measurements survived.
-    target_fields = tuple(kept.get(Scope.TARGET, ()))
-    return ExtractedRecords(
-        target=TargetRecord(source_ids=target_ids, fields=target_fields) if target_fields else None,
-        samples=tuple(
-            sample.model_copy(update={"fields": tuple(kept.get(scope, ()))})
-            for scope, sample in samples.items()
-            if sample_counts[scope] >= majority
-        ),
-        invalid_source_ids=tuple(sorted({sid for records in results for sid in records.invalid_source_ids})),
-        dropped=tuple(dict.fromkeys(dropped)),
-        # An unplaced value is voted on like any other: agreeing three times that it cannot be placed is
-        # still agreement about the value itself.
-        unattributed=tuple(kept.get(Scope.UNATTRIBUTED, ())),
-    )
-
-
-def _values(records: ExtractedRecords) -> Iterator[tuple[ScopeKey, FieldValue]]:
-    for value in records.target.fields if records.target else ():
-        yield Scope.TARGET, value
-    for sample in records.samples:
-        scope = normalize_key(sample.sample_id)
-        for value in sample.fields:
-            yield scope, value
-    for value in records.unattributed:
-        yield Scope.UNATTRIBUTED, value
-
-
-def _value_key(value: FieldValue) -> ValueKey:
-    """Identity for voting and for merging repeats: the same number in the same unit under the same
-    condition, however it is spelled.
-
-    The unit belongs in the identity: "2.1 μm" and "2.1 nm" are a thousand-fold disagreement, and treating
-    them as one value would merge the disagreement away instead of reporting it.
-    """
-    unit = clean_unit(value.unit_raw) if value.unit_raw else ""
-    return value.field, normalize_key(value.condition), grounding_key(value.value_raw), unit

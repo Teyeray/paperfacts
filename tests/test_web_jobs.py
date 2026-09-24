@@ -188,6 +188,25 @@ def test_the_traceback_is_kept_so_the_failure_can_be_diagnosed_from_the_page():
     assert f"job {job.job_id} failed" in joined  # failure goes through the logger too, matched by job_id
 
 
+def test_log_records_from_the_pipeline_pools_reach_the_job_log_and_request_threads_do_not():
+    # run_document extracts the two lanes on a pool named "paperfacts-lane"; an HTTP request thread has no such name.
+    def body(job: Job, mark) -> None:
+        def say(message: str) -> None:
+            logging.getLogger("paperfacts.extract").warning(message)
+
+        pool = threading.Thread(target=say, args=("from a lane pool",), name="paperfacts-lane_0")
+        other = threading.Thread(target=say, args=("from a request thread",), name="AnyIO worker thread")
+        for thread in (pool, other):
+            thread.start()
+            thread.join()
+
+    _, job = run_to_completion(RecordingRunner(body=body))
+
+    joined = "\n".join(job.log)
+    assert "from a lane pool" in joined
+    assert "from a request thread" not in joined
+
+
 def test_a_base_exception_in_the_runner_still_ends_the_job_as_failed():
     # KeyboardInterrupt / SystemExit aren't Exception; without this catch the job would show "running" forever.
     def body(job: Job, mark) -> None:

@@ -134,6 +134,38 @@ def test_a_table_on_another_page_is_not_pulled_in():
     assert ids(candidate_blocks(SHEET_RESISTANCE, [named, table], limit=1)) == [named.source_id]
 
 
+def test_a_caption_on_the_next_page_follows_its_table_across_the_break():
+    # A table typeset at the foot of a page carries its caption to the head of the next one. The condition
+    # the numbers were measured under lives in that caption, so the break must not separate them.
+    table = make_block(page=0, order=9, type="table", content="<table><tr><td>Rs</td><td>12.3</td></tr></table>")
+    caption = make_block(page=1, order=0, type="caption", content="Table 2. Sheet resistance of the films.")
+
+    assert ids(candidate_blocks(SHEET_RESISTANCE, [table, caption], limit=1)) == [
+        table.source_id,
+        caption.source_id,
+    ]
+
+
+def test_a_table_on_the_next_page_follows_its_caption_across_the_break():
+    # The same pair in the other order: the caption scored and the table has to come with it.
+    caption = make_block(page=0, order=9, type="caption", content="Table 2. Sheet resistance of the films.")
+    table = make_block(page=1, order=0, type="table", content="<table><tr><td>A</td><td>B</td></tr></table>")
+
+    assert ids(candidate_blocks(SHEET_RESISTANCE, [caption, table], limit=1)) == [
+        caption.source_id,
+        table.source_id,
+    ]
+
+
+def test_two_tables_across_a_page_break_are_still_unrelated():
+    # Only a table/caption pair survives the break. Two tables that merely meet at a page boundary are
+    # consecutive by accident, and pulling one in would cost the prompt a block for nothing.
+    scored = make_block(page=0, order=9, type="table", content="<table><tr><td>Rs</td><td>12.3</td></tr></table>")
+    other = make_block(page=1, order=0, type="table", content="<table><tr><td>A</td><td>B</td></tr></table>")
+
+    assert ids(candidate_blocks(SHEET_RESISTANCE, [scored, other], limit=1)) == [scored.source_id]
+
+
 def test_the_selection_comes_back_in_document_order():
     # The ranking decides which blocks; the document decides their order, so the model reads the paper's
     # own narrative rather than a scoreboard.
@@ -172,6 +204,26 @@ def test_prose_that_states_a_numeric_condition_is_in_the_inventory():
     power = text(1, "The discharge was held at 150 W throughout.")
 
     assert ids(inventory_blocks([flow, power])) == [flow.source_id, power.source_id]
+
+
+def test_prose_that_states_a_duration_in_seconds_is_in_the_inventory():
+    block = text(0, "The films were deposited for 300 s at room temperature.")
+
+    assert ids(inventory_blocks([block])) == [block.source_id]
+
+
+def test_the_word_samples_after_a_number_is_not_a_seconds_unit():
+    # "\d\s*s\b" must not fire here: after the "s" of "samples" comes the "a" of "amples", both word
+    # characters, so \b fails and the prose stays out of the inventory.
+    block = text(0, "2 samples were prepared by the same route.")
+
+    assert inventory_blocks([block]) == []
+
+
+def test_prose_that_states_a_composition_ratio_is_in_the_inventory():
+    block = text(0, "The gas mix contained O2 at 3 vol.% of the total flow.")
+
+    assert ids(inventory_blocks([block])) == [block.source_id]
 
 
 def test_prose_without_a_number_is_left_out_of_the_inventory():

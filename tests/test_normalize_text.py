@@ -12,7 +12,8 @@ import unicodedata
 
 import pytest
 
-from paperfacts.normalize import normalize_key, normalize_text
+from paperfacts.fields import FIELD_BY_NAME
+from paperfacts.normalize import canonical_category, normalize_key, normalize_text, text_key
 
 # ---- Superscripts: must be handled before NFKC ------------------------------------------------------
 
@@ -54,10 +55,11 @@ def test_subscript_digits_become_plain_digits():
 # ---- Unifying Unicode variants ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("dash", ["−", "–", "—"])
+@pytest.mark.parametrize("dash", ["−", "–", "—", "‐", "‑", "‒", "―"])
 def test_every_dash_variant_becomes_an_ascii_hyphen(dash):
     # The minus sign / en dash / em dash all show up in papers; without unifying them, "−5" would fail to
-    # parse its negative sign.
+    # parse its negative sign. The hyphen family (U+2010 and friends) is what the two parsers disagree
+    # about when they transcribe the same sample label.
     assert normalize_text(f"{dash}5") == "-5"
 
 
@@ -147,7 +149,87 @@ def test_normalize_key_maps_missing_text_to_an_empty_string(blank):
     assert normalize_key(blank) == ""
 
 
+@pytest.mark.parametrize("dash", ["‐", "‑", "‒", "–", "—", "―", "−"])
+def test_normalize_key_keys_every_hyphen_variant_of_a_sample_id_identically(dash):
+    # The two lanes' parsers emit different Unicode for the same label, and the hyphen is where they
+    # differ most; keying them apart would split one sample into two that are never compared.
+    assert normalize_key(f"Sample{dash}A") == normalize_key("Sample-A") == "sample-a"
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("O\u2082-100", "O2-100"),  # subscript digit
+        ("O\u00b2-100", "O2-100"),  # superscript digit
+        ("\uff33\uff41\uff4d\uff50\uff4c\uff45\uff11", "Sample1"),  # full-width letters and digit
+        ("sample a", "SAMPLE\tA"),  # whitespace and case
+    ],
+)
+def test_normalize_key_folds_the_spellings_the_two_parsers_disagree_about(a, b):
+    assert normalize_key(a) == normalize_key(b)
+
+
 def test_normalize_key_is_idempotent():
     once = normalize_key("550 nm (average)")
 
     assert normalize_key(once) == once
+
+
+# ---- Closed category sets ---------------------------------------------------------------------------
+
+MODE = ("DC", "RF", "pulsed DC", "DC+RF", "HiPIMS")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # The three spellings one paper used for one mode, which used to read as three different answers.
+        ("DC and RF", "DC+RF"),
+        ("DC and RF co-sputtering", "DC+RF"),
+        ("DC and RF magnetron co-sputtering", "DC+RF"),
+        ("RF/DC", "DC+RF"),
+        ("DC", "DC"),
+        ("DC magnetron sputtering", "DC"),
+        ("rf sputtering", "RF"),
+        ("pulsed DC", "pulsed DC"),
+        ("pulsed-DC magnetron", "pulsed DC"),
+        ("HiPIMS", "HiPIMS"),
+    ],
+)
+def test_canonical_category_reduces_a_mode_to_the_tokens_it_names(raw, expected):
+    assert canonical_category(MODE, raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["magnetron sputtering", "reactive sputtering", "", None])
+def test_a_value_naming_no_category_is_never_guessed_into_one(raw):
+    # Refusing to resolve is the safe answer: the value then falls back to ordinary text comparison.
+    assert canonical_category(MODE, raw) is None
+
+
+def test_a_token_combination_no_category_names_stays_unresolved():
+    assert canonical_category(MODE, "pulsed DC and RF") is None
+
+
+def test_text_key_keeps_the_distinct_modes_apart():
+    spec = FIELD_BY_NAME["mode"]
+
+    assert text_key(spec, "DC and RF") == text_key(spec, "DC and RF magnetron co-sputtering")
+    assert text_key(spec, "DC") != text_key(spec, "RF")
+    assert text_key(spec, "DC") != text_key(spec, "DC and RF")
+    assert text_key(spec, "pulsed DC") != text_key(spec, "DC")
+
+
+def test_text_key_of_a_field_without_categories_is_the_plain_text_key():
+    spec = FIELD_BY_NAME["component"]
+
+    assert text_key(spec, "SnO2:Ta") == normalize_key("SnO2 : ta")
+
+
+# ---- Approximation characters ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", ["∼83.6", "~83.6"])
+def test_the_tilde_operator_folds_to_an_ascii_tilde(raw):
+    # U+223C TILDE OPERATOR is what papers actually print for "approximately", and NFKC leaves it alone.
+    # Folding it here is what lets both the comparison lane and the dataset lane recognise the marker.
+    assert normalize_text(raw) == "~83.6"

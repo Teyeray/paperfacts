@@ -19,8 +19,12 @@ from typing import Any
 
 import pytest
 
+from paperfacts import keys
 from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
+    DEFAULT_LLM_CONCURRENCY,
+    DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
+    DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_OVERLAY_DPI,
     DEFAULT_RETRY_ATTEMPTS,
@@ -28,6 +32,7 @@ from paperfacts.config import (
     DEFAULT_TEMPERATURE,
     ENV_CONFIG_PATH,
     ENV_PREFIX,
+    INHERIT,
     ConfigDocument,
     Settings,
     config_path,
@@ -307,6 +312,86 @@ def test_the_sampling_settings_come_from_the_file(tmp_path: Path):
     assert settings.llm_retry_backoff_s == 0.5
 
 
+def test_the_reasoning_effort_comes_from_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "low"})
+
+    assert Settings.from_env(env_for(path)).llm_reasoning_effort == "low"
+
+
+def test_a_null_reasoning_effort_leaves_the_parameter_out(tmp_path: Path):
+    # null is how the file says "send no reasoning_effort at all", which is the built-in baseline.
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": None})
+
+    assert Settings.from_env(env_for(path)).llm_reasoning_effort is DEFAULT_LLM_REASONING_EFFORT
+
+
+def test_an_unknown_reasoning_effort_names_the_ones_that_exist(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "maximum"})
+
+    with pytest.raises(ConfigError, match=re.escape("llm.reasoning_effort is 'maximum'")) as caught:
+        Settings.from_env(env_for(path))
+    assert "none, low, medium, high" in str(caught.value)
+
+
+def test_the_environment_overrides_the_reasoning_effort(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "none"})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_REASONING_EFFORT="high"))
+
+    assert settings.llm_reasoning_effort == "high"
+
+
+def test_an_empty_reasoning_effort_variable_leaves_the_file_alone(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.reasoning_effort": "low"})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_REASONING_EFFORT=""))
+
+    assert settings.llm_reasoning_effort == "low"
+
+
+def test_the_inventory_reasoning_effort_comes_from_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": "none"})
+
+    assert Settings.from_env(env_for(path)).llm_inventory_reasoning_effort == "none"
+
+
+def test_a_null_inventory_reasoning_effort_inherits_the_general_one(tmp_path: Path):
+    # null is the baseline, spelled INHERIT in code: the inventory question is sent with whatever
+    # llm.reasoning_effort says. The word "inherit" says the same thing out loud.
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": None})
+
+    settings = Settings.from_env(env_for(path))
+
+    assert settings.llm_inventory_reasoning_effort is DEFAULT_LLM_INVENTORY_REASONING_EFFORT is INHERIT
+    spelled = write_config(tmp_path / "spelled.json", {"llm.inventory_reasoning_effort": "inherit"})
+    assert Settings.from_env(env_for(spelled)).llm_inventory_reasoning_effort is INHERIT
+
+
+def test_an_omitted_inventory_reasoning_effort_sends_no_parameter(tmp_path: Path):
+    # The one meaning null cannot carry: send that question with no reasoning_effort at all, while the
+    # client keeps sending its own on every other question.
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": "omit"})
+
+    assert Settings.from_env(env_for(path)).llm_inventory_reasoning_effort is None
+
+
+def test_an_unknown_inventory_reasoning_effort_names_its_own_key(tmp_path: Path):
+    # The error has to name the key that is wrong, not the neighbouring one that shares the parser.
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": "maximum"})
+
+    with pytest.raises(ConfigError, match=re.escape("llm.inventory_reasoning_effort is 'maximum'")) as caught:
+        Settings.from_env(env_for(path))
+    assert "PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT" in str(caught.value)
+
+
+def test_the_environment_overrides_the_inventory_reasoning_effort(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.inventory_reasoning_effort": None})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT="low"))
+
+    assert settings.llm_inventory_reasoning_effort == "low"
+
+
 def test_a_missing_setting_in_the_file_fails_loudly(tmp_path: Path):
     # Not a silent fallback: a file that has lost a key is a file someone edited by hand, and the value
     # they deleted is more likely to be wrong than absent.
@@ -350,6 +435,78 @@ def test_every_optional_key_is_read_when_it_is_given():
     assert (spec.rel_tol, spec.abs_tol) == (0.05, 1.0)
     assert spec.condition_hint == "wavelength"
     assert spec.bare_number == "assume_canonical"
+
+
+def test_a_field_label_is_optional_and_read_when_it_is_given():
+    assert load_field_specs(document({"fields": [MINIMAL_FIELD]}))[0].label == ""
+
+    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": "厚度"}]}))[0]
+
+    assert spec.label == "厚度"
+
+
+@pytest.mark.parametrize("bad", ["", "  ", 5, None])
+def test_a_label_that_is_not_a_non_empty_string_is_refused(bad):
+    with pytest.raises(ConfigError, match="label"):
+        load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": bad}]}))
+
+
+def test_every_shipped_field_has_a_chinese_label():
+    assert all(spec.label for spec in FIELD_SPECS)
+
+
+def test_a_label_changes_neither_cache_key(monkeypatch):
+    # It is a column header, nothing more: adding or editing one must not re-extract or re-compare a paper.
+    plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
+    labelled = load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": "厚度"}]}))
+
+    def keys_for(specs):
+        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
+        return keys.extractor_key("a-model"), keys.comparison_key()
+
+    try:
+        assert keys_for(plain) == keys_for(labelled)
+    finally:
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
+
+
+def test_a_chinese_description_is_optional_and_read_when_it_is_given():
+    assert load_field_specs(document({"fields": [MINIMAL_FIELD]}))[0].description_zh == ""
+
+    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": "薄膜厚度"}]}))[0]
+
+    assert spec.description_zh == "薄膜厚度"
+
+
+@pytest.mark.parametrize("bad", ["", "  ", 5, None])
+def test_a_chinese_description_that_is_not_a_non_empty_string_is_refused(bad):
+    with pytest.raises(ConfigError, match="description_zh"):
+        load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": bad}]}))
+
+
+def test_every_shipped_field_has_a_chinese_description():
+    assert all(spec.description_zh for spec in FIELD_SPECS)
+
+
+def test_a_chinese_description_changes_neither_cache_key(monkeypatch):
+    # Like the label: it reaches a tooltip and a spreadsheet sheet, never a prompt and never a verdict.
+    plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
+    described = load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": "薄膜厚度"}]}))
+
+    def keys_for(specs):
+        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
+        return keys.extractor_key("a-model"), keys.comparison_key()
+
+    try:
+        assert keys_for(plain) == keys_for(described)
+    finally:
+        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+            cached.cache_clear()
 
 
 def test_an_unknown_key_in_a_field_names_the_field_and_the_valid_keys():
@@ -454,6 +611,13 @@ def test_the_shipped_configuration_mirrors_the_built_in_baselines():
 
     assert data["llm"]["temperature"] == DEFAULT_TEMPERATURE
     assert data["llm"]["max_tokens"] == DEFAULT_MAX_TOKENS
+    # Shipped unset on purpose: turning reasoning off was measured to lose a third of the extracted values
+    # (.omc/research/reasoning-effort.md), and an unedited checkout must keep its cache keys.
+    assert data["llm"]["reasoning_effort"] is DEFAULT_LLM_REASONING_EFFORT is None
+    # Shipped unset too: the inventory question inherits the general effort until somebody asks otherwise.
+    assert data["llm"]["inventory_reasoning_effort"] is None
+    assert DEFAULT_LLM_INVENTORY_REASONING_EFFORT is INHERIT
+    assert data["llm"]["concurrency"] == DEFAULT_LLM_CONCURRENCY
     assert data["llm"]["retry_attempts"] == DEFAULT_RETRY_ATTEMPTS
     assert data["llm"]["retry_backoff_s"] == DEFAULT_RETRY_BACKOFF_S
     assert data["extraction"]["candidate_limit"] == DEFAULT_CANDIDATE_LIMIT
@@ -465,13 +629,59 @@ def test_the_shipped_configuration_agrees_with_the_dataclass_defaults():
     # that reading the constants in config.py tells the truth about an unedited checkout.
     baseline = Settings()
     configured = Settings.from_env({})
+    assert configured.llm_reasoning_effort is DEFAULT_LLM_REASONING_EFFORT
 
     fed_by_the_file = [
         name
         for name in (field.name for field in dataclasses.fields(Settings))
         # repo_root follows the checkout and the two key fields are environment-only, by design.
-        if name not in {"repo_root", "llm_api_key", "llm_api_key_file"}
+        # llm_reasoning_effort is the deliberate exception above: the file turns reasoning off, the
+        # built-in baseline leaves the parameter out.
+        if name not in {"repo_root", "llm_api_key", "llm_api_key_file", "llm_reasoning_effort"}
     ]
     assert [getattr(configured, name) for name in fed_by_the_file] == [
         getattr(baseline, name) for name in fed_by_the_file
     ]
+
+
+# ---- llm.concurrency: how many questions wait at once, never what they say ----------------
+
+
+def test_the_concurrency_comes_from_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": 9})
+
+    assert Settings.from_env(env_for(path)).llm_concurrency == 9
+
+
+def test_the_concurrency_environment_variable_wins_over_the_file(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": 9})
+
+    settings = Settings.from_env(env_for(path, PAPERFACTS_LLM_CONCURRENCY="2"))
+
+    assert settings.llm_concurrency == 2
+
+
+def test_a_concurrency_below_one_names_the_key_and_the_file(tmp_path: Path):
+    # Zero questions in flight would hang forever inside the pool rather than fail here.
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": 0})
+
+    with pytest.raises(ConfigError, match=r"llm\.concurrency must be at least 1"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_file_without_a_concurrency_key_names_the_key_and_the_file(tmp_path: Path):
+    """Every setting is declared in config.json, so a missing key is a hand-edited file, not a default."""
+    path = write_config(tmp_path / "config.json", {})
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["llm"]["concurrency"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=r"missing setting 'llm\.concurrency'"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_non_integer_concurrency_still_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.concurrency": "four"})
+
+    with pytest.raises(ConfigError, match=r"llm\.concurrency must be int"):
+        Settings.from_env(env_for(path))

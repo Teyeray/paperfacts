@@ -23,8 +23,10 @@ import typer
 
 from paperfacts.config import EXTRACTION_MODES, Settings
 from paperfacts.errors import PaperFactsError, ParserError
+from paperfacts.fields import FIELD_SPECS
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
+from paperfacts.parsers import install_runner_cleanup
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import (
@@ -42,6 +44,13 @@ app = typer.Typer(
     help="Extract traceable sample-level facts from scientific PDFs using two independent parsers.",
     no_args_is_help=True,
 )
+
+
+@app.callback()
+def main() -> None:
+    # This process owns the parser subprocesses: make sure Ctrl-C or a kill takes them with it, rather
+    # than leaving a multi-gigabyte runner behind.
+    install_runner_cleanup()
 
 
 class BackendOption(StrEnum):
@@ -299,6 +308,19 @@ def export(
     """Re-export current cached results to Excel, without parser or LLM calls."""
     _configure_logging(verbose)
     _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True)
+
+
+@app.command()
+def fields() -> None:
+    """List the field table the package actually loaded, so an edit to config.json can be checked at a glance."""
+    for spec in FIELD_SPECS:
+        unit = spec.canonical_unit or "-"
+        tolerance = f"rel={spec.rel_tol:g} abs={spec.abs_tol:g}" if spec.kind == "numeric" else "-"
+        hint = f"  condition: {spec.condition_hint}" if spec.condition_hint else ""
+        typer.echo(
+            f"{spec.name:<26} {spec.group:<8} {spec.kind:<12} {unit:<8} {tolerance:<22} {spec.bare_number}{hint}"
+        )
+        typer.echo(f"    keywords: {', '.join(spec.keywords) or '-'}")
 
 
 @app.command()

@@ -19,6 +19,8 @@ Naming: ``document_id`` is the PDF's content sha256; ``source_id`` is ``{backend
 from __future__ import annotations
 
 import hashlib
+import os
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -172,6 +174,16 @@ class DocumentInput(BaseModel):
     document_id: str = Field(min_length=64, max_length=64)
     pdf_path: Path
     sha256: str = Field(min_length=64, max_length=64)
+    display_name: str | None = Field(
+        default=None,
+        description="Name to show a user. Web uploads are all stored as source.pdf, so the on-disk name is "
+        "useless there; the real one comes from identity.json.",
+    )
+
+    @property
+    def display_filename(self) -> str:
+        """The filename a user should see, wherever a document is named in output."""
+        return self.display_name or self.pdf_path.name
 
     @classmethod
     def from_path(cls, pdf_path: Path) -> Self:
@@ -244,8 +256,17 @@ class ParsedArtifact(BaseModel):
         return dict(sorted(counts.items()))
 
     def write(self, path: Path) -> None:
+        """Atomic: a run killed mid-write leaves the previous artifact, never a truncated one.
+
+        Open-coded rather than calling ``storage.write_atomic`` because ``storage`` imports this module.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @classmethod
     def read(cls, path: Path) -> Self:

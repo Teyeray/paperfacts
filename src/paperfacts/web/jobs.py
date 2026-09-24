@@ -96,6 +96,13 @@ class JobManager:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def all_jobs(self) -> list[Job]:
+        """Every job this process knows about, newest first. The dict is small (one entry per
+        submission since start-up), so the frontend can learn which documents are busy with one
+        request instead of one per row."""
+        with self._lock:
+            return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+
     def for_document(self, document_id: str) -> list[Job]:
         with self._lock:
             return sorted((j for j in self._jobs.values() if j.document_id == document_id), key=lambda j: j.created_at)
@@ -174,9 +181,14 @@ class JobManager:
             package_logger.setLevel(previous_level)
 
 
+# The pipeline fans out onto pools named with this prefix (workflow.run_document, extract._extract_passages).
+# One job runs at a time, so a record from such a thread can only belong to the current job.
+PIPELINE_THREAD_PREFIX = "paperfacts-"
+
+
 class _JobLogHandler(logging.Handler):
-    """Collect this job thread's paperfacts.* log records into job.log (filtered by thread, so
-    HTTP request-thread logs never leak in)."""
+    """Collect this job's paperfacts.* log records into job.log: those from the worker thread itself and
+    those from the pipeline's own pools, so HTTP request-thread logs never leak in."""
 
     def __init__(self, manager: JobManager, job_id: str) -> None:
         super().__init__(level=logging.INFO)
@@ -186,7 +198,7 @@ class _JobLogHandler(logging.Handler):
         self.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S"))
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.thread == self._thread:
+        if record.thread == self._thread or (record.threadName or "").startswith(PIPELINE_THREAD_PREFIX):
             self._manager._append_log(self._job_id, self.format(record))
 
 

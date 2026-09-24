@@ -1,12 +1,20 @@
 """An ML row must describe one actual sample and contain only defensible scalar values."""
 
+import json
 from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
+from pydantic import ValidationError
 
 from paperfacts.compare import compare_lanes
-from paperfacts.dataset import consolidate_document, write_dataset
+from paperfacts.dataset import (
+    DatasetPayload,
+    DocumentDataset,
+    consolidate_document,
+    write_dataset,
+    write_dataset_json,
+)
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
@@ -140,6 +148,69 @@ def test_multiple_conditions_are_not_collapsed_even_with_identical_numbers():
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
 
 
+def test_differently_worded_conditions_across_lanes_still_agree():
+    """The lanes paraphrase one condition; only a lane's own evidence may signal several conditions."""
+    result = paired(
+        [value("transmittance", "85", "%", condition="ITO monolayer thickness")],
+        [value("transmittance", "85", "%", condition="ITO monolayer film thickness", backend="paddleocr_vl")],
+    )
+    assert result.paper_row["transmittance"] == 85
+    assert decision(result, "transmittance")["decision"] == "agree"
+    row = decision(result, "transmittance")
+    assert "ITO monolayer thickness" in row["conditions"] and "ITO monolayer film thickness" in row["conditions"]
+
+
+def test_one_lane_with_two_conditions_is_still_refused():
+    result = paired(
+        [
+            value("transmittance", "85", "%", condition="550 nm"),
+            value("transmittance", "85", "%", condition="600 nm"),
+        ],
+        [value("transmittance", "85", "%", condition="550 nm", backend="paddleocr_vl")],
+    )
+    assert result.paper_row["transmittance"] is None
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def test_one_mode_quoted_two_ways_is_one_answer_not_a_refusal():
+    """A closed category set is judged on the category, so the paper's phrasing cannot manufacture a
+    multiple_values refusal out of a single co-sputtering run."""
+    result = paired(
+        [value("mode", "DC and RF")],
+        [value("mode", "DC and RF magnetron co-sputtering", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "mode")["decision"] == "agree"
+    assert result.paper_row["mode"] in {"DC and RF", "DC and RF magnetron co-sputtering"}
+
+
+def test_two_genuinely_different_modes_are_still_refused():
+    result = paired([value("mode", "DC")], [value("mode", "RF", backend="paddleocr_vl")])
+
+    assert result.paper_row["mode"] is None
+    assert decision(result, "mode")["decision"] == "conflict"
+
+
+def test_one_lane_quoting_two_spellings_of_one_mode_is_not_multiple_values():
+    result = paired(
+        [value("mode", "DC and RF"), value("mode", "DC and RF co-sputtering")],
+        [value("mode", "DC and RF", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "mode")["decision"] != "multiple_values"
+    assert result.paper_row["mode"] is not None
+
+
+def test_one_lane_quoting_two_different_modes_stays_refused():
+    result = paired(
+        [value("mode", "DC"), value("mode", "RF")],
+        [value("mode", "DC", backend="paddleocr_vl")],
+    )
+
+    assert result.paper_row["mode"] is None
+    assert decision(result, "mode")["decision"] in {"conflict", "multiple_values"}
+
+
 def test_different_target_compositions_cannot_be_picked_or_joined():
     result = dataset(make_lane(target=TargetRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
     assert result.paper_row["component"] is None
@@ -258,3 +329,182 @@ def test_mismatched_document_ids_are_rejected():
     document = DocumentInput(document_id="b" * 64, sha256="b" * 64, pdf_path=Path("other.pdf"))
     with pytest.raises(ValueError, match="same PDF"):
         consolidate_document(document, {a.backend: a, b.backend: b}, report)
+
+
+def test_the_json_view_survives_a_round_trip(tmp_path):
+    # Rows are MappingProxyType, which json refuses; the web UI reads this file, so the copy must be real.
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])
+
+    path = tmp_path / "dataset.json"
+    write_dataset_json(result, path)
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+
+    assert loaded["document_id"] == result.document_id
+    assert loaded["filename"] == "paper.pdf"
+    assert loaded["extractor_key"] == result.extractor_key
+    assert loaded["comparison_key"] == result.comparison_key
+    assert [field["name"] for field in loaded["fields"]] == [spec.name for spec in FIELD_SPECS]
+    assert loaded["paper_row"] == dict(result.paper_row)
+    assert loaded["sample_rows"] == [dict(row) for row in result.sample_rows]
+    assert loaded["quality_rows"] == [dict(row) for row in result.quality_rows]
+    assert loaded["sample_rows"][0]["thickness"] == 300
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_the_field_list_carries_the_chinese_description_for_the_header_tooltip():
+    result = paired([value("transmittance", "85", "%")], [value("transmittance", "85", "%", backend="paddleocr_vl")])
+    by_name = {field.name: field for field in result.to_payload().fields}
+    assert "透光率" in by_name["transmittance"].description
+    assert by_name["transmittance"].scope == "sample"
+
+
+def test_every_configured_field_has_a_chinese_description():
+    # The Excel field sheet and the header tooltips both read description_zh; a field shipped in
+    # config.json without one would export blank, which this test turns into a visible failure instead.
+    assert [spec.name for spec in FIELD_SPECS if not spec.description_zh] == []
+
+
+def test_the_field_list_carries_the_chinese_label_for_the_column_header():
+    # The browser prints this above the column; a field without one falls back to its id, never to blank.
+    by_name = {field.name: field for field in dataset(make_lane()).to_payload().fields}
+
+    assert by_name["transmittance"].label == "透光率"
+    assert by_name["thickness"].label == "厚度"
+
+
+def test_from_payload_reverses_to_payload_exactly():
+    # The corpus export rebuilds datasets from their JSON, so the round trip through disk has to be lossless.
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])
+
+    parsed = DatasetPayload.model_validate_json(result.to_payload().model_dump_json())
+    restored = DocumentDataset.from_payload(parsed)
+
+    assert restored == result
+    assert restored.to_payload() == result.to_payload()
+
+
+def test_a_dataset_file_in_the_wrong_shape_fails_at_the_boundary():
+    # Validation is pydantic's job where the JSON is parsed, so a bad file never travels on as a dict.
+    with pytest.raises(ValidationError):
+        DatasetPayload.model_validate_json("[1, 2, 3]")
+
+
+def test_the_json_field_list_carries_the_unit_and_the_scope():
+    fields = {field.name: field for field in dataset(make_lane()).to_payload().fields}
+
+    assert fields["thickness"].scope == "sample"
+    assert fields["component"].scope == "target"
+    assert fields["thickness"].unit == "nm"
+
+
+def test_the_display_name_is_the_filename_a_dataset_reports():
+    """A web upload is stored as source.pdf, so the path can't name the paper: the display name does."""
+    document = DocumentInput(
+        document_id=DOC_ID, sha256=DOC_ID, pdf_path=Path("source.pdf"), display_name="Sputtered ITO.pdf"
+    )
+    a = make_lane(samples=[make_sample("A", [value("thickness", "100 nm")])])
+    b = make_lane(backend="paddleocr_vl")
+    matching = SampleMatching(unmatched_a=("A",))
+    result = consolidate_document(document, {a.backend: a, b.backend: b}, compare_lanes(a, b, matching))
+
+    assert result.filename == "Sputtered ITO.pdf"
+    assert result.paper_row["filename"] == "Sputtered ITO.pdf"
+    assert [row["filename"] for row in result.sample_rows] == ["Sputtered ITO.pdf"]
+    assert all(row["filename"] == "Sputtered ITO.pdf" for row in result.quality_rows)
+
+
+def test_without_a_display_name_the_dataset_still_reports_the_path_name():
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "100 nm")])]), filename="paper.pdf")
+
+    assert result.filename == "paper.pdf"
+    assert result.paper_row["filename"] == "paper.pdf"
+
+
+def test_a_scale_factor_in_the_unit_reaches_the_paper_row():
+    # Observed on the corpus: a column headed "ρ (×10⁻⁴ Ω·cm)" makes the model transcribe the factor as the
+    # unit and leave the value a bare "19.4". The exported cell must be the resistivity, not an empty cell.
+    result = paired(
+        [value("resistivity", "19.4", "×10^-4 Ω-cm")],
+        [value("resistivity", "19.4", "×10^-4 Ω·cm", backend="paddleocr_vl")],
+    )
+
+    assert result.paper_row["resistivity"] == pytest.approx(1.94e-3)
+    assert decision(result, "resistivity")["decision"] == "agree"
+
+
+def test_an_approximate_value_spaced_out_by_latex_still_exports():
+    result = paired(
+        [value("thickness", "∼8 . 4", "nm")],
+        [value("thickness", "around 8.4", "nm", backend="paddleocr_vl")],
+    )
+
+    assert result.paper_row["thickness"] == pytest.approx(8.4)
+
+
+def test_a_value_stated_only_for_the_whole_series_is_marked_series_level():
+    result = paired(
+        [value("thickness", "300", "nm", series=True)],
+        [value("thickness", "300", "nm", backend="paddleocr_vl", series=True)],
+    )
+
+    assert decision(result, "thickness")["decision"] == "agree"
+    assert decision(result, "thickness")["series"] is True
+
+
+def test_one_sample_specific_side_keeps_the_value_off_the_series_mark():
+    result = paired(
+        [value("thickness", "300", "nm", series=True)],
+        [value("thickness", "300", "nm", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "thickness")["decision"] == "agree"
+    assert decision(result, "thickness")["series"] is False
+
+
+def test_a_single_source_series_value_is_still_marked_series_level():
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "300", "nm", series=True)])]))
+
+    assert decision(result, "thickness")["decision"] == "single_source"
+    assert decision(result, "thickness")["series"] is True
+
+
+def test_the_series_mark_reaches_the_quality_sheet(tmp_path):
+    result = paired(
+        [value("thickness", "300", "nm", series=True)],
+        [value("thickness", "300", "nm", backend="paddleocr_vl", series=True)],
+    )
+    output = tmp_path / "dataset.xlsx"
+    write_dataset([result], output)
+
+    sheet = load_workbook(output)["数据质量"]
+    columns = {cell.value: cell.column for cell in sheet[1]}
+    rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
+    assert sheet.cell(rows["thickness"], columns["系列级"]).value is True
+    assert sheet.cell(rows["resistivity"], columns["系列级"]).value is False
+
+
+def test_the_quality_row_names_the_lanes_behind_a_committed_value():
+    agreed = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm", backend="paddleocr_vl")])
+    assert decision(agreed, "thickness")["decision"] == "agree"
+    assert decision(agreed, "thickness")["lanes"] == "mineru; paddleocr_vl"
+
+    only_b = make_sample("A", [value("thickness", "300", "nm", backend="paddleocr_vl")])
+    single = dataset(make_lane(), make_lane(backend="paddleocr_vl", samples=[only_b]))
+    assert decision(single, "thickness")["decision"] == "single_source"
+    assert decision(single, "thickness")["lanes"] == "paddleocr_vl"
+
+
+def test_a_refused_cell_names_no_lane():
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "300", "nm", grounded=False)])]))
+    assert decision(result, "thickness")["lanes"] == ""
+
+
+def test_the_lane_column_reaches_the_quality_sheet(tmp_path):
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm", backend="paddleocr_vl")])
+    output = tmp_path / "dataset.xlsx"
+    write_dataset([result], output)
+
+    sheet = load_workbook(output)["数据质量"]
+    columns = {cell.value: cell.column for cell in sheet[1]}
+    rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
+    assert sheet.cell(rows["thickness"], columns["证据来源通道"]).value == "mineru; paddleocr_vl"

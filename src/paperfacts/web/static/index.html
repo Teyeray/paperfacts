@@ -11,7 +11,7 @@
 <header class="topbar">
   <a class="brand" href="#/">
     <span class="brand-mark">PF</span>
-    <span class="brand-text"><b>PaperFacts</b><small>两路 parser · 样品级事实 · page + bbox 溯源</small></span>
+    <span class="brand-text"><b>PaperFacts</b></span>
   </a>
   <div class="topbar-meta" id="health">…</div>
 </header>
@@ -26,17 +26,25 @@
     </section>
     <div class="rail-head">
       <h2>文档库</h2>
-      <button class="ghost" id="refresh-library" type="button" title="刷新">↻</button>
+      <div class="rail-head-actions">
+        <button class="ghost" id="run-all" type="button" title="把所有未完成的文档排入处理队列">处理全部未完成</button>
+        <button class="ghost" id="refresh-library" type="button" title="刷新">↻</button>
+      </div>
     </div>
     <ul class="doc-list" id="doc-list"></ul>
   </aside>
 
   <section class="content" id="content">
-    <div class="empty" id="empty-state">
-      <h1>把一篇论文放进来</h1>
-      <p>左侧上传 PDF。MinerU 与 PaddleOCR-VL 各自解析、同一个抽取器各自抽取，然后逐条比较：<br>
-      一致的直接接受，冲突与不确定的留给裁决，每一个数都能点回原文页面上的那一块。</p>
+    <div class="intro" id="empty-state">
+      <h1><span class="intro-title" data-when="empty">文献参数提取</span><span class="intro-title" data-when="corpus">论文结果总表</span></h1>
+      <p class="intro-lead" data-when="corpus">下表汇总已处理论文的样品级参数，点论文名可以查看它的逐条证据。</p>
+      <div class="intro-empty" data-when="empty">
+        <p class="intro-lead">从科研论文中抽取样品级的测量参数：两路解析各自抽取、逐条比较，每一个数都能点回原文页面上的那一块。</p>
+        <p class="intro-cta">在左侧拖入一份 PDF，或点「选择文件」开始。</p>
+        <p class="intro-steps muted">两路解析 → LLM 抽取 → 对齐比较</p>
+      </div>
     </div>
+    <div class="corpus-view hidden" id="corpus-view"></div>
     <div class="document hidden" id="document-view"></div>
   </section>
 </main>
@@ -54,6 +62,22 @@
   </header>
   <ol class="stages" data-slot="stages"></ol>
   <div class="kpis" data-slot="kpis"></div>
+  <section class="results" aria-label="结果表">
+    <div class="results-head">
+      <h2>结果表（按样品）</h2>
+      <div class="chips" data-slot="results-chips"></div>
+      <button class="copy-table hidden" data-slot="dataset-copy" type="button">复制表格</button>
+      <a class="download hidden" data-slot="dataset-download" download>下载 Excel</a>
+    </div>
+    <p class="results-note muted">每一行是合并两路解析后的一个样品；空白单元格是流水线拒绝猜测的取值，不是 0。</p>
+    <div class="table-wrap">
+      <table class="facts-table results-table">
+        <thead data-slot="results-head"></thead>
+        <tbody data-slot="results-rows"></tbody>
+      </table>
+      <div class="table-empty hidden" data-slot="results-empty">还没有结果表，处理完成后会出现在这里。</div>
+    </div>
+  </section>
   <div class="workbench">
     <section class="facts" aria-label="事实对照">
       <div class="facts-head">
@@ -70,10 +94,10 @@
     </section>
     <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
   </div>
-  <section class="samples" aria-label="样品记录">
-    <div class="samples-head"><h2>样品记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></div>
+  <details class="samples" aria-label="样品记录">
+    <summary class="samples-head"><h2>样品记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
     <div class="lanes" data-slot="lanes"></div>
-  </section>
+  </details>
   <details class="joblog" data-slot="joblog">
     <summary>处理日志 <span class="muted" data-slot="job-status"></span></summary>
     <pre data-slot="log"></pre>

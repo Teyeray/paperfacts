@@ -24,12 +24,17 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from paperfacts.config import (
+    DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_S,
     DEFAULT_TEMPERATURE,
+    INHERIT,
+    Inherit,
+    ReasoningEffort,
 )
 from paperfacts.errors import LlmError, LlmResponseError
+from paperfacts.storage import write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +60,17 @@ class LlmClient(Protocol):
     model: str
     temperature: float
     max_tokens: int
+    reasoning_effort: ReasoningEffort | None
 
-    def complete_json(self, *, system: str, user: str, refresh: bool = False, cache_salt: str = "") -> LlmResult: ...
+    def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        refresh: bool = False,
+        cache_salt: str = "",
+        reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
+    ) -> LlmResult: ...
 
 
 class OpenAICompatibleClient:
@@ -73,6 +87,7 @@ class OpenAICompatibleClient:
         client: httpx.Client | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        reasoning_effort: ReasoningEffort | None = DEFAULT_LLM_REASONING_EFFORT,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
         retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
         sleep: Callable[[float], None] = time.sleep,
@@ -85,6 +100,7 @@ class OpenAICompatibleClient:
         self.client = client or httpx.Client()
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
         self.retry_attempts = retry_attempts
         self.retry_backoff_s = retry_backoff_s
         self._sleep = sleep  # injectable so tests do not actually sleep
@@ -98,8 +114,16 @@ class OpenAICompatibleClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def complete_json(self, *, system: str, user: str, refresh: bool = False, cache_salt: str = "") -> LlmResult:
-        payload = self.payload(system=system, user=user)
+    def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        refresh: bool = False,
+        cache_salt: str = "",
+        reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
+    ) -> LlmResult:
+        payload = self.payload(system=system, user=user, reasoning_effort=reasoning_effort)
         key = self.cache_key(payload, cache_salt=cache_salt)
         if not refresh:
             cached = self._read_cache(key)
@@ -113,14 +137,21 @@ class OpenAICompatibleClient:
             raise LlmError(f"response has no choices[0].message.content: {str(data)[:300]}") from exc
         if not text or not text.strip():
             raise LlmError("the model returned empty content (usually max_tokens truncation in JSON mode)")
-        usage = {k: int(v) for k, v in (data.get("usage") or {}).items() if isinstance(v, int | float)}
-        result = LlmResult(text=text, usage=usage, cached=False)
+        result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
         self._write_cache(key, result)
         return result
 
-    def payload(self, *, system: str, user: str) -> dict[str, Any]:
-        """The complete request body. The cache key hashes this, so no parameter can escape the key."""
-        return {
+    def payload(
+        self, *, system: str, user: str, reasoning_effort: ReasoningEffort | Inherit | None = INHERIT
+    ) -> dict[str, Any]:
+        """The complete request body. The cache key hashes this, so no parameter can escape the key.
+
+        ``reasoning_effort`` overrides the client's own setting for this one request: ``INHERIT`` keeps it,
+        ``None`` sends no such parameter at all, a value sends that one.
+        A question that reasons far longer than its neighbours can therefore be given its own effort
+        without changing any other request's bytes, and so without invalidating their cached answers.
+        """
+        body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": self.temperature,
@@ -129,6 +160,12 @@ class OpenAICompatibleClient:
             # in the prompt for this to be accepted; prompts.py guarantees that.
             "response_format": {"type": "json_object"},
         }
+        # Omitted rather than sent as null when unset: the bytes on the wire stay what they were before this
+        # parameter existed, so every cached answer still resolves.
+        effort = self.reasoning_effort if reasoning_effort is INHERIT else reasoning_effort
+        if effort is not None:
+            body["reasoning_effort"] = effort
+        return body
 
     def cache_key(self, payload: dict[str, Any], *, cache_salt: str = "") -> str:
         """Key for this request.
@@ -148,6 +185,7 @@ class OpenAICompatibleClient:
         url = f"{self.base_url}/chat/completions"
         for attempt in range(1, self.retry_attempts + 1):
             error: LlmError
+            retry_after: float | None = None
             try:
                 response = self.client.post(url, json=payload, headers=headers, timeout=self.timeout_s)
             except httpx.HTTPError as exc:
@@ -161,9 +199,14 @@ class OpenAICompatibleClient:
                 error = LlmError(f"HTTP {response.status_code}: {response.text[:300]}")
                 if response.status_code not in RETRY_STATUS:
                     raise error
+                retry_after = _retry_after(response)
             if attempt == self.retry_attempts:
                 raise error
             delay = self.retry_backoff_s * 2 ** (attempt - 1)
+            if retry_after is not None:
+                # A 429 that says "try again in 30 s" is a promise, not a suggestion: backing off less
+                # than the server asked just spends another attempt of the same fixed budget.
+                delay = max(delay, retry_after)
             logger.warning("llm retry %d/%d in %.0fs: %s", attempt, self.retry_attempts, delay, error)
             self._sleep(delay)
         raise AssertionError("unreachable")  # the loop always returns or raises
@@ -186,11 +229,46 @@ class OpenAICompatibleClient:
         path = self._cache_path(key)
         if path is None:
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"model": self.model, "text": result.text, "usage": result.usage}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        payload = json.dumps(
+            {"model": self.model, "text": result.text, "usage": result.usage}, ensure_ascii=False, indent=2
         )
+        # Atomic like every other on-disk write: a crash mid-write must not leave a torn entry. The
+        # reader would tolerate one, but never creating it is cheaper than healing it.
+        write_text_atomic(path, payload)
+
+
+def _flat_usage(usage: Any) -> dict[str, int]:
+    """The response's usage block as flat integers.
+
+    Reasoning endpoints report the hidden reasoning tokens one level down, in
+    ``completion_tokens_details.reasoning_tokens``; that number is most of what a slow question costs, so
+    it is lifted to the top level as ``reasoning_tokens`` where the lane log and the page can show it.
+    """
+    flat: dict[str, int] = {}
+    for key, value in (usage or {}).items():
+        if isinstance(value, int | float):
+            flat[key] = int(value)
+        elif key == "completion_tokens_details" and isinstance(value, dict):
+            reasoning = value.get("reasoning_tokens")
+            if isinstance(reasoning, int | float):
+                flat["reasoning_tokens"] = int(reasoning)
+    return flat
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds the server asked us to wait, when it said so as a plain number.
+
+    The HTTP-date form is rare in practice and the exponential backoff already errs long, so an
+    unparseable header is simply ignored rather than interpreted.
+    """
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    return seconds if seconds > 0 else None
 
 
 def complete_validated[M: BaseModel](
@@ -202,6 +280,7 @@ def complete_validated[M: BaseModel](
     repair: Callable[[str, str], str],
     refresh: bool = False,
     cache_salt: str = "",
+    reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
 ) -> tuple[M, str, dict[str, int]]:
     """Ask for JSON that validates against ``model_cls``, giving the model one chance to fix itself.
 
@@ -209,14 +288,24 @@ def complete_validated[M: BaseModel](
     caller supplies ``repair(previous_text, error)`` to build the follow-up prompt. Returns the parsed
     model, the raw text, and the summed token usage of both calls.
     """
-    first = client.complete_json(system=system, user=user, refresh=refresh, cache_salt=cache_salt)
+    first = client.complete_json(
+        system=system, user=user, refresh=refresh, cache_salt=cache_salt, reasoning_effort=reasoning_effort
+    )
     usage = dict(first.usage)
     try:
         return model_cls.model_validate_json(first.text), first.text, usage
     except ValidationError as exc:
         error = str(exc)
     logger.warning("%s response invalid, asking for a repair: %s", model_cls.__name__, error[:300])
-    second = client.complete_json(system=system, user=repair(first.text, error), refresh=refresh, cache_salt=cache_salt)
+    # The repair asks the same question again, so it gets the same effort: a retry must not silently
+    # become a more expensive request than the one it is fixing.
+    second = client.complete_json(
+        system=system,
+        user=repair(first.text, error),
+        refresh=refresh,
+        cache_salt=cache_salt,
+        reasoning_effort=reasoning_effort,
+    )
     for key, value in second.usage.items():
         usage[key] = usage.get(key, 0) + value
     try:

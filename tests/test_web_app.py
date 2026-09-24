@@ -16,6 +16,7 @@ so the tests here watch "is the mapping right", not the business outcome:
 from __future__ import annotations
 
 import dataclasses
+import json
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -98,6 +99,15 @@ def parsed_only(library: Library) -> str:
     """A document processed via the CLI whose original PDF is no longer on this machine: it has
     artifacts but can't be reprocessed."""
     seed_artifact(library, "mineru")
+    return DOC_KEY
+
+
+@pytest.fixture
+def parsed_both_lanes(library: Library) -> str:
+    """A document processed on another machine: no PDF here, but both lanes' artifacts are stored, so
+    extraction, comparison and export can still run."""
+    for backend in BACKENDS:
+        seed_artifact(library, backend)
     return DOC_KEY
 
 
@@ -224,6 +234,17 @@ def test_rerunning_a_document_whose_pdf_is_gone_is_a_conflict(client: TestClient
     assert "re-upload" in response.json()["detail"]
 
 
+def test_rerunning_a_document_with_both_parses_and_no_pdf_is_accepted(
+    client: TestClient, parsed_both_lanes: str, runner: RecordingRunner
+):
+    """Nothing after parsing reads the PDF, so a stored parse for both lanes is enough to re-run."""
+    response = client.post(f"/api/documents/{parsed_both_lanes}/run")
+
+    assert response.status_code == 202
+    assert response.json()["document_id"] == parsed_both_lanes
+    wait_until(lambda: runner.call_count == 1, what="the rerun job to start")
+
+
 def test_rerunning_a_document_queues_a_new_job(client: TestClient, uploaded: str, runner: RecordingRunner):
     response = client.post(f"/api/documents/{uploaded}/run?force=true")
 
@@ -313,6 +334,201 @@ def test_the_artifact_carries_the_blocks_and_the_page_geometry(client: TestClien
     assert artifact.backend == "mineru"
     assert artifact.blocks and artifact.pages
     assert artifact.blocks[0].bbox.x1 >= 0.0  # the normalized bbox used for provenance goes to the frontend as-is
+
+
+# ---- the consolidated dataset ------------------------------------------------------------------
+
+
+def seed_dataset(library: Library, document_id: str, payload: dict) -> Path:
+    """Write the consolidated table under the library's current keys, the way the export stage does."""
+    path = library.layout.dataset_json_path(document_id, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_the_dataset_is_not_found_before_the_export_ran(client: TestClient, parsed_only: str):
+    response = client.get(f"/api/documents/{parsed_only}/dataset")
+
+    assert response.status_code == 404
+    assert "dataset" in response.json()["detail"]
+
+
+def test_the_dataset_of_an_unknown_document_is_not_found(client: TestClient):
+    assert client.get(f"/api/documents/{UNKNOWN_ID}/dataset").status_code == 404
+
+
+def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library: Library, parsed_only: str):
+    payload = {"document_id": parsed_only, "sample_rows": [{"sample_id": "A", "thickness": 300}]}
+    seed_dataset(library, parsed_only, payload)
+
+    body = client.get(f"/api/documents/{parsed_only}/dataset").json()
+
+    # The endpoint publishes the full DatasetPayload: what was written is there, the rest at its default.
+    assert body["document_id"] == parsed_only
+    assert body["sample_rows"] == payload["sample_rows"]
+    assert body["paper_row"] == {}
+    assert body["quality_rows"] == []
+    assert body["fields"] == []
+
+
+def test_a_dataset_written_under_other_keys_is_not_served(client: TestClient, library: Library, parsed_only: str):
+    # The same rule as the comparison report: a table built by a different model or field table is stale.
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("{}", encoding="utf-8")
+
+    assert client.get(f"/api/documents/{parsed_only}/dataset").status_code == 404
+
+
+def test_the_excel_export_is_not_found_before_it_is_written(client: TestClient, parsed_only: str):
+    response = client.get(f"/api/documents/{parsed_only}/dataset.xlsx")
+
+    assert response.status_code == 404
+    assert "Excel" in response.json()["detail"]
+
+
+def test_the_excel_export_is_served_as_a_download(client: TestClient, library: Library, parsed_only: str):
+    path = library.layout.dataset_path(parsed_only)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"PK\x03\x04 workbook")
+
+    response = client.get(f"/api/documents/{parsed_only}/dataset.xlsx")
+
+    assert response.status_code == 200
+    assert response.content == b"PK\x03\x04 workbook"
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert "attachment" in response.headers["content-disposition"]
+    assert f'filename="paperfacts-{parsed_only}.xlsx"' in response.headers["content-disposition"]
+
+
+# ---- the corpus table --------------------------------------------------------------------------
+
+
+def corpus_payload(document_id: str, *, name: str = "paper.pdf", samples: int = 2) -> dict:
+    """A dataset payload shaped like ``DatasetPayload``, trimmed to what the corpus reads."""
+    return {
+        "document_id": document_id,
+        "filename": name,
+        "fields": [{"name": "thickness", "label": "厚度", "unit": "nm", "scope": "sample", "description": "膜厚"}],
+        "paper_row": {"sample_id": "S1", "available_fields": 1, "agree_fields": 1, "thickness": 300},
+        "sample_rows": [{"sample_id": f"S{i}", "thickness": 300} for i in range(1, samples + 1)],
+        "quality_rows": [],
+    }
+
+
+def test_the_corpus_is_empty_until_a_document_has_a_dataset(client: TestClient, parsed_only: str):
+    body = client.get("/api/dataset").json()
+
+    assert body == {"fields": [], "rows": []}
+
+
+def test_the_corpus_carries_one_row_per_document_with_a_dataset(
+    client: TestClient, library: Library, parsed_only: str, uploaded: str
+):
+    # `uploaded` is a second document, deliberately left without a dataset: it must simply be absent.
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only))
+
+    body = client.get("/api/dataset").json()
+
+    assert [row["document_id"] for row in body["rows"]] == [parsed_only]
+    assert body["fields"] == [
+        {"name": "thickness", "label": "厚度", "unit": "nm", "scope": "sample", "description": "膜厚"}
+    ]
+    row = body["rows"][0]
+    assert row["paper_row"]["thickness"] == 300
+    assert row["sample_count"] == 2
+    assert row["name"]
+    assert "fields" not in row  # the field list travels once, at the top level
+
+
+def test_a_dataset_under_a_stale_key_is_left_out_of_the_corpus(client: TestClient, library: Library, parsed_only: str):
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps(corpus_payload(parsed_only)), encoding="utf-8")
+
+    assert client.get("/api/dataset").json() == {"fields": [], "rows": []}
+
+
+def test_a_stale_dataset_does_not_displace_the_current_one(client: TestClient, library: Library, parsed_only: str):
+    # Both keys present at once: the row must come from the current key, not from whichever file sorts first.
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps(corpus_payload(parsed_only, samples=9)), encoding="utf-8")
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only, samples=2))
+
+    rows = client.get("/api/dataset").json()["rows"]
+
+    assert [row["sample_count"] for row in rows] == [2]
+
+
+def test_only_the_current_key_document_appears_when_another_is_stale(
+    client: TestClient, library: Library, parsed_only: str, uploaded: str
+):
+    # Two different documents, one mined under the current keys and one left behind by an older run:
+    # the corpus is the current table, so only the first is a row.
+    stale = library.layout.dataset_json_path(parsed_only, "other-extractor", "other-comparison")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps(corpus_payload(parsed_only)), encoding="utf-8")
+    seed_dataset(library, uploaded, corpus_payload(uploaded))
+
+    rows = client.get("/api/dataset").json()["rows"]
+
+    assert [row["document_id"] for row in rows] == [uploaded]
+
+
+def test_a_corrupt_dataset_json_is_skipped_in_the_corpus(
+    client: TestClient, library: Library, parsed_only: str, uploaded: str
+):
+    # One unusable file costs exactly its own row: the corpus is library-wide, so it must not 500 as a whole.
+    seed_dataset(library, uploaded, corpus_payload(uploaded))
+    corrupt = library.layout.dataset_json_path(parsed_only, library.extractor_key, library.comparison_key)
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_text("{not json", encoding="utf-8")
+
+    body = client.get("/api/dataset").json()
+
+    assert [row["document_id"] for row in body["rows"]] == [uploaded]
+    assert client.get("/api/dataset.xlsx").status_code == 200
+
+
+def test_a_dataset_in_the_wrong_shape_is_skipped_in_the_corpus(client: TestClient, library: Library, parsed_only: str):
+    # Valid JSON, wrong shape: still one dropped row rather than a broken endpoint.
+    path = library.layout.dataset_json_path(parsed_only, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert client.get("/api/dataset").json() == {"fields": [], "rows": []}
+    assert client.get("/api/dataset.xlsx").status_code == 404
+
+
+def test_the_dataset_endpoints_publish_their_schemas(client: TestClient):
+    """The dataset crosses the HTTP boundary as a declared model, so the browser's contract is in the
+    schema rather than only in the code that happens to build the dict."""
+    schema = client.get("/openapi.json").json()
+
+    assert {"DatasetPayload", "FieldColumn", "CorpusPayload", "CorpusRow"} <= set(schema["components"]["schemas"])
+
+    def response_ref(path: str) -> str:
+        return schema["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+
+    assert response_ref("/api/dataset").endswith("/CorpusPayload")
+    assert response_ref("/api/documents/{document_id}/dataset").endswith("/DatasetPayload")
+
+
+def test_the_corpus_workbook_is_not_found_while_nothing_is_mined(client: TestClient, parsed_only: str):
+    assert client.get("/api/dataset.xlsx").status_code == 404
+
+
+def test_the_corpus_workbook_is_rebuilt_from_the_datasets(client: TestClient, library: Library, parsed_only: str):
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only))
+
+    response = client.get("/api/dataset.xlsx")
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK")  # a real xlsx (a zip), built on demand rather than read from disk
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert 'filename="paperfacts-corpus.xlsx"' in response.headers["content-disposition"]
 
 
 # ---- page images -----------------------------------------------------------------------------
@@ -415,7 +631,115 @@ def test_an_unknown_job_is_not_found(client: TestClient):
     assert "deadbeef" in response.json()["detail"]
 
 
+# ---- running the whole library ----------------------------------------------------------------
+
+
+@pytest.fixture
+def second_pdf_bytes(tmp_path: Path) -> bytes:
+    """A second, different PDF: a different page size is enough to give it another sha256."""
+    return make_blank_pdf(tmp_path / "other.pdf", [(200.0, 300.0)]).read_bytes()
+
+
+@pytest.fixture
+def two_idle_documents(
+    client: TestClient, jobs: JobManager, runner: RecordingRunner, pdf_bytes: bytes, second_pdf_bytes: bytes
+) -> list[str]:
+    """Two uploaded documents whose upload jobs have finished, so a bulk run starts from a quiet
+    manager rather than merging into whatever is still active."""
+    ids = [
+        upload(client, pdf_bytes)["document"]["document_id"],
+        upload(client, second_pdf_bytes, name="other.pdf")["document"]["document_id"],
+    ]
+    for document_id in ids:
+        wait_for_status(jobs, jobs.for_document(document_id)[0].job_id, "done", "failed")
+    return ids
+
+
+def mark_compared(library: Library, document_id: str) -> None:
+    identity = library.identity(document_id)
+    assert identity is not None
+    seed_report(library, document_sha=identity.sha256)
+
+
+def test_running_everything_skips_what_is_already_compared(
+    client: TestClient, library: Library, two_idle_documents: list[str]
+):
+    done, todo = two_idle_documents
+    mark_compared(library, done)
+
+    response = client.post("/api/documents/run-all")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert [job["document_id"] for job in body["submitted"]] == [todo]
+    assert [row["document_id"] for row in body["skipped"]] == [done]
+    assert body["skipped"][0]["reason"]
+
+
+def test_forcing_a_run_of_everything_queues_the_finished_document_too(
+    client: TestClient, library: Library, two_idle_documents: list[str]
+):
+    mark_compared(library, two_idle_documents[0])
+
+    body = client.post("/api/documents/run-all?force=true").json()
+
+    assert {job["document_id"] for job in body["submitted"]} == set(two_idle_documents)
+    assert body["skipped"] == []
+    assert all(job["force"] for job in body["submitted"])
+
+
+def test_a_document_without_a_pdf_is_skipped_with_a_reason(client: TestClient, parsed_only: str):
+    """The same situation ``run`` answers with a 409: a bulk run cannot fail over one such document,
+    so it reports it instead."""
+    body = client.post("/api/documents/run-all").json()
+
+    assert body["submitted"] == []
+    assert [row["document_id"] for row in body["skipped"]] == [parsed_only]
+    assert "PDF" in body["skipped"][0]["reason"]
+
+
+def test_a_document_with_both_parses_and_no_pdf_is_submitted_by_a_bulk_run(client: TestClient, parsed_both_lanes: str):
+    body = client.post("/api/documents/run-all").json()
+
+    assert [job["document_id"] for job in body["submitted"]] == [parsed_both_lanes]
+    assert body["skipped"] == []
+
+
+def test_running_everything_twice_while_the_jobs_are_active_reuses_them(
+    settings: Settings, pdf_bytes: bytes, second_pdf_bytes: bytes
+):
+    # the button is pressed twice: the second press must not pay for a second pass over the library
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = JobManager(runner, stage_names())
+    try:
+        with TestClient(create_app(settings, jobs=manager)) as client:
+            upload(client, pdf_bytes)
+            upload(client, second_pdf_bytes, name="other.pdf")
+
+            first = client.post("/api/documents/run-all").json()
+            second = client.post("/api/documents/run-all").json()
+
+            assert len(first["submitted"]) == 2
+            assert [job["job_id"] for job in second["submitted"]] == [job["job_id"] for job in first["submitted"]]
+    finally:
+        gate.set()
+
+
+def test_every_job_of_the_process_is_listed_newest_first(client: TestClient, two_idle_documents: list[str]):
+    body = client.get("/api/jobs").json()
+
+    assert {job["document_id"] for job in body} == set(two_idle_documents)
+    assert [job["created_at"] for job in body] == sorted((job["created_at"] for job in body), reverse=True)
+
+
 # ---- static frontend ----------------------------------------------------------------------
+
+
+def test_static_files_must_be_revalidated_by_the_browser(client: TestClient):
+    # No build step, no hashed names: a deploy changes app.js in place, so the browser has to ask again.
+    for path in ("/", "/app.js", "/app.css"):
+        assert client.get(path).headers["cache-control"] == "no-cache", path
 
 
 def test_the_index_page_is_served_at_the_root(client: TestClient):

@@ -15,6 +15,7 @@ import json
 import pytest
 
 from paperfacts.adapters import render_markdown
+from paperfacts.config import INHERIT
 from paperfacts.errors import ContextBudgetError, LlmResponseError
 from paperfacts.extract import extract_lane
 from paperfacts.keys import FINGERPRINT_LENGTH, extractor_key, schema_fingerprint
@@ -72,6 +73,48 @@ def test_a_document_mode_key_ignores_everything_only_passage_mode_depends_on(mon
 
     assert extractor_key("deepseek-chat", mode="document") == before_document
     assert extractor_key("deepseek-chat", mode="passage") != before_passage
+
+
+def test_extractor_key_is_unaffected_by_the_baseline_reasoning_effort():
+    # None is the baseline: the parameter is left out of the request, exactly as before it existed, so a
+    # checkout that never touched the setting keeps the filenames it already has.
+    assert extractor_key("deepseek-chat") == extractor_key("deepseek-chat", reasoning_effort=None)
+
+
+def test_extractor_key_changes_with_the_reasoning_effort():
+    # How much the model thinks before answering changes the answer, so it changes the stored extraction.
+    assert extractor_key("deepseek-chat") != extractor_key("deepseek-chat", reasoning_effort="none")
+    assert extractor_key("deepseek-chat", reasoning_effort="low") != extractor_key(
+        "deepseek-chat", reasoning_effort="high"
+    )
+
+
+def test_extractor_key_ignores_the_inventory_effort_at_its_baseline():
+    assert extractor_key("deepseek-chat", mode="passage") == extractor_key(
+        "deepseek-chat", mode="passage", inventory_reasoning_effort=INHERIT
+    )
+
+
+def test_extractor_key_changes_when_the_inventory_question_omits_the_parameter():
+    # "omit no parameter at all" is a different request from "inherit whatever the client sends", so it
+    # cannot quietly reuse the baseline's stored extractions.
+    assert extractor_key("deepseek-chat", mode="passage") != extractor_key(
+        "deepseek-chat", mode="passage", inventory_reasoning_effort=None
+    )
+
+
+def test_extractor_key_changes_with_the_inventory_effort_in_passage_mode():
+    assert extractor_key("deepseek-chat", mode="passage") != extractor_key(
+        "deepseek-chat", mode="passage", inventory_reasoning_effort="none"
+    )
+
+
+def test_extractor_key_ignores_the_inventory_effort_in_document_mode():
+    # Document mode never asks an inventory question, so the setting changes nothing it sends and must
+    # not rename its stored facts.
+    assert extractor_key("deepseek-chat", mode="document") == extractor_key(
+        "deepseek-chat", mode="document", inventory_reasoning_effort="none"
+    )
 
 
 def test_extractor_key_is_short_enough_to_live_in_a_filename():

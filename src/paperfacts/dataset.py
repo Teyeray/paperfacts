@@ -1,7 +1,9 @@
 """Conservative, one-value-per-field datasets and an atomic Excel export.
 
 The paper table selects a complete sample row. It must never manufacture a sample by
-combining the best measurement of each field from different experimental conditions.
+combining the best measurement of each field from different experimental conditions. "Different
+conditions" is judged within a lane: the two lanes paraphrase the same condition differently, so
+comparing their wording across lanes would refuse values the comparison report already agreed on.
 """
 
 from __future__ import annotations
@@ -18,33 +20,33 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
+from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport, FieldComparison
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_SPECS, SAMPLE_FIELDS, TARGET_FIELDS, FieldSpec
 from paperfacts.models import BACKENDS, Backend, DocumentInput
-from paperfacts.normalize import clean_unit, convert_to_canonical, delatex, normalize_lane, normalize_text, parse_number
+from paperfacts.normalize import (
+    clean_unit,
+    convert_to_canonical,
+    delatex,
+    normalize_key,
+    normalize_lane,
+    normalize_text,
+    parse_number,
+    text_key,
+)
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
-CellValue = str | float | int | None
+CellValue = str | float | int | bool | None
 Row = Mapping[str, CellValue]
 
 _NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
 _ATOM = rf"(?:{_NUMBER}\s*x\s*10\s*\^?\s*[-+]?\d+|10\s*\^\s*[-+]?\d+|{_NUMBER}(?:[eE][-+]?\d+)?)"
 _SCALAR = re.compile(rf"^(?P<center>{_ATOM})(?:\s*(?:±|\+/-|\+-|\\pm)\s*(?P<uncertainty>{_ATOM}))?(?P<tail>.*)$")
-_APPROX = re.compile(r"^(?:approximately|approx\.?|about|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
+# The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
+_APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-_DESCRIPTIONS = {
-    "component": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
-    "resistance": "靶材电阻率；与薄膜电阻率 resistivity 区分。",
-    "density": "靶材相对理论密度，数值 95 表示 95%。",
-    "inch": "靶材直径或唯一长度；矩形长宽、范围值不转成单个数值。",
-    "sputtering_time": "所选样品的溅射沉积时间。",
-    "sheet_resistance": "所选样品的薄膜方块电阻。",
-    "resistivity": "所选样品的薄膜电阻率。",
-    "transmittance": "所选样品的透光率，数值 85 表示 85%；测量波段见条件及数据质量。",
-    "thickness": "所选样品的薄膜厚度。",
-}
 _DATA_COLUMNS = (
     ("document_id", "文档ID"),
     ("filename", "文件名"),
@@ -65,8 +67,61 @@ _QUALITY_COLUMNS = (
     ("unit", "标准单位"),
     ("conditions", "条件"),
     ("source_ids", "合并证据来源"),
+    ("lanes", "证据来源通道"),
+    ("series", "系列级"),
     ("detail", "说明"),
 )
+
+
+class FieldColumn(BaseModel):
+    """What a reader needs to know about one column, built once for both the web UI and the Excel sheet.
+
+    ``label`` and ``description`` are display only and may be empty when ``config.json`` declares neither;
+    ``unit`` is absent for a text field.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    label: str = ""
+    unit: str | None = None
+    scope: str
+    description: str = ""
+
+
+class DatasetPayload(BaseModel):
+    """One document's consolidated dataset as it crosses the disk and HTTP boundaries.
+
+    The same model is written to ``dataset.json``, parsed back from it and returned by the endpoint, so
+    the browser's contract is declared once and FastAPI can publish a schema for it. The field list
+    travels with the data because the rows carry values only: the browser needs the canonical unit and
+    the paper/sample scope to build a header it can trust.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str = ""
+    filename: str = ""
+    extractor_key: str = ""
+    comparison_key: str = ""
+    fields: tuple[FieldColumn, ...] = ()
+    paper_row: dict[str, CellValue] = {}
+    sample_rows: tuple[dict[str, CellValue], ...] = ()
+    quality_rows: tuple[dict[str, CellValue], ...] = ()
+
+
+def field_columns() -> tuple[FieldColumn, ...]:
+    """The field table as columns, in the order the dataset writes them."""
+    return tuple(
+        FieldColumn(
+            name=spec.name,
+            label=spec.label,
+            unit=spec.canonical_unit,
+            scope="sample" if spec.is_sample_level else "target",
+            description=spec.description_zh,
+        )
+        for spec in FIELD_SPECS
+    )
 
 
 @dataclass(frozen=True)
@@ -78,6 +133,49 @@ class DocumentDataset:
     quality_rows: tuple[Row, ...]
     extractor_key: str = ""
     comparison_key: str = ""
+
+    def to_payload(self) -> DatasetPayload:
+        """The serialisable view the web UI and ``dataset.json`` share.
+
+        Rows are ``MappingProxyType`` so nothing downstream can mutate a consolidated row; pydantic copies
+        each into a plain dict here rather than weakening the model.
+        """
+        return DatasetPayload(
+            document_id=self.document_id,
+            filename=self.filename,
+            extractor_key=self.extractor_key,
+            comparison_key=self.comparison_key,
+            fields=field_columns(),
+            paper_row=dict(self.paper_row),
+            sample_rows=tuple(dict(row) for row in self.sample_rows),
+            quality_rows=tuple(dict(row) for row in self.quality_rows),
+        )
+
+    @classmethod
+    def from_payload(cls, payload: DatasetPayload) -> DocumentDataset:
+        """The exact inverse of :meth:`to_payload`, so a dataset read back from disk can be exported again
+        without re-running the pipeline. The field list is not restored: it is derived from FIELD_SPECS on
+        the way out, and a payload written under a different field table lives under a different
+        extractor_key and is never read next to this one.
+
+        The payload arrives already validated -- a malformed file fails at the disk boundary, where the
+        caller can decide whether to skip that document or raise.
+        """
+        return cls(
+            document_id=payload.document_id,
+            filename=payload.filename,
+            paper_row=MappingProxyType(dict(payload.paper_row)),
+            sample_rows=tuple(MappingProxyType(dict(row)) for row in payload.sample_rows),
+            quality_rows=tuple(MappingProxyType(dict(row)) for row in payload.quality_rows),
+            extractor_key=payload.extractor_key,
+            comparison_key=payload.comparison_key,
+        )
+
+
+def write_dataset_json(dataset: DocumentDataset, path: Path) -> None:
+    """Write one document's consolidated dataset for the web UI, atomically like every other artifact."""
+    payload = dataset.to_payload().model_dump_json(indent=2)
+    write_atomic(path, lambda tmp: tmp.write_text(payload, encoding="utf-8"))
 
 
 @dataclass(frozen=True)
@@ -97,11 +195,12 @@ class _Decision:
     conditions: str
     sources: str
     detail: str
-
-
-def _condition_key(value: str | None) -> str:
-    # Preserve non-Latin text and meaningful operators, unlike a formula-oriented ASCII key.
-    return re.sub(r"\s+", "", normalize_text(value or "")).casefold()
+    # The committed value rests entirely on evidence the paper stated for the whole sample series,
+    # never for this sample on its own. False for a rejected decision, which commits to nothing.
+    series: bool = False
+    # The backends whose trusted, parsed evidence produced the committed value. A reader seeing a
+    # single-source cell needs to know which lane it came from; empty for a rejected decision.
+    lanes: tuple[Backend, ...] = ()
 
 
 def _joined(values: Sequence[str]) -> str:
@@ -125,7 +224,7 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     number, _ = parse_number(match.group("center"))
     if number is None or not math.isfinite(number):
         return None, "数值不可解析或非有限数"
-    canonical, _, note = convert_to_canonical(spec, number, value.unit_raw)
+    canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, value_text=match.group("center"))
     if canonical is None or not math.isfinite(canonical):
         return None, note or "单位无法转换为标准单位"
     notes = [note or ""]
@@ -136,10 +235,60 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     return canonical, _joined(notes) or None
 
 
-def _same_value(a: CellValue, b: CellValue) -> bool:
+def _same_value(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+    """Whether two candidate cells state the same thing. Text fields with a closed category set are judged
+    on the category, so "DC and RF" and "DC and RF magnetron co-sputtering" are one answer rather than a
+    refusal; a field without one falls back to folded-text equality."""
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         return math.isclose(a, b, rel_tol=1e-12, abs_tol=0.0)
-    return isinstance(a, str) and isinstance(b, str) and normalize_text(a) == normalize_text(b)
+    if not (isinstance(a, str) and isinstance(b, str)):
+        return False
+    if spec.categories:
+        return text_key(spec, a) == text_key(spec, b)
+    return normalize_text(a) == normalize_text(b)
+
+
+def _matching_blocked(scope: _Scope | None) -> str | None:
+    """Why nothing measured on this scope may be committed, or None if it may.
+
+    Scope-wide rather than per-field: if the two lanes' samples were not confidently identified as the
+    same sample, no value on them can be trusted, whatever the per-field comparison says. The paper-level
+    target row has no scope and so is never blocked this way.
+    """
+    if scope is None:
+        return None
+    if scope.matching_failed:
+        return "样品匹配失败，无法确认跨通道身份"
+    if scope.confidence is not None and scope.confidence < AMBIGUOUS_MATCH_CONFIDENCE:
+        return "样品匹配置信度低于阈值"
+    return None
+
+
+def _commit(
+    spec: FieldSpec,
+    chosen: tuple[Backend, FieldValue, CellValue],
+    parsed: Sequence[tuple[Backend, FieldValue, CellValue]],
+    *,
+    agreed: bool,
+    conditions: str,
+    sources: str,
+    details: list[str],
+) -> _Decision:
+    """Nothing refused the evidence: record the value and how it was arrived at."""
+    chosen_backend, chosen_field, value = chosen
+    if spec.name == "transmittance" and not conditions:
+        details.append("原文提取结果未注明透光率波长或波段")
+    details.append(f"采用 {chosen_backend}；抽取重复一致率 {chosen_field.agreement:g}；合并重复证据")
+    series = all(field.series for _, field, _ in parsed)
+    return _Decision(
+        value,
+        "agree" if agreed else "single_source",
+        conditions,
+        sources,
+        _joined(details),
+        series=series,
+        lanes=tuple(dict.fromkeys(backend for backend, _, _ in parsed)),
+    )
 
 
 def _decide(
@@ -147,7 +296,7 @@ def _decide(
     evidence: Sequence[tuple[Backend, FieldValue]],
     comparisons: Sequence[FieldComparison],
     *,
-    blocked: str | None = None,
+    scope: _Scope | None = None,
 ) -> _Decision:
     conditions = _joined([value.condition or "" for _, value in evidence])
     sources = _joined(sorted({source for _, value in evidence for source in value.source_ids}))
@@ -159,6 +308,7 @@ def _decide(
 
     if not evidence:
         return reject("missing", "未提取到该字段；留空，不填 0")
+    blocked = _matching_blocked(scope)
     if blocked:
         return reject("ambiguous", blocked)
     if any(c.status in {"conflict", "ambiguous"} for c in comparisons):
@@ -173,8 +323,14 @@ def _decide(
         return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
     if len(trusted) != len(evidence):
         details.append("已排除未定位到原文或缺少有效引用的候选")
-    if len({_condition_key(value.condition) for _, value in trusted}) > 1:
-        return reject("multiple_conditions", "同字段存在多种测量条件，无法唯一确定")
+    # Per lane only: the two lanes word the same condition differently ("after sputtering" vs
+    # "after deposition"), so only a lane disagreeing with itself is evidence of several measurements.
+    # The key is normalize_key, the same one compare.py and extract.py judge conditions by, so a
+    # condition the comparison report called one thing is never two here.
+    if any(
+        len({normalize_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
+    ):
+        return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
     parsed: list[tuple[Backend, FieldValue, CellValue]] = []
     for backend, value in trusted:
         scalar, note = _scalar(value, spec)
@@ -187,18 +343,13 @@ def _decide(
     # here so two different same-condition values cannot disappear behind that first one.
     for backend in BACKENDS:
         same_lane = [scalar for lane, _, scalar in parsed if lane == backend]
-        if same_lane and any(not _same_value(same_lane[0], scalar) for scalar in same_lane[1:]):
+        if same_lane and any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
-    chosen_backend, chosen_field, chosen = min(
-        parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw)
-    )
+    chosen = min(parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw))
     agreed = any(c.status == "agree" for c in comparisons) and len({backend for backend, _, _ in parsed}) == 2
-    if not agreed and any(not _same_value(chosen, scalar) for _, _, scalar in parsed):
+    if not agreed and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
-    if spec.name == "transmittance" and not conditions:
-        details.append("原文提取结果未注明透光率波长或波段")
-    details.append(f"采用 {chosen_backend}；抽取重复一致率 {chosen_field.agreement:g}；合并重复证据")
-    return _Decision(chosen, "agree" if agreed else "single_source", conditions, sources, _joined(details))
+    return _commit(spec, chosen, parsed, agreed=agreed, conditions=conditions, sources=sources, details=details)
 
 
 def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> tuple[_Scope, ...]:
@@ -251,7 +402,7 @@ def consolidate_document(
     if any(lane.extractor_key != report.extractor_key for lane in lanes.values()):
         raise ValueError("extraction lanes and comparison report have different extractor keys")
     lanes = {backend: normalize_lane(lane) for backend, lane in lanes.items()}
-    metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.pdf_path.name}
+    metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.display_filename}
     quality: list[Row] = []
 
     def record(sample_id: str, spec: FieldSpec, decision: _Decision) -> None:
@@ -266,6 +417,8 @@ def consolidate_document(
                     "unit": spec.canonical_unit,
                     "conditions": decision.conditions,
                     "source_ids": decision.sources,
+                    "lanes": "; ".join(decision.lanes),
+                    "series": decision.series,
                     "detail": decision.detail,
                 }
             )
@@ -290,11 +443,6 @@ def consolidate_document(
     for scope in _scopes(lanes, report):
         scope_comparisons = _scope_comparisons(scope, report)
         decisions = dict(target)
-        blocked = None
-        if scope.matching_failed:
-            blocked = "样品匹配失败，无法确认跨通道身份"
-        elif scope.confidence is not None and scope.confidence < AMBIGUOUS_MATCH_CONFIDENCE:
-            blocked = "样品匹配置信度低于阈值"
         for spec in SAMPLE_FIELDS:
             evidence = [
                 (backend, field)
@@ -303,7 +451,7 @@ def consolidate_document(
                 for field in sample.fields
                 if field.field == spec.name
             ]
-            decision = _decide(spec, evidence, [c for c in scope_comparisons if c.field == spec.name], blocked=blocked)
+            decision = _decide(spec, evidence, [c for c in scope_comparisons if c.field == spec.name], scope=scope)
             decisions[spec.name] = decision
             record(scope.sample_id, spec, decision)
         samples = [sample for sample in (scope.a, scope.b) if sample is not None]
@@ -360,7 +508,7 @@ def consolidate_document(
     )
     return DocumentDataset(
         document.document_id,
-        document.pdf_path.name,
+        document.display_filename,
         paper_row,
         tuple(sample_rows),
         tuple(quality),
@@ -399,7 +547,10 @@ def _worksheet(
         sheet.column_dimensions[get_column_letter(column)].width = width
         for cells in sheet.iter_rows(min_row=2, min_col=column, max_col=column):
             cell = cells[0]
-            if isinstance(cell.value, str):
+            if isinstance(cell.value, bool):
+                # openpyxl writes a bool as Excel TRUE/FALSE; a number format would be misleading.
+                pass
+            elif isinstance(cell.value, str):
                 cell.value = _CONTROL.sub("", cell.value)
                 # PDF-derived strings are data even when their first character is '='.
                 cell.data_type = "s"
@@ -424,21 +575,22 @@ def write_dataset(
     workbook.remove(workbook.active)
     _worksheet(workbook, "论文数据", _DATA_COLUMNS, [doc.paper_row for doc in unique], "Papers")
     _worksheet(workbook, "样品数据", _DATA_COLUMNS, [row for doc in unique for row in doc.sample_rows], "Samples")
-    descriptions = [
-        {
-            "field": spec.name,
-            "scope": "靶材（论文级）" if not spec.is_sample_level else "样品级",
-            "unit": spec.canonical_unit or "文本",
-            "description": _DESCRIPTIONS[spec.name],
+    descriptions: list[Row] = [
+        column.model_dump()
+        | {
+            # The sheet says the same things in Chinese, for a reader who opens the workbook alone.
+            "scope": "样品级" if column.scope == "sample" else "靶材（论文级）",
+            "unit": column.unit or "文本",
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
-        for spec in FIELD_SPECS
+        for column in field_columns()
     ]
     _worksheet(
         workbook,
         "字段说明",
         (
-            ("field", "字段"),
+            ("name", "字段"),
+            ("label", "中文名"),
             ("scope", "层级"),
             ("unit", "标准单位"),
             ("description", "中文说明"),

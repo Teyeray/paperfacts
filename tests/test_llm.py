@@ -129,6 +129,13 @@ def test_a_missing_usage_block_is_not_an_error():
     assert llm.complete_json(system="S", user="U").usage == {}
 
 
+def test_reasoning_tokens_are_lifted_out_of_the_details_block():
+    usage = {"total_tokens": 50, "completion_tokens_details": {"reasoning_tokens": 40, "text_tokens": 8}}
+    llm = make_llm(lambda request: httpx.Response(200, json=chat_response(usage=usage)))
+
+    assert llm.complete_json(system="S", user="U").usage == {"total_tokens": 50, "reasoning_tokens": 40}
+
+
 def test_non_numeric_usage_entries_are_skipped():
     llm = make_llm(lambda request: httpx.Response(200, json=chat_response(usage={"total_tokens": 5, "model": "x"})))
 
@@ -192,6 +199,45 @@ def test_the_backoff_grows_exponentially_between_attempts():
         llm.complete_json(system="S", user="U")
 
     # No sleep after the final failure, so there are RETRY_ATTEMPTS - 1 backoffs.
+    assert sleep.delays == [RETRY_BACKOFF_S * 2**i for i in range(RETRY_ATTEMPTS - 1)]
+
+
+def test_a_numeric_retry_after_header_extends_the_backoff():
+    # A rate limit that names its own deadline is a promise: waiting less just spends another attempt
+    # of the same fixed budget on a request the server already refused.
+    sleep = FakeSleep()
+    llm = make_llm(lambda request: httpx.Response(429, text="rate limited", headers={"Retry-After": "30"}), sleep=sleep)
+
+    with pytest.raises(LlmError, match="429"):
+        llm.complete_json(system="S", user="U")
+
+    assert sleep.delays == [30.0] * (RETRY_ATTEMPTS - 1)
+
+
+def test_a_retry_after_shorter_than_the_backoff_does_not_shorten_it():
+    sleep = FakeSleep()
+    llm = make_llm(
+        lambda request: httpx.Response(429, text="rate limited", headers={"Retry-After": "0.5"}), sleep=sleep
+    )
+
+    with pytest.raises(LlmError, match="429"):
+        llm.complete_json(system="S", user="U")
+
+    assert sleep.delays == [RETRY_BACKOFF_S * 2**i for i in range(RETRY_ATTEMPTS - 1)]
+
+
+def test_a_non_numeric_retry_after_header_is_ignored():
+    # The HTTP-date form is rare; interpreting it wrongly would be worse than the exponential backoff
+    # that already errs long.
+    sleep = FakeSleep()
+    llm = make_llm(
+        lambda request: httpx.Response(503, text="down", headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
+        sleep=sleep,
+    )
+
+    with pytest.raises(LlmError, match="503"):
+        llm.complete_json(system="S", user="U")
+
     assert sleep.delays == [RETRY_BACKOFF_S * 2**i for i in range(RETRY_ATTEMPTS - 1)]
 
 
@@ -311,6 +357,40 @@ def test_the_cache_key_covers_the_whole_payload_not_just_the_prompts():
 
     assert cache_key_of(base, "S", "U") != cache_key_of(hotter, "S", "U")
     assert cache_key_of(base, "S", "U") != cache_key_of(longer, "S", "U")
+
+
+def test_the_payload_omits_the_reasoning_effort_when_it_is_unset():
+    # Unset means "send what was sent before this parameter existed", so every cached answer still resolves.
+    assert "reasoning_effort" not in make_llm().payload(system="S", user="U")
+
+
+def test_the_payload_carries_the_reasoning_effort_when_it_is_set():
+    llm = OpenAICompatibleClient(BASE_URL, API_KEY, "deepseek-chat", timeout_s=30.0, reasoning_effort="none")
+
+    assert llm.payload(system="S", user="U")["reasoning_effort"] == "none"
+
+
+def test_a_request_can_override_the_clients_reasoning_effort():
+    # One question that reasons far longer than its neighbours can be given its own effort without
+    # touching what any other request sends.
+    llm = OpenAICompatibleClient(BASE_URL, API_KEY, "deepseek-chat", timeout_s=30.0, reasoning_effort="high")
+
+    assert llm.payload(system="S", user="U", reasoning_effort="none")["reasoning_effort"] == "none"
+    assert llm.payload(system="S", user="U")["reasoning_effort"] == "high"
+
+
+def test_an_override_can_add_the_parameter_to_a_client_that_omits_it():
+    llm = make_llm()
+
+    assert "reasoning_effort" not in llm.payload(system="S", user="U")
+    assert llm.payload(system="S", user="U", reasoning_effort="none")["reasoning_effort"] == "none"
+
+
+def test_the_cache_key_covers_the_reasoning_effort():
+    base = make_llm()
+    quiet = OpenAICompatibleClient(BASE_URL, API_KEY, base.model, timeout_s=30.0, reasoning_effort="none")
+
+    assert cache_key_of(base, "S", "U") != cache_key_of(quiet, "S", "U")
 
 
 def test_the_cache_key_covers_the_base_url():
@@ -441,6 +521,18 @@ def test_the_cache_entry_records_the_model_alongside_the_text(tmp_path: Path):
 
     assert entry["model"] == "deepseek-chat"
     assert entry["text"] == '{"samples": []}'
+
+
+def test_the_cache_directory_holds_no_temp_files_after_a_write(tmp_path: Path):
+    # The entry is written atomically (unique temp file + replace), so a crash mid-write can never leave
+    # a torn entry behind -- only the finished one is ever visible, and no temp name survives.
+    cache_dir = tmp_path / "llm_cache"
+    llm = make_llm(cache_dir=cache_dir)
+
+    llm.complete_json(system="S", user="U")
+
+    names = sorted(path.name for path in cache_dir.iterdir())
+    assert names == [f"{cache_key_of(llm, 'S', 'U')}.json"]
 
 
 def test_without_a_cache_directory_nothing_is_written(tmp_path: Path):

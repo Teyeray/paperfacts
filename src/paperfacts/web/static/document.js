@@ -6,6 +6,8 @@ import { LANES, currentJob, isActive, slot, state } from "./state.js";
 import { PageViewer } from "./viewer.js";
 import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts.js";
 import { renderLanes } from "./samples.js";
+import { renderResults } from "./table.js";
+import { loadCorpus, renderCorpus } from "./corpus.js";
 import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from "./job.js";
 import { loadLibrary, renderLibrary } from "./library.js";
 
@@ -15,13 +17,21 @@ export function showDocument(id, factIndex = null) {
   else openDocument(id, factIndex);
 }
 
-export function showEmpty() {
+// The home view: the intro, and under it the whole library's mined table once anything has been mined.
+export async function showEmpty() {
   state.current = null;
   state.viewer = null;
   stopPolling();
-  document.getElementById("empty-state").classList.remove("hidden");
+  const intro = document.getElementById("empty-state");
+  intro.classList.remove("hidden");
   document.getElementById("document-view").classList.add("hidden");
   renderLibrary();
+  await loadCorpus();
+  const root = document.getElementById("corpus-view");
+  const hasRows = Boolean(state.corpus?.rows?.length);
+  root.classList.toggle("hidden", !hasRows);
+  intro.classList.toggle("with-corpus", hasRows);
+  renderCorpus(root);
 }
 
 async function openDocument(id, factIndex) {
@@ -45,15 +55,17 @@ async function openDocument(id, factIndex) {
 }
 
 async function loadDocumentData(id) {
-  const [summary, report, ...rest] = await Promise.all([
+  const [summary, report, dataset, ...rest] = await Promise.all([
     api(`/api/documents/${id}`),
     optional(api(`/api/documents/${id}/report`)),
+    optional(api(`/api/documents/${id}/dataset`)),
     ...LANES.map((l) => optional(api(`/api/documents/${id}/extraction/${l}`))),
     ...LANES.map((l) => optional(api(`/api/documents/${id}/artifact/${l}`))),
   ]);
   return {
     summary,
     report,
+    dataset,
     lanes: Object.fromEntries(LANES.map((l, i) => [l, rest[i]])),
     artifacts: Object.fromEntries(LANES.map((l, i) => [l, rest[LANES.length + i]])),
   };
@@ -62,6 +74,7 @@ async function loadDocumentData(id) {
 function renderDocument() {
   const view = document.getElementById("document-view");
   document.getElementById("empty-state").classList.add("hidden");
+  document.getElementById("corpus-view").classList.add("hidden");
   view.classList.remove("hidden");
   const viewerState = state.viewer?.getState() ?? null; // re-rendering after a job finishes must not lose the page or highlight the viewer was on
   view.innerHTML = "";
@@ -78,6 +91,7 @@ function renderDocument() {
 
   renderStages(s("stages"));
   renderKpis(s("kpis"));
+  renderResults(node.querySelector(".results"));
   renderFilters(s("filters"));
   renderRows(s("rows"), s("rows-empty"));
   renderLanes(s("lanes"));

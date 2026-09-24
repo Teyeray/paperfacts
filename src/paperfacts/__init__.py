@@ -12,7 +12,8 @@ Flat modules, in pipeline order:
 - ``prompts``     the extraction and matching prompts
 - ``llm``         OpenAI-compatible client with a request cache and one repair round
 - ``records``     the model's response schema, the stored records, and the cleaning between them
-- ``extract``     the document the model reads, the extraction itself, majority voting over passes
+- ``extract``     the document the model reads and the extraction itself
+- ``voting``      repeats collapsed within a pass, majority vote across passes
 - ``grounding``   the quoted text must occur in the block it cites
 - ``normalize``   text folding, number parsing, unit conversion
 - ``matching``    which sample in lane A is which sample in lane B
