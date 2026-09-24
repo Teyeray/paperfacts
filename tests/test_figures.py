@@ -272,12 +272,31 @@ def test_the_short_refusal_is_accepted_too():
     assert run(artifact(*SELECTED), FakeVisionClient({"chart": False})).panels[0].status == "not_chart"
 
 
-def test_an_unparseable_answer_is_final_but_a_failed_request_asks_again_next_time():
+def test_an_unparseable_answer_and_a_failed_request_both_leave_the_file_incomplete():
     unreadable = run(artifact(*SELECTED), FakeVisionClient("no idea"))
     failed = run(artifact(*SELECTED), FakeVisionClient(LlmError("HTTP 504")))
 
-    assert unreadable.panels[0].status == "unreadable" and unreadable.complete
+    assert unreadable.panels[0].status == "unreadable" and not unreadable.complete
+    assert unreadable.unreadable() == frozenset({"mineru_p0_b0"})
     assert failed.panels[0].status == "error" and not failed.complete
+    assert failed.unreadable() == frozenset()
+
+
+def test_the_panels_named_for_refresh_bypass_the_cache_and_no_others():
+    blocks = [fig(0, 0), fig(0, 1), cap(0, 2, "Fig. 3 Sheet resistance")]
+    client = FakeVisionClient(chart_answer())
+
+    read_figures(
+        artifact(*blocks),
+        lambda page, bbox: b"png",
+        client,
+        figure_key="k",
+        max_per_document=12,
+        refresh_panels=frozenset({"mineru_p0_b1"}),
+    )
+
+    assert sorted(call.refresh for call in client.calls) == [False, True]
+    assert len(client.calls) == 2  # asked once each: nothing loops within a run
 
 
 def test_one_failed_panel_does_not_cost_the_others():
@@ -512,3 +531,52 @@ def test_without_distinguishing_geometry_document_order_decides():
     groups = figure_groups([fig(0, 0), cap(0, 1, "Fig. 1 Rs."), fig(0, 2), fig(0, 3), cap(0, 4, "Fig. 2 Rs.")])
 
     assert [(g.label, [b.order for b in g.panels]) for g in groups] == [("Fig. 1", [0]), ("Fig. 2", [2, 3])]
+
+
+# ---- Mapping points to axes -------------------------------------------------------------------------------
+
+
+def test_axis_ids_and_series_labels_match_whatever_their_case():
+    answer = chart_answer()
+    answer["y_axes"][0]["id"] = "Left"
+    answer["y_axes"].append({"id": "RIGHT", "field": "resistivity", "unit": "Ω cm", "scale": "linear"})
+    answer["series"] = [{"label": "Rs", "y_axis": "left"}, {"label": "Rho", "y_axis": "right"}]
+    answer["points"] = [{"series": "rs", "x": 1, "y": 30.0}, {"series": "RHO", "x": 1, "y": 0.01}]
+
+    readings = run(artifact(*SELECTED), FakeVisionClient(answer)).readings
+
+    assert {(r.field, r.y_raw) for r in readings} == {("sheet_resistance", 30.0), ("resistivity", 0.01)}
+
+
+def test_points_that_fit_no_axis_make_the_panel_unreadable_not_read_with_nothing():
+    answer = chart_answer()
+    answer["y_axes"].append({"id": "right", "field": "resistivity", "unit": "Ω cm"})
+    answer["series"] = [{"label": "Rs", "y_axis": "middle"}]
+
+    panel = run(artifact(*SELECTED), FakeVisionClient(answer)).panels[0]
+
+    assert panel.status == "unreadable" and "none of them on an axis" in panel.detail
+
+
+# ---- More than one object in a reply ---------------------------------------------------------------------
+
+
+def test_of_several_answers_the_last_with_points_wins():
+    draft = '{"chart_type": "property_vs_condition", "points": [{"y": 1}]}'
+    final = '{"chart_type": "property_vs_condition", "points": [{"y": 2}]}'
+    empty = '{"chart_type": "property_vs_condition", "points": []}'
+
+    assert parse_answer(f"draft: {draft}\nfinal: {final}\n{empty}")["points"] == [{"y": 2}]
+
+
+def test_without_points_the_last_answer_wins():
+    reply = '{"chart": true} then {"chart_type": "not_property_vs_condition", "reason": "spectrum"}'
+
+    assert parse_answer(reply)["reason"] == "spectrum"
+
+
+def test_comment_stripping_starts_at_the_first_brace_and_handles_nested_trailing_commas():
+    reply = 'The chart // looks fine\n{"a": [1, 2,], "b": {"c": "x,}",},}'
+
+    assert figures._strip_comments(reply) == '{"a": [1, 2], "b": {"c": "x,}"}}'
+    assert parse_answer(reply.replace('"a"', '"chart": true, "a"')) == {"chart": True, "a": [1, 2], "b": {"c": "x,}"}}

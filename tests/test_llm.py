@@ -608,3 +608,16 @@ def test_an_empty_vision_answer_is_an_error():
 def test_a_vision_request_needs_an_image():
     with pytest.raises(ValueError):
         make_llm().complete_vision(system="s", user="u", image_png=b"")
+
+
+def test_a_vision_reply_cut_off_at_max_tokens_is_an_error_and_is_not_cached(tmp_path: Path):
+    def handler(request):
+        body = chat_response('{"chart_type": "property_vs')
+        body["choices"][0]["finish_reason"] = "length"
+        return httpx.Response(200, json=body)
+
+    llm = make_llm(handler, cache_dir=tmp_path)
+
+    with pytest.raises(LlmError, match="cut off"):
+        llm.complete_vision(system="s", user="u", image_png=PNG)
+    assert list(tmp_path.iterdir()) == []

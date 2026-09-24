@@ -185,8 +185,13 @@ class FigureReadings(BaseModel):
 
     @property
     def complete(self) -> bool:
-        """False when a request failed outright: a rerun should ask again, not serve this file."""
-        return all(panel.status != "error" for panel in self.panels)
+        """False when a request failed or its answer could not be used: a later run asks those panels again
+        (and only those; the rest replay from the LLM cache). Within one run nothing is asked twice."""
+        return all(panel.status not in {"error", "unreadable"} for panel in self.panels)
+
+    def unreadable(self) -> frozenset[str]:
+        """Panels whose answer was cached but useless: asking again must bypass the cache to get a new one."""
+        return frozenset(panel.source_id for panel in self.panels if panel.status == "unreadable")
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -369,10 +374,15 @@ _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def _strip_comments(text: str) -> str:
-    """Remove ``//`` and ``/* */`` comments and trailing commas outside strings; qwen3-vl-plus put ``//``
-    notes in its JSON."""
+    """Remove ``//`` and ``/* */`` comments and trailing commas outside strings, from the first ``{`` on;
+    qwen3-vl-plus put ``//`` notes in its JSON. One pass: a trailing comma is blanked where it was written,
+    by remembering where the last significant character went."""
+    start = text.find("{")
+    if start == -1:
+        return ""
     out: list[str] = []
-    index, in_string = 0, False
+    comma: int | None = None  # position in ``out`` of a comma with nothing significant after it yet
+    index, in_string = start, False
     while index < len(text):
         char = text[index]
         if in_string:
@@ -382,9 +392,6 @@ def _strip_comments(text: str) -> str:
                 index += 1
             elif char == '"':
                 in_string = False
-        elif char == '"':
-            in_string = True
-            out.append(char)
         elif text.startswith("//", index):
             newline = text.find("\n", index)
             index = len(text) if newline == -1 else newline
@@ -393,36 +400,46 @@ def _strip_comments(text: str) -> str:
             end = text.find("*/", index + 2)
             index = len(text) if end == -1 else end + 2
             continue
-        elif char in "}]" and (trimmed := "".join(out).rstrip()).endswith(","):
-            out = [trimmed[:-1], char]
         else:
+            if char in "}]" and comma is not None:
+                out[comma] = ""
+            if not char.isspace():
+                comma = len(out) if char == "," else None
+            in_string = char == '"'
             out.append(char)
         index += 1
     return "".join(out)
 
 
 def parse_answer(text: str) -> dict[str, Any]:
-    """The first JSON object in the reply, read leniently.
+    """The chart answer in the reply, read leniently.
 
     No JSON mode is requested (not every vision endpoint accepts it), so the reply may come fenced, with
     reasoning before it, with comments inside it or with a trailing comma. Only an object that says what it
     is (``chart_type`` or ``chart``) counts: when the outer object is broken, the first inner one that parses
     is an axis or a point, and reading that as the answer would file a real chart as refused, for good.
+    When the reply holds several (a draft, then a correction), the last one with points wins, else the last.
     ``NaN`` and ``Infinity`` are refused too; they would be stored as ``null`` and break the file.
     """
     cleaned = _strip_comments(_FENCE.sub("", _THINK.sub("", text)))
     decoder = json.JSONDecoder(parse_constant=_no_constant)
+    answers: list[dict[str, Any]] = []
     start = cleaned.find("{")
     while start != -1:
         try:
-            value, _ = decoder.raw_decode(cleaned, start)
+            value, end = decoder.raw_decode(cleaned, start)
         except ValueError:
             start = cleaned.find("{", start + 1)
             continue
         if isinstance(value, dict) and ("chart_type" in value or "chart" in value):
-            return value
-        start = cleaned.find("{", start + 1)
-    raise ValueError(f"no chart answer in the reply: {text[:200]!r}")
+            answers.append(value)
+            start = cleaned.find("{", end)  # an answer's own inner objects are not answers
+        else:
+            start = cleaned.find("{", start + 1)
+    if not answers:
+        raise ValueError(f"no chart answer in the reply: {text[:200]!r}")
+    with_points = [answer for answer in answers if isinstance(answer.get("points"), list) and answer["points"]]
+    return (with_points or answers)[-1]
 
 
 def _no_constant(name: str) -> float:
@@ -508,11 +525,20 @@ def precision_for(scale: str, series_count: int) -> float:
     return LOG_PRECISION if scale.lower().startswith("log") or series_count >= CROWDED_SERIES else LINEAR_PRECISION
 
 
-def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple[FigureReading, ...]:
-    """Turn a chart answer into readings: only for the fields asked about, y converted, precision labelled."""
+def _fold(text: str | None) -> str:
+    return (text or "").strip().casefold()
+
+
+def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple[tuple[FigureReading, ...], int]:
+    """Turn a chart answer into readings: only for the fields asked about, y converted, precision labelled.
+
+    Also returns how many points could not be put on any axis at all -- as opposed to points on an axis
+    that plots something nobody asked about, which are dropped on purpose. Axis ids and series labels are
+    matched case-insensitively: "Left" and "left" are the same axis to the model.
+    """
     specs = {spec.name.lower(): spec for spec in request.fields}
-    axes = {axis.id or "left": axis for axis in _items(answer, "y_axes", _Axis)}
-    series = {entry.label or "": entry for entry in _items(answer, "series", _Series)}
+    axes = {_fold(axis.id) or "left": axis for axis in _items(answer, "y_axes", _Axis)}
+    series = {_fold(entry.label): entry for entry in _items(answer, "series", _Series)}
     points = _items(answer, "points", _Point)
     try:
         x_axis = _XAxis.model_validate(answer.get("x_axis") or {})
@@ -522,11 +548,15 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
     only_axis = next(iter(axes.values())) if len(axes) == 1 else None
 
     readings: list[FigureReading] = []
+    unplaced = 0
     for point in points:
-        entry = series.get(point.series or "")
-        axis = axes.get(entry.y_axis) if entry is not None and entry.y_axis else None
+        entry = series.get(_fold(point.series))
+        axis = axes.get(_fold(entry.y_axis)) if entry is not None and entry.y_axis else None
         axis = axis or only_axis
-        if axis is None or axis.field is None:
+        if axis is None:
+            unplaced += 1
+            continue
+        if axis.field is None:
             continue
         spec = specs.get(axis.field.strip().lower())
         if spec is None:
@@ -563,7 +593,7 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
                 note="; ".join(notes) or None,
             )
         )
-    return tuple(readings)
+    return tuple(readings), unplaced
 
 
 # ---- The stage -------------------------------------------------------------------------------------------
@@ -600,9 +630,12 @@ def _read_panel(
         reason = str(answer.get("reason") or "not a property-vs-condition chart")
         return FigurePanel(**base, status="not_chart", detail=reason[:500], usage=result.usage), ()
     try:
-        readings = readings_from_answer(answer, request)
+        readings, unplaced = readings_from_answer(answer, request)
     except (ValueError, TypeError) as exc:
         return FigurePanel(**base, status="unreadable", detail=str(exc)[:500], usage=result.usage), ()
+    if unplaced and not readings:
+        detail = f"{unplaced} points, none of them on an axis the answer describes"
+        return FigurePanel(**base, status="unreadable", detail=detail, usage=result.usage), ()
     return FigurePanel(**base, status="read", readings=len(readings), usage=result.usage), readings
 
 
@@ -624,6 +657,7 @@ def read_figures(
     max_per_document: int,
     concurrency: int = 1,
     refresh: bool = False,
+    refresh_panels: frozenset[str] = frozenset(),
 ) -> FigureReadings:
     """Read every selected chart panel of ``artifact``: one vision request per panel.
 
@@ -634,7 +668,9 @@ def read_figures(
     images = [_crop(render, request) for request in requests]
     with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
         futures = [
-            pool.submit(_read_panel, request, image, client, refresh=refresh)
+            pool.submit(
+                _read_panel, request, image, client, refresh=refresh or request.block.source_id in refresh_panels
+            )
             for request, image in zip(requests, images, strict=True)
         ]
         results = [future.result() for future in futures]

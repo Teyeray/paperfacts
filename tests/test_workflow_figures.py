@@ -249,3 +249,15 @@ def test_the_stored_file_is_named_after_what_the_client_actually_sends(document:
     expected = figure_key_for(settings, "fake-vl", temperature=0.5)
     assert DataLayout(settings.data_root).figures_path(document.document_id, expected).is_file()
     assert not figures_file(document, settings).is_file()
+
+
+def test_an_unreadable_panel_is_asked_again_next_run_past_the_cache(document: DocumentInput, settings: Settings):
+    store_artifact(document, settings)
+    first = read_document_figures(document, settings, FakeVisionClient("no idea"))
+    retry = FakeVisionClient(chart_answer())
+
+    second = read_document_figures(document, settings, retry)
+
+    assert first.panels[0].status == "unreadable"
+    assert [call.refresh for call in retry.calls] == [True]
+    assert second.complete and second.readings

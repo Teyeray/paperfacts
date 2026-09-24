@@ -398,6 +398,7 @@ def read_document_figures(
         )
         return png_bytes(crop)
 
+    previous = None if force else _stored_file(path)
     readings = read_figures(
         artifact,
         render,
@@ -406,9 +407,21 @@ def read_document_figures(
         max_per_document=settings.figures_max_per_document,
         concurrency=settings.llm_concurrency,
         refresh=force,
+        refresh_panels=previous.unreadable() if previous is not None else frozenset(),
     )
     readings.write(path)
     return readings
+
+
+def _stored_file(path: Path) -> FigureReadings | None:
+    """A stored readings file, or None when there is none or it will not load (it is then read again)."""
+    if not path.is_file():
+        return None
+    try:
+        return FigureReadings.read(path)
+    except (OSError, ValueError) as exc:
+        logger.warning("stored figure readings at %s are unreadable (%s); ignoring them", path, exc)
+        return None
 
 
 def _usable(path: Path, artifact: ParsedArtifact) -> FigureReadings | None:
@@ -416,12 +429,8 @@ def _usable(path: Path, artifact: ParsedArtifact) -> FigureReadings | None:
     with. A re-parse, or a MinerU parse arriving after the paper was read from PaddleOCR-VL's boxes, leaves
     readings behind whose citations point at blocks that are no longer there; those are read again, which
     costs nothing for an unchanged crop because the vision cache is keyed by the image."""
-    if not path.is_file():
-        return None
-    try:
-        stored = FigureReadings.read(path)
-    except (OSError, ValueError) as exc:
-        logger.warning("stored figure readings at %s are unreadable (%s); reading the charts again", path, exc)
+    stored = _stored_file(path)
+    if stored is None:
         return None
     boxes = {block.source_id: block.bbox for block in artifact.blocks if block.type == "figure"}
     current = (

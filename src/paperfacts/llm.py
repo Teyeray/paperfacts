@@ -207,6 +207,10 @@ class OpenAICompatibleClient:
             raise LlmError(f"response has no choices[0].message.content: {str(data)[:300]}") from exc
         if not text or not text.strip():
             raise LlmError("the vision model returned empty content")
+        if data["choices"][0].get("finish_reason") == "length":
+            # A reply cut off at max_tokens is not an answer. Caching it would serve the same torn JSON to
+            # every later run; raising leaves the panel to be asked again.
+            raise LlmError("the vision model's reply was cut off at max_tokens")
         result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
         self._write_cache(key, result)
         return result
