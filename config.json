@@ -332,7 +332,7 @@
       "label": "基片偏轴距",
       "group": "process",
       "kind": "numeric",
-      "description": "Distance between the substrate surface and the holder center, i.e. the off-axis offset (cm).",
+      "description": "Lateral offset of the substrate from the holder's rotation axis or centre, i.e. the off-axis distance (cm). Never the target-to-substrate distance, which is target_substrate_distance.",
       "description_zh": "基片到样品台中心的偏轴距离（cm）。",
       "keywords": [
         "off-axis distance",
