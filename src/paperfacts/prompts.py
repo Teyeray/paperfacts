@@ -28,9 +28,13 @@ from paperfacts.fields import FIELD_SPECS, FieldSpec
 # prompts, so the two modes cannot come to mean different things by "sample".
 _SAMPLE_SCOPE = (
     "A sample is a TCO or transparent-electrode film that this paper deposits itself. The other layers of a"
-    " device -- a perovskite or organic absorber / active layer, charge-transport layers, metal contacts -- are"
-    " never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When the"
-    " paper varies only those other layers, the TCO film it deposits is still a single sample."
+    " device -- a perovskite or organic absorber / active layer, charge-transport layers, thin buffer layers"
+    " (e.g. evaporated MoOx, WOx, NbOy, VOx, or nanoparticle SnO2 / ZnO under an electrode), metal contacts --"
+    " are never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When"
+    " the paper varies only those other layers, the TCO film it deposits is still a single sample. Changes to"
+    " the TCO film itself do make separate samples: each deposition condition, and each post-treatment of it"
+    " (as-deposited, annealed at 150 °C, annealed at 230 °C...) is its own sample. The same TCO recipe merely"
+    " deposited on another substrate for characterisation (glass, Si, a TEM grid) is the same sample."
 )
 _LAYER_SCOPE = (
     "Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A"

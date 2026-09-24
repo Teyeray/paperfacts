@@ -374,7 +374,12 @@
         "target to substrate distance",
         "target-substrate distance",
         "target to holder distance",
-        "target-substrate separation"
+        "target-substrate separation",
+        "substrate to target distance",
+        "substrate-to-target distance",
+        "throw distance",
+        "target-to-substrate distance",
+        "working distance"
       ],
       "canonical_unit": "cm",
       "rel_tol": 0.02,
@@ -572,7 +577,9 @@
         "film thickness",
         "SEM cross section",
         "profilometry",
-        "d ="
+        "d =",
+        "thick",
+        "thicknesses"
       ],
       "canonical_unit": "nm",
       "rel_tol": 0.05,

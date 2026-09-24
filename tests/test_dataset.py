@@ -103,6 +103,20 @@ def test_agree_chooses_highest_repeat_agreement_without_averaging():
     assert result.paper_row["thickness"] == 305
 
 
+def test_a_comparison_agreement_on_a_value_that_failed_grounding_cannot_label_another_value_agreed():
+    # acsnano: both lanes said 230 °C, but lane A's 230 failed grounding; its lone 150 must not be "agree".
+    a = [
+        value("annealing_temperature", "230", "°C", grounded=False),
+        value("annealing_temperature", "150", "°C", condition="second anneal"),
+    ]
+    b = [value("annealing_temperature", "230", "°C", backend="paddleocr_vl")]
+
+    result = paired(a, b)
+
+    assert decision(result, "annealing_temperature")["decision"] != "agree"
+    assert result.paper_row["annealing_temperature"] is None
+
+
 def test_conflict_and_low_confidence_matching_remain_empty():
     result = paired([value("thickness", "300", "nm")], [value("thickness", "900", "nm", backend="paddleocr_vl")])
     assert result.paper_row["thickness"] is None

@@ -406,3 +406,24 @@ def test_a_pressure_qualifies_a_block_for_the_working_pressure(written):
     block = text(0, f"Deposition proceeded at {written} in argon.")
 
     assert ids(candidate_blocks(FIELD_BY_NAME["working_pressure"], [block])) == [block.source_id]
+
+
+def test_a_block_the_inventory_cited_for_the_samples_is_asked_about_every_sample_level_field():
+    # "The substrate to target distance is 69 mm" matches no keyword of the field and only a weak unit.
+    recipe = text(3, "The substrate to target distance is 69 mm and the films are 240 nm thick.")
+    others = [text(order, f"Earlier remark number {order} at 5 mm.") for order in range(3)]
+
+    chosen = candidate_blocks(
+        FIELD_BY_NAME["target_substrate_distance"],
+        [*others, recipe],
+        limit=1,
+        sample_blocks=frozenset({recipe.source_id}),
+    )
+
+    assert recipe.source_id in ids(chosen)
+
+
+def test_a_cited_block_without_a_number_is_not_added_to_a_numeric_question():
+    recipe = text(0, "The films were sputtered from an ITO target.")
+
+    assert candidate_blocks(THICKNESS, [recipe], sample_blocks=frozenset({recipe.source_id})) == []

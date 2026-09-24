@@ -170,7 +170,11 @@ def _is_inventory_block(block: SourceBlock) -> bool:
 
 
 def candidate_blocks(
-    spec: FieldSpec, blocks: Sequence[SourceBlock], *, limit: int = DEFAULT_CANDIDATE_LIMIT
+    spec: FieldSpec,
+    blocks: Sequence[SourceBlock],
+    *,
+    limit: int = DEFAULT_CANDIDATE_LIMIT,
+    sample_blocks: frozenset[str] = frozenset(),
 ) -> list[SourceBlock]:
     """The blocks that could hold a value of ``spec``, ranked by score and returned in document order.
 
@@ -197,6 +201,16 @@ def candidate_blocks(
     # Ties break on document order, so the selection is reproducible run to run.
     spare = max(limit - len(named), 0)
     chosen = named | {index for _, index in sorted(unit_only, key=lambda item: (-item[0], item[1]))[:spare]}
+    if spec.is_sample_level:
+        # The blocks the inventory said describe the samples. A methods paragraph stating "240 nm thick" or
+        # "the substrate to target distance is 69 mm" names the recipe in words no keyword list foresees,
+        # and then only its unit qualifies it -- where it loses its place to earlier blocks. It still has to
+        # carry a number to be of use.
+        chosen |= {
+            index
+            for index, block in enumerate(blocks)
+            if block.source_id in sample_blocks and (spec.kind != "numeric" or _has_digit(block))
+        }
     chosen |= _dense_neighbours(chosen, blocks)
     chosen |= continuation_partners(chosen, blocks)
     selected = [blocks[index] for index in sorted(chosen)]
@@ -208,6 +222,10 @@ def candidate_blocks(
         sum(len(block.content) for block in selected),
     )
     return selected
+
+
+def _has_digit(block: SourceBlock) -> bool:
+    return any(character.isdigit() for character in block.content)
 
 
 def _score(spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None) -> int | None:

@@ -173,6 +173,7 @@ _CARET_GAP = re.compile(r"\^\s*([-+]?)\s*(?=\d)")
 
 # Formatting commands that survive delatex and split what they wrap: MinerU writes the unit Ω·cm as
 # "\Omega { \cdot } \mathrm { c m }" and the formula SnO2 as "\mathrm { S n O } _ { 2 }".
+_WRAPPED_DIGITS = re.compile(r"(?<=[0-9.] )\s*\{\s*([0-9.])\s*\}")
 LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
 
 
@@ -183,6 +184,9 @@ def delatex(text: str) -> str:
     prompt's "verbatim" rule keeps it that way. Spaces between digits are collapsed only when the text
     carries a LaTeX marker, so ordinary "10 20" is left alone.
     """
+    # A digit wrapped in a formatting command ("2 3 \\mathbf { 0 }", MinerU bolding a table cell's last digit)
+    # is unwrapped first, so the run of spaced digits below still reads as one number.
+    text = _WRAPPED_DIGITS.sub(r"\1", LATEX_WRAPPERS.sub("", text)) if "\\" in text else text
     text = re.sub(r"\^\s*\{\s*([-+]?\s*\d+)\s*\}", lambda m: "^" + m.group(1).replace(" ", ""), text)
     # MinerU drops the LaTeX markers from some cells ("4 0 0 °C", "1 0 ^ { - 4 }"), so this run has to be
     # collapsed on its own signature rather than on the presence of "$" or a backslash.

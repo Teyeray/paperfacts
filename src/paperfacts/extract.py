@@ -365,6 +365,8 @@ def _extract_passages(
     usage: dict[str, int] = {}
 
     sample_list = _render_sample_list(inventory.response.samples)
+    # What the inventory cited as describing the samples: the recipe paragraph every field question needs.
+    sample_blocks = frozenset(source_id for sample in inventory.response.samples for source_id in sample.source_ids)
     field_system = field_system_prompt()
 
     # Which fields get asked, and with which blocks, is decided here in FIELD_SPECS order and nowhere else.
@@ -380,7 +382,10 @@ def _extract_passages(
             # missed inventory cannot cost the lane all its sample-level values.
             dropped.append(f"{spec.name}: the paper deposits no TCO film of its own, so it was not asked about")
             continue
-        candidates = fit_budget(candidate_blocks(spec, blocks, limit=candidate_limit), budget_chars=budget_chars)
+        candidates = fit_budget(
+            candidate_blocks(spec, blocks, limit=candidate_limit, sample_blocks=sample_blocks),
+            budget_chars=budget_chars,
+        )
         if not candidates:
             # Not an error: a paper that never mentions a target's density simply has none to find. Recorded
             # so that "the model missed it" and "we never asked" stay distinguishable.

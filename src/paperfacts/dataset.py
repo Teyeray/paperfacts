@@ -264,6 +264,13 @@ def _same_value(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
     return normalize_text(a) == normalize_text(b)
 
 
+def _within_tolerance(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+    """Whether two candidate cells agree the way compare.py judges agreement: within the field's tolerance."""
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(a, b, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
+    return _same_value(a, b, spec)
+
+
 def _matching_blocked(scope: _Scope | None) -> str | None:
     """Why nothing measured on this scope may be committed, or None if it may.
 
@@ -425,13 +432,13 @@ def _decide(
         if same_lane and any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
     chosen = min(parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw))
-    both_lanes = len({backend for backend, _, _ in parsed}) == 2
-    # After narrowing, the comparison's "agree" may be about a condition that was set aside; then only the
-    # values that remain, all tied to the row's own block, can vouch for each other.
-    agreed = both_lanes and (
-        all(_same_value(chosen[2], scalar, spec) for _, _, scalar in parsed)
-        if narrowed
-        else any(c.status == "agree" for c in comparisons)
+    # Agreement is two lanes vouching for the very value committed. The comparison's "agree" can be about a
+    # value this cell no longer holds -- a condition set aside by narrowing, or a lane's value that failed
+    # grounding and was left out of `trusted` -- so the remaining values have to match as well.
+    agreed = (
+        len({backend for backend, _, _ in parsed}) == 2
+        and all(_within_tolerance(chosen[2], scalar, spec) for _, _, scalar in parsed)
+        and (narrowed or any(c.status == "agree" for c in comparisons))
     )
     if not agreed and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
