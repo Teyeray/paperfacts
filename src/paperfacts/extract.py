@@ -373,11 +373,12 @@ def _extract_passages(
     questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
     for spec in FIELD_SPECS:
-        if spec.is_sample_level and not inventory.response.samples:
-            # The inventory is told to return nothing when the paper deposits no TCO film of its own (a
-            # device paper on purchased ITO glass). Asking anyway only harvests the absorber's thickness and
-            # the spin-coater's rpm as unattributed values that look like findings.
-            dropped.append(f"{spec.name}: the inventory found no sample in this lane, so it was not asked about")
+        if spec.is_sample_level and inventory.response.no_tco_film and not inventory.response.samples:
+            # A device paper on purchased ITO glass: asking anyway only harvests the absorber's thickness and
+            # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
+            # empty for any other reason -- it missed the sample text -- still gets every question, so one
+            # missed inventory cannot cost the lane all its sample-level values.
+            dropped.append(f"{spec.name}: the paper deposits no TCO film of its own, so it was not asked about")
             continue
         candidates = fit_budget(candidate_blocks(spec, blocks, limit=candidate_limit), budget_chars=budget_chars)
         if not candidates:

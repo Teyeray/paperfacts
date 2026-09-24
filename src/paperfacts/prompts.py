@@ -24,6 +24,21 @@ from __future__ import annotations
 
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 
+# What a sample is, and which layer a field is about. Shared by the document prompt and the two passage
+# prompts, so the two modes cannot come to mean different things by "sample".
+_SAMPLE_SCOPE = (
+    "A sample is a TCO or transparent-electrode film that this paper deposits itself. The other layers of a"
+    " device -- a perovskite or organic absorber / active layer, charge-transport layers, metal contacts -- are"
+    " never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When the"
+    " paper varies only those other layers, the TCO film it deposits is still a single sample."
+)
+_LAYER_SCOPE = (
+    "Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A"
+    " value that belongs to another layer (a perovskite or organic absorber / active layer, a transport layer,"
+    " a metal contact, the substrate) or to a whole device is not a value of this field, however well its"
+    " name fits: leave it out."
+)
+
 # The prompt is full of literal JSON braces, so the field table is substituted with str.replace rather
 # than str.format.
 _EXTRACTION_SYSTEM = """You extract materials-science facts from ONE scientific paper about transparent conductive oxide (TCO) thin films.
@@ -52,8 +67,10 @@ Rules:
 2. Put the unit in `unit_raw` exactly as written (e.g. "Ω/sq", "μm", "sccm"). If the number and unit are fused, split them.
 3. `source_ids` must be copied from the `<!-- source: ... -->` markers that precede the text or table where the value appears. Never invent ids. Prefer the most specific block (a table over the surrounding paragraph).
 4. Samples: create one sample per distinct film sample / deposition condition set that the paper reports results for (e.g. one per O2 flow rate, per power, per substrate temperature). Use the paper's own sample names when it has them; otherwise build `sample_id` from the distinguishing condition (e.g. "O2-100sccm"). `conditions` holds the deposition conditions that distinguish samples (flow rates, power, temperature, pressure, time...), values as written.
+   {sample_scope} If the paper deposits no such film, return an empty "samples" list.
 5. Target fields (group "target") describe the sputtering target and belong to the paper, not to a sample: put them under "target" only, never under a sample. `component` is the TARGET composition; a film's dopant concentration is not a component value. Use null for "target" only if the paper says nothing about the target.
 6. Only report a field when the paper states it. Never guess, never fill defaults. Omit missing fields.
+   {layer_scope}
    For numeric fields `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
 7. If a value is given in a table, cite the table block and copy the cell content. If the same field has several values under different conditions (e.g. transmittance at 550 nm and averaged), report them as separate FIELD entries with `condition` set.
 8. For `transmittance` always fill `condition` with the wavelength or spectral range.
@@ -79,16 +96,18 @@ Output ONLY a JSON object with this exact shape (no prose):
      "conditions": {"<condition name>": "<value as written>", ...},
      "source_ids": ["<id>", ...]},
     ...
-  ]
+  ],
+  "no_tco_film": <true|false>
 }
 
 Rules:
 1. Create one entry per distinct film sample / deposition condition set that the paper reports results for (e.g. one per O2 flow rate, per power, per substrate temperature).
-   A sample is a TCO or transparent-electrode film that this paper deposits itself. The other layers of a device -- a perovskite or organic absorber / active layer, charge-transport layers, metal contacts -- are never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When the paper varies only those other layers, the TCO film it deposits is still a single sample.
+   {sample_scope}
 2. Use the paper's own sample names when it has them; otherwise build `sample_id` from the distinguishing condition (e.g. "O2-100sccm"). Keep every `sample_id` unique.
 3. `conditions` holds the deposition conditions that distinguish the samples (flow rates, power, temperature, pressure, time...), values exactly as written in the paper.
 4. `source_ids` must be copied from the `<!-- source: ... -->` markers of the excerpts the sample is described in. Never invent ids.
-5. Only report samples the paper actually reports results for. Never guess and never invent a series: if the paper studies a single film, return exactly one sample; if the paper deposits no TCO or transparent-electrode film of its own (it only uses purchased ITO/FTO glass, say), or the excerpts name none, return an empty list.
+5. Only report samples the paper actually reports results for. Never guess and never invent a series: if the paper studies a single film, return exactly one sample; if the excerpts name none, return an empty list.
+6. `no_tco_film` is true ONLY when the excerpts show that the paper deposits no TCO or transparent-electrode film of its own (it only uses purchased ITO/FTO glass, say); then "samples" is empty. It is false whenever such a film is deposited, and false when the excerpts simply do not say.
 
 Return the JSON object only."""
 
@@ -113,7 +132,7 @@ Rules:
 4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
 5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, "all films", "for all samples". Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ("the sputtered films", when one listed sample is not sputtered) is false: give the individual sample ids the excerpt names.
 6. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
-   Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A value that belongs to another layer (a perovskite or organic absorber / active layer, a transport layer, a metal contact, the substrate) or to a whole device is not a value of this field, however well its name fits: leave it out.
+   {layer_scope}
    For a numeric field `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
 7. If the same field has several values -- one per sample, or the same sample under different conditions (e.g. transmittance at 550 nm and averaged) -- report them as separate entries with `condition` set.
 8. For `transmittance` always fill `condition` with the wavelength or spectral range.
@@ -128,6 +147,15 @@ _PLAUSIBLE = (
     " Plausible values are {range}; a number outside that range almost always belongs to a different layer,"
     " process step or quantity, so check before reporting it."
 )
+
+
+def _scoped(template: str) -> str:
+    return template.replace("{sample_scope}", _SAMPLE_SCOPE).replace("{layer_scope}", _LAYER_SCOPE)
+
+
+_EXTRACTION_SYSTEM = _scoped(_EXTRACTION_SYSTEM)
+_INVENTORY_SYSTEM = _scoped(_INVENTORY_SYSTEM)
+_FIELD_SYSTEM = _scoped(_FIELD_SYSTEM)
 
 
 def render_field_table(specs: tuple[FieldSpec, ...] = FIELD_SPECS) -> str:

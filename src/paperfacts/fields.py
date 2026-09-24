@@ -72,15 +72,16 @@ class FieldSpec:
         return self.group != "target"
 
     def describe_range(self) -> str | None:
-        """The plausible range in words, e.g. "below 100 rpm", or None when the field declares none."""
+        """The plausible range in words, e.g. "at most 100 rpm", or None when the field declares none. Both ends
+        are inclusive, as in :meth:`in_range`."""
         low, high = self.valid_range
         unit = self.canonical_unit or ""
         if low is not None and high is not None:
             return f"between {low:g} and {high:g} {unit}"
         if high is not None:
-            return f"below {high:g} {unit}"
+            return f"at most {high:g} {unit}"
         if low is not None:
-            return f"above {low:g} {unit}"
+            return f"at least {low:g} {unit}"
         return None
 
     def in_range(self, value: float) -> bool:

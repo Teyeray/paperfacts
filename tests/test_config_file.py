@@ -703,8 +703,8 @@ def test_a_field_without_a_range_accepts_every_value():
 @pytest.mark.parametrize(
     ("bounds", "described", "inside", "outside"),
     [
-        pytest.param({"max": 500}, "below 500 nm", 500.0, 501.0, id="ceiling"),
-        pytest.param({"min": 60}, "above 60 nm", 60.0, 59.9, id="floor"),
+        pytest.param({"max": 500}, "at most 500 nm", 500.0, 501.0, id="ceiling"),
+        pytest.param({"min": 60}, "at least 60 nm", 60.0, 59.9, id="floor"),
         pytest.param({"min": 1, "max": 2.5}, "between 1 and 2.5 nm", 2.0, 3.0, id="both"),
     ],
 )

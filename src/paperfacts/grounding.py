@@ -15,9 +15,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 
+from paperfacts.continuation import continuation_pairs
 from paperfacts.models import SourceBlock
 from paperfacts.normalize import KEY_CHARACTERS, delatex, normalize_text
-from paperfacts.passages import continuation_pairs
 from paperfacts.records import FieldValue, LaneExtraction
 
 # LaTeX expands to " x ", Unicode papers use "×"; fold both so the two spellings compare equal.
@@ -47,9 +47,10 @@ def block_adjacency(blocks: Sequence[SourceBlock]) -> dict[str, tuple[str | None
     """Map each block's source_id to ``(previous_id, next_id)`` within the given sequence.
 
     A neighbour is the adjacent entry in reading order *on the same page*, or the other half of a sentence
-    :func:`paperfacts.passages.continuation_pairs` found cut by a page or column break. Any other pair of
-    blocks across a page break comes from two different regions of the document, and joining them would
-    manufacture text that appears nowhere in the PDF.
+    :func:`paperfacts.continuation.continuation_pairs` found cut by a page or column break. Any other pair
+    of blocks across a page break comes from two different regions of the document, and joining them would
+    manufacture text that appears nowhere in the PDF. A linked half's partner replaces its reading-order
+    neighbour on that side, so a formula between the two halves is no longer tried as the neighbour.
     """
     adjacency: dict[str, list[str | None]] = {}
     for index, block in enumerate(blocks):

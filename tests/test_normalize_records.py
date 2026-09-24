@@ -162,14 +162,14 @@ def _records(*, samples=(), unattributed=()) -> ExtractedRecords:
 
 
 def test_a_value_outside_its_range_is_dropped_with_the_reason():
-    # Shipped range: thickness below 500 nm. A perovskite absorber's 600 nm is the observed confusion.
+    # Shipped range: thickness at most 500 nm. A perovskite absorber's 600 nm is the observed confusion.
     records = _records(samples=(make_sample("S1", [make_field("thickness", "600", unit_raw="nm")]),))
 
     kept = drop_implausible(records)
 
     assert kept.samples[0].fields == ()
     assert len(kept.dropped) == 1
-    assert "thickness" in kept.dropped[0] and "600" in kept.dropped[0] and "below 500 nm" in kept.dropped[0]
+    assert "thickness" in kept.dropped[0] and "600" in kept.dropped[0] and "at most 500 nm" in kept.dropped[0]
 
 
 def test_the_range_is_judged_after_conversion_to_the_canonical_unit():
@@ -211,3 +211,17 @@ def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_
     )
 
     assert drop_implausible(records) is records
+
+
+def test_a_target_whose_every_field_is_dropped_keeps_its_citations():
+    spec = FIELD_BY_NAME["thickness"]  # any ranged field will do; the target is judged like a sample
+    records = ExtractedRecords(
+        target=TargetRecord(source_ids=("mineru_p0_b1",), fields=(make_field(spec.name, "900", unit_raw="nm"),)),
+        samples=(),
+        invalid_source_ids=(),
+        dropped=(),
+    )
+
+    kept = drop_implausible(records)
+
+    assert kept.target == TargetRecord(source_ids=("mineru_p0_b1",), fields=())

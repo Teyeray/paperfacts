@@ -12,9 +12,10 @@ import logging
 
 import pytest
 
+from paperfacts.continuation import continuation_pairs
 from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.models import SourceBlock
-from paperfacts.passages import candidate_blocks, continuation_pairs, fit_budget, inventory_blocks
+from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from support.factories import make_block
 
 COMPONENT = FIELD_BY_NAME["component"]
@@ -137,6 +138,13 @@ def test_a_unit_written_in_latex_is_recognised():
     block = text(0, r"The value reached $5.1 \times 10^{-4}\ \Omega\cdot\text{cm}$ at 300 C.")
 
     assert ids(candidate_blocks(FIELD_BY_NAME["resistivity"], [block])) == [block.source_id]
+
+
+@pytest.mark.parametrize("written", ["300 $^{\\circ}$C", "300 $^\\circ$C", "300 °C"])
+def test_a_temperature_written_in_latex_qualifies_a_block(written):
+    block = text(0, f"The films were annealed at {written}.")
+
+    assert ids(candidate_blocks(FIELD_BY_NAME["annealing_temperature"], [block])) == [block.source_id]
 
 
 @pytest.mark.parametrize("written", ["60 W", "0.2 kW", "150W"])

@@ -304,16 +304,27 @@ def test_a_value_naming_no_sample_goes_to_the_only_sample_of_a_single_sample_pap
     assert lane.unattributed == ()
 
 
-def test_with_no_sample_in_the_inventory_only_paper_level_fields_are_asked():
-    # A device paper that deposits no TCO film of its own gets an empty inventory; its sample-level answers
-    # could only be some other layer's values.
-    client = FakeLlmClient(responder(inventory=inventory_json([])))
+def test_a_paper_depositing_no_tco_film_is_asked_only_paper_level_fields():
+    # A device paper on purchased ITO glass: its sample-level answers could only be some other layer's.
+    client = FakeLlmClient(responder(inventory=json.dumps({"samples": [], "no_tco_film": True})))
 
     lane = extract(client)
 
     assert client.call_count == 1
     assert lane.samples == () and lane.unattributed == ()
-    assert any(entry.startswith(f"{ASKED_FIELD}: the inventory found no sample") for entry in lane.dropped)
+    assert any(entry.startswith(f"{ASKED_FIELD}: the paper deposits no TCO film") for entry in lane.dropped)
+
+
+def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
+    # The inventory may simply have missed the sample text; that must not cost the lane its values.
+    client = FakeLlmClient(
+        responder(inventory=inventory_json([]), sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"}))
+    )
+
+    lane = extract(client)
+
+    assert client.call_count == 5
+    assert [field.value_raw for field in lane.unattributed] == ["12.5"]
 
 
 def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattributed():
@@ -831,11 +842,10 @@ def test_a_series_value_and_a_quote_naming_the_sample_become_one_sample_specific
 
 
 def test_a_series_value_with_no_samples_to_place_it_on_is_unattributed_and_unflagged():
-    # Nothing to fan out to, so the flag would claim a placement the record does not have. The inventory's
-    # only entry has a blank id and is dropped, which leaves the field questions asked but no sample to use.
+    # Nothing to fan out to, so the flag would claim a placement the record does not have.
     client = FakeLlmClient(
         responder(
-            inventory=inventory_json([{"sample_id": "  ", "label": "unnamed"}]),
+            inventory=inventory_json([]),
             sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5", "applies_to_all_samples": True}),
         )
     )

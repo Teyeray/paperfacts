@@ -190,6 +190,8 @@ def test_the_condition_stated_in_the_same_block_as_the_rest_of_the_row_fills_the
     row = decision(result, "transmittance")
     assert (result.paper_row["transmittance"], row["decision"]) == (83.5, "agree")
     assert row["conditions"] == "400-1800 nm"
+    # Traceable to the sentence it came from, not to the blocks of the values set aside.
+    assert row["source_ids"] == "mineru_p0_b9; paddleocr_vl_p0_b9"
 
 
 def test_several_conditions_sharing_the_rows_block_stay_refused():
@@ -204,7 +206,9 @@ def test_several_conditions_sharing_the_rows_block_stay_refused():
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
 
 
-def test_a_narrowed_lane_that_disagrees_with_the_other_lane_is_not_called_agreement():
+def test_the_other_lanes_value_for_a_condition_set_aside_cannot_vouch_for_the_chosen_one():
+    # Lane B only quotes 400-800 nm, from another block. The comparison agrees on that condition, but it is
+    # not the one chosen for the cell, so the cell is one lane's word, not an agreement.
     a = [
         _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),
         _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), "mineru_p0_b9"),
@@ -214,8 +218,9 @@ def test_a_narrowed_lane_that_disagrees_with_the_other_lane_is_not_called_agreem
 
     result = paired(a, b)
 
-    assert result.paper_row["transmittance"] is None
-    assert decision(result, "transmittance")["decision"] == "multiple_values"
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (83.5, "single_source")
+    assert row["source_ids"] == "mineru_p0_b9"
 
 
 def test_one_mode_quoted_two_ways_is_one_answer_not_a_refusal():

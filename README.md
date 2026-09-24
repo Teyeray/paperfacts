@@ -335,12 +335,14 @@ question strictly one after another.
 |---|---|
 | `mode` | `"passage"` (default) or `"document"` |
 | `passes` | Extract each lane this many times and keep the majority. Default 1 |
-| `candidate_limit` | How many retrieved blocks a field question may show. Default 8 |
+| `candidate_limit` | How many blocks matched only by a unit a field question may show; blocks naming the field always come. Default 8 |
 
 **Passage mode** asks which samples the paper reports, then asks about one field at a time, showing only
-the blocks retrieved for that field. Retrieval is ordinary code, not a model call: keyword and unit
-matching, ranked, capped at `candidate_limit`. Both lanes get identical retrieval rules, so the comparison
-still measures the parsers and not the retrieval. **Document mode** hands the whole paper over and asks
+the blocks retrieved for that field. Retrieval is ordinary code, not a model call: every block naming the
+field by one of its keywords, plus the best blocks matched only by a unit up to `candidate_limit`. A table's
+caption, and the other half of a paragraph a page or column break cut in two, come along with whichever
+half was picked. Both lanes get identical retrieval rules, so the comparison still measures the parsers
+and not the retrieval. **Document mode** hands the whole paper over and asks
 for everything at once; on a fifteen-thousand-token paper the model loses its place, cites blocks that
 merely discuss a number, and never mentions fields the paper states in passing.
 
@@ -482,7 +484,7 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Cache | Keyed on | Invalidated by |
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
-| Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords and `passages.py` | changing any of them |
+| Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
 | Comparison (`comparison_key`) | the field tolerances, the categories, and the source of `normalize.py`, `compare.py`, `matching.py` and the matching prompt | changing a tolerance or a rule |
 | LLM requests | the entire request payload | nothing — an identical request is free |
 

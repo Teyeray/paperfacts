@@ -89,7 +89,7 @@ this file is the part that is easy to get wrong.
   with an audited reason; grounding only flags, never drops.
 - Cache keys live in `keys.py`. `extractor_key` hashes the model, the field schema, the prompts, the
   sampling settings and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its
-  two prompts plus `retrieval_fingerprint` (the keywords and `passages.py`). `comparison_key` hashes
+  two prompts plus `retrieval_fingerprint` (the keywords, `passages.py` and `continuation.py`). `comparison_key` hashes
   tolerances, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt. Anything that is at its built-in
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change

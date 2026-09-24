@@ -477,8 +477,7 @@ def drop_implausible(records: ExtractedRecords) -> ExtractedRecords:
 
     target = records.target
     if target is not None:
-        fields = kept(target.fields)
-        target = target.model_copy(update={"fields": fields}) if fields else None
+        target = target.model_copy(update={"fields": kept(target.fields)})
     samples = tuple(sample.model_copy(update={"fields": kept(sample.fields)}) for sample in records.samples)
     unattributed = kept(records.unattributed)
     if not dropped:
