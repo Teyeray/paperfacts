@@ -201,6 +201,79 @@ class FigureReadings(BaseModel):
         return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+# ---- What a reader is shown ----------------------------------------------------------------------------
+
+Cell = str | float | int | bool | None
+
+
+class FiguresView(BaseModel):
+    """The readings a document page and a workbook show, with what they should warn about.
+
+    ``stale``: no file exists under the current figure_key, so these were read under older settings (another
+    model, prompt or field table). ``orphaned``: figure blocks the readings cite that the current parse no
+    longer has; the numbers stand, but clicking one cannot point at the chart.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str
+    figure_key: str
+    model: str
+    stale: bool = False
+    orphaned: tuple[str, ...] = ()
+    rows: tuple[dict[str, Cell], ...] = ()
+
+    def warning(self) -> str:
+        notes = ["stale (older key)"] if self.stale else []
+        if self.orphaned:
+            notes.append(f"{len(self.orphaned)} cite figure blocks missing from the current parse")
+        return ", ".join(notes)
+
+
+def _x_text(quantity: str | None, value: float | str | None, unit: str | None, on_tick: bool | None) -> str | None:
+    if value is None:
+        return None
+    number = f"{value:g}" if isinstance(value, float) else str(value)
+    text = " ".join(part for part in (f"{quantity} =" if quantity else None, number, unit) if part)
+    return text + ("（刻度之间，插值）" if on_tick is False else "")
+
+
+def figure_rows(
+    readings: FigureReadings, *, filename: str, stale: bool = False, orphaned: frozenset[str] = frozenset()
+) -> tuple[dict[str, Cell], ...]:
+    """One display row per reading, keyed like the 图中读数 sheet's columns in :mod:`paperfacts.dataset`."""
+
+    def detail(reading: FigureReading) -> str | None:
+        notes = [reading.note] if reading.note else []
+        if stale:
+            notes.append("旧版本读数（设置已变，尚未重读）")
+        if reading.source_id in orphaned:
+            notes.append("当前解析里已没有这个图块")
+        return "; ".join(notes) or None
+
+    return tuple(
+        {
+            "document_id": readings.document_id,
+            "filename": filename,
+            "figure": reading.figure,
+            "page": reading.page + 1,
+            "source_id": reading.source_id,
+            "panel": reading.panel,
+            "field": reading.field,
+            "series": reading.series,
+            "x": _x_text(reading.x_quantity, reading.x_value, reading.x_unit, reading.x_on_tick),
+            "value": reading.y,
+            "unit": reading.unit,
+            "precision": f"±{reading.precision * 100:g}%",
+            "value_raw": " ".join(part for part in (f"{reading.y_raw:g}", reading.y_unit_raw) if part),
+            "scale": "对数" if reading.scale == "log" else "线性",
+            "caption": reading.caption,
+            "detail": detail(reading),
+        }
+        for reading in readings.readings
+    )
+
+
 # ---- Selection -----------------------------------------------------------------------------------------
 
 

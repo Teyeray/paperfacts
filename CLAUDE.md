@@ -97,12 +97,14 @@ this file is the part that is easy to get wrong.
 
 ## Figures
 
-- `figures.py` is the opt-in `figures` stage (after parse, before extract): a vision model reads
-  property-vs-condition charts selected by deterministic code (the whole-figure caption names a film field
-  by its keywords). It is paper-level, not a lane: its readings are approximate (±10 % / ±20 %), never
-  create or identify a sample (chart x snaps to ticks), never fill a dataset cell and never join the
-  two-lane comparison — they live only in `figure_rows`, the 图中读数 sheet and their own web section.
-  A failure in it marks only its own stage failed. Its prompt lives in `figures.py`, not `prompts.py`, so
+- `figures.py` is the opt-in `figures` stage (starts after parse, runs beside the extraction lanes, joined
+  before export): a vision model reads property-vs-condition charts selected by deterministic code (the
+  whole-figure caption names a film field by its keywords; panels go to captions by geometry). It is
+  paper-level, not a lane: its readings are approximate (±10 % / ±20 %), never create or identify a sample
+  (chart x snaps to ticks), never fill a dataset cell and never join the two-lane comparison. They live in
+  their own file, the 图中读数 sheet (`write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
+  and their own web section; `dataset.py` must not import `figures.py`. A failure in it marks only its own
+  stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
   tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
 - Vision requests go through `llm.complete_vision` on a `VisionClient`, never the extraction client;
   crops come from `pdf.render_region`.

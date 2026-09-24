@@ -26,7 +26,9 @@ from fastapi.testclient import TestClient
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.models import BACKENDS, Backend, ParsedArtifact
+from paperfacts.figures import FigureReading, FigureReadings
+from paperfacts.keys import figure_key_for
+from paperfacts.models import BACKENDS, Backend, NormalizedBBox, ParsedArtifact
 from paperfacts.records import LaneExtraction
 from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
@@ -36,6 +38,7 @@ from support.extraction import make_field, make_sample
 from support.factories import make_blank_pdf
 from support.web import (
     DOC_KEY,
+    DOC_SHA,
     RecordingRunner,
     seed_artifact,
     seed_extraction,
@@ -370,19 +373,45 @@ def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library:
     assert body["paper_row"] == {}
     assert body["quality_rows"] == []
     assert body["fields"] == []
-    assert body["figure_rows"] == []
 
 
-def test_the_dataset_carries_the_chart_readings_apart_from_the_sample_rows(
-    client: TestClient, library: Library, parsed_only: str
+def seed_figures(library: Library, settings: Settings) -> None:
+    key = figure_key_for(settings)
+    reading = FigureReading(
+        source_id="mineru_p0_b9",
+        page=0,
+        bbox=NormalizedBBox(x1=0.1, y1=0.1, x2=0.5, y2=0.4),
+        figure="Fig. 3",
+        caption="Fig. 3 Sheet resistance",
+        panel=1,
+        field="sheet_resistance",
+        y_raw=25.0,
+        y_unit_raw="Ω/sq",
+        y=25.0,
+        unit="Ω/sq",
+        precision=0.1,
+    )
+    FigureReadings(
+        document_id=DOC_SHA, figure_key=key, model="qwen3.7-plus", backend="mineru", readings=(reading,)
+    ).write(library.layout.figures_path(DOC_SHA, key))
+
+
+def test_the_figure_readings_are_not_found_before_the_stage_ran(client: TestClient, parsed_only: str):
+    assert client.get(f"/api/documents/{parsed_only}/figures").status_code == 404
+
+
+def test_the_figure_readings_are_served_from_their_own_file(
+    client: TestClient, library: Library, settings: Settings, parsed_only: str
 ):
-    figure_row = {"source_id": "mineru_p2_b4", "field": "sheet_resistance", "value": 2500.0, "precision": "±10%"}
-    seed_dataset(library, parsed_only, {"document_id": parsed_only, "figure_rows": [figure_row]})
+    seed_figures(library, settings)
 
-    body = client.get(f"/api/documents/{parsed_only}/dataset").json()
+    body = client.get(f"/api/documents/{parsed_only}/figures").json()
 
-    assert body["figure_rows"] == [figure_row]
-    assert body["sample_rows"] == []
+    assert body["stale"] is False
+    [row] = body["rows"]
+    assert row["value"] == 25.0 and row["precision"] == "±10%" and row["figure"] == "Fig. 3"
+    # The seeded parse has no block mineru_p0_b9, so the reading cannot be located on the page.
+    assert body["orphaned"] == ["mineru_p0_b9"]
 
 
 def test_a_dataset_written_under_other_keys_is_not_served(client: TestClient, library: Library, parsed_only: str):

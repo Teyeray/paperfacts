@@ -84,13 +84,11 @@ class VisionClient(Protocol):
 
     Deliberately a separate protocol from :class:`LlmClient`. Extraction must never be handed an image (the
     two lanes are compared on the *text* the parsers produced, and an image would be a third source), and
-    figure reading must never be handed a text-only client. The attributes decide what the model was asked,
-    so the figures stage reads them into ``figure_key`` from the client rather than from settings.
+    figure reading must never be handed a text-only client. ``model`` is recorded with the readings; the
+    sampling that goes into ``figure_key`` is fixed where the stage's client is built.
     """
 
     model: str
-    temperature: float
-    max_tokens: int
 
     def complete_vision(self, *, system: str, user: str, image_png: bytes, refresh: bool = False) -> LlmResult: ...
 

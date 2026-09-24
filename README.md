@@ -268,7 +268,7 @@ The flags worth knowing:
   calls, N times the cost.
 - `--mode document|passage` picks how the model is asked; see below.
 - `--figures` / `--no-figures` on `run` and `batch` switches the figures stage on or off for this run,
-  over `figures.enabled`.
+  over `figures.enabled`; `--force-figures` re-reads the charts without redoing anything else.
 - `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
 - `--data-root` overrides the data directory; `--verbose` / `-v` prints INFO logs.
@@ -510,12 +510,16 @@ number with no unit rather than assuming one.
 
 Many papers give a sample's sheet resistance or resistivity only as a marker on a chart, "Rs vs O2 flow",
 where neither text lane can see it. The `figures` stage, off by default, crops such charts out of the page
-and asks a vision model (`qwen3.7-plus`) to read them. It runs after parsing and before extraction; switch
-it on with `figures.enabled`, `PAPERFACTS_FIGURES_ENABLED=true` or `--figures`.
+and asks a vision model (`qwen3.7-plus`) to read them. It starts after parsing, runs beside the two
+extraction lanes and is joined before export; switch it on with `figures.enabled`,
+`PAPERFACTS_FIGURES_ENABLED=true` or `--figures`. `--force` does not re-read charts and `--force-figures`
+re-reads only them, since each costs minutes of a different model.
 
-- **Which charts.** Figure and caption blocks that sit together on a page form one figure. Its caption is
-  the one that starts "Fig." / "Figure" / "FIGURE": MinerU captions a panel of a multi-panel figure with the
-  neighbouring panels' labels ("(a) (c)"), which name nothing. A figure is read when that caption names a
+- **Which charts.** Figure and caption blocks that sit together on a page are split among the captions
+  that start "Fig." / "Figure" / "FIGURE" by geometry: each panel goes to the nearest such caption on the
+  side that caption was written on. MinerU captions a panel of a multi-panel figure with the neighbouring
+  panels' labels ("(a) (c)"), which name nothing, and hangs the figure's caption under whichever panel it
+  was attached to, so reading order alone would hand panels to the next figure. A figure is read when that caption names a
   film property (sheet resistance, resistivity, transmittance, thickness) by one of the field's retrieval
   keywords, and then every panel is asked about separately, up to `figures.max_per_document` panels per
   paper. The boxes are MinerU's, or PaddleOCR-VL's when there is no MinerU parse. A panel that turns out to
@@ -527,17 +531,21 @@ it on with `figures.enabled`, `PAPERFACTS_FIGURES_ENABLED=true` or `--figures`.
   (`.omc/research/figure-reading-accuracy.md`).
 - **What a reading is not.** The chart's x is shown for the reader only: the models round it to the nearest
   tick label, so it never creates a sample or decides which sample a point is. Readings never fill a cell
-  of 结果表 or of the 论文数据 / 样品数据 sheets and never take part in the two-lane comparison. They have
-  their own sheet, 图中读数, their own `figure_rows` in the dataset JSON, and their own section on the
+  of 结果表 or of the 论文数据 / 样品数据 sheets and never take part in the two-lane comparison; `dataset.py`
+  does not even import the stage. They have their own sheet, 图中读数, their own endpoint
+  (`GET /api/documents/{id}/figures`, read straight from the readings file), and their own section on the
   document page, where clicking one outlines the chart on the page.
 - **Cost and failure.** About a minute per chart, two for a crowded one; requests overlap
   `llm.concurrency` at a time, time out after `figures.timeout_s` and are retried once. A failure marks only
-  the `figures` stage failed: the paper is still extracted, compared and exported, and a request that
-  failed is asked again on the next run while the answered panels replay from the LLM cache.
+  the `figures` stage failed: the paper is still extracted, compared and exported. A request that failed,
+  a reply cut off at the token limit (never cached) and an answer that could not be used are asked again
+  on the next run -- the last with the cache bypassed -- while the answered panels replay from the LLM cache.
 - **Stored.** `figures/<figure_key>.json` per document. `figure_key` hashes the vision model and its
   sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the film fields' descriptions,
-  keywords and units, and the source of `figures.py`, `normalize.py` and `passages.py`. Readings stored
-  under the current key reach the dataset even when the stage is switched off for a later run.
+  keywords and units, and the source of `figures.py`, `normalize.py` and `passages.py`. Stored readings are
+  shown and exported even when the stage is switched off for a later run. With nothing under the current
+  key, the newest older file is shown and marked stale (旧版本读数); readings citing figure blocks the
+  current parse no longer has are marked too, and both notes appear in the stage detail.
 
 ## Caching, and why filenames carry keys
 

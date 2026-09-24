@@ -249,7 +249,7 @@ def test_the_mode_option_reaches_run(monkeypatch, two_page_pdf: Path, data_root:
     monkeypatch.delenv("PAPERFACTS_EXTRACTION_MODE", raising=False)
     captured: list[Settings] = []
 
-    def fake_run_document(document: DocumentInput, settings: Settings, *, force: bool = False, on_stage=None):
+    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
         captured.append(settings)
         raise ParserError("mineru", "run", "stop here, the flag has already been observed")
 
@@ -449,7 +449,7 @@ def test_the_figures_flag_reaches_run(monkeypatch, two_page_pdf: Path, data_root
     monkeypatch.delenv("PAPERFACTS_FIGURES_ENABLED", raising=False)
     captured: list[Settings] = []
 
-    def fake_run_document(document: DocumentInput, settings: Settings, *, force: bool = False, on_stage=None):
+    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
         captured.append(settings)
         raise ParserError("mineru", "run", "stop here, the flag has already been observed")
 
@@ -473,3 +473,22 @@ def test_the_figures_flag_reaches_batch(monkeypatch, two_page_pdf: Path, data_ro
     runner.invoke(app, ["batch", str(two_page_pdf.parent), "--data-root", str(data_root), flag])
 
     assert captured[0].figures_enabled is expected
+
+
+@pytest.mark.parametrize(
+    ("flags", "force", "force_figures"), [(["--force"], True, False), (["--force-figures"], False, True)]
+)
+def test_force_and_force_figures_are_separate(
+    monkeypatch, two_page_pdf: Path, data_root: Path, flags, force, force_figures
+):
+    captured: list[dict] = []
+
+    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
+        captured.append(kwargs)
+        raise ParserError("mineru", "run", "stop here")
+
+    monkeypatch.setattr("paperfacts.cli.run_document", fake_run_document)
+
+    runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), *flags])
+
+    assert (captured[0]["force"], captured[0]["force_figures"]) == (force, force_figures)

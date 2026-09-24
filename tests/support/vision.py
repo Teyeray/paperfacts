@@ -12,7 +12,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from paperfacts import figures
 from paperfacts.errors import LlmError
 from paperfacts.llm import LlmResult
 
@@ -39,12 +38,8 @@ class FakeVisionClient:
         answer: Answer | Responder,
         *,
         model: str = "fake-vl",
-        temperature: float = figures.TEMPERATURE,
-        max_tokens: int = figures.MAX_TOKENS,
     ) -> None:
         self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
         self.calls: list[VisionCall] = []
         self.closed = False
         self._lock = threading.Lock()

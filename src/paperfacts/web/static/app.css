@@ -219,6 +219,7 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .figures-table td.val .unit { color: var(--ink-3); font-size: 11px; }
 .figures-table td.x, .figures-table td.note { color: var(--ink-2); font-size: 12px; }
 .flag.approx { color: var(--neutral); }
+.figures-warning { font-size: 12px; margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--warn); color: var(--ink-2); }
 .results-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .results-head h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.003em; }
 .results-note { font-size: 12px; margin: 0 0 10px; }

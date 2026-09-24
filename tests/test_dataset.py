@@ -16,9 +16,8 @@ from paperfacts.dataset import (
     write_dataset_json,
 )
 from paperfacts.fields import FIELD_SPECS
-from paperfacts.figures import FigureReading, FigureReadings
 from paperfacts.matching import SampleMatch, SampleMatching
-from paperfacts.models import DocumentInput, NormalizedBBox
+from paperfacts.models import DocumentInput
 from paperfacts.records import FieldValue, TargetRecord
 from support.extraction import make_lane, make_sample
 from support.factories import DOC_ID
@@ -618,84 +617,29 @@ def test_the_lane_column_reaches_the_quality_sheet(tmp_path):
 # ---- Figure readings: their own sheet, never a cell -------------------------------------------------
 
 
-def figure_readings(y: float | None = 2500.0):
-    reading = FigureReading(
-        source_id="mineru_p2_b4",
-        page=2,
-        bbox=NormalizedBBox(x1=0.1, y1=0.1, x2=0.5, y2=0.4),
-        figure="Fig. 3",
-        caption="Fig. 3 Sheet resistance vs O2 flow",
-        panel=1,
-        field="sheet_resistance",
-        series="Rs",
-        x_quantity="O2 flow",
-        x_value=1.25,
-        x_unit="sccm",
-        x_on_tick=False,
-        y_raw=25.0,
-        y_unit_raw="10^2 ohm/sq",
-        y=y,
-        unit="Ω/sq" if y is not None else None,
-        scale="log",
-        precision=0.2,
-    )
-    return FigureReadings(document_id=DOC_ID, figure_key="f" * 12, model="qwen3.7-plus", readings=(reading,))
-
-
-def with_figures(figures):
-    a = make_lane(samples=[make_sample("A", [value("thickness", "100", "nm")])])
-    b = make_lane(backend="paddleocr_vl")
-    matching = SampleMatching(unmatched_a=("A",))
-    document = DocumentInput(document_id=DOC_ID, sha256=DOC_ID, pdf_path=Path("paper.pdf"))
-    return consolidate_document(document, {a.backend: a, b.backend: b}, compare_lanes(a, b, matching), figures=figures)
-
-
-def test_a_chart_reading_becomes_a_figure_row_labelled_approximate():
-    [row] = with_figures(figure_readings()).figure_rows
-
-    assert row["value"] == 2500.0 and row["unit"] == "Ω/sq"
-    assert row["precision"] == "±20%"
-    assert row["page"] == 3  # shown 1-based, like every page a reader sees
-    assert row["value_raw"] == "25 10^2 ohm/sq"
-    assert row["figure"] == "Fig. 3" and row["source_id"] == "mineru_p2_b4"
-    assert row["x"] == "O2 flow = 1.25 sccm（刻度之间，插值）"
-
-
-def test_a_chart_reading_never_fills_a_sample_cell():
-    without = with_figures(None)
-    with_chart = with_figures(figure_readings())
-
-    assert with_chart.sample_rows == without.sample_rows
-    assert with_chart.paper_row == without.paper_row
-    assert with_chart.quality_rows == without.quality_rows
-    assert without.figure_rows == ()
-
-
-def test_figure_rows_survive_the_payload_round_trip():
-    result = with_figures(figure_readings())
-
-    restored = DocumentDataset.from_payload(DatasetPayload.model_validate_json(result.to_payload().model_dump_json()))
-
-    assert restored.to_payload() == result.to_payload()
-    assert restored.to_payload().figure_rows[0]["value"] == 2500.0
-
-
-def test_figure_readings_of_another_pdf_are_refused():
-    readings = figure_readings().model_copy(update={"document_id": "b" * 64})
-
-    with pytest.raises(ValueError, match="another PDF"):
-        with_figures(readings)
-
-
-def test_the_workbook_has_a_figure_sheet(tmp_path: Path):
+def test_figure_rows_fill_only_their_own_sheet(tmp_path: Path):
     output = tmp_path / "dataset.xlsx"
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "100", "nm")])]))
+    row = {"document_id": DOC_ID, "figure": "Fig. 3", "value": None, "value_raw": "25 10^2 ohm/sq", "precision": "±20%"}
 
-    write_dataset([with_figures(figure_readings(y=None))], output)
+    write_dataset([result], output, figure_rows=[row])
 
-    sheet = load_workbook(output)["图中读数"]
+    workbook = load_workbook(output)
+    sheet = workbook["图中读数"]
     header = [cell.value for cell in sheet[1]]
-    assert "读数（近似值）" in header and "精度" in header
-    row = {header[i]: cell.value for i, cell in enumerate(sheet[2])}
-    assert row["读数（近似值）"] is None  # an unconvertible reading keeps its raw text only
-    assert row["图中原始读数"] == "25 10^2 ohm/sq"
-    assert row["精度"] == "±20%"
+    cells = {header[i]: cell.value for i, cell in enumerate(sheet[2])}
+    assert cells["图"] == "Fig. 3" and cells["读数（近似值）"] is None and cells["精度"] == "±20%"
+    assert workbook["样品数据"].max_row == 2  # the sample sheet is what it would have been without the row
+
+
+def test_the_dataset_module_knows_nothing_of_figure_reading():
+    # Chart readings take part in no verdict, so the module whose source names every comparison must not
+    # depend on the one that reads charts: tuning the figures stage must never rename a stored comparison.
+    import ast
+
+    import paperfacts.dataset
+
+    tree = ast.parse(Path(paperfacts.dataset.__file__).read_text(encoding="utf-8"))
+    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert "paperfacts.figures" not in imported
+    assert "figure_rows" not in DatasetPayload.model_fields

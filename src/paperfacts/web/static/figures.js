@@ -7,8 +7,14 @@ import { escapeHtml, fmt, toast } from "./html.js";
 import { LANES, slot, state } from "./state.js";
 
 export function renderFigures(root) {
-  const rows = state.dataset?.figure_rows ?? [];
+  const rows = state.figures?.rows ?? [];
   root.classList.toggle("hidden", !rows.length);
+  const warn = slot("figures-warning", root);
+  const notes = [];
+  if (state.figures?.stale) notes.push("这些读数是在旧设置下读出的（模型、提示或字段表已变），重新读图前仅供参考。");
+  if (state.figures?.orphaned?.length) notes.push(`${state.figures.orphaned.length} 个图块在当前解析里已不存在，无法在页面上定位。`);
+  warn.textContent = notes.join(" ");
+  warn.classList.toggle("hidden", !notes.length);
   const body = slot("figure-rows", root);
   body.innerHTML = "";
   for (const row of rows) {

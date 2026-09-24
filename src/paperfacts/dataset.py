@@ -31,7 +31,6 @@ from paperfacts.fields import (
     TARGET_FIELDS,
     FieldSpec,
 )
-from paperfacts.figures import FigureReadings
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.normalize import (
     clean_unit,
@@ -83,8 +82,8 @@ _QUALITY_COLUMNS = (
     ("series", "系列级"),
     ("detail", "说明"),
 )
-# Values read off charts. A sheet of their own: they are approximate, were never compared across lanes, and
-# their x cannot say which sample a point is, so none of them may fill a cell of the sample table.
+# Values a vision model read off charts. The rows come from paperfacts.figures (which this module does not
+# import: the readings are no part of any verdict here); this is only the sheet's layout.
 _FIGURE_COLUMNS = (
     ("document_id", "文档ID"),
     ("filename", "文件名"),
@@ -140,8 +139,6 @@ class DatasetPayload(BaseModel):
     paper_row: dict[str, CellValue] = {}
     sample_rows: tuple[dict[str, CellValue], ...] = ()
     quality_rows: tuple[dict[str, CellValue], ...] = ()
-    # Chart readings (the opt-in figures stage), kept apart from the sample rows: see _FIGURE_COLUMNS.
-    figure_rows: tuple[dict[str, CellValue], ...] = ()
 
 
 def field_columns() -> tuple[FieldColumn, ...]:
@@ -167,7 +164,6 @@ class DocumentDataset:
     quality_rows: tuple[Row, ...]
     extractor_key: str = ""
     comparison_key: str = ""
-    figure_rows: tuple[Row, ...] = ()
 
     def to_payload(self) -> DatasetPayload:
         """The serialisable view the web UI and ``dataset.json`` share.
@@ -184,7 +180,6 @@ class DocumentDataset:
             paper_row=dict(self.paper_row),
             sample_rows=tuple(dict(row) for row in self.sample_rows),
             quality_rows=tuple(dict(row) for row in self.quality_rows),
-            figure_rows=tuple(dict(row) for row in self.figure_rows),
         )
 
     @classmethod
@@ -205,7 +200,6 @@ class DocumentDataset:
             quality_rows=tuple(MappingProxyType(dict(row)) for row in payload.quality_rows),
             extractor_key=payload.extractor_key,
             comparison_key=payload.comparison_key,
-            figure_rows=tuple(MappingProxyType(dict(row)) for row in payload.figure_rows),
         )
 
 
@@ -511,17 +505,9 @@ def _scope_comparisons(scope: _Scope, report: ComparisonReport) -> tuple[FieldCo
 
 
 def consolidate_document(
-    document: DocumentInput,
-    lanes: Mapping[Backend, LaneExtraction],
-    report: ComparisonReport,
-    *,
-    figures: FigureReadings | None = None,
+    document: DocumentInput, lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport
 ) -> DocumentDataset:
-    """Collapse source evidence, then select the most complete trustworthy sample row.
-
-    ``figures`` only adds figure rows; nothing below reads it, so a chart reading can never fill, confirm
-    or refuse a cell.
-    """
+    """Collapse source evidence, then select the most complete trustworthy sample row."""
     if report.document_id != document.document_id or any(
         lane.document_id != document.document_id for lane in lanes.values()
     ):
@@ -655,44 +641,6 @@ def consolidate_document(
         tuple(quality),
         report.extractor_key,
         report.comparison_key,
-        figure_rows(document, figures) if figures is not None else (),
-    )
-
-
-def _x_text(quantity: str | None, value: float | str | None, unit: str | None, on_tick: bool | None) -> str | None:
-    if value is None:
-        return None
-    number = f"{value:g}" if isinstance(value, float) else str(value)
-    text = " ".join(part for part in (f"{quantity} =" if quantity else None, number, unit) if part)
-    return text + ("（刻度之间，插值）" if on_tick is False else "")
-
-
-def figure_rows(document: DocumentInput, figures: FigureReadings) -> tuple[Row, ...]:
-    """One row per chart reading, in the order the stage read them."""
-    if figures.document_id != document.document_id:
-        raise ValueError("figure readings belong to another PDF")
-    return tuple(
-        MappingProxyType(
-            {
-                "document_id": document.document_id,
-                "filename": document.display_filename,
-                "figure": reading.figure,
-                "page": reading.page + 1,
-                "source_id": reading.source_id,
-                "panel": reading.panel,
-                "field": reading.field,
-                "series": reading.series,
-                "x": _x_text(reading.x_quantity, reading.x_value, reading.x_unit, reading.x_on_tick),
-                "value": reading.y,
-                "unit": reading.unit,
-                "precision": f"±{reading.precision * 100:g}%",
-                "value_raw": " ".join(part for part in (f"{reading.y_raw:g}", reading.y_unit_raw) if part),
-                "scale": "对数" if reading.scale == "log" else "线性",
-                "caption": reading.caption,
-                "detail": reading.note,
-            }
-        )
-        for reading in figures.readings
     )
 
 
@@ -746,9 +694,17 @@ def _worksheet(
 
 
 def write_dataset(
-    documents: Sequence[DocumentDataset], output: Path, *, failures: Sequence[dict[str, str]] = ()
+    documents: Sequence[DocumentDataset],
+    output: Path,
+    *,
+    failures: Sequence[dict[str, str]] = (),
+    figure_rows: Sequence[Row] = (),
 ) -> None:
-    """Replace a workbook atomically; repeated PDF hashes produce exactly one paper row."""
+    """Replace a workbook atomically; repeated PDF hashes produce exactly one paper row.
+
+    ``figure_rows`` (from :func:`paperfacts.figures.figure_rows`) only fill the 图中读数 sheet: chart readings
+    are approximate and never compared, so they never reach a sample or paper row.
+    """
     unique = sorted(
         {document.document_id: document for document in documents}.values(), key=lambda document: document.document_id
     )
@@ -781,7 +737,7 @@ def write_dataset(
         "Fields",
     )
     _worksheet(workbook, "数据质量", _QUALITY_COLUMNS, [row for doc in unique for row in doc.quality_rows], "Quality")
-    _worksheet(workbook, "图中读数", _FIGURE_COLUMNS, [row for doc in unique for row in doc.figure_rows], "Figures")
+    _worksheet(workbook, "图中读数", _FIGURE_COLUMNS, figure_rows, "Figures")
     runs: list[Row] = [
         {
             "document_id": doc.document_id,
