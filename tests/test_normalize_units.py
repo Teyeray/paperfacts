@@ -64,6 +64,8 @@ def test_prefix_case_distinguishes_milli_from_mega():
         "Ωxcm",
         "Ω-cm",
         "ohm-cm",
+        "Ω•cm",
+        "Ω∙cm",
         # MinerU's LaTeX, formatting commands and all.
         "\\Omega { \\cdot } \\mathrm { c m }",
     ],

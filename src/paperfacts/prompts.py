@@ -31,10 +31,13 @@ _SAMPLE_SCOPE = (
     " device -- a perovskite or organic absorber / active layer, charge-transport layers, thin buffer layers"
     " (e.g. evaporated MoOx, WOx, NbOy, VOx, or nanoparticle SnO2 / ZnO under an electrode), metal contacts --"
     " are never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When"
-    " the paper varies only those other layers, the TCO film it deposits is still a single sample. Changes to"
-    " the TCO film itself do make separate samples: each deposition condition, and each post-treatment of it"
-    " (as-deposited, annealed at 150 °C, annealed at 230 °C...) is its own sample. The same TCO recipe merely"
-    " deposited on another substrate for characterisation (glass, Si, a TEM grid) is the same sample."
+    " the paper varies only those other layers, the TCO film it deposits is still a single sample. A multilayer"
+    " transparent electrode (oxide/metal/oxide such as ITO/Ag/ITO or WO3/Ag/WO3) is one film: its thin metal"
+    " interlayer is part of it, not a metal contact. Changes to the TCO film itself do make separate samples:"
+    " each deposition condition, each thickness of any of its layers, and each post-treatment (as-deposited,"
+    " annealed at 150 °C, annealed at 230 °C...) is its own sample. So is each substrate the paper compares the"
+    " film's properties on (glass vs. a metal foil); the same film merely deposited on a second substrate to"
+    " characterise it (Si for XRD, a TEM grid) is the same sample."
 )
 _LAYER_SCOPE = (
     "Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A"
