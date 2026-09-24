@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -23,7 +23,14 @@ from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport, FieldComparison
-from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_SPECS, SAMPLE_FIELDS, TARGET_FIELDS, FieldSpec
+from paperfacts.fields import (
+    AMBIGUOUS_MATCH_CONFIDENCE,
+    CONDITION_NUMBER,
+    FIELD_SPECS,
+    SAMPLE_FIELDS,
+    TARGET_FIELDS,
+    FieldSpec,
+)
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.normalize import (
     clean_unit,
@@ -300,22 +307,53 @@ def _commit(
     )
 
 
-def _co_cited_condition(
-    trusted: Sequence[tuple[Backend, FieldValue]], row_sources: frozenset[str]
-) -> list[tuple[Backend, FieldValue]] | None:
-    """The values whose condition is stated in a block the rest of the row also cites, or None.
+def _one_condition(
+    spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]], row_sources: frozenset[str]
+) -> tuple[list[tuple[Backend, FieldValue]], str] | None:
+    """Of a sample's several measurements, the one the cell should state, with the reason; or None.
 
-    A sentence such as "resistivity of 5.74e-4 Ω·cm and a transmittance of 83.5 % (400-1800 nm)" ties one
-    of a sample's several transmittances to the rest of its row; that is the one a reader expects in the
-    cell. Once the cell is chosen this way, every lane is held to it: a lane keeps only its values that
-    share a block with the row, so a lane quoting a different condition elsewhere cannot vouch for the one
-    chosen. A lane with two such conditions, or no value left anywhere, leaves the cell refused.
+    Tried in order, the first that settles it wins:
+
+    1. The condition stated in a block the rest of the row also cites. "Resistivity of 5.74e-4 Ω·cm and a
+       transmittance of 83.5 % (400-1800 nm)" ties one of several transmittances to the rest of its row;
+       that is the one a reader expects in the cell.
+    2. The field's ``condition_preference``, entry by entry: a condition matches an entry when it names
+       exactly the entry's numbers, so "average 400–800 nm" and "from 400 to 800 nm" both match "400-800".
+
+    Once a rule chooses, every lane is held to it: a lane keeps only its values the rule picks, so a lane
+    quoting a different condition cannot vouch for the one chosen. A rule that picks two conditions in one
+    lane, or nothing in any, settles nothing and the next is tried.
     """
+    rules: list[tuple[str, Callable[[FieldValue], bool]]] = [
+        ("采用与本行其他字段引用同一原文块的条件", lambda value: bool(row_sources.intersection(value.source_ids)))
+    ]
+    for entry in spec.condition_preference:
+        numbers = _condition_numbers(entry)
+        rules.append(
+            (
+                f"按字段配置的优先条件 {entry} 选取",
+                lambda value, numbers=numbers: _condition_numbers(value.condition) == numbers,
+            )
+        )
+    for reason, picks in rules:
+        kept = _held_to(trusted, picks)
+        if kept:
+            return kept, reason
+    return None
+
+
+def _condition_numbers(condition: str | None) -> tuple[float, ...]:
+    return tuple(float(number) for number in CONDITION_NUMBER.findall(delatex(normalize_text(condition or ""))))
+
+
+def _held_to(
+    trusted: Sequence[tuple[Backend, FieldValue]], picks: Callable[[FieldValue], bool]
+) -> list[tuple[Backend, FieldValue]] | None:
     kept: list[tuple[Backend, FieldValue]] = []
     for backend in BACKENDS:
         groups: dict[str, list[FieldValue]] = {}
         for lane, value in trusted:
-            if lane == backend and row_sources.intersection(value.source_ids):
+            if lane == backend and picks(value):
                 groups.setdefault(normalize_key(value.condition), []).append(value)
         if len(groups) > 1:
             return None
@@ -364,14 +402,14 @@ def _decide(
         len({normalize_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
     )
     if narrowed:
-        co_cited = _co_cited_condition(trusted, row_sources)
-        if co_cited is None:
+        chosen_condition = _one_condition(spec, trusted, row_sources)
+        if chosen_condition is None:
             return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
         # The cell now states one of several measurements, so it names only that one's condition and blocks.
-        trusted = co_cited
+        trusted, reason = chosen_condition
         conditions = _joined([value.condition or "" for _, value in trusted])
         sources = _joined(sorted({source for _, value in trusted for source in value.source_ids}))
-        details.append("该样品有多种测量条件；采用与本行其他字段引用同一原文块的条件")
+        details.append(f"该样品有多种测量条件；{reason}")
     parsed: list[tuple[Backend, FieldValue, CellValue]] = []
     for backend, value in trusted:
         scalar, note = _scalar(value, spec)

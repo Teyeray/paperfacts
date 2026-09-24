@@ -419,7 +419,8 @@ to count as the same fact.
   "abs_tol": 0.0,
   "condition_hint": null,                   // what to record alongside, e.g. a wavelength
   "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction
-  "valid_range": {"max": 500}               // optional plausible range in canonical_unit; min and/or max
+  "valid_range": {"max": 500},              // optional plausible range in canonical_unit; min and/or max
+  "condition_preference": ["400-800", "550"] // optional: which measurement fills the dataset cell
 }
 ```
 
@@ -437,16 +438,24 @@ A numeric field may declare `valid_range`, the plausible values in its `canonica
 open. The model is told the range with its field question, and a value whose converted number still falls
 outside it is dropped with the reason in the lane's `dropped` audit (the web's 清洗记录). It is meant for
 the confusions a unit cannot catch: the spin-coating rpm of an absorber read as the substrate rotation, the
-thickness of a perovskite layer or a glass substrate read as the electrode's. The shipped table caps
-`rotation_speed` at 100 rpm and `thickness` at 500 nm and floors `transmittance` at 60 %. A value that
+thickness of a wafer or a glass substrate read as the electrode's. The shipped table caps `rotation_speed`
+at 100 rpm and `thickness` at 5000 nm and floors `transmittance` at 60 %. A value that
 cannot be converted is kept, since there is no number to judge. A range changes the prompt and which values
 survive, so it moves both cache keys; a field without one keeps the keys it had.
 
 A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
-`W`, `sccm`, `rpm`) or startup fails rather than guessing. Adding a field is one table entry; the prompt,
+`W`, `sccm`, `rpm`, `Pa`) or startup fails rather than guessing. Adding a field is one table entry; the prompt,
 normalisation and tolerances follow from it. `uv run paperfacts fields` prints what was actually loaded.
 
-The twenty shipped fields are aimed at sputtered transparent-conductive-oxide films:
+A sample often has one field measured several ways -- transmittance averaged over 400-800 nm, at 550 nm,
+over 400-1800 nm -- and the dataset has one cell for it. The cell takes the measurement stated in the same
+block as the rest of the sample's row; failing that, the first entry of `condition_preference` that picks
+exactly one condition. An entry names the numbers a condition states, so `"400-800"` matches "average
+400–800 nm" and "from 400 to 800 nm" alike. If neither settles it the cell stays empty as
+`multiple_conditions`. Every measurement stays in the facts either way. The preference changes only which
+cell is committed, so editing it re-compares without re-extracting.
+
+The twenty-three shipped fields are aimed at sputtered transparent-conductive-oxide films:
 
 | Field | 中文名 | Group | Kind | Unit |
 |---|---|---|---|---|
@@ -460,6 +469,9 @@ The twenty shipped fields are aimed at sputtered transparent-conductive-oxide fi
 | `ar_flow_rate` | Ar 流量 | process | numeric | sccm |
 | `o2_flow_rate` | O2 流量 | process | numeric | sccm |
 | `h2_flow_rate` | H2 流量 | process | numeric | sccm |
+| `o2_ratio` | O2 比例 | process | numeric | % |
+| `h2_ratio` | H2 比例 | process | numeric | % |
+| `working_pressure` | 工作气压 | process | numeric | Pa |
 | `target_substrate_distance` | 靶基距 | process | numeric | cm |
 | `substrate_axis_distance` | 基片偏轴距 | process | numeric | cm |
 | `substrate_temperature` | 基片温度 | process | numeric | ℃ |
@@ -484,7 +496,7 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
 | Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
-| Comparison (`comparison_key`) | the field tolerances, the categories, and the source of `normalize.py`, `compare.py`, `matching.py` and the matching prompt | changing a tolerance or a rule |
+| Comparison (`comparison_key`) | the field tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
 | LLM requests | the entire request payload | nothing — an identical request is free |
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot

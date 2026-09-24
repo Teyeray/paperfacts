@@ -151,7 +151,8 @@ def test_a_comparison_cannot_hide_different_same_condition_values_in_one_lane():
 
 
 def test_multiple_conditions_are_not_collapsed_even_with_identical_numbers():
-    fields = [value("transmittance", "85", "%", condition=condition) for condition in ("550 nm", "600 nm")]
+    # Neither wavelength is in transmittance's condition_preference, so nothing picks one.
+    fields = [value("transmittance", "85", "%", condition=condition) for condition in ("450 nm", "600 nm")]
     result = paired(fields, [v.model_copy(update={"source_ids": ("paddleocr_vl_p0_b1",)}) for v in fields])
     assert result.paper_row["transmittance"] is None
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
@@ -172,10 +173,10 @@ def test_differently_worded_conditions_across_lanes_still_agree():
 def test_one_lane_with_two_conditions_is_still_refused():
     result = paired(
         [
-            value("transmittance", "85", "%", condition="550 nm"),
+            value("transmittance", "85", "%", condition="450 nm"),
             value("transmittance", "85", "%", condition="600 nm"),
         ],
-        [value("transmittance", "85", "%", condition="550 nm", backend="paddleocr_vl")],
+        [value("transmittance", "85", "%", condition="450 nm", backend="paddleocr_vl")],
     )
     assert result.paper_row["transmittance"] is None
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
@@ -207,12 +208,41 @@ def test_several_conditions_sharing_the_rows_block_stay_refused():
     fields = [
         _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),
         _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), "mineru_p0_b9"),
-        _cited(value("transmittance", "81.6", "%", condition="400-800 nm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "81.6", "%", condition="450-700 nm"), "mineru_p0_b9"),
     ]
 
     result = paired(fields, [])
 
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def test_without_a_row_sharing_condition_the_fields_preference_picks_the_cell():
+    # Zhao: 91.9 % averaged over 400-800 nm and 92.2 % at 550 nm, both lanes, no sentence shared with the row.
+    def lane(backend):
+        return [
+            _cited(value("transmittance", "92.2", "%", condition="at 550 nm"), f"{backend}_p4_b2"),
+            _cited(value("transmittance", "91.9", "%", condition="average from 400 to 800 nm"), f"{backend}_p4_b3"),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (91.9, "agree")
+    assert "优先条件 400-800" in row["detail"]
+    assert row["source_ids"] == "mineru_p4_b3; paddleocr_vl_p4_b3"
+
+
+def test_a_preference_matching_two_conditions_in_one_lane_moves_on_to_the_next():
+    # Both name 400 and 800; the tie is not settled by the first entry, so 550 decides.
+    fields = [
+        value("transmittance", "91.9", "%", condition="average 400-800 nm"),
+        value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
+        value("transmittance", "92.2", "%", condition="550 nm"),
+    ]
+
+    result = paired(fields, [])
+
+    assert result.paper_row["transmittance"] == 92.2
 
 
 def test_the_other_lanes_value_for_a_condition_set_aside_cannot_vouch_for_the_chosen_one():

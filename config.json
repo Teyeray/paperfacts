@@ -234,15 +234,10 @@
         "Ar flow",
         "gas ratio",
         "flow ratio",
-        "working pressure",
         "O2/Ar",
         "O2/(Ar+O2)",
         "H2/Ar",
-        "H2/(Ar+H2)",
-        "Pa",
-        "mTorr",
-        "mbar",
-        "Torr"
+        "H2/(Ar+H2)"
       ],
       "canonical_unit": "sccm",
       "rel_tol": 0.02,
@@ -263,15 +258,10 @@
         "O2 flow",
         "gas ratio",
         "flow ratio",
-        "working pressure",
         "O2/Ar",
         "O2/(Ar+O2)",
         "H2/Ar",
-        "H2/(Ar+H2)",
-        "Pa",
-        "mTorr",
-        "mbar",
-        "Torr"
+        "H2/(Ar+H2)"
       ],
       "canonical_unit": "sccm",
       "rel_tol": 0.02,
@@ -292,19 +282,84 @@
         "H2 flow",
         "gas ratio",
         "flow ratio",
-        "working pressure",
         "O2/Ar",
         "O2/(Ar+O2)",
         "H2/Ar",
+        "H2/(Ar+H2)"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "o2_ratio",
+      "label": "O2 比例",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Oxygen share of the sputtering gas as the paper states it, O2/(Ar+O2) or O2/Ar (%). Record which of the two in `condition`.",
+      "description_zh": "溅射气体中氧气的比例（%），O2/(Ar+O2) 或 O2/Ar，具体口径见条件。",
+      "keywords": [
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "oxygen ratio",
+        "oxygen content",
+        "oxygen partial pressure ratio",
+        "gas ratio",
+        "flow ratio",
+        "O2 concentration"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": "which ratio, e.g. 'O2/(Ar+O2)' or 'O2/Ar'",
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "h2_ratio",
+      "label": "H2 比例",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Hydrogen share of the sputtering gas as the paper states it, H2/(Ar+H2) or H2/Ar (%). Record which of the two in `condition`.",
+      "description_zh": "溅射气体中氢气的比例（%），H2/(Ar+H2) 或 H2/Ar，具体口径见条件。",
+      "keywords": [
+        "H2/Ar",
         "H2/(Ar+H2)",
+        "hydrogen ratio",
+        "hydrogen content",
+        "hydrogen volume",
+        "gas ratio",
+        "flow ratio",
+        "H2 concentration"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": "which ratio, e.g. 'H2/(Ar+H2)' or 'H2/Ar'",
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "working_pressure",
+      "label": "工作气压",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Working (sputtering) pressure in the chamber during deposition (Pa) -- not the base pressure reached before it.",
+      "description_zh": "沉积时腔体的工作气压（Pa），不是本底真空。",
+      "keywords": [
+        "working pressure",
+        "sputtering pressure",
+        "deposition pressure",
+        "process pressure",
+        "chamber pressure",
         "Pa",
         "mTorr",
         "mbar",
         "Torr"
       ],
-      "canonical_unit": "sccm",
+      "canonical_unit": "Pa",
       "rel_tol": 0.02,
-      "abs_tol": 0.2,
+      "abs_tol": 0.0,
       "condition_hint": null,
       "bare_number": "reject"
     },
@@ -497,7 +552,13 @@
       "bare_number": "percent_or_fraction",
       "valid_range": {
         "min": 60
-      }
+      },
+      "condition_preference": [
+        "400-800",
+        "380-780",
+        "400-700",
+        "550"
+      ]
     },
     {
       "name": "thickness",
@@ -519,7 +580,7 @@
       "condition_hint": null,
       "bare_number": "reject",
       "valid_range": {
-        "max": 500
+        "max": 5000
       }
     }
   ]

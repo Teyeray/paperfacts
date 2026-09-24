@@ -162,20 +162,20 @@ def _records(*, samples=(), unattributed=()) -> ExtractedRecords:
 
 
 def test_a_value_outside_its_range_is_dropped_with_the_reason():
-    # Shipped range: thickness at most 500 nm. A perovskite absorber's 600 nm is the observed confusion.
-    records = _records(samples=(make_sample("S1", [make_field("thickness", "600", unit_raw="nm")]),))
+    # Shipped range: thickness at most 5000 nm. A 280 µm wafer read as the film is the observed confusion.
+    records = _records(samples=(make_sample("S1", [make_field("thickness", "6000", unit_raw="nm")]),))
 
     kept = drop_implausible(records)
 
     assert kept.samples[0].fields == ()
     assert len(kept.dropped) == 1
-    assert "thickness" in kept.dropped[0] and "600" in kept.dropped[0] and "at most 500 nm" in kept.dropped[0]
+    assert "thickness" in kept.dropped[0] and "6000" in kept.dropped[0] and "at most 5000 nm" in kept.dropped[0]
 
 
 def test_the_range_is_judged_after_conversion_to_the_canonical_unit():
-    # "0.6" has digits well under 500, but in μm it is 600 nm.
-    inside = make_field("thickness", "0.3", unit_raw="μm")
-    outside = make_field("thickness", "0.6", unit_raw="μm")
+    # "0.006" has digits well under 5000, but in mm it is 6000 nm.
+    inside = make_field("thickness", "3", unit_raw="μm")
+    outside = make_field("thickness", "0.006", unit_raw="mm")
     records = _records(samples=(make_sample("S1", [inside, outside]),))
 
     assert drop_implausible(records).samples[0].fields == (inside,)
@@ -216,7 +216,7 @@ def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_
 def test_a_target_whose_every_field_is_dropped_keeps_its_citations():
     spec = FIELD_BY_NAME["thickness"]  # any ranged field will do; the target is judged like a sample
     records = ExtractedRecords(
-        target=TargetRecord(source_ids=("mineru_p0_b1",), fields=(make_field(spec.name, "900", unit_raw="nm"),)),
+        target=TargetRecord(source_ids=("mineru_p0_b1",), fields=(make_field(spec.name, "9", unit_raw="μm"),)),
         samples=(),
         invalid_source_ids=(),
         dropped=(),

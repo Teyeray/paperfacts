@@ -21,6 +21,7 @@ Keywords are matched as whole tokens, case-insensitively, after Unicode folding.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
@@ -30,6 +31,8 @@ from paperfacts.config import ConfigDocument, configuration
 from paperfacts.errors import ConfigError
 
 FieldGroup = Literal["target", "process", "film"]
+# A number as a measurement condition states it: "550", "400" and "800" in "average 400–800 nm".
+CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # numeric: a number with a unit; composition: a chemical formula; text: anything else
 FieldKind = Literal["numeric", "composition", "text"]
 # What a bare number with no unit means. Declared per field so normalisation never special-cases a name.
@@ -66,6 +69,11 @@ class FieldSpec:
     # substrate rotation, a perovskite layer's thickness read as the electrode's -- so the model is told the
     # range and a converted value outside it is dropped with an audited reason.
     valid_range: tuple[float | None, float | None] = (None, None)
+    # Which measurement fills the dataset cell when a sample has several, in order of preference: each entry
+    # names the numbers a condition states ("400-800" for an average over 400-800 nm, "550" for one
+    # wavelength). A verdict rule only -- the model is never told it -- so it is kept out of the schema
+    # fingerprint and hashed into comparison_key alone.
+    condition_preference: tuple[str, ...] = ()
 
     @property
     def is_sample_level(self) -> bool:
@@ -139,6 +147,14 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
             f"{where}: description_zh must be a non-empty string when present, got {entry.get('description_zh')!r}"
         )
 
+    preference = entry.get("condition_preference", [])
+    if not isinstance(preference, list) or not all(
+        isinstance(word, str) and CONDITION_NUMBER.search(word) for word in preference
+    ):
+        raise ConfigError(
+            f"{where}: condition_preference must be a list of strings each naming a number, like '400-800'"
+        )
+
     categories = entry.get("categories", [])
     if not isinstance(categories, list) or not all(isinstance(word, str) and word.strip() for word in categories):
         raise ConfigError(f"{where}: categories must be a list of non-empty strings")
@@ -160,6 +176,7 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         bare_number=choice("bare_number", get_args(BareNumberPolicy)) if "bare_number" in entry else "reject",  # type: ignore[arg-type]
         categories=tuple(categories),
         valid_range=_valid_range(entry, where),
+        condition_preference=tuple(preference),
     )
 
 

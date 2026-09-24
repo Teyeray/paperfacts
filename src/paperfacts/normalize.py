@@ -311,6 +311,15 @@ _FLOW = {"sccm": 1.0, "cm3/min": 1.0}
 _ROTATION = {"rpm": 1.0, "r/min": 1.0, "rev/min": 1.0}
 # Power prefixes are case-sensitive (mW ≠ MW), so the table's lowercasing cannot be used here.
 _POWER = re.compile(r"^(?P<p>[kKMmμn]?)[Ww]$")
+# Working pressure in Pa. "mPa" and "MPa" differ only in case, so those two are looked up as written and
+# everything else case-folded.
+_PRESSURE_EXACT = {"mPa": 1e-3, "MPa": 1e6}
+_PRESSURE = {"pa": 1.0, "hpa": 100.0, "kpa": 1e3, "mbar": 100.0, "bar": 1e5, "torr": 133.322, "mtorr": 0.133322}
+
+
+def _pressure(unit: str) -> float | None:
+    return _PRESSURE_EXACT.get(unit, _PRESSURE.get(unit.lower()) if unit.lower() != "mpa" else None)
+
 
 Converter = Callable[[str], float | None]
 
@@ -343,6 +352,7 @@ CONVERTERS: dict[str, Converter] = {
     "sccm": _by_table(_FLOW),
     "rpm": _by_table(_ROTATION),
     "W": _by_pattern(_POWER),
+    "Pa": _pressure,
 }
 
 # Fail at import time rather than with a KeyError buried in normalisation, field by field.

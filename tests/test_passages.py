@@ -399,3 +399,10 @@ def test_what_the_budget_drops_is_logged_by_source_id(caplog):
         fit_budget(prose, budget_chars=150)
 
     assert prose[2].source_id in caplog.text
+
+
+@pytest.mark.parametrize("written", ["0.5 Pa", "3 mTorr", "5×10-3 mbar", "0.4Pa"])
+def test_a_pressure_qualifies_a_block_for_the_working_pressure(written):
+    block = text(0, f"Deposition proceeded at {written} in argon.")
+
+    assert ids(candidate_blocks(FIELD_BY_NAME["working_pressure"], [block])) == [block.source_id]

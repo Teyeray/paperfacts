@@ -83,6 +83,7 @@ UNIT_PATTERNS: dict[str, re.Pattern[str]] = {
     "W": re.compile(r"\d\s*[km]?w\b"),
     "sccm": re.compile(r"\d\s*(?:sccm|slm)\b"),
     "rpm": re.compile(r"\d\s*(?:rpm|r/min)\b"),
+    "Pa": re.compile(r"\d\s*(?:[mkh]?pa|m?torr|m?bar)\b"),
 }
 
 # A deposition condition stated as a number with its unit. This is what distinguishes one sample from

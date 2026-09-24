@@ -46,7 +46,7 @@ _PACKAGE_DIR = Path(__file__).parent
 # Cells that change a verdict or retrieval but never what the model is asked; each has its own fingerprint.
 # ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
 # verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
-_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh"}
+_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh", "condition_preference"}
 # Cells added after stored results existed: left out of the material while at their default, so a field that
 # does not use one keeps the fingerprint it had before the cell was introduced.
 _SCHEMA_OMITTED_AT_DEFAULT = {"valid_range": (None, None)}
@@ -93,6 +93,13 @@ def category_fingerprint() -> str:
     """The closed answer sets of text fields, empty for a table that declares none -- so a checkout without
     any keeps the comparison keys it already has."""
     table = {spec.name: list(spec.categories) for spec in FIELD_SPECS if spec.categories}
+    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+
+
+@cache
+def preference_fingerprint() -> str:
+    """The condition preferences that pick a dataset cell among several measurements; a verdict rule."""
+    table = {spec.name: list(spec.condition_preference) for spec in FIELD_SPECS if spec.condition_preference}
     return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
 
 
@@ -227,6 +234,8 @@ def comparison_key() -> str:
     # the concept existed, the same way every other baseline stays out of the material.
     if any(spec.categories for spec in FIELD_SPECS):
         material["categories"] = category_fingerprint()
+    if any(spec.condition_preference for spec in FIELD_SPECS):
+        material["condition_preference"] = preference_fingerprint()
     return content_fingerprint(
         json.dumps(
             material,

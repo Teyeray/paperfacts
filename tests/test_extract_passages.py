@@ -21,6 +21,7 @@ import pytest
 
 from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
+from paperfacts.fields import FIELD_SPECS
 from paperfacts.keys import extractor_key
 from paperfacts.prompts import field_system_prompt, inventory_system_prompt
 from support.extraction import make_artifact
@@ -147,8 +148,9 @@ def test_a_field_no_block_mentions_is_never_asked_about_and_the_lane_says_why():
 
     assert any("thickness: no block in this lane mentions it" in entry for entry in lane.dropped)
     assert not any(entry.startswith(f"{ASKED_FIELD}: no block") for entry in lane.dropped)
-    # Sixteen of the twenty fields go unasked, which is why only four field calls were made.
-    assert sum(1 for entry in lane.dropped if "was not asked about" in entry) == 16
+    # All but the four asked fields go unasked, which is why only four field calls were made.
+    unasked = len(FIELD_SPECS) - len(ASKED_FIELDS)
+    assert sum(1 for entry in lane.dropped if "was not asked about" in entry) == unasked
 
 
 def test_both_lanes_get_a_byte_identical_inventory_question():
