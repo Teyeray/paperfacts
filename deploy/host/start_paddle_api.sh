@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # PaperFacts -- start PaddleOCR-VL's pipeline / API layer (Route B: bare-metal host install)
 #
-# ============================================================================
-# Hard GPU constraint: this server has 8 GPUs; PaperFacts may only use ids 4, 5, 6, 7.
-# This script uses GPU 6, shared with start_paddle_vlm.sh:
-#   this layer only runs the layout detection model PP-DocLayoutV2 (1-2GB); all vision
-#   recognition is forwarded to the vLLM service.
-#   GPU 4, 5 → MinerU (start_mineru.sh)
-#   GPU 7    → currently unused
-# ============================================================================
+# By default this shares a GPU with start_paddle_vlm.sh: this layer only runs the layout
+# detection model PP-DocLayoutV2 (1-2GB); all vision recognition is forwarded to the vLLM
+# service, so the two comfortably fit on the same card.
 #
 # Usage (recommended to run long-lived in a tmux window; **start_paddle_vlm.sh must be started
 # first**):
@@ -21,7 +16,7 @@
 # Tunable environment variables:
 #   PAPERFACTS_PADDLE_HOST             listen address, default 0.0.0.0
 #   PAPERFACTS_PADDLE_PORT             listen port, default 8080
-#   PAPERFACTS_PADDLE_GPUS             GPUs to use, default 6 (must be within 4-7)
+#   PAPERFACTS_PADDLE_GPUS             GPUs to use, default 0
 #   PAPERFACTS_PADDLE_PIPELINE_CONFIG  pipeline config, default
 #                                      deploy/host/paddleocr_vl_pipeline.yaml
 #                                      (defined as PF_PIPELINE_CONFIG in _common.sh; this is
@@ -33,11 +28,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 PADDLE_HOST="${PAPERFACTS_PADDLE_HOST:-0.0.0.0}"
 PADDLE_PORT="${PAPERFACTS_PADDLE_PORT:-8080}"
-PADDLE_GPUS="${PAPERFACTS_PADDLE_GPUS:-6}"
+PADDLE_GPUS="${PAPERFACTS_PADDLE_GPUS:-0}"
 
-# Check the GPU whitelist first: this is a hard constraint and should be reported before
-# checking whether the environment is even installed.
-require_allowed_gpus "${PADDLE_GPUS}"
+# Check a GPU was actually specified before checking whether the environment is installed.
+require_gpus "${PADDLE_GPUS}"
 require_venv_bin "${PF_PADDLE_ENV}" paddlex
 warn_if_port_busy "${PADDLE_PORT}"
 

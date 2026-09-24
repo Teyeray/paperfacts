@@ -15,15 +15,13 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 
+from paperfacts.continuation import continuation_pairs
 from paperfacts.models import SourceBlock
-from paperfacts.normalize import KEY_CHARACTERS, delatex, normalize_text
+from paperfacts.normalize import KEY_CHARACTERS, LATEX_WRAPPERS, delatex, normalize_text
 from paperfacts.records import FieldValue, LaneExtraction
 
 # LaTeX expands to " x ", Unicode papers use "×"; fold both so the two spellings compare equal.
 _MULTIPLICATION = re.compile(r"[×✕✖⋅·]")
-# Formatting commands that survive delatex and would otherwise split a chemical formula: a table cell
-# holding "$\mathrm { S n O } _ { 2 } : \mathrm { S b } _ { 2 }$" has to match a quoted "SnO2:Sb2O3".
-_LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
 
 
 # Decoration collapses to a single space rather than vanishing. `normalize_key` deletes it, which is right
@@ -34,7 +32,7 @@ _DECORATION = re.compile(f"[^{KEY_CHARACTERS}]+")
 
 def grounding_key(text: str) -> str:
     """Reduce text to the form used for the containment test: no LaTeX, no case, no decoration."""
-    folded = _LATEX_WRAPPERS.sub(" ", delatex(normalize_text(text)))
+    folded = LATEX_WRAPPERS.sub(" ", delatex(normalize_text(text)))
     folded = _MULTIPLICATION.sub("x", folded).lower().replace("ω", "Ω")
     return _DECORATION.sub(" ", folded).strip()
 
@@ -45,19 +43,24 @@ _MIN_SQUEEZED_LENGTH = 4
 def block_adjacency(blocks: Sequence[SourceBlock]) -> dict[str, tuple[str | None, str | None]]:
     """Map each block's source_id to ``(previous_id, next_id)`` within the given sequence.
 
-    A neighbour is the adjacent entry in reading order *on the same page* -- a sentence broken by a page
-    break is not a sentence split across two adjacent blocks, but two blocks from two different regions
-    of the document, and joining them would manufacture text that appears nowhere in the PDF.
+    A neighbour is the adjacent entry in reading order *on the same page*, or the other half of a sentence
+    :func:`paperfacts.continuation.continuation_pairs` found cut by a page or column break. Any other pair
+    of blocks across a page break comes from two different regions of the document, and joining them would
+    manufacture text that appears nowhere in the PDF. A linked half's partner replaces its reading-order
+    neighbour on that side, so a formula between the two halves is no longer tried as the neighbour.
     """
-    adjacency: dict[str, tuple[str | None, str | None]] = {}
+    adjacency: dict[str, list[str | None]] = {}
     for index, block in enumerate(blocks):
         previous = blocks[index - 1] if index > 0 and blocks[index - 1].page == block.page else None
         nxt = blocks[index + 1] if index + 1 < len(blocks) and blocks[index + 1].page == block.page else None
-        adjacency[block.source_id] = (
+        adjacency[block.source_id] = [
             previous.source_id if previous is not None else None,
             nxt.source_id if nxt is not None else None,
-        )
-    return adjacency
+        ]
+    for first, second in continuation_pairs(blocks):
+        adjacency[blocks[first].source_id][1] = blocks[second].source_id
+        adjacency[blocks[second].source_id][0] = blocks[first].source_id
+    return {source_id: (previous, nxt) for source_id, (previous, nxt) in adjacency.items()}
 
 
 def is_grounded(

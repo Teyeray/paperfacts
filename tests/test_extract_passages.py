@@ -21,6 +21,7 @@ import pytest
 
 from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
+from paperfacts.fields import FIELD_SPECS
 from paperfacts.keys import extractor_key
 from paperfacts.prompts import field_system_prompt, inventory_system_prompt
 from support.extraction import make_artifact
@@ -147,8 +148,9 @@ def test_a_field_no_block_mentions_is_never_asked_about_and_the_lane_says_why():
 
     assert any("thickness: no block in this lane mentions it" in entry for entry in lane.dropped)
     assert not any(entry.startswith(f"{ASKED_FIELD}: no block") for entry in lane.dropped)
-    # Sixteen of the twenty fields go unasked, which is why only four field calls were made.
-    assert sum(1 for entry in lane.dropped if "was not asked about" in entry) == 16
+    # All but the four asked fields go unasked, which is why only four field calls were made.
+    unasked = len(FIELD_SPECS) - len(ASKED_FIELDS)
+    assert sum(1 for entry in lane.dropped if "was not asked about" in entry) == unasked
 
 
 def test_both_lanes_get_a_byte_identical_inventory_question():
@@ -302,6 +304,29 @@ def test_a_value_naming_no_sample_goes_to_the_only_sample_of_a_single_sample_pap
     assert len(lane.samples) == 1
     assert [field.value_raw for field in lane.samples[0].fields] == ["12.5"]
     assert lane.unattributed == ()
+
+
+def test_a_paper_depositing_no_tco_film_is_asked_only_paper_level_fields():
+    # A device paper on purchased ITO glass: its sample-level answers could only be some other layer's.
+    client = FakeLlmClient(responder(inventory=json.dumps({"samples": [], "no_tco_film": True})))
+
+    lane = extract(client)
+
+    assert client.call_count == 1
+    assert lane.samples == () and lane.unattributed == ()
+    assert any(entry.startswith(f"{ASKED_FIELD}: the paper deposits no TCO film") for entry in lane.dropped)
+
+
+def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
+    # The inventory may simply have missed the sample text; that must not cost the lane its values.
+    client = FakeLlmClient(
+        responder(inventory=inventory_json([]), sheet_resistance=values_json({"sample_id": None, "value_raw": "12.5"}))
+    )
+
+    lane = extract(client)
+
+    assert client.call_count == 5
+    assert [field.value_raw for field in lane.unattributed] == ["12.5"]
 
 
 def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattributed():

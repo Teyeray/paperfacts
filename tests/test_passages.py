@@ -12,6 +12,7 @@ import logging
 
 import pytest
 
+from paperfacts.continuation import continuation_pairs
 from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.models import SourceBlock
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
@@ -110,10 +111,114 @@ def test_a_block_with_neither_a_name_nor_a_unit_is_not_a_candidate():
 # ---- Ranking, the limit, and neighbours -------------------------------------------------------------
 
 
-def test_the_limit_caps_how_many_scored_blocks_are_chosen():
+def test_every_block_naming_the_field_is_chosen_whatever_the_limit():
+    # Ranking named blocks against each other cut the later pages, where the results are.
     blocks = [text(order, f"The sheet resistance was {order + 1}.2 per square.") for order in range(5)]
 
-    assert len(candidate_blocks(SHEET_RESISTANCE, blocks, limit=2)) == 2
+    assert len(candidate_blocks(SHEET_RESISTANCE, blocks, limit=2)) == 5
+
+
+def test_blocks_matching_only_a_unit_fill_the_places_the_named_ones_left():
+    named = text(0, "The sheet resistance was 12 per square.")
+    by_unit = [text(order, f"Sample {order} measured {order}0 Ω/sq.") for order in range(1, 5)]
+
+    chosen = candidate_blocks(SHEET_RESISTANCE, [named, *by_unit], limit=3)
+
+    assert ids(chosen) == ids([named, *by_unit[:2]])
+
+
+def test_a_keyword_matches_a_spelling_that_lost_one_of_a_doubled_letter():
+    # MinerU writes "transmitance" on some papers; the other lane has "transmittance".
+    block = text(0, "The average transmitance of the film was 88.6%.")
+
+    assert ids(candidate_blocks(TRANSMITTANCE, [block])) == [block.source_id]
+
+
+def test_a_unit_written_in_latex_is_recognised():
+    block = text(0, r"The value reached $5.1 \times 10^{-4}\ \Omega\cdot\text{cm}$ at 300 C.")
+
+    assert ids(candidate_blocks(FIELD_BY_NAME["resistivity"], [block])) == [block.source_id]
+
+
+@pytest.mark.parametrize("written", ["300 $^{\\circ}$C", "300 $^\\circ$C", "300 °C"])
+def test_a_temperature_written_in_latex_qualifies_a_block(written):
+    block = text(0, f"The films were annealed at {written}.")
+
+    assert ids(candidate_blocks(FIELD_BY_NAME["annealing_temperature"], [block])) == [block.source_id]
+
+
+@pytest.mark.parametrize("written", ["60 W", "0.2 kW", "150W"])
+def test_a_power_in_watts_qualifies_a_block_for_sputtering_power(written):
+    block = text(0, f"The films were grown at {written} for 30 min.")
+
+    assert ids(candidate_blocks(FIELD_BY_NAME["sputtering_power"], [block])) == [block.source_id]
+
+
+# ---- Paragraphs cut by a page or column break -----------------------------------------------------------
+
+
+def test_a_sentence_cut_by_a_page_break_is_linked_across_the_page_furniture():
+    before = text(9, "The hydrogen volume was 0.6% and the", page=4)
+    furniture = [
+        make_block(page=4, order=10, type="caption", content="Fig. 3. XRD patterns."),
+        make_block(page=5, order=0, type="figure", content="images/fig3.jpg"),
+    ]
+    after = text(1, "films showed a transmittance of 92.1%.", page=5)
+
+    assert continuation_pairs([before, *furniture, after]) == [(0, 3)]
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param("The films were annealed.", "then they were cooled.", id="sentence-finished"),
+        pytest.param("The films were annealed and", "The next section describes", id="capital-start"),
+        pytest.param("as shown in", "(a) the XRD pattern", id="sub-figure-label"),
+        pytest.param("the results are", "3 Results and discussion", id="numbered-heading"),
+    ],
+)
+def test_a_block_that_starts_something_new_is_not_a_continuation(before, after):
+    assert continuation_pairs([text(0, before, page=0), text(0, after, page=1)]) == []
+
+
+@pytest.mark.parametrize("start", ["95% SnO2", "$5.1 \\times 10^{-4}$", "(Ar 20 sccm)", "were annealed"])
+def test_a_continuation_may_start_with_a_number_formula_or_parenthesis(start):
+    assert continuation_pairs([text(0, "composed of", page=0), text(0, start, page=1)]) == [(0, 1)]
+
+
+def test_a_title_between_two_blocks_breaks_the_link():
+    blocks = [
+        text(0, "the films were", page=0),
+        make_block(page=1, order=0, type="title", content="Results"),
+        text(1, "annealed", page=1),
+    ]
+
+    assert continuation_pairs(blocks) == []
+
+
+def test_a_footnote_between_the_halves_is_skipped_and_never_linked_itself():
+    before = text(9, "The hydrogen volume was 0.6% and the", page=4)
+    footnote = SourceBlock.model_validate(
+        make_block(page=4, order=10, content="* corresponding author").model_dump() | {"raw_label": "page_footnote"}
+    )
+    after = text(0, "films were annealed.", page=5)
+
+    assert continuation_pairs([before, footnote, after]) == [(0, 2)]
+
+
+def test_the_other_half_of_a_chosen_block_comes_along_beyond_the_limit():
+    naming = text(9, "The sample deposited with 0.6% hydrogen", page=4)
+    value = text(0, "reached a sheet resistance of 12 Ω/sq.", page=5)
+    unrelated = text(1, "Unrelated remarks.", page=5)
+
+    assert ids(candidate_blocks(SHEET_RESISTANCE, [naming, value, unrelated], limit=1)) == ids([naming, value])
+
+
+def test_the_inventory_brings_the_other_half_of_a_block_it_chose():
+    naming = text(9, "The films deposited at 150 W with the", page=4)
+    rest = text(0, "hydrogen mixture are named ICO-H.", page=5)
+
+    assert ids(inventory_blocks([naming, rest])) == ids([naming, rest])
 
 
 def test_a_table_next_to_a_chosen_block_comes_along_beyond_the_limit():
@@ -294,3 +399,31 @@ def test_what_the_budget_drops_is_logged_by_source_id(caplog):
         fit_budget(prose, budget_chars=150)
 
     assert prose[2].source_id in caplog.text
+
+
+@pytest.mark.parametrize("written", ["0.5 Pa", "3 mTorr", "5×10-3 mbar", "0.4Pa"])
+def test_a_pressure_qualifies_a_block_for_the_working_pressure(written):
+    block = text(0, f"Deposition proceeded at {written} in argon.")
+
+    assert ids(candidate_blocks(FIELD_BY_NAME["working_pressure"], [block])) == [block.source_id]
+
+
+def test_a_block_the_inventory_cited_for_the_samples_is_asked_about_every_sample_level_field():
+    # "The substrate to target distance is 69 mm" matches no keyword of the field and only a weak unit.
+    recipe = text(3, "The substrate to target distance is 69 mm and the films are 240 nm thick.")
+    others = [text(order, f"Earlier remark number {order} at 5 mm.") for order in range(3)]
+
+    chosen = candidate_blocks(
+        FIELD_BY_NAME["target_substrate_distance"],
+        [*others, recipe],
+        limit=1,
+        sample_blocks=frozenset({recipe.source_id}),
+    )
+
+    assert recipe.source_id in ids(chosen)
+
+
+def test_a_cited_block_without_a_number_is_not_added_to_a_numeric_question():
+    recipe = text(0, "The films were sputtered from an ITO target.")
+
+    assert candidate_blocks(THICKNESS, [recipe], sample_blocks=frozenset({recipe.source_id})) == []

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -23,7 +23,14 @@ from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport, FieldComparison
-from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_SPECS, SAMPLE_FIELDS, TARGET_FIELDS, FieldSpec
+from paperfacts.fields import (
+    AMBIGUOUS_MATCH_CONFIDENCE,
+    CONDITION_NUMBER,
+    FIELD_SPECS,
+    SAMPLE_FIELDS,
+    TARGET_FIELDS,
+    FieldSpec,
+)
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.normalize import (
     clean_unit,
@@ -44,6 +51,10 @@ Row = Mapping[str, CellValue]
 _NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
 _ATOM = rf"(?:{_NUMBER}\s*x\s*10\s*\^?\s*[-+]?\d+|10\s*\^\s*[-+]?\d+|{_NUMBER}(?:[eE][-+]?\d+)?)"
 _SCALAR = re.compile(rf"^(?P<center>{_ATOM})(?:\s*(?:±|\+/-|\+-|\\pm)\s*(?P<uncertainty>{_ATOM}))?(?P<tail>.*)$")
+# "100 nm (± 5 nm)": the uncertainty in parentheses after the unit, read as "100 ± 5 nm" when both units agree.
+_PARENTHESISED_UNCERTAINTY = re.compile(
+    rf"^(?P<center>{_ATOM})\s*(?P<unit>[^\d\s(±][^(±]*?)?\s*\(\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_ATOM})\s*(?P<again>[^)]*)\)$"
+)
 # The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
 _APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -214,6 +225,11 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     approx = _APPROX.match(text)
     if approx:
         text = text[approx.end() :].strip()
+    parenthesised = _PARENTHESISED_UNCERTAINTY.fullmatch(text)
+    if parenthesised:
+        center, unit, uncertainty, again = parenthesised.group("center", "unit", "uncertainty", "again")
+        if clean_unit(unit or "") == clean_unit(again):
+            text = f"{center} ± {uncertainty} {unit or ''}"
     match = _SCALAR.fullmatch(text)
     if match is None:
         return None, "不是唯一精确标量（含上下界、区间、尺寸组合或无法解析的文字）"
@@ -246,6 +262,13 @@ def _same_value(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
     if spec.categories:
         return text_key(spec, a) == text_key(spec, b)
     return normalize_text(a) == normalize_text(b)
+
+
+def _within_tolerance(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+    """Whether two candidate cells agree the way compare.py judges agreement: within the field's tolerance."""
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(a, b, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
+    return _same_value(a, b, spec)
 
 
 def _matching_blocked(scope: _Scope | None) -> str | None:
@@ -291,12 +314,67 @@ def _commit(
     )
 
 
+def _one_condition(
+    spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]], row_sources: frozenset[str]
+) -> tuple[list[tuple[Backend, FieldValue]], str] | None:
+    """Of a sample's several measurements, the one the cell should state, with the reason; or None.
+
+    Tried in order, the first that settles it wins:
+
+    1. The condition stated in a block the rest of the row also cites. "Resistivity of 5.74e-4 Ω·cm and a
+       transmittance of 83.5 % (400-1800 nm)" ties one of several transmittances to the rest of its row;
+       that is the one a reader expects in the cell.
+    2. The field's ``condition_preference``, entry by entry: a condition matches an entry when it names
+       exactly the entry's numbers, so "average 400–800 nm" and "from 400 to 800 nm" both match "400-800".
+
+    Once a rule chooses, every lane is held to it: a lane keeps only its values the rule picks, so a lane
+    quoting a different condition cannot vouch for the one chosen. A rule that picks two conditions in one
+    lane, or nothing in any, settles nothing and the next is tried.
+    """
+    rules: list[tuple[str, Callable[[FieldValue], bool]]] = [
+        ("采用与本行其他字段引用同一原文块的条件", lambda value: bool(row_sources.intersection(value.source_ids)))
+    ]
+    for entry in spec.condition_preference:
+        numbers = _condition_numbers(entry)
+        rules.append(
+            (
+                f"按字段配置的优先条件 {entry} 选取",
+                lambda value, numbers=numbers: _condition_numbers(value.condition) == numbers,
+            )
+        )
+    for reason, picks in rules:
+        kept = _held_to(trusted, picks)
+        if kept:
+            return kept, reason
+    return None
+
+
+def _condition_numbers(condition: str | None) -> tuple[float, ...]:
+    return tuple(float(number) for number in CONDITION_NUMBER.findall(delatex(normalize_text(condition or ""))))
+
+
+def _held_to(
+    trusted: Sequence[tuple[Backend, FieldValue]], picks: Callable[[FieldValue], bool]
+) -> list[tuple[Backend, FieldValue]] | None:
+    kept: list[tuple[Backend, FieldValue]] = []
+    for backend in BACKENDS:
+        groups: dict[str, list[FieldValue]] = {}
+        for lane, value in trusted:
+            if lane == backend and picks(value):
+                groups.setdefault(normalize_key(value.condition), []).append(value)
+        if len(groups) > 1:
+            return None
+        kept += [(backend, value) for values in groups.values() for value in values]
+    return kept or None
+
+
 def _decide(
     spec: FieldSpec,
     evidence: Sequence[tuple[Backend, FieldValue]],
     comparisons: Sequence[FieldComparison],
     *,
     scope: _Scope | None = None,
+    row_sources: frozenset[str] = frozenset(),
 ) -> _Decision:
     conditions = _joined([value.condition or "" for _, value in evidence])
     sources = _joined(sorted({source for _, value in evidence for source in value.source_ids}))
@@ -327,10 +405,18 @@ def _decide(
     # "after deposition"), so only a lane disagreeing with itself is evidence of several measurements.
     # The key is normalize_key, the same one compare.py and extract.py judge conditions by, so a
     # condition the comparison report called one thing is never two here.
-    if any(
+    narrowed = any(
         len({normalize_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
-    ):
-        return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
+    )
+    if narrowed:
+        chosen_condition = _one_condition(spec, trusted, row_sources)
+        if chosen_condition is None:
+            return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
+        # The cell now states one of several measurements, so it names only that one's condition and blocks.
+        trusted, reason = chosen_condition
+        conditions = _joined([value.condition or "" for _, value in trusted])
+        sources = _joined(sorted({source for _, value in trusted for source in value.source_ids}))
+        details.append(f"该样品有多种测量条件；{reason}")
     parsed: list[tuple[Backend, FieldValue, CellValue]] = []
     for backend, value in trusted:
         scalar, note = _scalar(value, spec)
@@ -346,7 +432,14 @@ def _decide(
         if same_lane and any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
     chosen = min(parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw))
-    agreed = any(c.status == "agree" for c in comparisons) and len({backend for backend, _, _ in parsed}) == 2
+    # Agreement is two lanes vouching for the very value committed. The comparison's "agree" can be about a
+    # value this cell no longer holds -- a condition set aside by narrowing, or a lane's value that failed
+    # grounding and was left out of `trusted` -- so the remaining values have to match as well.
+    agreed = (
+        len({backend for backend, _, _ in parsed}) == 2
+        and all(_within_tolerance(chosen[2], scalar, spec) for _, _, scalar in parsed)
+        and (narrowed or any(c.status == "agree" for c in comparisons))
+    )
     if not agreed and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
     return _commit(spec, chosen, parsed, agreed=agreed, conditions=conditions, sources=sources, details=details)
@@ -451,7 +544,21 @@ def consolidate_document(
                 for field in sample.fields
                 if field.field == spec.name
             ]
-            decision = _decide(spec, evidence, [c for c in scope_comparisons if c.field == spec.name], scope=scope)
+            row_sources = frozenset(
+                source
+                for sample in (scope.a, scope.b)
+                if sample is not None
+                for field in sample.fields
+                if field.field != spec.name and field.grounded
+                for source in field.source_ids
+            )
+            decision = _decide(
+                spec,
+                evidence,
+                [c for c in scope_comparisons if c.field == spec.name],
+                scope=scope,
+                row_sources=row_sources,
+            )
             decisions[spec.name] = decision
             record(scope.sample_id, spec, decision)
         samples = [sample for sample in (scope.a, scope.b) if sample is not None]

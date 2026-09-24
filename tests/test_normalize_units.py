@@ -53,7 +53,23 @@ def test_prefix_case_distinguishes_milli_from_mega():
 # ---- Resistivity Ω·cm -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("unit", ["Ω·cm", "Ω cm", "ohm cm", "Ω.cm", "Ωcm", "Ωxcm", "Ω-cm", "ohm-cm"])
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "Ω·cm",
+        "Ω cm",
+        "ohm cm",
+        "Ω.cm",
+        "Ωcm",
+        "Ωxcm",
+        "Ω-cm",
+        "ohm-cm",
+        "Ω•cm",
+        "Ω∙cm",
+        # MinerU's LaTeX, formatting commands and all.
+        "\\Omega { \\cdot } \\mathrm { c m }",
+    ],
+)
 def test_every_spelling_of_ohm_centimetre_is_the_canonical_unit_itself(unit):
     assert convert("resistance", 0.3, unit) == (0.3, "Ω·cm", None)
 
@@ -206,11 +222,11 @@ def test_the_assume_canonical_policy_takes_the_number_at_face_value():
 
 
 def test_the_bare_number_policy_comes_from_the_field_table_not_from_the_field_name():
-    # Only the two fields with canonical_unit == "%" use percent_or_fraction; the policy lives on
-    # FieldSpec, not on the field name.
+    # Only the fields with canonical_unit == "%" use percent_or_fraction; the policy lives on FieldSpec,
+    # not on the field name.
     percent_fields = {spec.name for spec in FIELD_BY_NAME.values() if spec.bare_number == "percent_or_fraction"}
 
-    assert percent_fields == {"transmittance", "density"}
+    assert percent_fields == {"transmittance", "density", "o2_ratio", "h2_ratio"}
 
 
 # ---- Unrecognized units ----------------------------------------------------------------
@@ -398,3 +414,17 @@ def test_a_leading_number_without_a_caret_or_x10_is_not_a_factor(unit):
     # "10mm" is a length someone wrote into the unit column, not a scale factor; reading it as 10^10 would
     # be catastrophic and silent.
     assert split_scale_factor(unit) == (1.0, "10mm")
+
+
+# ---- Working pressure Pa ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("unit", "factor"),
+    [("Pa", 1.0), ("kPa", 1e3), ("mPa", 1e-3), ("MPa", 1e6), ("mbar", 100.0), ("Torr", 133.322), ("mTorr", 0.133322)],
+)
+def test_a_working_pressure_converts_to_pascal_with_milli_and_mega_kept_apart(unit, factor):
+    value, canonical, note = convert("working_pressure", 2.0, unit)
+
+    assert (canonical, note) == ("Pa", None)
+    assert value == pytest.approx(2.0 * factor)

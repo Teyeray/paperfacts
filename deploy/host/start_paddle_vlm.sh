@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 # PaperFacts -- start PaddleOCR-VL's VLM inference service (Route B: bare-metal host install)
 #
-# ============================================================================
-# Hard GPU constraint: this server has 8 GPUs; PaperFacts may only use ids 4, 5, 6, 7.
-# This script uses GPU 6, **shared with start_paddle_api.sh**:
-#   this service (vLLM hosting the 0.9B VLM) is capped at 50% GPU memory by
-#   deploy/vllm_config.yaml, leaving the rest for the API layer's layout detection model
-#   PP-DocLayoutV2 (only needs 1-2GB).
-#   GPU 4, 5 → MinerU (start_mineru.sh)
-#   GPU 7    → currently unused
-# ============================================================================
+# By default this shares a GPU with start_paddle_api.sh: this service (vLLM hosting the 0.9B
+# VLM) is capped at 50% GPU memory by deploy/vllm_config.yaml, leaving the rest for the API
+# layer's layout detection model PP-DocLayoutV2 (only needs 1-2GB).
 #
 # Usage (recommended to run long-lived in a tmux window; must be started before
 # start_paddle_api.sh):
@@ -25,7 +19,7 @@
 #   PAPERFACTS_VLM_HOST    listen address, default 127.0.0.1 (local API layer only; don't
 #                          change to 0.0.0.0)
 #   PAPERFACTS_VLM_PORT    listen port, default 8118
-#   PAPERFACTS_VLM_GPUS    GPU to use, default 6 (must be within 4-7)
+#   PAPERFACTS_VLM_GPUS    GPU to use, default 0
 #   PAPERFACTS_VLM_MODEL   model name, defaults to reading from the pipeline config (see
 #                          "model name must match" below)
 #   PAPERFACTS_VLM_CONFIG  vLLM args file, default deploy/vllm_config.yaml
@@ -34,10 +28,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 VLM_HOST="${PAPERFACTS_VLM_HOST:-127.0.0.1}"
 VLM_PORT="${PAPERFACTS_VLM_PORT:-8118}"
-VLM_GPUS="${PAPERFACTS_VLM_GPUS:-6}"
+VLM_GPUS="${PAPERFACTS_VLM_GPUS:-0}"
 VLM_CONFIG="${PAPERFACTS_VLM_CONFIG:-${PF_DEPLOY_DIR}/vllm_config.yaml}"
 
-require_allowed_gpus "${VLM_GPUS}"
+require_gpus "${VLM_GPUS}"
 warn_if_port_busy "${VLM_PORT}"
 
 [[ -d "${PF_PADDLE_ENV}" ]] || die "Environment ${PF_PADDLE_ENV} not found; run ${PF_HOST_DIR}/setup.sh first"

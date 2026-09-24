@@ -21,7 +21,7 @@ from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
 from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
-from paperfacts.extract import build_extraction_document, extract_lane
+from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.llm import LlmClient, OpenAICompatibleClient
@@ -235,7 +235,12 @@ def read_lane(
     if artifact is None and artifact_path.is_file():
         artifact = ParsedArtifact.read(artifact_path)
     if artifact is not None:
-        lane = ground_lane(lane, build_extraction_document(artifact).blocks, adjacency=block_adjacency(artifact.blocks))
+        # The same blocks, and so the same neighbours, extraction grounded against: adjacency over every block
+        # would put page furniture between two halves of a sentence.
+        blocks = informative_blocks(artifact.blocks)
+        lane = ground_lane(
+            lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks)
+        )
     return normalize_lane(lane)
 
 

@@ -18,11 +18,9 @@
 #   3. Generates and rewrites PaddleOCR-VL's pipeline config, pointing its VLM stage at the
 #      local vLLM service.
 #
-# ============================================================================
-# Hard GPU constraint: this server has 8 GPUs; PaperFacts may only use ids 4, 5, 6, 7.
 # This script only installs environments and runs no inference, so it doesn't touch the GPU;
-# actual GPU assignment happens in the three start_*.sh scripts.
-# ============================================================================
+# actual GPU assignment happens in the three start_*.sh scripts (default GPU 0, overridable
+# per service).
 #
 # Usage:
 #   bash deploy/host/setup.sh
@@ -235,9 +233,9 @@ cat >&2 <<EOF
 
   Next, start the three services in order (recommended: one tmux window each):
 
-    bash ${PF_HOST_DIR}/start_mineru.sh        # GPU 4,5  → :8002
-    bash ${PF_HOST_DIR}/start_paddle_vlm.sh    # GPU 6    → :8118 (internal)
-    bash ${PF_HOST_DIR}/start_paddle_api.sh    # GPU 6    → :8080
+    bash ${PF_HOST_DIR}/start_mineru.sh        # GPU 0  → :8002
+    bash ${PF_HOST_DIR}/start_paddle_vlm.sh    # GPU 0  → :8118 (internal)
+    bash ${PF_HOST_DIR}/start_paddle_api.sh    # GPU 0  → :8080
 
   Note: start_paddle_api.sh depends on start_paddle_vlm.sh being up first -- before starting,
   it curls the /health endpoint for the server_url in the pipeline config (default

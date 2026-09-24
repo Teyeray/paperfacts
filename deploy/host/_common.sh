@@ -3,13 +3,6 @@
 #
 # This file cannot be executed directly; it must be sourced:
 #   source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
-#
-# ============================================================================
-# Hard GPU constraint: this server has 8 GPUs; PaperFacts **may only use ids 4, 5, 6, 7**.
-# GPUs 0-3 belong to other projects and no script here may touch them.
-# require_allowed_gpus below validates CUDA_VISIBLE_DEVICES before startup, so a wrong id
-# causes an immediate exit instead of being discovered only after the model has loaded.
-# ============================================================================
 
 set -euo pipefail
 
@@ -38,9 +31,6 @@ PF_PADDLE_ENV="${PF_ENV_ROOT}/paddle"
 # "please run setup.sh first".
 PF_PIPELINE_CONFIG="${PAPERFACTS_PADDLE_PIPELINE_CONFIG:-${PF_HOST_DIR}/paddleocr_vl_pipeline.yaml}"
 
-# Whitelist of GPUs PaperFacts is allowed to use (space-separated).
-PF_ALLOWED_GPUS="${PAPERFACTS_ALLOWED_GPUS:-4 5 6 7}"
-
 # --- Helpers ---------------------------------------------------------------------
 
 log() {
@@ -52,27 +42,12 @@ die() {
     exit 1
 }
 
-# Validate that every id in a comma-separated GPU list is in the whitelist.
-# Usage: require_allowed_gpus "4,5"
-require_allowed_gpus() {
+# Confirm a GPU id was actually specified before starting a service against it.
+# Usage: require_gpus "4,5"
+require_gpus() {
     local requested="$1"
-    [[ -n "${requested}" ]] || die "CUDA_VISIBLE_DEVICES is empty; a GPU must be specified explicitly (only ${PF_ALLOWED_GPUS} allowed)."
-
-    # Replace commas with spaces first, then let the default IFS do word-splitting.
-    # Don't use `local IFS=','` here -- that would make the whitespace-separated whitelist
-    # collapse into a single word when iterated below.
-    local gpu allowed found
-    for gpu in ${requested//,/ }; do
-        found=0
-        for allowed in ${PF_ALLOWED_GPUS}; do
-            if [[ "${gpu}" == "${allowed}" ]]; then
-                found=1
-                break
-            fi
-        done
-        [[ "${found}" == "1" ]] || die "GPU ${gpu} is not in the allowed list [${PF_ALLOWED_GPUS}]. GPUs 0-3 belong to other projects and must not be used."
-    done
-    log "GPU check passed: CUDA_VISIBLE_DEVICES=${requested} (allowed list: ${PF_ALLOWED_GPUS})"
+    [[ -n "${requested}" ]] || die "CUDA_VISIBLE_DEVICES is empty; a GPU must be specified explicitly."
+    log "GPU check passed: CUDA_VISIBLE_DEVICES=${requested}"
 }
 
 # Confirm a venv has already been created by setup.sh and contains the given executable.

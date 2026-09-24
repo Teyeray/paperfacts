@@ -84,6 +84,10 @@ class InventoryResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     samples: list[InventorySample] = Field(default_factory=list)
+    no_tco_film: bool = Field(
+        default=False,
+        description="the paper deposits no TCO film of its own; an empty list for any other reason says nothing",
+    )
 
 
 class ResponseValue(BaseModel):

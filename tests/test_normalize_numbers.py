@@ -264,3 +264,9 @@ def test_two_single_digit_numbers_are_read_as_one_two_digit_number():
     # The accepted trade-off of the LaTeX-spacing collapse: "2 5" is indistinguishable from a spaced-out
     # "25", and in a table cell 25 is the reading that is almost always right.
     assert parse_number("2 5") == (25.0, None)
+
+
+@pytest.mark.parametrize("raw", ["2 3 \\mathbf{0}", "2 3 \\mathbf { 0 }", "$2 3 0$"])
+def test_a_digit_wrapped_in_a_formatting_command_stays_part_of_its_number(raw):
+    # MinerU bolds a table cell's last digit; "2 3 \\mathbf{0}" is 230, not 23 and a stray 0.
+    assert parse_number(raw) == (230.0, None)

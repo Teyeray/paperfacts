@@ -103,6 +103,20 @@ def test_agree_chooses_highest_repeat_agreement_without_averaging():
     assert result.paper_row["thickness"] == 305
 
 
+def test_a_comparison_agreement_on_a_value_that_failed_grounding_cannot_label_another_value_agreed():
+    # acsnano: both lanes said 230 °C, but lane A's 230 failed grounding; its lone 150 must not be "agree".
+    a = [
+        value("annealing_temperature", "230", "°C", grounded=False),
+        value("annealing_temperature", "150", "°C", condition="second anneal"),
+    ]
+    b = [value("annealing_temperature", "230", "°C", backend="paddleocr_vl")]
+
+    result = paired(a, b)
+
+    assert decision(result, "annealing_temperature")["decision"] != "agree"
+    assert result.paper_row["annealing_temperature"] is None
+
+
 def test_conflict_and_low_confidence_matching_remain_empty():
     result = paired([value("thickness", "300", "nm")], [value("thickness", "900", "nm", backend="paddleocr_vl")])
     assert result.paper_row["thickness"] is None
@@ -124,7 +138,16 @@ def test_lossy_numeric_interpretations_are_never_exported(raw):
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"), [("~300", 300), ("300 ± 2", 300), ("1e-4 ± 2e-5", 1e-4), ("300 ± 2e-1", 300)]
+    ("raw", "expected"),
+    [
+        ("~300", 300),
+        ("300 ± 2", 300),
+        ("1e-4 ± 2e-5", 1e-4),
+        ("300 ± 2e-1", 300),
+        # The uncertainty in parentheses after the unit, as GM1's PaddleOCR-VL lane quotes it.
+        ("300 nm (± 5 nm)", 300),
+        ("300 nm (  $ \\pm $ 5 nm)", 300),
+    ],
 )
 def test_approximation_and_uncertainty_keep_documented_center(raw, expected):
     result = paired([value("thickness", raw, "nm")], [value("thickness", raw, "nm", backend="paddleocr_vl")])
@@ -142,7 +165,8 @@ def test_a_comparison_cannot_hide_different_same_condition_values_in_one_lane():
 
 
 def test_multiple_conditions_are_not_collapsed_even_with_identical_numbers():
-    fields = [value("transmittance", "85", "%", condition=condition) for condition in ("550 nm", "600 nm")]
+    # Neither wavelength is in transmittance's condition_preference, so nothing picks one.
+    fields = [value("transmittance", "85", "%", condition=condition) for condition in ("450 nm", "600 nm")]
     result = paired(fields, [v.model_copy(update={"source_ids": ("paddleocr_vl_p0_b1",)}) for v in fields])
     assert result.paper_row["transmittance"] is None
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
@@ -163,13 +187,93 @@ def test_differently_worded_conditions_across_lanes_still_agree():
 def test_one_lane_with_two_conditions_is_still_refused():
     result = paired(
         [
-            value("transmittance", "85", "%", condition="550 nm"),
+            value("transmittance", "85", "%", condition="450 nm"),
             value("transmittance", "85", "%", condition="600 nm"),
         ],
-        [value("transmittance", "85", "%", condition="550 nm", backend="paddleocr_vl")],
+        [value("transmittance", "85", "%", condition="450 nm", backend="paddleocr_vl")],
     )
     assert result.paper_row["transmittance"] is None
     assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def _cited(field, source):
+    return field.model_copy(update={"source_ids": (source,)})
+
+
+def test_the_condition_stated_in_the_same_block_as_the_rest_of_the_row_fills_the_cell():
+    # GM1: "5.74e-4 Ω·cm ... 83.5 % (400-1800 nm)" in one abstract sentence, other ranges elsewhere.
+    def lane(backend):
+        return [
+            _cited(value("resistivity", "5.74e-4", "Ω·cm", backend=backend), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "81.6", "%", condition="400-800 nm"), f"{backend}_p3_b2"),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (83.5, "agree")
+    assert row["conditions"] == "400-1800 nm"
+    # Traceable to the sentence it came from, not to the blocks of the values set aside.
+    assert row["source_ids"] == "mineru_p0_b9; paddleocr_vl_p0_b9"
+
+
+def test_several_conditions_sharing_the_rows_block_stay_refused():
+    fields = [
+        _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "81.6", "%", condition="450-700 nm"), "mineru_p0_b9"),
+    ]
+
+    result = paired(fields, [])
+
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def test_without_a_row_sharing_condition_the_fields_preference_picks_the_cell():
+    # Zhao: 91.9 % averaged over 400-800 nm and 92.2 % at 550 nm, both lanes, no sentence shared with the row.
+    def lane(backend):
+        return [
+            _cited(value("transmittance", "92.2", "%", condition="at 550 nm"), f"{backend}_p4_b2"),
+            _cited(value("transmittance", "91.9", "%", condition="average from 400 to 800 nm"), f"{backend}_p4_b3"),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (91.9, "agree")
+    assert "优先条件 400-800" in row["detail"]
+    assert row["source_ids"] == "mineru_p4_b3; paddleocr_vl_p4_b3"
+
+
+def test_a_preference_matching_two_conditions_in_one_lane_moves_on_to_the_next():
+    # Both name 400 and 800; the tie is not settled by the first entry, so 550 decides.
+    fields = [
+        value("transmittance", "91.9", "%", condition="average 400-800 nm"),
+        value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
+        value("transmittance", "92.2", "%", condition="550 nm"),
+    ]
+
+    result = paired(fields, [])
+
+    assert result.paper_row["transmittance"] == 92.2
+
+
+def test_the_other_lanes_value_for_a_condition_set_aside_cannot_vouch_for_the_chosen_one():
+    # Lane B only quotes 400-800 nm, from another block. The comparison agrees on that condition, but it is
+    # not the one chosen for the cell, so the cell is one lane's word, not an agreement.
+    a = [
+        _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "83.5", "%", condition="400-1800 nm"), "mineru_p0_b9"),
+        _cited(value("transmittance", "81.6", "%", condition="400-800 nm"), "mineru_p3_b2"),
+    ]
+    b = [_cited(value("transmittance", "81.6", "%", condition="400-800 nm"), "paddleocr_vl_p3_b2")]
+
+    result = paired(a, b)
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (83.5, "single_source")
+    assert row["source_ids"] == "mineru_p0_b9"
 
 
 def test_one_mode_quoted_two_ways_is_one_answer_not_a_refusal():

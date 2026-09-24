@@ -46,7 +46,11 @@ _PACKAGE_DIR = Path(__file__).parent
 # Cells that change a verdict or retrieval but never what the model is asked; each has its own fingerprint.
 # ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
 # verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
-_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh"}
+_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh", "condition_preference"}
+# Cells added after stored results existed: left out of the material while at their default, so a field that
+# does not use one keeps the fingerprint it had before the cell was introduced.
+_SCHEMA_OMITTED_AT_DEFAULT = {"valid_range": (None, None)}
+_NO_DEFAULT = object()
 
 
 def content_fingerprint(material: str) -> str:
@@ -74,7 +78,11 @@ def schema_fingerprint() -> str:
     :func:`category_fingerprint` folds it into ``comparison_key`` alone.
     """
     table = [
-        {name: value for name, value in dataclasses.asdict(spec).items() if name not in _SCHEMA_EXCLUDED}
+        {
+            name: value
+            for name, value in dataclasses.asdict(spec).items()
+            if name not in _SCHEMA_EXCLUDED and _SCHEMA_OMITTED_AT_DEFAULT.get(name, _NO_DEFAULT) != value
+        }
         for spec in FIELD_SPECS
     ]
     return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
@@ -89,12 +97,19 @@ def category_fingerprint() -> str:
 
 
 @cache
+def preference_fingerprint() -> str:
+    """The condition preferences that pick a dataset cell among several measurements; a verdict rule."""
+    table = {spec.name: list(spec.condition_preference) for spec in FIELD_SPECS if spec.condition_preference}
+    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+
+
+@cache
 def retrieval_fingerprint() -> str:
     """Everything that decides which blocks a passage-mode question is shown."""
     material = {
         "keywords": {spec.name: list(spec.keywords) for spec in FIELD_SPECS},
         "condition_keywords": list(CONDITION_KEYWORDS),
-        "code": source_fingerprint("passages.py"),
+        "code": source_fingerprint("passages.py", "continuation.py"),
     }
     return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
 
@@ -105,13 +120,21 @@ def extraction_code_fingerprint() -> str:
 
     ``adapters.py`` renders the bytes the model reads; ``prompts.py`` wraps them (only the system prompts are
     hashed by value, so the user half would otherwise be invisible); ``normalize.py`` and ``grounding.py``
-    fold the text that decides which values are duplicates of each other and which sample a value lands on;
+    fold the text that decides which values are duplicates of each other and which sample a value lands on
+    (``continuation.py`` decides which blocks grounding joins across a page break);
     ``voting.py`` decides which of the model's repeated claims survive the majority vote.
     Over-invalidation is cheap here: an unchanged request replays from the LLM cache, so re-deriving the
     records costs nothing but a second of CPU.
     """
     return source_fingerprint(
-        "extract.py", "voting.py", "records.py", "adapters.py", "prompts.py", "normalize.py", "grounding.py"
+        "extract.py",
+        "voting.py",
+        "records.py",
+        "adapters.py",
+        "prompts.py",
+        "normalize.py",
+        "grounding.py",
+        "continuation.py",
     )
 
 
@@ -211,6 +234,8 @@ def comparison_key() -> str:
     # the concept existed, the same way every other baseline stays out of the material.
     if any(spec.categories for spec in FIELD_SPECS):
         material["categories"] = category_fingerprint()
+    if any(spec.condition_preference for spec in FIELD_SPECS):
+        material["condition_preference"] = preference_fingerprint()
     return content_fingerprint(
         json.dumps(
             material,

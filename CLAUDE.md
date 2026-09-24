@@ -82,14 +82,15 @@ this file is the part that is easy to get wrong.
   every sample with `series=True`.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
-- Four guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
-  not be attached to a sample), and citation validation — all in `records.py` — plus grounding
-  (`grounding.py`), where the quoted text must occur in the block it cites. The first three drop the value
+- Five guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
+  not be attached to a sample), and citation validation — all in `records.py` — the plausible range
+  (`valid_range`, judged on the converted value by `normalize.drop_implausible`), plus grounding
+  (`grounding.py`), where the quoted text must occur in the block it cites. The first four drop the value
   with an audited reason; grounding only flags, never drops.
 - Cache keys live in `keys.py`. `extractor_key` hashes the model, the field schema, the prompts, the
   sampling settings and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its
-  two prompts plus `retrieval_fingerprint` (the keywords and `passages.py`). `comparison_key` hashes
-  tolerances, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt. Anything that is at its built-in
+  two prompts plus `retrieval_fingerprint` (the keywords, `passages.py` and `continuation.py`). `comparison_key` hashes
+  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt. Anything that is at its built-in
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
   re-derives records for free as long as the rendered document and prompts stay byte-identical.
@@ -115,6 +116,6 @@ this file is the part that is easy to get wrong.
 
 ## Deployment
 
-`deploy/` targets a Linux GPU server and is restricted to **GPUs 4–7**; do not widen that. Development
+`deploy/` targets a Linux GPU server. GPU ids are set per service by env var, default 0. Development
 happens on macOS, is pushed to GitHub, and pulled on the server — do not try to operate the server over
 ssh from here.
