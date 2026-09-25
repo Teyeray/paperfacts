@@ -235,6 +235,10 @@ def read_lane(
     the file: improving a rule costs nothing and never leaves a stale verdict behind. The artifact is read
     from disk unless the caller already holds it; without one the stored grounding verdicts are kept, since
     they cannot be re-checked but are still the best answer.
+
+    A lane extracted from a different parse than the current artifact is a miss (``None``): its source ids
+    would point at whatever block now has that ordinal. Re-deriving it is cheap whenever the rendered
+    prompts are byte-identical, because the LLM cache is keyed by the request.
     """
     path = layout.extraction_path(document_id, backend, key)
     if not path.is_file():
@@ -243,6 +247,9 @@ def read_lane(
     artifact_path = layout.artifact_path(document_id, backend)
     if artifact is None and artifact_path.is_file():
         artifact = ParsedArtifact.read(artifact_path)
+    if artifact is not None and lane.artifact_sha256 not in (None, artifact.content_hash()):
+        logger.info("stored %s extraction came from another parse of doc=%s; re-deriving", backend, document_id[:16])
+        return None
     if artifact is not None:
         # The same blocks, and so the same neighbours, extraction grounded against: adjacency over every block
         # would put page furniture between two halves of a sentence.
@@ -285,7 +292,7 @@ def extract_document(
         concurrency=settings.llm_concurrency,
         inventory_reasoning_effort=settings.llm_inventory_reasoning_effort,
         refresh=force,
-    )
+    ).model_copy(update={"artifact_sha256": artifact.content_hash()})
     lane.write(layout.extraction_path(document.document_id, backend, key))
     return normalize_lane(lane)
 
@@ -314,13 +321,16 @@ def compare_document(
         extractor_key_for(settings, client.model),
         comparison_key(),
     )
-    if path.is_file() and not force:
-        logger.info("comparison cache_hit doc=%s", document.document_id[:16])
-        return ComparisonReport.read(path)
-
     if lanes is None:
         lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
+    if path.is_file() and not force:
+        cached = ComparisonReport.read(path)
+        if _compared_these(cached, lane_a, lane_b):
+            logger.info("comparison cache_hit doc=%s", document.document_id[:16])
+            return cached
+        logger.info("stored comparison of doc=%s compared other parses; comparing again", document.document_id[:16])
+
     matching = match_samples(lane_a, lane_b, client, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching)
     if matching.failed:
@@ -332,6 +342,18 @@ def compare_document(
         report.write(path)
     logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
     return report
+
+
+def _compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
+    """Whether ``report`` was built from lanes of the same parses as these. A hash missing on either side
+    (a file from before it was recorded) is unknown, not a mismatch, so existing stores still read."""
+    return all(
+        stored is None or current is None or stored == current
+        for stored, current in (
+            (report.artifact_sha256_a, lane_a.artifact_sha256),
+            (report.artifact_sha256_b, lane_b.artifact_sha256),
+        )
+    )
 
 
 # ---- Figure reading ------------------------------------------------------------------------------------
@@ -768,6 +790,8 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
         if lane is None:
             raise FileNotFoundError(f"no current {backend} extraction for {document.display_filename}")
         lanes[backend] = lane
+    if not _compared_these(report, lanes[BACKEND_A], lanes[BACKEND_B]):
+        raise FileNotFoundError(f"the comparison of {document.display_filename} predates its parse; run it again")
     # Grounding is rechecked on read, so comparison must use those same refreshed values.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
     dataset = consolidate_document(document, lanes, report)

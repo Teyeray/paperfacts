@@ -611,6 +611,12 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
+Extractions and comparisons also record the parse they came from (a hash of the artifact's blocks).
+After a re-parse, a stored lane or comparison of the old parse is a miss and is derived again: source ids
+are positional, so the old citations would point at whatever block now has that ordinal. Re-deriving is
+free from the LLM cache whenever the rendered prompts are byte-identical. Files written before the hash was
+recorded have none and are read as before.
+
 Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
 costs one repair request and is never written, and an invalid answer already in the cache is asked again
 rather than replayed. A sample matching that failed (the model answered badly twice) is shown for that run

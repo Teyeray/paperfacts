@@ -105,6 +105,9 @@ class ComparisonReport(BaseModel):
     matching: SampleMatching
     comparisons: tuple[FieldComparison, ...] = ()
     counts: ComparisonCounts = Field(default_factory=ComparisonCounts)
+    # The lanes' artifact_sha256, so a report is tied to the parses it compared (None: unknown, older file).
+    artifact_sha256_a: str | None = None
+    artifact_sha256_b: str | None = None
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -202,6 +205,8 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
         matching=matching,
         comparisons=tuple(comparisons),
         counts=_count(comparisons, matching, (lane_a, lane_b)),
+        artifact_sha256_a=lane_a.artifact_sha256,
+        artifact_sha256_b=lane_b.artifact_sha256,
     )
 
 

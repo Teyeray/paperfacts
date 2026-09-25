@@ -19,6 +19,7 @@ Naming: ``document_id`` is the PDF's content sha256; ``source_id`` is ``{backend
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -248,6 +249,15 @@ class ParsedArtifact(BaseModel):
 
     def blocks_on_page(self, page: int) -> tuple[SourceBlock, ...]:
         return tuple(block for block in self.blocks if block.page == page)
+
+    def content_hash(self) -> str:
+        """sha256 over the blocks: what a citation resolves against, nothing that varies between runs.
+
+        Source ids are positional, so a lane derived from one parse and read against another would cite
+        whatever block now has that ordinal. Stored results record this hash to notice that.
+        """
+        blocks = [block.model_dump(mode="json") for block in self.blocks]
+        return hashlib.sha256(json.dumps(blocks, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
     def type_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
