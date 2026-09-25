@@ -59,6 +59,7 @@ def install_fake_pipeline(
     sample_count: int = 2,
     counts: ComparisonCounts | None = None,
     matching: SampleMatching | None = None,
+    unanswered: str | None = None,
 ) -> PipelineSpy:
     spy = PipelineSpy()
     counts = counts or ComparisonCounts(agree=3, conflict=1, ambiguous=2, missing=4, total=10)
@@ -90,11 +91,16 @@ def install_fake_pipeline(
         time.sleep(0.05)
         with spy.lock:
             spy._in_flight -= 1
-        return make_lane(
+        lane = make_lane(
             backend=backend,
             document_id=document.document_id,
             samples=[make_sample(f"S{i}") for i in range(sample_count)],
         )
+        if unanswered and backend == "mineru":
+            lane = lane.model_copy(
+                update={"failed_questions": (FailedQuestion(field=unanswered, detail="cut off at max_tokens"),)}
+            )
+        return lane
 
     def fake_compare(
         document: DocumentInput,
@@ -236,6 +242,7 @@ def test_a_run_with_an_unanswered_field_question_is_not_finished(
     marks, result = run(document, settings)
 
     assert result.dataset_json_path is None
+    assert "no valid answer to mineru:thickness" in result.dataset.incomplete
     final = {stage: (status, detail) for stage, status, detail in marks}
     assert "1 question unanswered" in final["extract:mineru"][1]
     assert "no valid answer" in final["compare"][1]

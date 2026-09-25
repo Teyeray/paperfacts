@@ -19,7 +19,7 @@ from paperfacts.decide import decide
 from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
-from paperfacts.records import FieldValue, TargetRecord
+from paperfacts.records import FailedQuestion, FieldValue, TargetRecord
 from support.extraction import make_lane, make_sample
 from support.factories import DOC_ID
 
@@ -657,6 +657,35 @@ def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
     result = paired(lane("mineru", "90.1"), lane("paddleocr_vl", "92.0"))
 
     assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (None, "conflict")
+
+
+def test_a_field_one_lane_never_answered_is_refused_in_both_lanes():
+    # Committing the other lane's 150 nm as single_source would read as "lane A found nothing", which is not
+    # what happened: lane A was never given a valid answer. Lane symmetry is the measurement.
+    a = make_lane(samples=[make_sample("A", [value("sheet_resistance", "12", "Ω/sq")])]).model_copy(
+        update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off"),)}
+    )
+    b = make_lane(
+        backend="paddleocr_vl",
+        samples=[
+            make_sample(
+                "A",
+                [
+                    value("thickness", "150", "nm", backend="paddleocr_vl"),
+                    value("sheet_resistance", "12", "Ω/sq", backend="paddleocr_vl"),
+                ],
+            )
+        ],
+    )
+    matching = SampleMatching(
+        pairs=(SampleMatch(a_id="A", b_id="A", confidence=1.0, method="llm", justification="test"),)
+    )
+
+    result = dataset(a, b, matching)
+
+    assert (result.paper_row["thickness"], decision(result, "thickness")["decision"]) == (None, "unanswered")
+    assert decision(result, "sheet_resistance")["decision"] == "agree"
+    assert "no valid answer to mineru:thickness" in result.incomplete
 
 
 def test_a_compound_duration_reaches_the_cell():

@@ -97,12 +97,16 @@ def decide(
     comparisons: Sequence[FieldComparison],
     *,
     blocked: str | None = None,
+    unanswered: bool = False,
     row_sources: frozenset[str] = frozenset(),
 ) -> Decision:
     """The cell for ``spec`` given every lane's candidates for it.
 
     ``blocked`` is why nothing on this sample may be committed (its sample match failed or is too weak), or
-    None. ``row_sources`` are the blocks the rest of the sample's row cites, for :func:`_one_condition`.
+    None. ``unanswered`` says some lane's question about this field got no valid answer: the other lane's value
+    would then pass as single_source, as if that lane had read the paper and found nothing, so the cell is
+    refused in both. ``row_sources`` are the blocks the rest of the sample's row cites, for
+    :func:`_one_condition`.
     """
 
     def reject(status: str, reason: str) -> Decision:
@@ -111,6 +115,8 @@ def decide(
         sources = joined(sorted({source for _, value in evidence for source in value.source_ids}))
         return Decision(None, status, conditions, sources, joined([reason, raw]))
 
+    if unanswered:
+        return reject("unanswered", "某一解析通道对该字段的提问未得到有效回答；下次运行会重新提问")
     if not evidence:
         return reject("missing", "未提取到该字段；留空，不填 0")
     if blocked:

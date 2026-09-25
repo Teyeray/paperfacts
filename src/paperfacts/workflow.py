@@ -26,6 +26,7 @@ from paperfacts.config import Settings
 from paperfacts.dataset import (
     DocumentDataset,
     consolidate_document,
+    incomplete_reason,
     write_dataset,
     write_dataset_json,
 )
@@ -346,27 +347,13 @@ def compare_document(
 
     matching = match_samples(lane_a, lane_b, client, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching)
-    reason = _not_kept(lanes, report)
+    reason = incomplete_reason(lanes, report)
     if reason:
         logger.warning("%s for doc=%s; the comparison is not stored", reason, document.document_id[:16])
     else:
         report.write(path)
     logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
     return report
-
-
-def _not_kept(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> str:
-    """Why this run's comparison and consolidated table must not be stored, or "" when they may be.
-
-    Each reason is a model that answered badly this time, not a verdict about the paper. Stored, the result
-    would be served on every later run -- and the stored table marks the paper finished (is_finished), so
-    "run all" would never retry it; unstored, the next run asks again, and only the failed request reaches
-    the model, since invalid answers are never cached (llm.complete_validated).
-    """
-    if report.matching.failed:
-        return "sample matching failed"
-    unanswered = [f"{backend}:{q.field}" for backend, lane in lanes.items() for q in lane.failed_questions]
-    return f"no valid answer to {', '.join(unanswered)}" if unanswered else ""
 
 
 def _compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
@@ -488,7 +475,7 @@ class PipelineResult:
     report: ComparisonReport
     dataset: DocumentDataset
     excel_path: Path
-    # None when the run's result is not kept (see _not_kept): such a dataset is not stored.
+    # None when the run's result is not kept (dataset.incomplete says why): such a dataset is not stored.
     dataset_json_path: Path | None
     # The chart readings shown with this paper, when there are any (see shown_figures).
     figures: FiguresView | None = None
@@ -592,11 +579,10 @@ def run_document(
     excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path, figure_rows=figures.rows if figures is not None else ())
     dataset_json_path: Path | None = None
-    reason = _not_kept(lanes, report)
-    if reason:
-        # The stored dataset is what marks a paper finished (is_finished), so it is kept back for the same
-        # reasons as the comparison. The workbook of this run is still written.
-        on_stage("export", "done", f"{excel_path}; not kept as finished: {reason}")
+    if dataset.incomplete:
+        # The stored dataset is what marks a paper finished (stored.is_finished), so it is kept back for the
+        # same reasons as the comparison. The workbook of this run is still written.
+        on_stage("export", "done", f"{excel_path}; not kept as finished: {dataset.incomplete}")
     else:
         dataset_json_path = _store_dataset(layout, dataset)
         on_stage("export", "done", str(excel_path))
@@ -695,7 +681,7 @@ def _extract_and_compare(
     detail = (
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"
     )
-    reason = _not_kept(lanes, report)
+    reason = incomplete_reason(lanes, report)
     if reason:
         # Not a failure of the paper: the report was not stored and the next run asks again.
         on_stage("compare", "failed", f"{detail}; {reason}, not stored")
@@ -757,7 +743,7 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
     # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
     # serves the report beside the table, and the two must be the same verdicts.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
-    reason = _not_kept(lanes, report)
+    reason = incomplete_reason(lanes, report)
     if reason:
         raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")
     report.write(report_path)
@@ -830,7 +816,8 @@ def run_batch(
         index: int, prefix: str, outcome: DocumentDataset | dict[str, str], rows: Sequence[Mapping[str, object]] = ()
     ) -> None:
         if isinstance(outcome, DocumentDataset):
-            report(prefix, "done", "")
+            # Its rows are written, with the unanswered cells refused, but the paper is not finished.
+            report(prefix, "done", f"incomplete: {outcome.incomplete}" if outcome.incomplete else "")
         else:
             report(prefix, "failed", outcome["error"])
         with results_lock:

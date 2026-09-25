@@ -81,6 +81,36 @@ def test_a_failed_paper_is_recorded_and_remaining_papers_are_exported(monkeypatc
     workbook.close()
 
 
+def test_a_paper_with_an_unanswered_question_is_listed_as_incomplete(monkeypatch, tmp_path):
+    # Its rows are written (the unanswered field refused in both lanes), but it is not a success: the next
+    # run asks that question again.
+    source = make_blank_pdf(tmp_path / "paper.pdf")
+    install_fake_pipeline(monkeypatch, unanswered="thickness")
+    output = tmp_path / "result.xlsx"
+
+    cli = CliRunner().invoke(
+        app, ["batch", str(source), "--output", str(output), "--data-root", str(tmp_path / "data")]
+    )
+
+    assert cli.exit_code == 0, cli.output
+    assert "1 incomplete" in cli.output
+    workbook = load_workbook(output)
+    [run] = [row for row in workbook["运行记录"].iter_rows(min_row=2, values_only=True)]
+    workbook.close()
+    assert run[2] == "incomplete"
+    assert "no valid answer to mineru:thickness" in run[-1]
+
+
+def test_cli_run_says_when_its_result_is_not_kept(monkeypatch, tmp_path):
+    source = make_blank_pdf(tmp_path / "paper.pdf")
+    install_fake_pipeline(monkeypatch, unanswered="thickness")
+
+    cli = CliRunner().invoke(app, ["run", str(source), "--data-root", str(tmp_path / "data")])
+
+    assert cli.exit_code == 0, cli.output
+    assert "Incomplete, not kept as finished: no valid answer to mineru:thickness" in cli.output
+
+
 def test_offline_export_never_runs_parser_or_llm(monkeypatch, tmp_path):
     source = make_blank_pdf(tmp_path / "paper.pdf")
     settings = Settings(data_root=tmp_path / "data")

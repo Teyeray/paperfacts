@@ -307,6 +307,8 @@ def run(
             + (f"; {warning}" if warning else "")
         )
     typer.echo(f"Excel -> {result.excel_path}")
+    if result.dataset.incomplete:
+        typer.echo(f"Incomplete, not kept as finished: {result.dataset.incomplete}; the next run asks again")
 
 
 def _batch_summary(
@@ -335,9 +337,11 @@ def _batch_summary(
         )
     except (*REPORTABLE_ERRORS, OSError) as exc:
         _fail("export" if export_only else "batch", exc)
+    incomplete = sum(1 for document in result.documents if document.incomplete)
     typer.echo(
-        f"Completed: {len(result.documents)} papers; failed: {len(result.failures)}; "
-        f"duplicates skipped: {result.duplicate_count}"
+        f"Completed: {len(result.documents)} papers"
+        + (f" ({incomplete} incomplete, asked again next run)" if incomplete else "")
+        + f"; failed: {len(result.failures)}; duplicates skipped: {result.duplicate_count}"
     )
     typer.echo(f"Excel -> {result.excel_path}")
     if result.failures:

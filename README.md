@@ -657,7 +657,8 @@ a paper finished, so 「处理全部未完成」 and `deploy.sh --rerun` pick th
 
 The same holds for one field question in passage mode that gets no valid answer (invalid twice, or cut off):
 it costs that field, not the lane. The lane is stored with the question in `failed_questions` and its other
-fields intact; the comparison and table of that run are not stored, and the next run extracts the lane again,
+fields intact; that field's cells are `unanswered` in both lanes; the run's workbook marks the paper
+`incomplete` in 运行记录 (and `run`/`batch` say so); the comparison and table of that run are not stored, and the next run extracts the lane again,
 which re-asks only that question (every other answer replays from the cache). The inventory question and
 transport failures still fail the lane.
 
@@ -761,6 +762,7 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `conflict` | The lanes produced different values. Once a condition is chosen, only a conflict involving a candidate at that condition counts: differing 400-1100 nm averages do not refuse a cell whose preferred 550 nm values agree |
 | `ambiguous` | The lanes could not be decided between, or the sample match fell below `ambiguous_match_confidence` |
 | `ungrounded` | No evidence both located in the text and carrying a valid citation |
+| `unanswered` | One lane's question about this field got no valid answer. Refused in both lanes, so the other lane's value never passes as single-source; the next run asks that question again |
 | `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
 | `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
