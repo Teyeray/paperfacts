@@ -298,7 +298,7 @@ Three things keep parallel papers from multiplying the load:
 
 - **Parsing is one paper per parser at a time.** The server has one GPU, and two papers sent to the same
   parser service only compete for its memory; MinerU and PaddleOCR-VL may parse two different papers side
-  by side. On a workstation the two runner subprocesses share one lock instead, because both model sets do
+  by side, and with a parser service configured the two lanes of one paper parse side by side too. On a workstation the two runner subprocesses share one lock instead, because both model sets do
   not fit in its memory at once. A cached parse never waits.
 - **Model requests share `llm.max_in_flight`** (default 8) across every paper, lane and stage in the
   process, so the Model Studio rate limit sees at most that many open requests however many papers run.

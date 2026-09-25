@@ -591,9 +591,28 @@ def run_document(
     """
     parse_reports: dict[Backend, ParseReport] = {}
     parsed: dict[Backend, ParsedArtifact | None] = {}
+    outcomes: dict[Backend, tuple[ParsedArtifact, ParseReport]] = {}
+    # Written here, once, before two parse threads could both find it missing and race to write it.
+    ensure_identity(DataLayout(settings.data_root), document)
+    if settings.mineru_url or settings.paddle_url:
+        # At least one parser is a service on another machine, so the two lanes parse side by side; each
+        # still waits for its own parser's lock. Two runner subprocesses share one lock, so there the lanes
+        # stay one after the other and the progress marks say so.
+        for backend in BACKENDS:
+            on_stage(f"parse:{backend}", "running", "")
+        with ContextThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-parse") as pool:
+            outcomes = _every_lane(
+                {
+                    backend: pool.submit(parse_document, document, backend, settings, force=force)
+                    for backend in BACKENDS
+                },
+                "parse",
+            )
     for backend in BACKENDS:
-        on_stage(f"parse:{backend}", "running", "")
-        parsed[backend], parse_report = parse_document(document, backend, settings, force=force)
+        if backend not in outcomes:
+            on_stage(f"parse:{backend}", "running", "")
+            outcomes[backend] = parse_document(document, backend, settings, force=force)
+        parsed[backend], parse_report = outcomes[backend]
         parse_reports[backend] = parse_report
         cached = " (cached)" if parse_report.cache_hit else ""
         on_stage(f"parse:{backend}", "done", f"{parse_report.block_count} blocks{cached}")
@@ -645,6 +664,28 @@ def run_document(
     )
 
 
+def _every_lane[T](futures: Mapping[Backend, Future[T]], what: str) -> dict[Backend, T]:
+    """Both lanes' results, in BACKENDS order, or the first lane's failure.
+
+    Every lane's outcome is collected before any of them is acted on, so an exception nobody asked for is
+    logged rather than dropped by the garbage collector. A BaseException (a KeyboardInterrupt, say) still
+    propagates straight out; leaving the caller's pool then waits for the other lane.
+    """
+    results: dict[Backend, T] = {}
+    failures: list[tuple[Backend, Exception]] = []
+    for backend in BACKENDS:
+        try:
+            results[backend] = futures[backend].result()
+        except Exception as exc:
+            failures.append((backend, exc))
+    if failures:
+        # In BACKENDS order, so the first lane's failure wins; the rest are explanations.
+        for backend, exc in failures[1:]:
+            logger.warning("%s lane %s also failed with %s", what, backend, exc)
+        raise failures[0][1]
+    return results
+
+
 def _extract_and_compare(
     document: DocumentInput, settings: Settings, *, force: bool, on_stage: StageCallback
 ) -> tuple[dict[Backend, LaneExtraction], ComparisonReport]:
@@ -666,22 +707,7 @@ def _extract_and_compare(
                 backend: pool.submit(extract_document, document, backend, settings, client, force=force)
                 for backend in BACKENDS
             }
-            # Every lane's outcome is collected before any of them is acted on, so an exception nobody
-            # asked for is logged rather than dropped by the garbage collector. A BaseException (a
-            # KeyboardInterrupt, say) still propagates straight out, as it always did; leaving the `with`
-            # then waits for the other lane.
-            extracted: dict[Backend, LaneExtraction] = {}
-            failures: list[tuple[Backend, Exception]] = []
-            for backend in BACKENDS:
-                try:
-                    extracted[backend] = futures[backend].result()
-                except Exception as exc:
-                    failures.append((backend, exc))
-            if failures:
-                # In BACKENDS order, so the first lane's failure wins as before; the rest are explanations.
-                for backend, exc in failures[1:]:
-                    logger.warning("extraction lane %s also failed with %s", backend, exc)
-                raise failures[0][1]
+            extracted = _every_lane(futures, "extraction")
             for backend, lane in extracted.items():
                 lanes[backend] = lane
                 ungrounded = len(lane.ungrounded())
