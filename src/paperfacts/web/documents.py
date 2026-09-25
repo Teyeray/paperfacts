@@ -18,7 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.dataset import CellValue, DatasetPayload, DocumentDataset, FieldColumn
+from paperfacts.dataset import DatasetPayload, DocumentDataset, FieldColumn
+from paperfacts.decide import CellValue
 from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached

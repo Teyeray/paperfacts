@@ -407,7 +407,7 @@ def conditions_measure_differently(condition_a: str | None, condition_b: str | N
 def condition_numbers(condition: str | None) -> tuple[float, ...]:
     """The numbers a condition names, in order: "550 nm" -> (550,), "400-800 nm" -> (400, 800).
 
-    The one definition of a condition's numbers: this module pairs values by it and ``dataset.py`` picks
+    The one definition of a condition's numbers: this module pairs values by it and ``decide.py`` picks
     and cross-checks conditions by it, so the two can never parse a condition differently. In order, so a
     caller that cares (a configured preference "400-800") can match exactly; pairing across lanes compares
     them as a multiset (:func:`conditions_measure_differently`). The text is de-LaTeXed first, since MinerU

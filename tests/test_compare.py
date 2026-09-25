@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts import dataset
+from paperfacts import decide
 from paperfacts.compare import (
     ComparisonReport,
     compare_lanes,
@@ -792,7 +792,7 @@ def test_the_same_numbers_in_another_order_are_the_same_condition_for_pairing():
 def test_dataset_judges_conditions_by_the_same_definition_as_compare():
     # Two definitions disagreed on ranges, signs and extra numbers, so compare could pair two values as
     # one fact while dataset treated them as two conditions.
-    assert dataset.condition_numbers is condition_numbers
+    assert decide.condition_numbers is condition_numbers
 
 
 @pytest.mark.parametrize(

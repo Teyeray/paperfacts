@@ -22,6 +22,7 @@ Flat modules, in pipeline order:
 - ``normalize``   text folding, number parsing, unit conversion
 - ``matching``    which sample in lane A is which sample in lane B
 - ``compare``     field-by-field comparison of the two lanes
+- ``decide``      one dataset cell's verdict: which candidate the cell states, or why it states none
 - ``dataset``     merge source evidence into unique values and export machine-learning tables to Excel
 - ``keys``        the cache keys that name stored extractions and comparisons
 - ``workflow``    orchestration; ``cli``, ``report`` and ``web`` are thin layers over it

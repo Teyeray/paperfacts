@@ -545,9 +545,9 @@ A sample often has one field measured several ways -- transmittance averaged ove
 over 400-1800 nm -- and the dataset has one cell for it. The cell takes the measurement stated in the same
 block as the rest of the sample's row; failing that, the first entry of `condition_preference` that picks
 exactly one condition. An entry names the numbers a condition states, so `"400-800"` matches "average
-400–800 nm" and "from 400 to 800 nm" alike. When one entry matches several conditions in a lane, a condition
-that says peak / max / maximum is set aside in favour of the rest (one that also says average / avg / mean /
-AVT counts as an average), and the entry is tried again. The shipped transmittance preference is 400-800,
+400–800 nm" and "from 400 to 800 nm" alike. When one entry matches several conditions in a lane, the one
+that says average / avg / mean / AVT is taken and the others (a peak, a minimum, an unlabelled range) are set
+aside; without such an average the next entry is tried. The shipped transmittance preference is 400-800,
 380-780, 400-700, 400-1100, then 550 nm. If none of that settles it the cell stays empty as
 `multiple_conditions`. Every measurement stays in the facts either way. The preference changes only which
 cell is committed, so editing it re-compares without re-extracting.
@@ -634,7 +634,7 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
 | Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader), the field schema minus the tolerances, categories, condition preferences and display text, the prompts, the document rendering, and the source of `extract.py`, `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py` and `continuation.py`; passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
-| Comparison (`comparison_key`) | the whole field schema including the tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
+| Comparison (`comparison_key`) | the whole field schema including the tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py` and the matching prompt | changing a tolerance or a rule |
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
@@ -754,10 +754,17 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
 
 Two things are not refusals. A bound or range beside a scalar (`>80 %` next to `80.6 %`) is set aside with a
-note and the scalar decides the cell; only a cell holding nothing else is `non_scalar`. And several condition
-texts in one lane that all give the same number within the field's tolerance ("100 nm, by TEM cross-section",
-"100 nm, not reduced by the forming gas") are one measurement, committed with the texts joined -- unless the
-conditions name different numbers: 85 % at 450 nm and 85 % at 600 nm stay two measurements.
+note and the scalar decides the cell -- but only after the condition is chosen: a bound at the condition the
+row's block or `condition_preference` picks is the answer there, and the cell is `non_scalar` rather than
+filled with a scalar from a less preferred condition. And several condition texts in one lane that all give
+the very same number ("100 nm, by TEM cross-section", "100 nm, not reduced by the forming gas") are one
+measurement, committed with the texts joined -- unless the conditions name different numbers: 85 % at 450 nm
+and 85 % at 600 nm stay two measurements, and so do 100 nm as-deposited and 104 nm after annealing.
+
+A cell is `agree` only when both lanes' final candidates are within the field's tolerance and no pair across
+the lanes quotes conditions naming different numbers; where a lane quoted several conditions, the lanes must
+name the very same numbers. Two lanes that measured different things are `multiple_conditions`, however close
+their values.
 
 Approximate values and measurements with ± uncertainty keep their centre value and carry a note, including
 `(4.5 ± 0.2) × 10⁻⁴`. A spelling with no single safe reading is refused and compared as ambiguous rather
