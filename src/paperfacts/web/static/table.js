@@ -116,7 +116,6 @@ export function renderResults(root) {
   empty.classList.toggle("hidden", Boolean(data) && samples.length > 0);
   if (!hasRows) return;
   download.href = `/api/documents/${state.current}/dataset.xlsx`;
-  download.setAttribute("download", `${state.profile?.name ?? "paperfacts"}-${state.current}.xlsx`);
 
   const rerender = () => keepFocus(root, () => renderResults(root));
   const chosen = chosenFields(data.fields);
@@ -153,7 +152,7 @@ function documentColumns(fields, quality, paperSampleId) {
       (item) => (isTarget(item) ? "<td></td>" : `<td class="${className}" title="${escapeHtml(text(item))}">${escapeHtml(text(item))}</td>`),
       (item) => (isTarget(item) ? "" : text(item)),
     );
-  const paperMark = `<span class="paper-mark" title="被选作论文行的样品">★ 论文行</span>`;
+  const paperMark = `<span class="paper-mark" title="被选作论文行的${escapeHtml(uiCopy("entity_label_zh"))}">★ 论文行</span>`;
   const paperLabel = uiCopy("paper_level_label_zh");
   return [
     column(

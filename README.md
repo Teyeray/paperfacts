@@ -289,7 +289,7 @@ uv run paperfacts prompts --profile tco --field thickness          # what the mo
 | `serve` | Serve the web interface |
 | `fields` | Print the profile's field table (`--profile` for another), so an edit can be checked at a glance |
 | `profiles` | List the profiles in `profiles/` with their maturity, paper/sample field counts, content hash prefix and title. `--check PATH` validates one file instead: it prints the profile's line and any warnings then `ok`, or every error it finds, one `error:` line each, and exits 1. The listing reads `profiles/` without `config.json`, so it works while that file is broken |
-| `prompts` | Print the rendered inventory, extraction, per-field and matching system prompts of a profile (`--profile`), exactly as the model gets them. `--field NAME` prints the per-field system prompt and that field's line of the question. No model is called |
+| `prompts` | Print the rendered inventory, per-field, extraction and matching system prompts of a profile (`--profile`), exactly as the model gets them, each labelled with the mode that sends it (passage mode never sends the extraction prompt; document mode sends only it). `--field NAME` prints the per-field system prompt, that field's line, and the question's framing with `<sample list>` and `<excerpts>` in place of what a run fills in. No model is called |
 
 The flags worth knowing:
 

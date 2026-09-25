@@ -339,22 +339,25 @@ def test_prompts_prints_the_system_prompts_exactly_as_recorded():
 
     assert result.exit_code == 0
     assert prompt_sections(result.output) == {
-        "inventory system prompt": RECORDED_PROMPTS["inventory_system"],
-        "extraction system prompt": RECORDED_PROMPTS["extraction_system"],
-        "field system prompt": RECORDED_PROMPTS["field_system"],
-        "matching system prompt": RECORDED_PROMPTS["matching_system"],
+        "inventory system prompt (passage mode)": RECORDED_PROMPTS["inventory_system"],
+        "field system prompt (passage mode)": RECORDED_PROMPTS["field_system"],
+        "extraction system prompt (document mode)": RECORDED_PROMPTS["extraction_system"],
+        "matching system prompt (compare, both modes)": RECORDED_PROMPTS["matching_system"],
     }
 
 
-def test_prompts_for_one_field_prints_its_system_prompt_and_its_line():
+def test_prompts_for_one_field_prints_its_system_prompt_its_line_and_the_question():
     result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH), "--field", "thickness"])
 
     assert result.exit_code == 0
     sections = prompt_sections(result.output)
-    assert sections["field system prompt"] == RECORDED_PROMPTS["field_system"]
+    assert sections["field system prompt (passage mode)"] == RECORDED_PROMPTS["field_system"]
     line = sections["field line (thickness)"]
     assert line.startswith("- `thickness`")
     assert f"Field to extract:\n{line}\n\n" in RECORDED_PROMPTS["field_user:thickness"]
+    question = sections["field user prompt (thickness, passage mode)"]
+    assert question.startswith(f"Field to extract:\n{line}\n\nSamples this paper reports:\n<sample list>\n\n")
+    assert "<excerpts>" in question and question.endswith("Return the JSON object now.")
 
 
 def test_prompts_for_an_unknown_field_names_the_fields_there_are():

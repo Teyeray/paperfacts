@@ -55,9 +55,24 @@ export const state = {
 
 export const isCurrent = (generation) => generation === state.generation;
 
+// ui_copy.UiCopy's domain-free defaults, mirrored here (tests/test_web_copy.py holds the two equal): until the
+// profile has loaded, or when it never does, the page still names things, just generically.
+const GENERIC_UI_COPY = {
+  paper_level_label_zh: "论文级",
+  paper_level_short_zh: "论文级",
+  entity_label_zh: "样品",
+  no_samples_message_zh: "该论文没有范围内的样品，所以没有样品级数据。",
+};
+
 // One line of the profile's display copy (ui_copy.UiCopy). Every domain word on the page comes through here, so
-// the page names a paper-level record or a sample the way the served profile does. Empty until it has loaded.
-export const uiCopy = (key) => state.profile?.ui?.[key] ?? "";
+// the page names a paper-level record or a sample the way the served profile does.
+export const uiCopy = (key) => state.profile?.ui?.[key] ?? GENERIC_UI_COPY[key] ?? "";
+
+// Static markup names the entity through an empty `<span data-ui="key">`; this fills every one under `root`.
+// The document template is filled on every clone, the page itself once at start and again when the profile lands.
+export function applyUiCopy(root) {
+  for (const element of root.querySelectorAll("[data-ui]")) element.textContent = uiCopy(element.dataset.ui);
+}
 
 // Only a job belonging to the current document is used to draw progress; after switching
 // documents, a stale job snapshot must not carry over onto the new one
@@ -73,5 +88,5 @@ export const slot = (name, root = document.getElementById("document-view")) => r
 export function noSamplesReason() {
   const lanes = LANES.map((lane) => state.lanes[lane]).filter(Boolean);
   const noneInScope = lanes.length > 0 && lanes.every((lane) => !lane.samples?.length && lane.no_tco_film === true);
-  return noneInScope ? uiCopy("no_samples_message_zh") : "未识别到样品：两路抽取都没有给出样品。";
+  return noneInScope ? uiCopy("no_samples_message_zh") : `未识别到${uiCopy("entity_label_zh")}：两路抽取都没有给出${uiCopy("entity_label_zh")}。`;
 }

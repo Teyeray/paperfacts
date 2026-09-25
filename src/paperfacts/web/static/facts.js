@@ -17,7 +17,7 @@ export function renderKpis(root) {
   const matchNote = `${counts.samples_unmatched} 未配对${counts.low_confidence_matches ? ` · ${counts.low_confidence_matches} 低置信度` : ""}${counts.matching_failed ? " · 匹配失败" : ""}`;
   const tiles = [
     ...STATUS_ORDER.map((status) => [status, STATUS[status].label, counts[status], status === "missing" ? missingNote : STATUS[status].note]),
-    ["samples", "样品配对", counts.samples_matched, matchNote],
+    ["samples", `${uiCopy("entity_label_zh")}配对`, counts.samples_matched, matchNote],
   ];
   // Only worth a tile when it happened: a lane that placed every value has nothing to report here.
   const unplaced = Object.entries(counts.unattributed_by_backend ?? {});

@@ -440,6 +440,32 @@ async def no_samples(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     expect(await page.is_hidden('[data-slot="dataset-copy"]'), "copy is offered for an empty table")
 
 
+@check("a failed /api/profile leaves generic labels, not blanks, and the profile's own once a retry lands")
+async def profile_retry(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    failing = True
+
+    async def flaky(route: Route) -> None:
+        if failing:
+            await route.fulfill(status=500, content_type="application/json", body='{"detail": "profile down"}')
+        else:
+            await route.continue_()
+
+    await page.route("**/api/profile", flaky)
+    await open_doc(page, base, docs["C"])
+    health = await page.text_content("#health")
+    expect((health or "").startswith("model "), f"a profile failure marked the backend down: {health!r}")
+    text = await page.text_content('[data-slot="rows-empty"]')
+    expect("该论文没有范围内的样品" in (text or ""), f"generic no-samples message missing: {text!r}")
+    header = await page.text_content("#document-view section.facts thead")
+    expect("样品" in (header or ""), f"the facts header lost its entity label: {header!r}")
+    failing = False
+    # The first retry waits POLL_MS * 2; the view is then redrawn in the profile's words.
+    await page.wait_for_function(
+        "document.querySelector('[data-slot=\"rows-empty\"]')?.textContent.includes('TCO 膜')", timeout=10000
+    )
+    expect(bool(await page.text_content("#profile-title")), "the header never named the profile")
+
+
 @check("opening a document logs no failed request")
 async def quiet_console(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     errors: list[str] = []

@@ -36,6 +36,7 @@ from paperfacts.profile import PROFILES_DIRNAME, DomainProfile, load_profile
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
+    field_user_prompt,
     inventory_system_prompt,
     matching_system_prompt,
     render_field_table,
@@ -552,7 +553,8 @@ def prompts(
         str | None, typer.Option("--field", metavar="NAME", help="the per-field question for this field instead")
     ] = None,
 ) -> None:
-    """Print the system prompts a profile renders, exactly as the model gets them. No model is called."""
+    """Print the system prompts a profile renders, exactly as the model gets them, each under the mode that sends
+    it. No model is called."""
     settings = _env_settings()
     if profile is not None:
         settings = dataclasses.replace(settings, profile=profile)
@@ -563,15 +565,19 @@ def prompts(
             typer.secho(f"no field {field!r} in {domain.name}; it has: {', '.join(domain.by_name)}", fg="red", err=True)
             raise typer.Exit(code=1)
         sections = {
-            "field system prompt": field_system_prompt(domain),
+            "field system prompt (passage mode)": field_system_prompt(domain),
             f"field line ({field})": render_field_table((spec,)),
+            # The question's framing; the two placeholders are what a run fills from the paper.
+            f"field user prompt ({field}, passage mode)": field_user_prompt(spec, "<sample list>", "<excerpts>"),
         }
     else:
+        # Passage mode (the default) sends the inventory and field prompts and never the extraction prompt;
+        # document mode sends only the extraction prompt. Matching is the compare stage's, under either mode.
         sections = {
-            "inventory system prompt": inventory_system_prompt(domain),
-            "extraction system prompt": extraction_system_prompt(domain),
-            "field system prompt": field_system_prompt(domain),
-            "matching system prompt": matching_system_prompt(domain),
+            "inventory system prompt (passage mode)": inventory_system_prompt(domain),
+            "field system prompt (passage mode)": field_system_prompt(domain),
+            "extraction system prompt (document mode)": extraction_system_prompt(domain),
+            "matching system prompt (compare, both modes)": matching_system_prompt(domain),
         }
     for title, text in sections.items():
         typer.echo(f"===== {title} =====")
