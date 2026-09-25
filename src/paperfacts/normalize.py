@@ -14,9 +14,11 @@ import re
 import unicodedata
 from collections.abc import Callable
 from functools import cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FieldSpec
+from paperfacts.errors import ConfigError
+from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FIELDS_SOURCE, FieldSpec
 
 if TYPE_CHECKING:
     # Types only: records.py keys its sample list with sample_key from here, so a runtime import would be
@@ -517,10 +519,22 @@ CONVERTERS: dict[str, Converter] = {
     "Pa": _pressure,
 }
 
-# Fail at import time rather than with a KeyError buried in normalisation, field by field.
-_MISSING_CONVERTERS = {spec.canonical_unit for spec in FIELD_SPECS if spec.canonical_unit} - CONVERTERS.keys()
-if _MISSING_CONVERTERS:
-    raise RuntimeError(f"no converter registered for canonical unit(s): {sorted(_MISSING_CONVERTERS)}")
+
+def check_canonical_units(specs: tuple[FieldSpec, ...], source: Path) -> None:
+    """Refuse a field whose canonical unit nothing here can convert into, naming the field and the file.
+
+    Checked at import rather than as a KeyError buried in normalisation, field by field. It lives here and
+    not in fields.py because the converters do, and fields.py cannot import this module.
+    """
+    for spec in specs:
+        if spec.canonical_unit and spec.canonical_unit not in CONVERTERS:
+            raise ConfigError(
+                f"{source}: field {spec.name!r}: canonical_unit {spec.canonical_unit!r} has no converter; "
+                f"known units are {', '.join(CONVERTERS)}"
+            )
+
+
+check_canonical_units(FIELD_SPECS, FIELDS_SOURCE)
 
 
 # A power-of-ten factor written into the unit: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm" (normalize_text has

@@ -340,8 +340,8 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `model` | Model name sent with every request. Default `deepseek-v4.1-flash` |
 | `timeout_s` | Per-request timeout. Default 600, because this model reasons before it answers |
 | `context_tokens` | The window the prompt is planned against. Default 200000 |
-| `temperature` | Default 0.0 |
-| `max_tokens` | Completion budget, hidden reasoning included. Default 65536 |
+| `temperature` | 0 to 2. Default 0.0 |
+| `max_tokens` | Completion budget, hidden reasoning included; must be below `context_tokens`. Default 65536 |
 | `concurrency` | How many of one lane's field questions are in flight at once. Default 4 |
 | `max_in_flight` | How many model requests, text and vision, the whole process has on the wire at once. Default 8 |
 | `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
@@ -491,10 +491,10 @@ to count as the same fact.
   "description_zh": "所选样品的薄膜方块电阻。",   // Chinese explanation; display only
   "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
   "canonical_unit": "Ω/sq",
-  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
+  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol); both >= 0
   "abs_tol": 0.0,
   "condition_hint": null,                   // what to record alongside, e.g. a wavelength
-  "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction
+  "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction (only with "%")
   "valid_range": {"max": 500},              // optional plausible range in canonical_unit; min and/or max
   "condition_preference": ["400-800", "550"] // optional: which measurement fills the dataset cell
 }

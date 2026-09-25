@@ -168,7 +168,8 @@ def test_the_llm_context_tokens_default_matches_the_extractor_default():
 
 
 def test_the_llm_context_tokens_are_read_from_the_environment():
-    settings = Settings.from_env({f"{ENV_PREFIX}LLM_CONTEXT_TOKENS": "32000"})
+    # max_tokens comes down with it: the reply is reserved out of the window, so it has to fit inside.
+    settings = Settings.from_env({f"{ENV_PREFIX}LLM_CONTEXT_TOKENS": "32000", f"{ENV_PREFIX}LLM_MAX_TOKENS": "8192"})
 
     assert settings.llm_context_tokens == 32000
     assert isinstance(settings.llm_context_tokens, int)

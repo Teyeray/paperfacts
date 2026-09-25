@@ -337,7 +337,7 @@ class Settings:
         _warn_if_fields_came_from_elsewhere(file.path)
         repo_root = Path(get("REPO_ROOT") or DEFAULT_REPO_ROOT)
         key_file = get("LLM_API_KEY_FILE")
-        return cls(
+        settings = cls(
             data_root=Path(get("DATA_ROOT") or file.get("data_root", str)),
             repo_root=repo_root,
             uv_bin=get("UV_BIN") or file.get("parsers.uv_bin", str),
@@ -416,6 +416,8 @@ class Settings:
                 number("FIGURES_TIMEOUT_S", file.get("figures.timeout_s", float), float), "figures.timeout_s", file.path
             ),
         )
+        _check_ranges(settings, file.path)
+        return settings
 
     def require_llm_api_key(self) -> str:
         """Resolve the key at the moment it is needed: environment first, then the key file."""
@@ -431,6 +433,56 @@ class Settings:
             f"(copy .env.example), export PAPERFACTS_LLM_API_KEY or DEEPSEEK_API_KEY, "
             f"or write the key to {key_file}. All three are gitignored; config.json cannot hold a key."
         )
+
+
+def _check_ranges(settings: Settings, source: Path) -> None:
+    """Refuse a value outside what its setting can mean, naming the key and the file.
+
+    Each of these otherwise fails far from its cause: a zero timeout reads as a broken endpoint, a port of
+    0 as a bind error, and ``max_tokens >= context_tokens`` as a ContextBudgetError blaming every paper for
+    being too long.
+    """
+    mb = settings.max_upload_bytes // (1024 * 1024)
+    rules: list[tuple[bool, str]] = [
+        (
+            settings.paddle_render_dpi >= 1,
+            f"parsers.paddle_render_dpi must be at least 1, got {settings.paddle_render_dpi}",
+        ),
+        (
+            settings.subprocess_timeout_s > 0,
+            f"parsers.subprocess_timeout_s must be positive, got {settings.subprocess_timeout_s}",
+        ),
+        (settings.http_timeout_s > 0, f"parsers.http_timeout_s must be positive, got {settings.http_timeout_s}"),
+        (settings.llm_timeout_s > 0, f"llm.timeout_s must be positive, got {settings.llm_timeout_s}"),
+        (settings.llm_context_tokens >= 1, f"llm.context_tokens must be at least 1, got {settings.llm_context_tokens}"),
+        (settings.llm_max_tokens >= 1, f"llm.max_tokens must be at least 1, got {settings.llm_max_tokens}"),
+        (
+            settings.llm_max_tokens < settings.llm_context_tokens,
+            f"llm.max_tokens ({settings.llm_max_tokens}) must be below llm.context_tokens "
+            f"({settings.llm_context_tokens}): the reply is reserved out of the context window, and no prompt "
+            "would be left",
+        ),
+        (
+            0 <= settings.llm_temperature <= 2,
+            f"llm.temperature must be between 0 and 2, got {settings.llm_temperature}",
+        ),
+        (
+            settings.llm_retry_backoff_s >= 0,
+            f"llm.retry_backoff_s must not be negative, got {settings.llm_retry_backoff_s}",
+        ),
+        (1 <= settings.server_port <= 65535, f"server.port must be between 1 and 65535, got {settings.server_port}"),
+        (settings.max_upload_bytes >= 1024 * 1024, f"server.max_upload_mb must be at least 1, got {mb}"),
+        (settings.page_dpi_min >= 1, f"server.page_dpi.min must be at least 1, got {settings.page_dpi_min}"),
+        (
+            settings.page_dpi_min <= settings.page_dpi <= settings.page_dpi_max,
+            f"server.page_dpi.default ({settings.page_dpi}) must lie between server.page_dpi.min "
+            f"({settings.page_dpi_min}) and server.page_dpi.max ({settings.page_dpi_max})",
+        ),
+        (settings.overlay_dpi >= 1, f"overlay.dpi must be at least 1, got {settings.overlay_dpi}"),
+    ]
+    for ok, message in rules:
+        if not ok:
+            raise ConfigError(f"{message} (set in {source} or the matching {ENV_PREFIX} variable)")
 
 
 def _positive(value: int, dotted: str, source: Path) -> int:

@@ -536,6 +536,12 @@ def test_an_unknown_key_in_a_field_names_the_field_and_the_valid_keys():
         pytest.param({"keywords": ["thickness", 7]}, "keywords", id="keywords-with-a-number"),
         pytest.param({"description": "   "}, "description", id="blank-description"),
         pytest.param({"canonical_unit": 5}, "canonical_unit", id="unit-not-a-string"),
+        pytest.param({"rel_tol": -0.05}, "rel_tol", id="negative-relative-tolerance"),
+        pytest.param({"abs_tol": -1}, "abs_tol", id="negative-absolute-tolerance"),
+        pytest.param(
+            {"canonical_unit": "nm", "bare_number": "percent_or_fraction"}, "bare_number", id="fraction-on-nm"
+        ),
+        pytest.param({"bare_number": "percent_or_fraction"}, "bare_number", id="fraction-without-a-unit"),
     ],
 )
 def test_an_invalid_field_value_names_the_field_and_the_key(change: dict[str, Any], expected: str):
@@ -920,3 +926,60 @@ def test_a_figures_timeout_of_zero_names_the_key(tmp_path: Path):
 
     with pytest.raises(ConfigError, match=r"figures\.timeout_s must be positive"):
         Settings.from_env(env_for(path))
+
+
+# ---- Ranges and cross-checks on the settings -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        pytest.param({"llm.context_tokens": 0}, "llm.context_tokens", id="context-zero"),
+        pytest.param({"llm.max_tokens": 0}, "llm.max_tokens", id="max-tokens-zero"),
+        pytest.param(
+            {"llm.context_tokens": 60000, "llm.max_tokens": 65536}, "llm.context_tokens", id="reply-fills-window"
+        ),
+        pytest.param({"llm.temperature": -0.1}, "llm.temperature", id="temperature-negative"),
+        pytest.param({"llm.temperature": 2.5}, "llm.temperature", id="temperature-too-high"),
+        pytest.param({"llm.timeout_s": 0}, "llm.timeout_s", id="llm-timeout-zero"),
+        pytest.param({"parsers.http_timeout_s": -1}, "parsers.http_timeout_s", id="http-timeout-negative"),
+        pytest.param({"parsers.subprocess_timeout_s": 0}, "parsers.subprocess_timeout_s", id="subprocess-timeout"),
+        pytest.param({"llm.retry_backoff_s": -1}, "llm.retry_backoff_s", id="backoff-negative"),
+        pytest.param({"server.port": 0}, "server.port", id="port-zero"),
+        pytest.param({"server.port": 70000}, "server.port", id="port-too-high"),
+        pytest.param({"server.max_upload_mb": 0}, "server.max_upload_mb", id="upload-zero"),
+        pytest.param({"server.page_dpi.min": 0}, "server.page_dpi.min", id="dpi-min-zero"),
+        pytest.param({"server.page_dpi.default": 300}, "server.page_dpi.default", id="dpi-above-max"),
+        pytest.param({"server.page_dpi.default": 20}, "server.page_dpi.default", id="dpi-below-min"),
+        pytest.param({"overlay.dpi": 0}, "overlay.dpi", id="overlay-dpi-zero"),
+        pytest.param({"parsers.paddle_render_dpi": 0}, "parsers.paddle_render_dpi", id="render-dpi-zero"),
+    ],
+)
+def test_a_setting_outside_its_range_names_the_key_and_the_file(tmp_path: Path, changes, expected):
+    path = write_config(tmp_path / "config.json", changes)
+
+    with pytest.raises(ConfigError) as excinfo:
+        Settings.from_env(env_for(path))
+
+    assert expected in str(excinfo.value)
+    assert str(path) in str(excinfo.value)
+
+
+def test_the_reply_budget_error_names_both_keys(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"llm.context_tokens": 60000, "llm.max_tokens": 65536})
+
+    with pytest.raises(ConfigError, match=r"llm\.max_tokens .* llm\.context_tokens"):
+        Settings.from_env(env_for(path))
+
+
+def test_the_shipped_settings_pass_every_range_check(tmp_path: Path):
+    Settings.from_env(env_for(write_config(tmp_path / "config.json")))
+
+
+def test_a_canonical_unit_with_no_converter_names_the_field_and_the_file():
+    from paperfacts.normalize import check_canonical_units
+
+    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"canonical_unit": "furlong"}]}))[0]
+
+    with pytest.raises(ConfigError, match=r"config\.json: field 'thickness': canonical_unit 'furlong'"):
+        check_canonical_units((spec,), Path("config.json"))
