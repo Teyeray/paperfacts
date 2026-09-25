@@ -16,6 +16,7 @@ so the tests here watch "is the mapping right", not the business outcome:
 from __future__ import annotations
 
 import dataclasses
+import json
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -25,7 +26,10 @@ from fastapi.testclient import TestClient
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
+from paperfacts.errors import ConfigError
 from paperfacts.models import BACKENDS, Backend, ParsedArtifact
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import load_profile
 from paperfacts.records import LaneExtraction
 from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
@@ -33,8 +37,10 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_sample
 from support.factories import make_blank_pdf
+from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data
 from support.web import (
     DOC_KEY,
+    DOC_SHA,
     RecordingRunner,
     corpus_payload,
     seed_artifact,
@@ -54,12 +60,18 @@ MALFORMED_ID = "not-a-document"
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", llm_model="fake-model")
+    return Settings(
+        data_root=tmp_path / "data",
+        repo_root=tmp_path,
+        profile=str(SHIPPED_PROFILE_PATH),
+        llm_api_key="sk-test",
+        llm_model="fake-model",
+    )
 
 
 @pytest.fixture
-def library(settings: Settings) -> Library:
-    return Library(settings)
+def library(settings: Settings, tco_profile: DomainProfile) -> Library:
+    return Library(settings, tco_profile)
 
 
 @pytest.fixture
@@ -115,11 +127,85 @@ def parsed_both_lanes(library: Library) -> str:
 # ---- health / listing ---------------------------------------------------------------------
 
 
-def test_health_reports_the_model_that_will_be_used(client: TestClient):
+def test_health_reports_the_model_and_the_profile_that_will_be_used(client: TestClient, tco_profile: DomainProfile):
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "model": "fake-model"}
+    assert response.json() == {
+        "status": "ok",
+        "model": "fake-model",
+        "profile": "tco",
+        "profile_hash": tco_profile.content_hash[:12],
+        "profile_on_disk_changed": False,
+    }
+
+
+# ---- the profile (AC-14) ------------------------------------------------------------------
+
+
+def test_the_profile_gives_the_page_tcos_own_copy(client: TestClient, tco_profile: DomainProfile):
+    body = client.get("/api/profile").json()
+
+    assert (body["name"], body["title_zh"], body["maturity"]) == ("tco", tco_profile.title_zh, "production")
+    # The strings the page and the workbook printed before they came from the profile.
+    assert body["ui"] == {
+        "paper_level_label_zh": "靶材（论文级）",
+        "paper_level_short_zh": "靶材",
+        "entity_label_zh": "样品",
+        "no_samples_message_zh": "该论文没有自己沉积的 TCO 膜，所以没有样品级数据。",
+    }
+    assert body["groups"][0] == {"name": "target", "level": "paper", "label_zh": "靶材"}
+    assert body["field_count"] == {"paper": len(tco_profile.paper_fields), "sample": len(tco_profile.sample_fields)}
+    assert [field["name"] for field in body["fields"]] == [spec.name for spec in tco_profile.fields]
+    thickness = next(field for field in body["fields"] if field["name"] == "thickness")
+    assert thickness == {"name": "thickness", "label": "厚度", "group": "film", "level": "sample", "unit": "nm"}
+
+
+def test_a_profile_name_that_could_break_the_download_header_is_refused(settings: Settings, jobs: JobManager):
+    # The loader enforces the name, but a profile built in memory has not been through it, and the name goes
+    # unquoted into the corpus download's Content-Disposition.
+    profile = dataclasses.replace(make_profile(), name='demo"; filename="evil.exe')
+
+    with pytest.raises(ConfigError, match="must match"):
+        create_app(settings, profile=profile, jobs=jobs)
+
+
+def test_another_profile_serves_its_own_copy_over_the_defaults(settings: Settings, jobs: JobManager):
+    """The copy a profile sets replaces the default; what it leaves out is the domain-free default."""
+    profile = make_profile({"ui": {"paper_level_label_zh": "前驱体（论文级）", "entity_label_zh": "涂层"}})
+
+    with TestClient(create_app(settings, profile=profile, jobs=jobs)) as other:
+        body = other.get("/api/profile").json()
+
+    assert (body["name"], body["title_zh"], body["maturity"]) == ("demo", "示例领域", "example")
+    assert body["ui"] == {
+        "paper_level_label_zh": "前驱体（论文级）",
+        "paper_level_short_zh": "论文级",
+        "entity_label_zh": "涂层",
+        "no_samples_message_zh": "该论文没有范围内的样品，所以没有样品级数据。",
+    }
+    assert body["groups"] == [
+        {"name": "precursor", "level": "paper", "label_zh": "前驱体"},
+        {"name": "coating", "level": "sample", "label_zh": "涂层"},
+    ]
+    assert body["field_count"] == {"paper": 1, "sample": 2}
+
+
+def test_a_b0_lane_with_no_film_still_carries_the_flag_the_no_samples_message_keys_on(
+    client: TestClient, library: Library, parsed_only: str
+):
+    """The page shows ``ui.no_samples_message_zh`` when every lane is empty with ``no_tco_film`` set. A lane
+    written before profiles existed must still arrive with that internal name."""
+    b0 = json.loads((Path(__file__).parent / "fixtures" / "b0_formats" / "lane.json").read_text(encoding="utf-8"))
+    b0.update(document_id=DOC_SHA, extractor_key=library.extractor_key, samples=[], no_tco_film=True)
+    path = library.layout.extraction_path(DOC_SHA, "mineru", library.extractor_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(b0), encoding="utf-8")
+
+    body = client.get(f"/api/documents/{parsed_only}/extraction/mineru").json()
+
+    assert body["samples"] == [] and body["no_tco_film"] is True
+    assert "no_samples_message_zh" in client.get("/api/profile").json()["ui"]
 
 
 def test_the_document_list_is_empty_before_anything_is_uploaded(client: TestClient):
@@ -641,8 +727,8 @@ def test_the_pipeline_runner_hands_the_job_to_run_document(
     the job's force flag, and the mark callback straight through to workflow, unchanged."""
     received: dict = {}
 
-    def fake_run_document(document, settings_seen, *, force, on_stage):
-        received.update(document=document, settings=settings_seen, force=force, on_stage=on_stage)
+    def fake_run_document(document, settings_seen, profile, *, force, on_stage):
+        received.update(document=document, settings=settings_seen, profile=profile, force=force, on_stage=on_stage)
 
     monkeypatch.setattr("paperfacts.web.app.run_document", fake_run_document)
     job = Job(job_id="job-1", document_id=registered, force=True, created_at="2026-01-01T00:00:00+00:00")
@@ -650,11 +736,12 @@ def test_the_pipeline_runner_hands_the_job_to_run_document(
     def mark(stage: str, status: str, detail: str = "") -> None:
         pass
 
-    pipeline_runner(settings, library)(job, mark)
+    pipeline_runner(settings, library.profile, library)(job, mark)
 
     assert received == {
         "document": library.document(registered),
         "settings": settings,
+        "profile": library.profile,
         "force": True,
         "on_stage": mark,
     }
@@ -667,5 +754,116 @@ def test_the_pipeline_fails_loudly_when_the_pdf_is_gone(monkeypatch, settings: S
     job = Job(job_id="job-1", document_id=DOC_KEY, force=False, created_at="2026-01-01T00:00:00+00:00")
 
     with pytest.raises(FileNotFoundError):
-        pipeline_runner(settings, library)(job, lambda stage, status, detail="": None)
+        pipeline_runner(settings, library.profile, library)(job, lambda stage, status, detail="": None)
     assert calls == []
+
+
+def test_the_pipeline_runner_refuses_a_job_once_the_profile_file_changed_on_disk(
+    monkeypatch, settings: Settings, tmp_path: Path, registered
+):
+    """load_profile is cached for the life of the process, so after an edit the server would keep running the
+    old profile under keys the edited file no longer names. The job is refused until a restart instead."""
+    path = tmp_path / "profiles" / "demo.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(profile_data(), ensure_ascii=False), encoding="utf-8")
+    profile = load_profile(path)
+    library = Library(settings, profile)
+    calls: list[object] = []
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: calls.append(args))
+    job = Job(job_id="job-1", document_id=registered, force=False, created_at="2026-01-01T00:00:00+00:00")
+    run = pipeline_runner(settings, profile, library)
+
+    run(job, lambda stage, status, detail="": None)
+    path.write_text(json.dumps(profile_data({"prompt.domain_subject": "edited"}), ensure_ascii=False), "utf-8")
+
+    with pytest.raises(ConfigError, match="profile changed on disk") as refused:
+        run(job, lambda stage, status, detail="": None)
+    assert "请重启服务器" in str(refused.value)
+    assert len(calls) == 1
+
+
+def _demo_file(path: Path, changes: dict | None = None) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(profile_data(changes), ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _job(document_id: str) -> Job:
+    return Job(job_id="job-1", document_id=document_id, force=False, created_at="2026-01-01T00:00:00+00:00")
+
+
+def _no_mark(stage: str, status: str, detail: str = "") -> None:
+    pass
+
+
+def test_a_display_only_edit_is_refused_too(monkeypatch, settings: Settings, tmp_path: Path, registered):
+    """The content hash leaves display text out, but the server keeps showing the text it started with: every
+    byte of the file counts."""
+    path = _demo_file(tmp_path / "profiles" / "demo.json")
+    profile = load_profile(path)
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: None)
+    run = pipeline_runner(settings, profile, Library(settings, profile))
+    _demo_file(path, {"title_zh": "改过的标题"})
+
+    assert load_profile(path) is profile  # the process still holds the text it started with
+    with pytest.raises(ConfigError, match="profile changed on disk"):
+        run(_job(registered), _no_mark)
+
+
+@pytest.mark.parametrize("damage", ["delete", "unreadable"])
+def test_a_profile_file_that_cannot_be_read_refuses_the_job_with_its_own_message(
+    monkeypatch, settings: Settings, tmp_path: Path, registered, damage: str
+):
+    path = _demo_file(tmp_path / "profiles" / "demo.json")
+    profile = load_profile(path)
+    calls: list[object] = []
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: calls.append(args))
+    run = pipeline_runner(settings, profile, Library(settings, profile))
+    if damage == "delete":
+        path.unlink()
+    else:
+
+        def refuse(self, *args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "read_bytes", refuse)
+
+    with pytest.raises(ConfigError, match="cannot read the profile file") as refused:
+        run(_job(registered), _no_mark)
+    assert "无法读取领域配置文件" in str(refused.value)
+    assert "changed on disk" not in str(refused.value)
+    # The message reaches the browser: the file's name, never where the server keeps it.
+    assert "demo.json" in str(refused.value) and str(tmp_path) not in str(refused.value)
+    assert calls == []
+
+
+def test_a_retargeted_symlink_is_noticed(monkeypatch, settings: Settings, tmp_path: Path, registered):
+    first = _demo_file(tmp_path / "v1" / "demo.json")
+    second = _demo_file(tmp_path / "v2" / "demo.json", {"prompt.domain_subject": "edited"})
+    link = tmp_path / "demo.json"
+    link.symlink_to(first)
+    linked = dataclasses.replace(settings, profile=str(link))
+    profile = load_profile(link)
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: None)
+    run = pipeline_runner(linked, profile, Library(linked, profile))
+    run(_job(registered), _no_mark)
+
+    link.unlink()
+    link.symlink_to(second)
+
+    with pytest.raises(ConfigError, match="profile changed on disk"):
+        run(_job(registered), _no_mark)
+
+
+def test_health_says_when_the_profile_file_changed_on_disk(settings: Settings, tmp_path: Path):
+    path = _demo_file(tmp_path / "profiles" / "demo.json")
+    profile = load_profile(path)
+    client = TestClient(create_app(settings, profile=profile, jobs=JobManager(RecordingRunner(), stage_names())))
+
+    before = client.get("/api/health").json()["profile_on_disk_changed"]
+    _demo_file(path, {"description_zh": "只改了说明"})
+    after = client.get("/api/health").json()["profile_on_disk_changed"]
+    path.unlink()
+    gone = client.get("/api/health").json()["profile_on_disk_changed"]
+
+    assert (before, after, gone) == (False, True, True)

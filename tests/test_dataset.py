@@ -4,24 +4,28 @@ import json
 from pathlib import Path
 
 import pytest
-from openpyxl import load_workbook
 from pydantic import ValidationError
 
+from paperfacts.columns import field_columns
 from paperfacts.compare import FieldComparison, compare_lanes
 from paperfacts.dataset import (
     DatasetPayload,
     DocumentDataset,
     consolidate_document,
-    write_dataset,
     write_dataset_json,
 )
 from paperfacts.decide import decide
-from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.records import FailedQuestion, FieldValue, TargetRecord
-from support.extraction import make_lane, make_sample
+from support.extraction import comparison_options, make_lane, make_sample
 from support.factories import DOC_ID
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
+FIELD_SPECS = shipped_profile().fields
 
 
 def value(name, raw, unit=None, *, condition=None, backend="mineru", **kwargs):
@@ -36,8 +40,8 @@ def dataset(a, b=None, matching=None, *, filename="paper.pdf"):
         unmatched_a=tuple(s.sample_id for s in a.samples), unmatched_b=tuple(s.sample_id for s in b.samples)
     )
     document = DocumentInput(document_id=DOC_ID, sha256=DOC_ID, pdf_path=Path(filename))
-    report = compare_lanes(a, b, matching)
-    return consolidate_document(document, {a.backend: a, b.backend: b}, report)
+    report = compare_lanes(a, b, matching, comparison_options())
+    return consolidate_document(document, {a.backend: a, b.backend: b}, report, comparison_options())
 
 
 def paired(a, b, *, confidence=1.0, filename="paper.pdf"):
@@ -629,7 +633,7 @@ def test_a_conflict_at_a_condition_narrowing_set_aside_does_not_refuse_the_chose
     assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
 
 
-def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell():
+def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell(tco_profile):
     # Fail closed: only a conflict wholly about candidates narrowing set aside is ignored. One whose values
     # match no candidate at all (a stale report, a changed normalisation) says nothing is known to be settled.
     spec = FIELD_BY_NAME["transmittance"]
@@ -644,10 +648,10 @@ def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell():
         FieldComparison(scope="sample:A|A", field="transmittance", status="conflict", a=stranger, b=None),
     ]
 
-    assert decide(spec, evidence, comparisons).status == "conflict"
+    assert decide(spec, evidence, comparisons, units=tco_profile.units).status == "conflict"
 
 
-def test_a_troubled_comparison_with_no_values_still_refuses_the_cell():
+def test_a_troubled_comparison_with_no_values_still_refuses_the_cell(tco_profile):
     # Nothing ties it to a condition narrowing set aside, so it is not known to be about another measurement.
     spec = FIELD_BY_NAME["transmittance"]
     evidence = [
@@ -660,7 +664,7 @@ def test_a_troubled_comparison_with_no_values_still_refuses_the_cell():
         FieldComparison(scope="sample:A|A", field="transmittance", status="ambiguous"),
     ]
 
-    assert decide(spec, evidence, comparisons).status == "ambiguous"
+    assert decide(spec, evidence, comparisons, units=tco_profile.units).status == "ambiguous"
 
 
 def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
@@ -852,65 +856,12 @@ def test_paper_selection_prefers_two_lane_agreement_then_stable_sample_id():
     assert dataset(a, b, matching).paper_row["sample_id"] == "B"
 
 
-def test_excel_reopens_with_numeric_fields_text_ids_and_no_pdf_formulas(tmp_path):
-    a = make_lane(
-        samples=[
-            make_sample(
-                "001",
-                [value("thickness", "0.3", "μm"), value("resistivity", "1e-4", "Ω cm")],
-                label='=HYPERLINK("https://example.invalid")',
-                conditions={"temperature": "001"},
-            )
-        ],
-        target=TargetRecord(fields=(value("component", "=1+1"),)),
-    )
-    b = make_lane(backend="paddleocr_vl", samples=[make_sample("001", a.samples[0].fields)], target=a.target)
-    matching = SampleMatching(
-        pairs=(SampleMatch(a_id="001", b_id="001", confidence=1.0, method="exact", justification="same"),)
-    )
-    result = dataset(a, b, matching, filename="=paper.pdf")
-    output = tmp_path / "dataset.xlsx"
-    write_dataset(
-        [result, result],
-        output,
-        failures=[{"document_id": "b" * 64, "filename": "failed.pdf", "error": "parser failed"}],
-    )
-    workbook = load_workbook(output)
-    assert workbook.sheetnames == ["论文数据", "样品数据", "字段说明", "数据质量", "图中读数", "运行记录"]
-    sheet = workbook["论文数据"]
-    assert sheet.max_row == 2
-    assert sheet.freeze_panes == "D2"
-    assert len(sheet.tables) == 1
-    columns = {cell.value: cell.column for cell in sheet[1]}
-    assert sheet.cell(2, columns["thickness"]).value == 300
-    assert sheet.cell(2, columns["thickness"]).data_type == "n"
-    assert sheet.cell(2, columns["样品ID"]).value == "001"
-    assert sheet.cell(2, columns["样品ID"]).data_type == "s"
-    assert sheet.cell(2, columns["component"]).value == "=1+1"
-    assert sheet.cell(2, columns["component"]).data_type == "s"
-    assert sheet.cell(2, columns["文件名"]).data_type == "s"
-    assert sheet.cell(2, columns["density"]).value is None
-    assert "E+00" in sheet.cell(2, columns["resistivity"]).number_format
-    assert workbook["运行记录"].max_row == 3
-    assert workbook["运行记录"].cell(3, 3).value == "failed"
-    assert not list(tmp_path.glob("*.tmp"))
-    assert all(cell.data_type != "f" for page in workbook for row in page for cell in row)
-
-
-def test_an_empty_export_still_records_failures(tmp_path):
-    output = tmp_path / "empty.xlsx"
-    write_dataset([], output, failures=[{"filename": "bad.pdf", "error": "unreadable"}])
-    workbook = load_workbook(output)
-    assert workbook["论文数据"].max_row == 1
-    assert workbook["运行记录"].cell(2, 3).value == "failed"
-
-
 def test_mismatched_document_ids_are_rejected():
     a, b = make_lane(), make_lane(backend="paddleocr_vl")
-    report = compare_lanes(a, b, SampleMatching())
+    report = compare_lanes(a, b, SampleMatching(), comparison_options())
     document = DocumentInput(document_id="b" * 64, sha256="b" * 64, pdf_path=Path("other.pdf"))
     with pytest.raises(ValueError, match="same PDF"):
-        consolidate_document(document, {a.backend: a, b.backend: b}, report)
+        consolidate_document(document, {a.backend: a, b.backend: b}, report, comparison_options())
 
 
 def test_the_json_view_survives_a_round_trip(tmp_path):
@@ -925,7 +876,8 @@ def test_the_json_view_survives_a_round_trip(tmp_path):
     assert loaded["filename"] == "paper.pdf"
     assert loaded["extractor_key"] == result.extractor_key
     assert loaded["comparison_key"] == result.comparison_key
-    assert [field["name"] for field in loaded["fields"]] == [spec.name for spec in FIELD_SPECS]
+    # The field list is display text, built from the profile by whoever serves the table: never stored.
+    assert "fields" not in loaded
     assert loaded["paper_row"] == dict(result.paper_row)
     assert loaded["sample_rows"] == [dict(row) for row in result.sample_rows]
     assert loaded["quality_rows"] == [dict(row) for row in result.quality_rows]
@@ -933,9 +885,22 @@ def test_the_json_view_survives_a_round_trip(tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_a_stored_file_with_a_field_list_still_reads(tmp_path):
+    # Files written before the list was dropped carry one; it is read, and the library replaces it.
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])
+    path = tmp_path / "dataset.json"
+    write_dataset_json(result, path)
+    old = json.loads(path.read_text(encoding="utf-8")) | {
+        "fields": [column.model_dump() for column in field_columns(shipped_profile())]
+    }
+
+    parsed = DatasetPayload.model_validate(old)
+
+    assert DocumentDataset.from_payload(parsed) == result
+
+
 def test_the_field_list_carries_the_chinese_description_for_the_header_tooltip():
-    result = paired([value("transmittance", "85", "%")], [value("transmittance", "85", "%", backend="paddleocr_vl")])
-    by_name = {field.name: field for field in result.to_payload().fields}
+    by_name = {field.name: field for field in field_columns(shipped_profile())}
     assert "透光率" in by_name["transmittance"].description
     assert by_name["transmittance"].scope == "sample"
 
@@ -948,7 +913,7 @@ def test_every_configured_field_has_a_chinese_description():
 
 def test_the_field_list_carries_the_chinese_label_for_the_column_header():
     # The browser prints this above the column; a field without one falls back to its id, never to blank.
-    by_name = {field.name: field for field in dataset(make_lane()).to_payload().fields}
+    by_name = {field.name: field for field in field_columns(shipped_profile())}
 
     assert by_name["transmittance"].label == "透光率"
     assert by_name["thickness"].label == "厚度"
@@ -984,7 +949,7 @@ def test_a_dataset_file_in_the_wrong_shape_fails_at_the_boundary():
 
 
 def test_the_json_field_list_carries_the_unit_and_the_scope():
-    fields = {field.name: field for field in dataset(make_lane()).to_payload().fields}
+    fields = {field.name: field for field in field_columns(shipped_profile())}
 
     assert fields["thickness"].scope == "sample"
     assert fields["component"].scope == "target"
@@ -999,7 +964,12 @@ def test_the_display_name_is_the_filename_a_dataset_reports():
     a = make_lane(samples=[make_sample("A", [value("thickness", "100 nm")])])
     b = make_lane(backend="paddleocr_vl")
     matching = SampleMatching(unmatched_a=("A",))
-    result = consolidate_document(document, {a.backend: a, b.backend: b}, compare_lanes(a, b, matching))
+    result = consolidate_document(
+        document,
+        {a.backend: a, b.backend: b},
+        compare_lanes(a, b, matching, comparison_options()),
+        comparison_options(),
+    )
 
     assert result.filename == "Sputtered ITO.pdf"
     assert result.paper_row["filename"] == "Sputtered ITO.pdf"
@@ -1062,21 +1032,6 @@ def test_a_single_source_series_value_is_still_marked_series_level():
     assert decision(result, "thickness")["series"] is True
 
 
-def test_the_series_mark_reaches_the_quality_sheet(tmp_path):
-    result = paired(
-        [value("thickness", "300", "nm", series=True)],
-        [value("thickness", "300", "nm", backend="paddleocr_vl", series=True)],
-    )
-    output = tmp_path / "dataset.xlsx"
-    write_dataset([result], output)
-
-    sheet = load_workbook(output)["数据质量"]
-    columns = {cell.value: cell.column for cell in sheet[1]}
-    rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
-    assert sheet.cell(rows["thickness"], columns["系列级"]).value is True
-    assert sheet.cell(rows["resistivity"], columns["系列级"]).value is False
-
-
 def test_the_quality_row_names_the_lanes_behind_a_committed_value():
     agreed = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm", backend="paddleocr_vl")])
     assert decision(agreed, "thickness")["decision"] == "agree"
@@ -1093,33 +1048,7 @@ def test_a_refused_cell_names_no_lane():
     assert decision(result, "thickness")["lanes"] == ""
 
 
-def test_the_lane_column_reaches_the_quality_sheet(tmp_path):
-    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm", backend="paddleocr_vl")])
-    output = tmp_path / "dataset.xlsx"
-    write_dataset([result], output)
-
-    sheet = load_workbook(output)["数据质量"]
-    columns = {cell.value: cell.column for cell in sheet[1]}
-    rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
-    assert sheet.cell(rows["thickness"], columns["证据来源通道"]).value == "mineru; paddleocr_vl"
-
-
 # ---- Figure readings: their own sheet, never a cell -------------------------------------------------
-
-
-def test_figure_rows_fill_only_their_own_sheet(tmp_path: Path):
-    output = tmp_path / "dataset.xlsx"
-    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "100", "nm")])]))
-    row = {"document_id": DOC_ID, "figure": "Fig. 3", "value": None, "value_raw": "25 10^2 ohm/sq", "precision": "±20%"}
-
-    write_dataset([result], output, figure_rows=[row])
-
-    workbook = load_workbook(output)
-    sheet = workbook["图中读数"]
-    header = [cell.value for cell in sheet[1]]
-    cells = {header[i]: cell.value for i, cell in enumerate(sheet[2])}
-    assert cells["图"] == "Fig. 3" and cells["读数（近似值）"] is None and cells["精度"] == "±20%"
-    assert workbook["样品数据"].max_row == 2  # the sample sheet is what it would have been without the row
 
 
 def test_the_dataset_module_knows_nothing_of_figure_reading():

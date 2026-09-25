@@ -15,7 +15,7 @@ one shows every intermediate state of one paper:
     ├── facts/<backend>.<extractor_key>.json           one lane's extraction, the model's own wording
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated per-sample table, for the web UI
-    ├── figures/<figure_key>.json                  values a vision model read off charts (opt-in stage)
+    ├── figures/<profile>/<figure_key>.json        values a vision model read off charts (opt-in stage)
     ├── overlays/<backend>/page_000.png                bbox overlays
     └── pages/<dpi>dpi/page_000.png                    page renders for the web viewer
 
@@ -95,8 +95,20 @@ class DataLayout:
     def comparison_path(self, document_id: str, extractor_key: str, comparison_key: str) -> Path:
         return self.doc_dir(document_id) / "comparisons" / f"{extractor_key}.{comparison_key}.json"
 
-    def figures_path(self, document_id: str, figure_key: str) -> Path:
-        return self.doc_dir(document_id) / "figures" / f"{figure_key}.json"
+    def figures_path(self, document_id: str, figure_key: str, profile: str) -> Path:
+        # Per profile: two profiles with the same chart slots and figure fields share a figure_key, and one file
+        # would be re-tagged by whichever wrote it last.
+        return self.figures_dir(document_id, profile) / f"{figure_key}.json"
+
+    def figures_dir(self, document_id: str, profile: str) -> Path:
+        return self.legacy_figures_dir(document_id) / profile
+
+    def legacy_figures_dir(self, document_id: str) -> Path:
+        """Where readings were stored before they were kept per profile, all of them under the TCO profile."""
+        return self.doc_dir(document_id) / "figures"
+
+    def legacy_figures_path(self, document_id: str, figure_key: str) -> Path:
+        return self.legacy_figures_dir(document_id) / f"{figure_key}.json"
 
     def overlay_dir(self, document_id: str, backend: Backend) -> Path:
         return self.doc_dir(document_id) / "overlays" / backend
@@ -107,16 +119,18 @@ class DataLayout:
     def llm_cache_dir(self) -> Path:
         return self.root / "llm_cache"
 
-    def dataset_path(self, document_id: str) -> Path:
-        return self.doc_dir(document_id) / "dataset.xlsx"
+    def dataset_path(self, document_id: str, profile_name: str) -> Path:
+        # Named after the profile, so one document run under two profiles keeps both workbooks. A workbook is
+        # not key-stamped: it is whatever the profile's last run wrote.
+        return self.doc_dir(document_id) / "exports" / f"{profile_name}.xlsx"
 
     def dataset_json_path(self, document_id: str, extractor_key: str, comparison_key: str) -> Path:
         # Keyed like comparison_path: a dataset built with another model or field table is a different
         # file, so the browser can never be served a consolidated table the current settings disown.
         return self.doc_dir(document_id) / "datasets" / f"{extractor_key}.{comparison_key}.json"
 
-    def batch_dataset_path(self) -> Path:
-        return self.root / "exports" / "paperfacts.xlsx"
+    def batch_dataset_path(self, profile_name: str) -> Path:
+        return self.root / "exports" / f"{profile_name}.xlsx"
 
 
 # ---- Atomic writes -----------------------------------------------------------------------------------

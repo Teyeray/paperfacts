@@ -24,6 +24,7 @@ from paperfacts.prompts import inventory_system_prompt
 from paperfacts.threads import ContextThreadPoolExecutor
 from support.extraction import lane_options, make_artifact
 from support.llm import FakeLlmClient
+from support.profiles import shipped_profile
 from support.vision import FakeVisionClient, chart_answer
 from test_extract_passages import make_blocks, responder
 from test_figures import artifact, cap, fig
@@ -67,7 +68,7 @@ def test_the_field_questions_run_in_the_callers_context():
     answer = responder()
 
     def recording(system: str, user: str) -> str:
-        if system != inventory_system_prompt():
+        if system != inventory_system_prompt(shipped_profile()):
             seen.append(CALLER.get())
         return answer(system, user)
 
@@ -82,7 +83,7 @@ def test_the_field_questions_run_in_the_callers_context():
     assert seen and set(seen) == {"job-1"}
 
 
-def test_the_chart_panels_run_in_the_callers_context():
+def test_the_chart_panels_run_in_the_callers_context(tco_profile):
     seen: list[str | None] = []
 
     def recording(user: str, image: bytes):
@@ -94,6 +95,7 @@ def test_the_chart_panels_run_in_the_callers_context():
         artifact(fig(0, 0), fig(0, 1), cap(0, 2, "Fig. 3 Sheet resistance")),
         lambda page, bbox: b"png",
         FakeVisionClient(recording),
+        tco_profile,
         figure_key="k",
         max_per_document=12,
         concurrency=2,
@@ -107,11 +109,11 @@ def test_the_lanes_and_the_figures_stage_run_in_the_callers_context(monkeypatch,
     seen: list[tuple[str, str | None]] = []
     fake_extract = workflow.extract_document  # the fake pipeline's, installed above
 
-    def recording_extract(document, backend, settings, client, *, force=False):
+    def recording_extract(document, backend, settings, options, client, *, force=False):
         seen.append((backend, CALLER.get()))
-        return fake_extract(document, backend, settings, client, force=force)
+        return fake_extract(document, backend, settings, options, client, force=force)
 
-    def recording_figures(document, settings, *, force, artifact, stop):
+    def recording_figures(document, settings, profile, *, force, artifact, stop):
         seen.append(("figures", CALLER.get()))
         return "done", ""
 
@@ -120,6 +122,6 @@ def test_the_lanes_and_the_figures_stage_run_in_the_callers_context(monkeypatch,
     settings = dataclasses.replace(Settings(data_root=tmp_path / "data"), figures_enabled=True)
 
     CALLER.set("job-3")
-    workflow.run_document(DocumentInput.from_path(two_page_pdf), settings)
+    workflow.run_document(DocumentInput.from_path(two_page_pdf), settings, workflow.load_run_profile(settings))
 
     assert sorted(seen) == [("figures", "job-3"), ("mineru", "job-3"), ("paddleocr_vl", "job-3")]

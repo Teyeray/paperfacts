@@ -16,13 +16,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.dataset import DatasetPayload, DocumentDataset, FieldColumn
+from paperfacts.dataset import DatasetPayload, DocumentDataset
 from paperfacts.decide import CellValue
-from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
+from paperfacts.keys import comparison_key_for, extractor_key_for, figure_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
+from paperfacts.profile import DomainProfile
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import (
     DataLayout,
@@ -99,15 +101,18 @@ class CorpusPayload(BaseModel):
 
 
 class Library:
-    """Read-only queries over ``data/docs``, plus upload registration. Cache keys follow the current Settings."""
+    """Read-only queries over ``data/docs``, plus upload registration. Cache keys follow the Settings and the
+    profile it is built with, which must be the ones the jobs run under."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, profile: DomainProfile) -> None:
         self.settings = settings
         self.layout = DataLayout(settings.data_root)
         # The same key the pipeline writes under, or the browser looks for a file nothing ever wrote.
-        self.extractor_key = extractor_key_for(settings)
-        self.comparison_key = comparison_key()
-        self.figure_key = figure_key_for(settings)
+        self.profile = profile
+        self.extractor_key = extractor_key_for(settings, self.profile)
+        self.comparison_key = comparison_key_for(settings, self.profile)
+        self.figure_key = figure_key_for(settings, self.profile)
+        self.columns: tuple[FieldColumn, ...] = field_columns(profile)
         self._counts_cache: dict[Path, tuple[tuple[tuple[int, int, int] | None, ...], ComparisonCounts | None]] = {}
         self._counts_lock = threading.Lock()
 
@@ -147,6 +152,7 @@ class Library:
             extractor_key=self.extractor_key,
             comparison_key=self.comparison_key,
             figure_key=self.figure_key,
+            profile=self.profile.name,
             figures_enabled=self.settings.figures_enabled,
         )
         status = {stage.name: stage.status for stage in stages}
@@ -204,16 +210,19 @@ class Library:
 
     def extraction(self, document_id: str, backend: Backend) -> LaneExtraction | None:
         # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.
-        return read_lane(self.layout, document_id, backend, self.extractor_key)
+        return read_lane(self.layout, document_id, backend, self.extractor_key, self.profile)
 
     def dataset(self, document_id: str) -> DatasetPayload | None:
         """The consolidated per-sample table, or ``None`` until the export ran under the current keys.
 
         Validation happens here, at the disk boundary: a file in the wrong shape raises
-        ``ValidationError`` rather than travelling on as an untyped dict.
+        ``ValidationError`` rather than travelling on as an untyped dict. The columns are the profile's, not
+        the ones stored with the table: a label or description is display text, which re-keys nothing, so an
+        edit to it must show without a re-run.
         """
         # Through workflow, so a table of an earlier parse counts as absent here too.
-        return stored_dataset(self.layout, document_id, self.extractor_key, self.comparison_key)
+        dataset = stored_dataset(self.layout, document_id, self.extractor_key, self.comparison_key)
+        return None if dataset is None else dataset.model_copy(update={"fields": self.columns})
 
     def corpus(self) -> CorpusPayload:
         """The library-wide results table: one row per document that has a dataset under the current keys.
@@ -221,11 +230,8 @@ class Library:
         A document without a dataset is absent, not an empty row: the home view shows what has been
         mined, not what is missing.
         """
-        fields: tuple[FieldColumn, ...] = ()
         rows: list[CorpusRow] = []
         for summary, dataset in self._corpus_entries():
-            if not fields:
-                fields = dataset.fields
             rows.append(
                 CorpusRow(
                     document_id=summary.document_id,
@@ -235,7 +241,7 @@ class Library:
                     sample_rows=dataset.sample_rows,
                 )
             )
-        return CorpusPayload(fields=fields, rows=tuple(rows))
+        return CorpusPayload(fields=self.columns if rows else (), rows=tuple(rows))
 
     def corpus_datasets(self) -> list[DocumentDataset]:
         """The same documents as :meth:`corpus`, rebuilt as datasets so the whole library can be exported
@@ -260,9 +266,10 @@ class Library:
             yield summary, dataset
 
     def dataset_excel(self, document_id: str) -> Path | None:
-        """The workbook ``run`` wrote for this document. Unlike the JSON it is not key-stamped, so it is
-        whatever the last run produced -- good enough for a download, never for the table on screen."""
-        path = self.layout.dataset_path(document_id)
+        """The workbook ``run`` wrote for this document under this profile. Unlike the JSON it is not
+        key-stamped, so it is whatever the last run produced -- good enough for a download, never for the table
+        on screen."""
+        path = self.layout.dataset_path(document_id, self.profile.name)
         return path if path.is_file() else None
 
     def artifact(self, document_id: str, backend: Backend) -> ParsedArtifact | None:

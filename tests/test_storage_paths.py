@@ -162,3 +162,28 @@ def test_the_m2_paths_do_not_touch_the_filesystem(tmp_path: Path):
     local.llm_cache_dir()
 
     assert list(tmp_path.iterdir()) == []
+
+
+# ---- workbooks are named after the profile (spec section 3.5) ----------------------------------
+
+
+def test_a_documents_workbook_is_named_after_its_profile(layout: DataLayout):
+    assert layout.dataset_path(DOC_ID, "tco") == Path("/data/docs/0123456789abcdef/exports/tco.xlsx")
+
+
+def test_two_profiles_keep_two_workbooks_of_one_document(layout: DataLayout):
+    tco, battery = layout.dataset_path(DOC_ID, "tco"), layout.dataset_path(DOC_ID, "battery_cathode")
+
+    assert tco != battery
+    assert tco.parent == battery.parent == layout.doc_dir(DOC_ID) / "exports"
+
+
+def test_the_batch_workbook_is_named_after_its_profile(layout: DataLayout):
+    assert layout.batch_dataset_path("tco") == Path("/data/exports/tco.xlsx")
+    assert layout.batch_dataset_path("battery_cathode") == Path("/data/exports/battery_cathode.xlsx")
+
+
+def test_no_profile_workbook_takes_the_pre_profile_names(layout: DataLayout):
+    """Workbooks from before profiles are left where they are; a new one never overwrites them."""
+    assert layout.dataset_path(DOC_ID, "tco").name != "dataset.xlsx"
+    assert layout.batch_dataset_path("tco").name != "paperfacts.xlsx"

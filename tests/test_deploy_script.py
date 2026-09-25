@@ -8,7 +8,9 @@ the wrong lane or log in as the wrong user.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -90,3 +92,43 @@ def test_the_web_user_falls_back_to_the_services_default():
     # config.py serves as "paperfacts" when neither .env nor config.json names a user; an empty user here
     # would answer every call with 401.
     assert '[ -n "$WEB_USERNAME" ] || WEB_USERNAME=paperfacts' in TEXT
+
+
+REPO = SCRIPT.parent.parent
+
+
+def preflight(tmp_path: Path, unit_environment: str, **shell: str) -> subprocess.CompletedProcess[str]:
+    """The script's profile preflight, with a stand-in ``systemctl`` that reports ``unit_environment`` as the
+    service unit's Environment= value."""
+    fake = tmp_path / "bin" / "systemctl"
+    fake.parent.mkdir()
+    fake.write_text(f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(unit_environment)}\n", encoding="utf-8")
+    fake.chmod(0o755)
+    return subprocess.run(
+        ["bash", "-c", f"{function('preflight_profile')}\npreflight_profile"],
+        cwd=REPO,
+        env={**os.environ, **shell, "PATH": f"{fake.parent}:{os.environ['PATH']}", "ROOT": str(REPO)},
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_the_preflight_loads_the_profile_the_service_would_serve(tmp_path: Path):
+    result = preflight(tmp_path, "PATH=/usr/bin PAPERFACTS_PROFILE=tco")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("tco ")
+
+
+def test_the_preflight_fails_on_a_profile_the_unit_names_but_cannot_load(tmp_path: Path):
+    result = preflight(tmp_path, f"PAPERFACTS_PROFILE={tmp_path / 'missing.json'}")
+
+    assert result.returncode != 0
+    assert "no profile at" in result.stderr
+
+
+def test_the_preflight_reads_the_units_environment_not_the_shells(tmp_path: Path):
+    # The service never sees the deploying shell's variables: a broken one there must not fail the deploy.
+    result = preflight(tmp_path, "", PAPERFACTS_PROFILE=str(tmp_path / "missing.json"))
+
+    assert result.returncode == 0, result.stderr

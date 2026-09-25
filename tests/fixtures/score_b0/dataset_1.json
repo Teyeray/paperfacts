@@ -1,0 +1,19 @@
+{
+ "document_id": "0000000000000001",
+ "paper_row": {"sample_id": "target", "component": "In2O3:SnO2 90:10 wt%", "inch": 2, "resistance": 0.001, "density": null},
+ "sample_rows": [
+  {"sample_id": "100nm-asdep", "sample_label": "ITO as-dep 100 nm", "thickness": 100, "sheet_resistance": 20.3,
+   "transmittance": 80, "mode": "RF magnetron sputtering", "working_pressure": null},
+  {"sample_id": "200nm", "sample_label": "200 nm", "thickness": 200, "sheet_resistance": 15, "resistivity": 0.0002,
+   "mode": "DC", "working_pressure": 0.5},
+  {"sample_id": "ann", "sample_label": "annealed 300 nm", "thickness": 300, "mode": "RF"},
+  {"sample_id": "stray", "sample_label": "stray", "thickness": 50}
+ ],
+ "quality_rows": [
+  {"sample_id": "target", "field": "component", "decision": "single_source", "detail": "one lane", "source_ids": "mineru_p0_b1"},
+  {"sample_id": "target", "field": "inch", "decision": "agree", "conditions": "", "detail": "both lanes", "source_ids": "mineru_p1_b2"},
+  {"sample_id": "100nm-asdep", "field": "transmittance", "decision": "agree", "conditions": "400-800 nm", "detail": "", "source_ids": "mineru_p3_b4"},
+  {"sample_id": "200nm", "field": "sheet_resistance", "decision": "conflict", "detail": "15 vs 16", "source_ids": "paddleocr_vl_p2_b7"},
+  {"sample_id": "stray", "field": "thickness", "decision": "single_source", "detail": "", "source_ids": "mineru_p2_b3"}
+ ]
+}

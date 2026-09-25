@@ -46,6 +46,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_blank_pdf, make_block
+from support.profiles import shipped_profile
 
 STAGE_SECONDS = 0.3  # the stub job takes len(stage_names()) * this
 # As long as the model's condition prose gets on real papers: the text that pushed the second lane off screen.
@@ -173,7 +174,8 @@ def free_port() -> int:
 @contextlib.contextmanager
 def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     settings = Settings(data_root=root / "data", repo_root=root, llm_api_key="sk-test", llm_model="fake-model")
-    library = Library(settings)
+    profile = shipped_profile()
+    library = Library(settings, profile)
     docs = {
         "A": seed_document(
             library,
@@ -188,7 +190,7 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     }
     for index in range(3, 28):  # a long library, as on the real server
         seed_document(library, root, index, f"filler paper {index}.pdf", samples=1, comparisons=1)
-    app = create_app(settings, jobs=JobManager(stub_runner, stage_names(), workers=2))
+    app = create_app(settings, profile=profile, jobs=JobManager(stub_runner, stage_names(), workers=2))
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -436,6 +438,32 @@ async def no_samples(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     text = await page.text_content('[data-slot="rows-empty"]')
     expect("没有自己沉积的 TCO 膜" in (text or ""), f"facts empty state says {text!r}")
     expect(await page.is_hidden('[data-slot="dataset-copy"]'), "copy is offered for an empty table")
+
+
+@check("a failed /api/profile leaves generic labels, not blanks, and the profile's own once a retry lands")
+async def profile_retry(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    failing = True
+
+    async def flaky(route: Route) -> None:
+        if failing:
+            await route.fulfill(status=500, content_type="application/json", body='{"detail": "profile down"}')
+        else:
+            await route.continue_()
+
+    await page.route("**/api/profile", flaky)
+    await open_doc(page, base, docs["C"])
+    health = await page.text_content("#health")
+    expect((health or "").startswith("model "), f"a profile failure marked the backend down: {health!r}")
+    text = await page.text_content('[data-slot="rows-empty"]')
+    expect("该论文没有范围内的样品" in (text or ""), f"generic no-samples message missing: {text!r}")
+    header = await page.text_content("#document-view section.facts thead")
+    expect("样品" in (header or ""), f"the facts header lost its entity label: {header!r}")
+    failing = False
+    # The first retry waits POLL_MS * 2; the view is then redrawn in the profile's words.
+    await page.wait_for_function(
+        "document.querySelector('[data-slot=\"rows-empty\"]')?.textContent.includes('TCO 膜')", timeout=10000
+    )
+    expect(bool(await page.text_content("#profile-title")), "the header never named the profile")
 
 
 @check("opening a document logs no failed request")

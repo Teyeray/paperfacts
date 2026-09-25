@@ -8,20 +8,39 @@ evidence trail.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
-from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.normalize import drop_implausible, normalize_field, normalize_lane
 from paperfacts.records import ExtractedRecords, FieldValue, TargetRecord
 from support.extraction import make_field, make_lane, make_sample
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
+TCO_UNITS = shipped_profile().units
 
 # ---- normalize_field ----------------------------------------------------------------
+
+
+def test_a_range_follows_the_fields_range_policy():
+    field = make_field("thickness", "10–20", unit_raw="nm")
+    tco = FIELD_BY_NAME["thickness"]
+    assert tco.range_policy == "midpoint"
+
+    assert normalize_field(field, tco, TCO_UNITS).value == 15.0
+    refused = normalize_field(field, dataclasses.replace(tco, range_policy="reject"), TCO_UNITS)
+    assert (refused.value, refused.unit) == (None, None)
+    assert "refused (range_policy 'reject')" in refused.normalization_note
+    assert refused.value_raw == "10–20"
 
 
 def test_a_numeric_field_gets_value_and_unit_filled_in():
     field = make_field("thickness", "1.2", unit_raw="μm")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["thickness"])
+    normalized = normalize_field(field, FIELD_BY_NAME["thickness"], TCO_UNITS)
 
     assert normalized.value == 1200.0
     assert normalized.unit == "nm"
@@ -33,7 +52,7 @@ def test_a_numeric_field_keeps_the_original_text_untouched():
     # change value_raw / unit_raw.
     field = make_field("sheet_resistance", "1.2 × 10⁻⁴", unit_raw="kΩ/sq")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["sheet_resistance"])
+    normalized = normalize_field(field, FIELD_BY_NAME["sheet_resistance"], TCO_UNITS)
 
     assert normalized.value_raw == "1.2 × 10⁻⁴"
     assert normalized.unit_raw == "kΩ/sq"
@@ -43,7 +62,7 @@ def test_a_numeric_field_keeps_the_original_text_untouched():
 def test_the_parse_note_and_the_unit_note_are_joined():
     field = make_field("transmittance", "> 80")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["transmittance"])
+    normalized = normalize_field(field, FIELD_BY_NAME["transmittance"], TCO_UNITS)
 
     assert normalized.normalization_note == "qualifier '>' dropped; no unit; read as percent"
 
@@ -51,7 +70,7 @@ def test_the_parse_note_and_the_unit_note_are_joined():
 def test_an_unparseable_number_clears_value_and_unit_and_explains_why():
     field = make_field("thickness", "n.a.", unit_raw="nm")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["thickness"])
+    normalized = normalize_field(field, FIELD_BY_NAME["thickness"], TCO_UNITS)
 
     assert (normalized.value, normalized.unit) == (None, None)
     assert normalized.normalization_note == "no number found"
@@ -71,7 +90,9 @@ def test_an_unparseable_number_clears_value_and_unit_and_explains_why():
 )
 def test_a_compound_duration_is_one_value(raw, unit_raw, expected):
     # Read as its first number, "3 h 30 min" became 180 min: a common annealing-time spelling, silently wrong.
-    normalized = normalize_field(make_field("annealing_time", raw, unit_raw=unit_raw), FIELD_BY_NAME["annealing_time"])
+    normalized = normalize_field(
+        make_field("annealing_time", raw, unit_raw=unit_raw), FIELD_BY_NAME["annealing_time"], TCO_UNITS
+    )
 
     assert normalized.value == pytest.approx(expected)
     assert normalized.unit == "min"
@@ -93,7 +114,9 @@ def test_a_compound_duration_is_one_value(raw, unit_raw, expected):
     ],
 )
 def test_only_a_descending_pair_of_one_quantity_is_a_compound(raw):
-    normalized = normalize_field(make_field("annealing_time", raw, unit_raw="min"), FIELD_BY_NAME["annealing_time"])
+    normalized = normalize_field(
+        make_field("annealing_time", raw, unit_raw="min"), FIELD_BY_NAME["annealing_time"], TCO_UNITS
+    )
 
     assert normalized.value is None
 
@@ -111,7 +134,7 @@ def test_only_a_descending_pair_of_one_quantity_is_a_compound(raw):
 def test_a_value_restated_in_a_second_unit_is_never_added_up(field, raw, unit_raw):
     # Only a duration is written as a sum of units; anywhere else a second unit restates the same value, and
     # adding the two doubled it (0.5 Pa 3.75 mTorr read as 1.0 Pa).
-    assert normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value is None
+    assert normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field], TCO_UNITS).value is None
 
 
 @pytest.mark.parametrize(
@@ -128,7 +151,7 @@ def test_a_value_restated_in_a_second_unit_is_never_added_up(field, raw, unit_ra
 )
 def test_a_condition_tail_is_set_aside_only_when_it_is_not_the_value(field, raw, unit_raw, expected):
     # "400 °C for 2 h" on annealing_time read 400 h (24000 min) once "for" opened a condition.
-    value = normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value
+    value = normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field], TCO_UNITS).value
 
     assert value == (pytest.approx(expected) if expected is not None else None)
 
@@ -138,7 +161,7 @@ def test_a_text_field_is_returned_untouched():
     # than caching a canonical text copy on the record (to avoid the two rule sets drifting apart).
     field = make_field("component", "SnO₂:Ta (2 wt% Ta₂O₅)")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["component"])
+    normalized = normalize_field(field, FIELD_BY_NAME["component"], TCO_UNITS)
 
     assert normalized is field
     assert normalized.value is None and normalized.unit is None
@@ -147,32 +170,32 @@ def test_a_text_field_is_returned_untouched():
 # ---- normalize_lane -----------------------------------------------------------------
 
 
-def test_normalize_lane_returns_a_new_object_and_leaves_the_input_alone():
+def test_normalize_lane_returns_a_new_object_and_leaves_the_input_alone(tco_profile):
     # The models are frozen, but a misplaced model_copy could still leak the normalized result back
     # through the original object reference.
     lane = make_lane(samples=[make_sample("A", [make_field("thickness", "1.2", unit_raw="μm")])])
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized is not lane
     assert lane.samples[0].fields[0].value is None
     assert normalized.samples[0].fields[0].value == 1200.0
 
 
-def test_normalize_lane_covers_the_target_record_too():
+def test_normalize_lane_covers_the_target_record_too(tco_profile):
     lane = make_lane(target=TargetRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized.target.fields[0].value == 98.5
     assert normalized.target.fields[0].unit == "%"
 
 
-def test_normalize_lane_keeps_a_missing_target_as_none():
-    assert normalize_lane(make_lane()).target is None
+def test_normalize_lane_keeps_a_missing_target_as_none(tco_profile):
+    assert normalize_lane(make_lane(), tco_profile).target is None
 
 
-def test_normalize_lane_normalizes_every_field_of_every_sample():
+def test_normalize_lane_normalizes_every_field_of_every_sample(tco_profile):
     lane = make_lane(
         samples=[
             make_sample(
@@ -182,24 +205,24 @@ def test_normalize_lane_normalizes_every_field_of_every_sample():
         ]
     )
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert [f.value for f in normalized.samples[0].fields] == [300.0, 85.0]
     assert normalized.samples[1].fields[0].value == 120.0
 
 
-def test_a_field_outside_the_schema_survives_untouched():
+def test_a_field_outside_the_schema_survives_untouched(tco_profile):
     # The extraction layer already filtered these out once; this is a defensive second line — better to
     # leave it untouched than let a KeyError blow up the whole document.
     unknown = FieldValue(field="carrier_concentration", value_raw="1e20")
     lane = make_lane(samples=[make_sample("A", [unknown])])
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized.samples[0].fields[0] == unknown
 
 
-def test_normalize_lane_preserves_everything_that_is_not_a_field_value():
+def test_normalize_lane_preserves_everything_that_is_not_a_field_value(tco_profile):
     lane = make_lane(
         backend="paddleocr_vl",
         samples=[
@@ -211,7 +234,7 @@ def test_normalize_lane_preserves_everything_that_is_not_a_field_value():
         raw_response='{"samples": []}',
     )
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized.backend == "paddleocr_vl"
     assert normalized.usage == {"total_tokens": 42}
@@ -220,12 +243,14 @@ def test_normalize_lane_preserves_everything_that_is_not_a_field_value():
     assert normalized.samples[0].conditions == {"O2": "100"}
 
 
-def test_normalizing_twice_changes_nothing_further():
+def test_normalizing_twice_changes_nothing_further(tco_profile):
     # Normalization is redone every time a lane is read (so a rule change doesn't require re-calling the
     # LLM), which means it must be idempotent.
-    lane = normalize_lane(make_lane(samples=[make_sample("A", [make_field("thickness", "1.2", unit_raw="μm")])]))
+    lane = normalize_lane(
+        make_lane(samples=[make_sample("A", [make_field("thickness", "1.2", unit_raw="μm")])]), tco_profile
+    )
 
-    assert normalize_lane(lane) == lane
+    assert normalize_lane(lane, tco_profile) == lane
 
 
 # ---- drop_implausible --------------------------------------------------------------------
@@ -237,43 +262,43 @@ def _records(*, samples=(), unattributed=()) -> ExtractedRecords:
     )
 
 
-def test_a_value_outside_its_range_is_dropped_with_the_reason():
+def test_a_value_outside_its_range_is_dropped_with_the_reason(tco_profile):
     # Shipped range: thickness at most 5000 nm. A 280 µm wafer read as the film is the observed confusion.
     records = _records(samples=(make_sample("S1", [make_field("thickness", "6000", unit_raw="nm")]),))
 
-    kept = drop_implausible(records)
+    kept = drop_implausible(records, tco_profile)
 
     assert kept.samples[0].fields == ()
     assert len(kept.dropped) == 1
     assert "thickness" in kept.dropped[0] and "6000" in kept.dropped[0] and "at most 5000 nm" in kept.dropped[0]
 
 
-def test_the_range_is_judged_after_conversion_to_the_canonical_unit():
+def test_the_range_is_judged_after_conversion_to_the_canonical_unit(tco_profile):
     # "0.006" has digits well under 5000, but in mm it is 6000 nm.
     inside = make_field("thickness", "3", unit_raw="μm")
     outside = make_field("thickness", "0.006", unit_raw="mm")
     records = _records(samples=(make_sample("S1", [inside, outside]),))
 
-    assert drop_implausible(records).samples[0].fields == (inside,)
+    assert drop_implausible(records, tco_profile).samples[0].fields == (inside,)
 
 
-def test_unattributed_values_are_held_to_the_same_range():
+def test_unattributed_values_are_held_to_the_same_range(tco_profile):
     records = _records(unattributed=(make_field("rotation_speed", "3000", unit_raw="rpm"),))
 
-    kept = drop_implausible(records)
+    kept = drop_implausible(records, tco_profile)
 
     assert kept.unattributed == ()
     assert "rotation_speed" in kept.dropped[0]
 
 
-def test_a_value_that_cannot_be_converted_is_kept_since_there_is_nothing_to_judge():
+def test_a_value_that_cannot_be_converted_is_kept_since_there_is_nothing_to_judge(tco_profile):
     unconvertible = make_field("thickness", "600", unit_raw="furlongs")
     records = _records(samples=(make_sample("S1", [unconvertible]),))
 
-    assert drop_implausible(records) == records
+    assert drop_implausible(records, tco_profile) == records
 
 
-def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_were():
+def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_were(tco_profile):
     records = _records(
         samples=(
             make_sample(
@@ -286,10 +311,10 @@ def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_
         )
     )
 
-    assert drop_implausible(records) is records
+    assert drop_implausible(records, tco_profile) is records
 
 
-def test_a_target_whose_every_field_is_dropped_keeps_its_citations():
+def test_a_target_whose_every_field_is_dropped_keeps_its_citations(tco_profile):
     spec = FIELD_BY_NAME["thickness"]  # any ranged field will do; the target is judged like a sample
     records = ExtractedRecords(
         target=TargetRecord(source_ids=("mineru_p0_b1",), fields=(make_field(spec.name, "9", unit_raw="μm"),)),
@@ -298,6 +323,6 @@ def test_a_target_whose_every_field_is_dropped_keeps_its_citations():
         dropped=(),
     )
 
-    kept = drop_implausible(records)
+    kept = drop_implausible(records, tco_profile)
 
     assert kept.target == TargetRecord(source_ids=("mineru_p0_b1",), fields=())

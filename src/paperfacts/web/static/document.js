@@ -3,7 +3,7 @@
 
 import { api, optional } from "./api.js";
 import { toast } from "./html.js";
-import { LANES, currentJob, isActive, isCurrent, slot, state } from "./state.js";
+import { LANES, applyUiCopy, currentJob, isActive, isCurrent, slot, state, uiCopy } from "./state.js";
 import { PageViewer } from "./viewer.js";
 import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts.js";
 import { renderLanes } from "./samples.js";
@@ -130,6 +130,8 @@ function renderDocument() {
   const node = document.getElementById("tpl-document").content.cloneNode(true);
   const s = (name) => slot(name, node);
   const { summary } = state;
+  applyUiCopy(node);
+  s("samples").setAttribute("aria-label", `${uiCopy("entity_label_zh")}记录`);
 
   s("name").textContent = summary.name;
   s("id").textContent = summary.document_id;

@@ -10,7 +10,7 @@ import dataclasses
 
 import pytest
 
-from paperfacts import figures, keys
+from paperfacts import figures
 from paperfacts.config import Settings
 from paperfacts.errors import LlmError, LlmOfflineMiss
 from paperfacts.figures import (
@@ -24,10 +24,14 @@ from paperfacts.figures import (
 )
 from paperfacts.keys import figure_key, figure_key_for
 from paperfacts.models import NormalizedBBox, PageGeometry, ParsedArtifact
+from paperfacts.profile import FigureSlots
 from support.factories import DOC_ID, make_block
+from support.profiles import make_profile, shipped_profile
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
 
 BOX = NormalizedBBox(x1=0.1, y1=0.1, x2=0.5, y2=0.4)
+# For the module-level helpers, which a fixture cannot reach; the tests themselves take ``tco_profile``.
+TCO = shipped_profile()
 
 
 def fig(page: int, order: int):
@@ -53,7 +57,7 @@ def artifact(*blocks) -> ParsedArtifact:
 
 
 def run(art: ParsedArtifact, client: FakeVisionClient, *, limit: int = 12) -> FigureReadings:
-    return read_figures(art, lambda page, bbox: b"png", client, figure_key="k" * 12, max_per_document=limit)
+    return read_figures(art, lambda page, bbox: b"png", client, TCO, figure_key="k" * 12, max_per_document=limit)
 
 
 # ---- Figure groups and the whole-figure caption ---------------------------------------------------
@@ -110,33 +114,38 @@ def test_without_a_figure_caption_the_group_keeps_whatever_captions_it_has():
 # ---- Selection -----------------------------------------------------------------------------------------
 
 
-def test_a_figure_is_selected_when_its_caption_names_a_film_property():
-    [request] = select_panels([fig(0, 0), cap(0, 1, "Fig. 2 Sheet resistance of ITO films")], limit=12)
+def test_a_figure_is_selected_when_its_caption_names_a_film_property(tco_profile):
+    [request] = select_panels([fig(0, 0), cap(0, 1, "Fig. 2 Sheet resistance of ITO films")], tco_profile, limit=12)
 
     assert [spec.name for spec in request.fields] == ["sheet_resistance"]
 
 
-def test_a_panel_caption_alone_does_not_select_a_figure_whose_caption_names_nothing():
+def test_a_panel_caption_alone_does_not_select_a_figure_whose_caption_names_nothing(tco_profile):
     # "(a) Rs" on a panel, but the figure's own caption is about XRD: the figure caption is the one that counts.
     blocks = [fig(0, 0), cap(0, 1, "(a) sheet resistance"), fig(0, 2), cap(0, 3, "Fig. 4 XRD patterns of the films.")]
 
-    assert select_panels(blocks, limit=12) == ()
+    assert select_panels(blocks, tco_profile, limit=12) == ()
 
 
-def test_a_process_condition_in_the_caption_does_not_select_a_figure():
+def test_a_process_condition_in_the_caption_does_not_select_a_figure(tco_profile):
     blocks = [fig(0, 0), cap(0, 1, "Fig. 1 Spectra of films deposited at a substrate temperature of 300 °C.")]
 
-    assert select_panels(blocks, limit=12) == ()
+    assert select_panels(blocks, tco_profile, limit=12) == ()
 
 
-def test_every_panel_of_a_selected_figure_is_asked_separately_up_to_the_limit():
+def test_every_panel_of_a_selected_figure_is_asked_separately_up_to_the_limit(tco_profile):
     blocks = [fig(0, 0), fig(0, 1), fig(0, 2), cap(0, 3, "Fig. 3 (a-c) Resistivity of the films")]
     blocks += [fig(1, 0), cap(1, 1, "Fig. 4 Thickness of the films")]
 
-    chosen = select_panels(blocks, limit=2)
+    chosen = select_panels(blocks, tco_profile, limit=2)
 
     assert [(r.block.page, r.block.order, r.panel) for r in chosen] == [(0, 0, 1), (0, 1, 2)]
-    assert [(r.block.page, r.panel) for r in select_panels(blocks, limit=12)] == [(0, 1), (0, 2), (0, 3), (1, 1)]
+    assert [(r.block.page, r.panel) for r in select_panels(blocks, tco_profile, limit=12)] == [
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 1),
+    ]
 
 
 def test_the_question_carries_the_whole_caption_and_only_the_candidate_fields():
@@ -209,8 +218,23 @@ def test_an_axis_whose_title_multiplies_the_quantity_divides_the_reading():
 
 
 def test_the_prompt_keeps_the_quantity_symbol_with_an_axis_multiplier():
-    assert '"ρ × 10^4 (Ω cm)"' in USER_PROMPT
+    rendered = figures.user_prompt("caption", TCO.figure_fields, TCO.figures)
+
+    assert 'axis "ρ × 10^4 (Ω cm)" => unit "ρ × 10^4 (Ω cm)"' in rendered
     assert "quantity symbol" in USER_PROMPT
+
+
+def test_a_profile_without_its_own_chart_examples_gets_generic_ones():
+    slots = dataclasses.replace(
+        TCO.figures,
+        symbol_axis_example=FigureSlots.symbol_axis_example,
+        x_label_examples=FigureSlots.x_label_examples,
+    )
+
+    rendered = figures.user_prompt("caption", TCO.figure_fields, slots)
+
+    assert "ρ" not in rendered and "ITO-RT" not in rendered
+    assert 'axis "X × 10^3 (unit)" => unit "X × 10^3 (unit)"' in rendered
 
 
 def test_a_unit_that_will_not_convert_keeps_the_raw_reading_with_a_note():
@@ -313,6 +337,7 @@ def test_the_panels_named_for_refresh_bypass_the_cache_and_no_others():
         artifact(*blocks),
         lambda page, bbox: b"png",
         client,
+        TCO,
         figure_key="k",
         max_per_document=12,
         refresh_panels=frozenset({"mineru_p0_b1"}),
@@ -333,6 +358,7 @@ def test_one_failed_panel_does_not_cost_the_others():
         artifact(*blocks),
         lambda page, bbox: next(images),
         FakeVisionClient(responder),
+        TCO,
         figure_key="k",
         max_per_document=12,
         concurrency=2,
@@ -372,10 +398,10 @@ def test_the_readings_round_trip_through_their_file(tmp_path):
 # ---- figure_key: what makes a stored reading stale -------------------------------------------------------
 
 
-def key(**changes) -> str:
+def key(profile=TCO, **changes) -> str:
     arguments = {"dpi": 200, "max_pixels": 2_000_000, "max_per_document": 12} | changes
     model = arguments.pop("model", "qwen3.7-plus")
-    return figure_key(model, **arguments)
+    return figure_key(profile, model, **arguments)
 
 
 @pytest.mark.parametrize(
@@ -397,24 +423,60 @@ def test_the_figure_key_is_stable_for_the_same_settings():
     assert key() == key()
 
 
-def test_the_figure_key_moves_when_a_film_field_keyword_changes(monkeypatch):
-    specs = tuple(
-        dataclasses.replace(spec, keywords=(*spec.keywords, "Rsq2")) if spec.name == "sheet_resistance" else spec
-        for spec in figures.FIELD_SPECS
-    )
-    before = key()
-    monkeypatch.setattr(figures, "FIELD_SPECS", specs)
-    keys.figure_field_fingerprint.cache_clear()
-    try:
-        assert key() != before
-    finally:
-        monkeypatch.undo()
-        keys.figure_field_fingerprint.cache_clear()
+def test_the_figure_key_reads_its_settings(tco_profile):
+    assert figure_key_for(Settings(), tco_profile) == key()
+    assert figure_key_for(Settings(figures_dpi=100), tco_profile) == key(dpi=100)
 
 
-def test_the_figure_key_reads_its_settings():
-    assert figure_key_for(Settings()) == key()
-    assert figure_key_for(Settings(figures_dpi=100)) == key(dpi=100)
+# The demo profile with its sample-level numeric field readable off a chart, and the slots that requires.
+CHARTED = {
+    "fields.1.figure_readable": True,
+    "figures": {
+        "subject": "sol-gel coatings",
+        "property_noun": "coating properties",
+        "chart_definition": "a coating property plotted against a preparation condition",
+        "axis_example": 'axis "Thickness [nm]" => unit "nm"',
+    },
+}
+
+
+def charted_key(changes: dict[str, object] | None = None) -> str:
+    return key(make_profile(CHARTED | (changes or {})))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"figures": CHARTED["figures"] | {"chart_definition": "a coating property against annealing"}},
+        {"figures": CHARTED["figures"] | {"subject": "spin-coated films"}},
+        {"fields.1.keywords": ["thickness", "coating thickness"]},
+        {"fields.1.description": "Thickness of the dried coating."},
+        {"fields.1.canonical_unit": "cm"},
+        {"fields.0.figure_readable": True},
+    ],
+    ids=["chart_definition", "subject", "keywords", "description", "canonical_unit", "another_field_readable"],
+)
+def test_the_figure_key_moves_with_a_chart_slot_or_a_chart_field(changes):
+    assert charted_key(changes) != charted_key()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"fields.0.description": "Purity of the metal precursor, as the supplier states it."},
+        {"fields.0.keywords": ["purity", "assay"]},
+        {"fields.2.description": "Solvent of the sol."},
+        {"prompt.domain_subject": "dip-coated films"},
+        {"retrieval.condition_keywords": ["annealed", "coating", "cured"]},
+        {"fields.1.rel_tol": 0.05},
+        {"fields.1.label": "厚度"},
+    ],
+    ids=lambda changes: next(iter(changes)),
+)
+def test_the_figure_key_ignores_what_no_chart_question_reads(changes):
+    # A field no chart is read for, the text prompts, retrieval, a tolerance and display text decide nothing
+    # a vision model is asked or how its reading converts.
+    assert charted_key(changes) == charted_key()
 
 
 # ---- Answers that must not be cached as something they are not -------------------------------------------
@@ -465,7 +527,7 @@ def test_a_crop_or_client_failure_other_than_an_llm_error_is_one_panel_error():
         raise OSError("disk gone")
 
     client = FakeVisionClient(chart_answer())
-    cropped = read_figures(artifact(*blocks), render, client, figure_key="k", max_per_document=12)
+    cropped = read_figures(artifact(*blocks), render, client, TCO, figure_key="k", max_per_document=12)
 
     def responder(user, image):
         raise RuntimeError("socket closed")

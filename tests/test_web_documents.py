@@ -25,11 +25,13 @@ from paperfacts.compare import ComparisonCounts
 from paperfacts.config import Settings
 from paperfacts.keys import ExtractionOptions, extractor_key
 from paperfacts.models import BACKENDS, DocumentInput
+from paperfacts.profile import DomainProfile
 from paperfacts.records import FailedQuestion
 from paperfacts.storage import write_text_atomic
 from paperfacts.web.documents import Library
 from support.extraction import make_field, make_sample
 from support.factories import make_block
+from support.profiles import SHIPPED_PROFILE_PATH
 from support.web import (
     DOC_KEY,
     DOC_SHA,
@@ -46,12 +48,14 @@ OTHER_PDF_BYTES = b"%PDF-1.7\n% a different document\n"
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test")
+    return Settings(
+        data_root=tmp_path / "data", repo_root=tmp_path, profile=str(SHIPPED_PROFILE_PATH), llm_api_key="sk-test"
+    )
 
 
 @pytest.fixture
-def library(settings: Settings) -> Library:
-    return Library(settings)
+def library(settings: Settings, tco_profile: DomainProfile) -> Library:
+    return Library(settings, tco_profile)
 
 
 def sha_of(data: bytes) -> str:
@@ -251,7 +255,7 @@ def test_extracted_is_per_backend(library: Library):
     assert summary.extracted == {"mineru": True, "paddleocr_vl": False}
 
 
-def test_an_extraction_from_another_model_does_not_count_as_extracted(library: Library):
+def test_an_extraction_from_another_model_does_not_count_as_extracted(library: Library, tco_profile):
     """The extraction artifact's path carries an ``extractor_key`` (a fingerprint of the model +
     prompt + field schema).
 
@@ -259,7 +263,9 @@ def test_an_extraction_from_another_model_does_not_count_as_extracted(library: L
     model's results without knowing it.
     """
     seed_extraction(
-        library, "mineru", extractor_key=extractor_key(ExtractionOptions("some-other-model", mode="document"))
+        library,
+        "mineru",
+        extractor_key=extractor_key(ExtractionOptions(tco_profile, "some-other-model", mode="document")),
     )
 
     assert library.summary(DOC_KEY).extracted["mineru"] is False

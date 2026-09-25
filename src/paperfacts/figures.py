@@ -32,25 +32,26 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperfacts.errors import Cancelled, LlmOfflineMiss
-from paperfacts.fields import FIELD_SPECS, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.llm import VisionClient
 from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
-from paperfacts.normalize import convert_to_canonical, normalize_text
+from paperfacts.normalize import convert_to_canonical
 
 # Keyword matching is passages.py's, so a caption names a field under exactly the rules a passage-mode
-# question uses to find it in the text. The two helpers are private there; they are imported rather than
-# made public because renaming them would change passages.py's source, which is hashed into every
-# passage-mode extractor_key and would rename every stored extraction for no change in behaviour.
-from paperfacts.passages import _names, _searchable
+# question uses to find it in the text.
+from paperfacts.passages import keyword_hits, searchable
+from paperfacts.profile import DomainProfile, FigureSlots
 from paperfacts.storage import write_text_atomic
+from paperfacts.text import normalize_text
 from paperfacts.threads import ContextThreadPoolExecutor
+from paperfacts.units import UnitRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +81,14 @@ SYSTEM_PROMPT = "You read numeric data off charts in scientific papers. Answer w
 # ticks, and strict JSON. Added for the pipeline: the list of fields and a "field" per y axis, so the model
 # answers only for fields this table has and the code never guesses which axis is which property.
 USER_PROMPT = """\
-You are reading data off a chart from a scientific paper about thin films (e.g. sputtered transparent conductive oxides).
+You are reading data off a chart from a scientific paper about {subject}.
 The image may be one panel of a multi-panel figure. The figure caption is:
 <<<{caption}>>>
 
-Only these film properties are of interest (name: meaning, usual unit):
+Only these {property_noun} are of interest (name: meaning, usual unit):
 {fields}
 
-Step 1 - decide whether this chart is a "property-vs-condition" chart: a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name), with one discrete marker per sample.
+Step 1 - decide whether this chart is a "property-vs-condition" chart: {chart_definition}, with one discrete marker per sample.
 Spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are NOT property-vs-condition charts. If it is not one, or none of its y axes plots one of the properties listed above, output {{"chart_type": "not_property_vs_condition", "reason": "..."}} and nothing else.
 
 Step 2 - otherwise read the chart carefully:
@@ -95,9 +96,9 @@ Step 2 - otherwise read the chart carefully:
 - For each y axis, determine the scale from the tick labels: linear or logarithmic (ticks like 10^1, 10^2, 10^3 evenly spaced => log; interpolate logarithmically between them). Note axis breaks.
 - For each y axis, set "field" to the name of the listed property it plots, or null if it plots none of them. Report points only for series on an axis whose field is not null.
 - If there are several y axes (left/right, or several right axes), decide which axis each series belongs to (colour of axis and labels, arrows, legend) and read each series against ITS OWN axis.
-- Report y in the units printed on that axis INCLUDING any multiplier written in the axis title, exactly as the title writes it (e.g. axis "Sheet resistance [10^2 ohm/sq]" with a marker at the "25" gridline => y = 25, unit "10^2 ohm/sq"). When the multiplier is attached to the quantity symbol rather than to the unit, keep the quantity symbol and the brackets too (axis "ρ × 10^4 (Ω cm)" => unit "ρ × 10^4 (Ω cm)"): the two mean opposite things. Do not convert.
+- Report y in the units printed on that axis INCLUDING any multiplier written in the axis title, exactly as the title writes it (e.g. {axis_example}). When the multiplier is attached to the quantity symbol rather than to the unit, keep the quantity symbol and the brackets too ({symbol_axis_example}): the two mean opposite things. Do not convert.
 - If the chart prints the numeric value next to a point, use the printed value.
-- Report x exactly as the tick label/category of that marker (e.g. 400, 1.5, "As-deposited", "ITO-RT"); if markers of one series are shifted slightly sideways to avoid overlap, still report the nominal x of the group.
+- Report x exactly as the tick label/category of that marker (e.g. {x_label_examples}); if markers of one series are shifted slightly sideways to avoid overlap, still report the nominal x of the group.
   If a marker lies between labelled ticks, interpolate its x position instead of rounding to the nearest tick, and set "x_on_tick": false.
 - Markers hidden behind other markers: include them if you can infer their position, with low confidence.
 - Include error-bar half-width if error bars are visible, else null.
@@ -110,16 +111,6 @@ Output ONLY this JSON (strict JSON: no comments, no trailing text):
  "series": [{{"label": "legend text or quantity name", "y_axis": "left|right|right2", "marker": "..."}}],
  "points": [{{"series": "<label>", "x": <number or string>, "x_on_tick": true, "y": <number>, "y_error": <number or null>, "confidence": <0..1>}}]}}
 """
-
-
-def figure_fields() -> tuple[FieldSpec, ...]:
-    """The fields a chart may be read for: numeric film properties.
-
-    Only the ``film`` group, although process fields are sample-level too: a chart's y axis is what gets
-    read, and a y axis plots a property of the film. Letting "annealing temperature" select charts would
-    spend the per-paper budget on every spectrum whose caption says what the film was annealed at.
-    """
-    return tuple(spec for spec in FIELD_SPECS if spec.group == "film" and spec.kind == "numeric")
 
 
 # ---- Stored result -----------------------------------------------------------------------------------
@@ -203,79 +194,6 @@ class FigureReadings(BaseModel):
         return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-# ---- What a reader is shown ----------------------------------------------------------------------------
-
-Cell = str | float | int | bool | None
-
-
-class FiguresView(BaseModel):
-    """The readings a document page and a workbook show, with what they should warn about.
-
-    ``stale``: no file exists under the current figure_key, so these were read under older settings (another
-    model, prompt or field table). ``orphaned``: figure blocks the readings cite that the current parse no
-    longer has; the numbers stand, but clicking one cannot point at the chart.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    document_id: str
-    figure_key: str
-    model: str
-    stale: bool = False
-    orphaned: tuple[str, ...] = ()
-    rows: tuple[dict[str, Cell], ...] = ()
-
-    def warning(self) -> str:
-        notes = ["stale (older key)"] if self.stale else []
-        if self.orphaned:
-            notes.append(f"{len(self.orphaned)} cite figure blocks missing from the current parse")
-        return ", ".join(notes)
-
-
-def _x_text(quantity: str | None, value: float | str | None, unit: str | None, on_tick: bool | None) -> str | None:
-    if value is None:
-        return None
-    number = f"{value:g}" if isinstance(value, float) else str(value)
-    text = " ".join(part for part in (f"{quantity} =" if quantity else None, number, unit) if part)
-    return text + ("（刻度之间，插值）" if on_tick is False else "")
-
-
-def figure_rows(
-    readings: FigureReadings, *, filename: str, stale: bool = False, orphaned: frozenset[str] = frozenset()
-) -> tuple[dict[str, Cell], ...]:
-    """One display row per reading, keyed like the 图中读数 sheet's columns in :mod:`paperfacts.dataset`."""
-
-    def detail(reading: FigureReading) -> str | None:
-        notes = [reading.note] if reading.note else []
-        if stale:
-            notes.append("旧版本读数（设置已变，尚未重读）")
-        if reading.source_id in orphaned:
-            notes.append("当前解析里已没有这个图块")
-        return "; ".join(notes) or None
-
-    return tuple(
-        {
-            "document_id": readings.document_id,
-            "filename": filename,
-            "figure": reading.figure,
-            "page": reading.page + 1,
-            "source_id": reading.source_id,
-            "panel": reading.panel,
-            "field": reading.field,
-            "series": reading.series,
-            "x": _x_text(reading.x_quantity, reading.x_value, reading.x_unit, reading.x_on_tick),
-            "value": reading.y,
-            "unit": reading.unit,
-            "precision": f"±{reading.precision * 100:g}%",
-            "value_raw": " ".join(part for part in (f"{reading.y_raw:g}", reading.y_unit_raw) if part),
-            "scale": "对数" if reading.scale == "log" else "线性",
-            "caption": reading.caption,
-            "detail": detail(reading),
-        }
-        for reading in readings.readings
-    )
-
-
 # ---- Selection -----------------------------------------------------------------------------------------
 
 
@@ -305,8 +223,8 @@ class FigureGroup:
         """The fields the figure's caption names. Only the whole-figure caption counts when there is one: a
         panel's "(a) (c)" names nothing, and a neighbouring figure's caption is about another chart."""
         blocks = (self.figure_caption,) if self.figure_caption is not None else self.captions
-        texts = [_searchable(block) for block in blocks]
-        return tuple(spec for spec in specs if any(_names(spec.keywords, text) for text in texts))
+        texts = [searchable(block) for block in blocks]
+        return tuple(spec for spec in specs if any(keyword_hits(spec.keywords, text) for text in texts))
 
 
 def _is_figure_caption(block: SourceBlock) -> bool:
@@ -419,11 +337,17 @@ class PanelRequest:
     fields: tuple[FieldSpec, ...]
 
 
-def select_panels(blocks: Sequence[SourceBlock], *, limit: int) -> tuple[PanelRequest, ...]:
-    """The panels worth a question, in document order, at most ``limit`` of them."""
+def select_panels(blocks: Sequence[SourceBlock], profile: DomainProfile, *, limit: int) -> tuple[PanelRequest, ...]:
+    """The panels worth a question, in document order, at most ``limit`` of them.
+
+    Only the profile's ``figure_readable`` fields select a chart. A chart's y axis is what gets read, so a
+    profile marks the properties a y axis plots, not the conditions a caption mentions: letting a process
+    field select charts would spend the per-paper budget on every spectrum whose caption says how the sample
+    was made.
+    """
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
-    specs = figure_fields()
+    specs = profile.figure_fields
     chosen: list[PanelRequest] = []
     for group in figure_groups(blocks):
         fields = group.fields(specs)
@@ -437,9 +361,11 @@ def select_panels(blocks: Sequence[SourceBlock], *, limit: int) -> tuple[PanelRe
     return tuple(chosen)
 
 
-def user_prompt(caption: str, fields: Sequence[FieldSpec]) -> str:
+def user_prompt(caption: str, fields: Sequence[FieldSpec], slots: FigureSlots) -> str:
+    """The question for one panel. ``str.format`` inserts the caption, the field list and the profile's chart
+    slots verbatim, never scanning them again, so braces in any of them reach the model as written."""
     listed = "\n".join(f"- {spec.name}: {spec.description} ({spec.canonical_unit})" for spec in fields)
-    return USER_PROMPT.format(caption=caption, fields=listed)
+    return USER_PROMPT.format(caption=caption, fields=listed, **asdict(slots))
 
 
 # ---- Parsing the answer ---------------------------------------------------------------------------------
@@ -604,7 +530,9 @@ def _fold(text: str | None) -> str:
     return (text or "").strip().casefold()
 
 
-def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple[tuple[FigureReading, ...], int]:
+def readings_from_answer(
+    answer: dict[str, Any], request: PanelRequest, units: UnitRegistry
+) -> tuple[tuple[FigureReading, ...], int]:
     """Turn a chart answer into readings: only for the fields asked about, y converted, precision labelled.
 
     Also returns how many points could not be put on any axis at all -- as opposed to points on an axis
@@ -646,7 +574,7 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
         if spec is None:
             continue  # a field nobody asked about, or one this table does not have
         unit_raw = _axis_unit(axis.unit)
-        value, unit, note = convert_to_canonical(spec, point.y, unit_raw)
+        value, unit, note = convert_to_canonical(spec, point.y, unit_raw, units)
         notes = [note] if note else []
         if point.confidence is not None and point.confidence < LOW_CONFIDENCE:
             notes.append(f"model confidence {point.confidence:g}: likely a hidden or overlapping marker")
@@ -690,17 +618,18 @@ def _read_panel_unless_stopped(
     request: PanelRequest,
     image: bytes | Exception,
     client: VisionClient,
+    profile: DomainProfile,
     *,
     refresh: bool,
     stop: threading.Event | None,
 ) -> tuple[FigurePanel, tuple[FigureReading, ...]]:
     if stop is not None and stop.is_set():
         raise Cancelled("figure reading was stopped")
-    return _read_panel(request, image, client, refresh=refresh)
+    return _read_panel(request, image, client, profile, refresh=refresh)
 
 
 def _read_panel(
-    request: PanelRequest, image: bytes | Exception, client: VisionClient, *, refresh: bool
+    request: PanelRequest, image: bytes | Exception, client: VisionClient, profile: DomainProfile, *, refresh: bool
 ) -> tuple[FigurePanel, tuple[FigureReading, ...]]:
     block, group = request.block, request.group
     base = {
@@ -712,9 +641,14 @@ def _read_panel(
     }
     if isinstance(image, Exception):
         return FigurePanel(**base, status="error", detail=f"crop failed: {image}"[:500]), ()
+    # A panel is selected only for a figure_readable field, and the loader refuses such a field without slots.
+    assert profile.figures is not None
     try:
         result = client.complete_vision(
-            system=SYSTEM_PROMPT, user=user_prompt(group.caption, request.fields), image_png=image, refresh=refresh
+            system=SYSTEM_PROMPT,
+            user=user_prompt(group.caption, request.fields, profile.figures),
+            image_png=image,
+            refresh=refresh,
         )
     except LlmOfflineMiss:
         # A replay miss is not this panel's failure but the run's: stored as an ``error`` panel it would
@@ -731,7 +665,7 @@ def _read_panel(
         reason = str(answer.get("reason") or "not a property-vs-condition chart")
         return FigurePanel(**base, status="not_chart", detail=reason[:500], usage=result.usage), ()
     try:
-        readings, unplaced = readings_from_answer(answer, request)
+        readings, unplaced = readings_from_answer(answer, request, profile.units)
     except (ValueError, TypeError) as exc:
         return FigurePanel(**base, status="unreadable", detail=str(exc)[:500], usage=result.usage), ()
     if unplaced and not readings:
@@ -754,6 +688,7 @@ def read_figures(
     artifact: ParsedArtifact,
     render: CropRenderer,
     client: VisionClient,
+    profile: DomainProfile,
     *,
     figure_key: str,
     max_per_document: int,
@@ -771,7 +706,7 @@ def read_figures(
     :class:`Cancelled` is raised when the ones already out have answered. Nothing is returned, so nothing
     partial is stored; the answers that did arrive are in the LLM cache.
     """
-    requests = select_panels(artifact.blocks, limit=max_per_document)
+    requests = select_panels(artifact.blocks, profile, limit=max_per_document)
     images = [_crop(render, request) for request in requests]
     with ContextThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
         futures = [
@@ -780,6 +715,7 @@ def read_figures(
                 request,
                 image,
                 client,
+                profile,
                 refresh=refresh or request.block.source_id in refresh_panels,
                 stop=stop,
             )

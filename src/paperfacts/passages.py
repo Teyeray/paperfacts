@@ -33,13 +33,16 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
+from functools import cache
 from typing import Literal
 
 from paperfacts.config import DEFAULT_CANDIDATE_LIMIT
 from paperfacts.continuation import continuation_partners
-from paperfacts.fields import CONDITION_KEYWORDS, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.models import SourceBlock
-from paperfacts.normalize import delatex, normalize_text
+from paperfacts.profile import RetrievalSpec
+from paperfacts.text import delatex, is_word_edge, normalize_text
+from paperfacts.units import BUILTIN_RETRIEVAL, UnitRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -49,52 +52,13 @@ DENSE_TYPES: frozenset[str] = frozenset({"table", "caption"})
 # extraction.candidate_limit in config.json caps the unit-only blocks, together with the named ones: named
 # blocks are never cut, and the unit-only ones fill whatever places they left.
 
+# A profile's own regular expressions -- the condition unit pattern, a declared unit's retrieval -- search at most
+# this much of a block. The loader refuses the nested quantifiers that backtrack catastrophically; this bounds
+# what one it could not recognise can cost. The longest block in the recorded parses is about 2 000 characters,
+# so a real paragraph is searched whole. The built-in patterns are the package's own and search everything.
+PROFILE_PATTERN_SPAN = 20_000
 
-# How each canonical unit is recognised **inside running text**. :mod:`paperfacts.normalize` has unit
-# patterns too, but those are anchored: they answer "is this whole string the unit?" for a value the model
-# already quoted. Searching prose for a unit is a different question and needs looser expressions.
-#
-# A unit match ranks below a name match rather than being filtered out, because the two failure modes are
-# not symmetric. "%" and "nm" appear in every paper, so treating them as proof would drown the prompt;
-# refusing them outright loses the paper that writes "films of 2108 nm" without the word "thickness". As a
-# weaker class they only fill places no named block wanted.
-# Lowercase omega, not the ohm sign: _searchable() lowercases, and "Ω".lower() is "ω". normalize_key has to
-# undo the same fold for the same reason. Spelling it uppercase here would silently match only "ohm".
-_OHM = r"(?:ohms?|ω)"
-# Every pattern runs on _searchable() text, which is lower case: an upper-case letter in one never matches.
-# "W" was written that way once, and sputtering_power went unasked in 22 of 54 lanes that said "60 W".
-UNIT_PATTERNS: dict[str, re.Pattern[str]] = {
-    "Ω/sq": re.compile(rf"{_OHM}\s*(?:/|per)?\s*(?:sq|square|□)"),
-    "Ω·cm": re.compile(rf"{_OHM}\s*[.x*·-]?\s*cm"),
-    # "4 in." and "2 inch" are target sizes; a bare "in" is the English word, so a digit must precede it.
-    "inch": re.compile(r"\d\s*(?:inch|inches|in\.|\")"),
-    "nm": re.compile(r"\d\s*(?:nm|µm|μm|um)\b"),
-    "min": re.compile(r"\d\s*(?:min|mins|minutes?|h|hr|hrs|hours?|s|sec|secs|seconds?)\b"),
-    "%": re.compile(r"\d\s*%"),
-    # K is admitted as a retrieval signal even though the converter refuses it: a block saying "annealed
-    # at 573 K" belongs in the prompt, and the honest ambiguous verdict is the comparison's job, not
-    # retrieval's.
-    "℃": re.compile(r"\d\s*(?:°\s*[ck]\b|℃|c\b|k\b)"),
-    "cm": re.compile(r"\d\s*(?:cm|mm|m|µm|μm|um)\b"),
-    "W": re.compile(r"\d\s*[km]?w\b"),
-    "sccm": re.compile(r"\d\s*(?:sccm|slm)\b"),
-    "rpm": re.compile(r"\d\s*(?:rpm|r/min)\b"),
-    "Pa": re.compile(r"\d\s*(?:[mkh]?pa|m?torr|m?bar)\b"),
-}
-
-# A deposition condition stated as a number with its unit. This is what distinguishes one sample from
-# another ("100 sccm", "150 W", "300 °C"), so a block carrying one belongs in the inventory question even
-# when it uses none of the condition words.
-# A bare "%" is deliberately absent: it appears in every results paragraph (transmittance, ratios),
-# so it would flood the inventory selection with prose. Only explicit composition ratios count here.
-# "\d\s*s\b" does not match "2 samples": \b requires a non-word character after the "s", and the "a" of
-# "amples" is a word character, so the boundary fails and the block stays out of the inventory.
-CONDITION_UNIT = re.compile(
-    r"\d\s*(?:sccm|W\b|°C|℃|K\b|Pa\b|mtorr|torr|mbar|kv\b|ma\b|rpm|min\b|h\b|s\b|(?:vol|at)\.?\s*%)",
-    re.IGNORECASE,
-)
-
-# Compiled on first use and kept: the keyword tables are small and fixed at import time.
+# Compiled on first use and kept: the keyword tables are small and a profile never changes while it is loaded.
 _PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
 
 
@@ -108,73 +72,87 @@ _LATEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
 
 def _pattern(keyword: str) -> re.Pattern[str]:
     """Match a keyword as a whole token. A keyword ending in punctuation (``d =``, ``%T``) keeps that edge
-    open, since ``\\b`` would demand a word character that is not there."""
+    open, since ``\\b`` would demand a word character that is not there; so does one ending in a Chinese or
+    Japanese character (:func:`paperfacts.text.is_word_edge`), whose text has no spaces for ``\\b`` to find."""
     cached = _PATTERN_CACHE.get(keyword)
     if cached is None:
         folded = _DOUBLED_LETTER.sub(r"\1", normalize_text(keyword).lower())
-        prefix = r"\b" if folded[:1].isalnum() else ""
-        suffix = r"\b" if folded[-1:].isalnum() else ""
+        prefix = r"\b" if is_word_edge(folded[:1]) else ""
+        suffix = r"\b" if is_word_edge(folded[-1:]) else ""
         cached = _PATTERN_CACHE[keyword] = re.compile(prefix + re.escape(folded) + suffix)
     return cached
 
 
-def _searchable(block: SourceBlock) -> str:
+def searchable(block: SourceBlock) -> str:
     """The block as units are searched for: folded, LaTeX undone (``delatex`` restores "°" and "%"), lower
     case."""
     return _LATEX_COMMAND.sub(" ", delatex(normalize_text(block.content))).lower()
 
 
-def _names(keywords: Sequence[str], text: str) -> int:
-    """How many of ``keywords`` occur in ``text`` (a :func:`_searchable` string) as whole tokens."""
+def keyword_hits(keywords: Sequence[str], text: str) -> int:
+    """How many of ``keywords`` occur in ``text`` (a :func:`searchable` string) as whole tokens."""
     squeezed = _DOUBLED_LETTER.sub(r"\1", text)
     return sum(1 for keyword in keywords if _pattern(keyword).search(squeezed))
 
 
-def inventory_blocks(blocks: Sequence[SourceBlock]) -> list[SourceBlock]:
+def inventory_blocks(blocks: Sequence[SourceBlock], retrieval: RetrievalSpec) -> list[SourceBlock]:
     """The blocks that could name a sample or the conditions that distinguish one.
 
     Section titles come along because they are nearly free and tell the model which part of the paper it is
     reading; tables and captions because samples are usually enumerated there; prose only when it mentions a
     deposition condition. Document order is preserved, so the model sees the paper's own narrative.
     """
-    chosen = {index for index, block in enumerate(blocks) if _is_inventory_block(block)}
+    condition_unit = _condition_unit(retrieval.condition_unit_pattern)
+    chosen = {
+        index
+        for index, block in enumerate(blocks)
+        if _is_inventory_block(block, condition_unit, retrieval.condition_keywords)
+    }
     chosen |= continuation_partners(chosen, blocks)
     logger.debug("inventory blocks %d/%d", len(chosen), len(blocks))
     return [blocks[index] for index in sorted(chosen)]
 
 
-def _is_inventory_block(block: SourceBlock) -> bool:
+@cache
+def _condition_unit(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def _is_inventory_block(block: SourceBlock, condition_unit: re.Pattern[str], keywords: Sequence[str]) -> bool:
     if block.type in DENSE_TYPES or block.type == "title":
         return True
-    text = _searchable(block)
-    if CONDITION_UNIT.search(text):
+    text = searchable(block)
+    if condition_unit.search(text[:PROFILE_PATTERN_SPAN]):
         return True
     # A condition word alone is not enough: "the deposition process" appears in every discussion paragraph.
     # Paired with a number it is almost always the sentence that states how a sample was made.
     if not any(character.isdigit() for character in text):
         return False
-    return _names(CONDITION_KEYWORDS, text) > 0
+    return keyword_hits(keywords, text) > 0
 
 
 def candidate_blocks(
     spec: FieldSpec,
     blocks: Sequence[SourceBlock],
     *,
+    units: UnitRegistry,
     limit: int = DEFAULT_CANDIDATE_LIMIT,
     sample_blocks: frozenset[str] = frozenset(),
 ) -> list[SourceBlock]:
     """The blocks that could hold a value of ``spec``, returned in document order.
 
     Every block naming the field comes along; the blocks that only carry its unit are capped by ``limit``,
-    which is what keeps a paper full of percentages from putting every caption into every question.
+    which is what keeps a paper full of percentages from putting every caption into every question. ``units``
+    says how that unit is written in running text.
     """
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
-    unit = UNIT_PATTERNS.get(spec.canonical_unit or "")
+    unit = None if spec.canonical_unit is None else units.retrieval(spec.canonical_unit)
+    span = None if unit is None or unit in BUILTIN_RETRIEVAL.values() else PROFILE_PATTERN_SPAN
     named: set[int] = set()
     unit_only: list[tuple[bool, int]] = []
     for index, block in enumerate(blocks):
-        match = _classify(spec, block, unit)
+        match = _classify(spec, block, unit, span)
         if match == "named":
             named.add(index)
         elif match == "unit":
@@ -215,14 +193,17 @@ def _has_digit(block: SourceBlock) -> bool:
     return any(character.isdigit() for character in block.content)
 
 
-def _classify(spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None) -> Literal["named", "unit"] | None:
-    """Whether ``block`` names ``spec`` by a keyword, only carries its unit, or does not qualify at all."""
-    text = _searchable(block)
+def _classify(
+    spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None, span: int | None
+) -> Literal["named", "unit"] | None:
+    """Whether ``block`` names ``spec`` by a keyword, only carries its unit (searched in its first ``span``
+    characters), or does not qualify at all."""
+    text = searchable(block)
     if spec.kind == "numeric" and not any(character.isdigit() for character in text):
         return None  # a number cannot be quoted from a block that has none
-    if _names(spec.keywords, text):
+    if keyword_hits(spec.keywords, text):
         return "named"
-    if unit is not None and unit.search(text):
+    if unit is not None and unit.search(text[:span]):
         return "unit"
     return None
 

@@ -5,11 +5,11 @@ import { api } from "./api.js";
 import { escapeHtml, toast } from "./html.js";
 import { JOB_STATUS_LABEL, STAGE_LABEL, STAGE_STATUS, currentJob, isActive, isCurrent, state } from "./state.js";
 
-const POLL_MS = 1500;
+export const POLL_MS = 1500;
 // A dropped request (a tunnel hiccup, a restarting server) is retried with a growing pause; only a run of
 // failures this long gives up, so one bad response cannot freeze the panel at "running".
-const MAX_RETRIES = 5;
-const MAX_BACKOFF_MS = 15000;
+export const MAX_RETRIES = 5;
+export const MAX_BACKOFF_MS = 15000;
 // Each loop owns a token; stopping bumps it, so a tick already waiting on the network cannot schedule
 // another one afterwards and two loops can never run side by side.
 let pollToken = 0;

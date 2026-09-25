@@ -4,6 +4,7 @@
     paperfacts overlay paper.pdf --backend both   # bbox overlays -> data/docs/<sha>/overlays/
     paperfacts run     paper.pdf                  # parse, extract and compare in one go
     paperfacts serve                              # the web interface
+    paperfacts prompts --field thickness          # what the model is asked, rendered; no model call
 
 Where the parsers run is decided by the environment (see :mod:`paperfacts.config`): subprocesses from
 ``runners/`` by default, or long-running services once ``PAPERFACTS_MINERU_URL`` /
@@ -18,18 +19,31 @@ import logging
 import os
 from collections.abc import Iterable
 from enum import StrEnum
+from logging.handlers import BufferingHandler
 from pathlib import Path
 from typing import Annotated, NoReturn, assert_never
 
 import typer
 
-from paperfacts.config import EXTRACTION_MODES, Settings
+from paperfacts.batch import run_batch
+from paperfacts.config import DEFAULT_REPO_ROOT, ENV_PREFIX, EXTRACTION_MODES, Settings
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
-from paperfacts.fields import FIELD_SPECS
+from paperfacts.figures import user_prompt as figure_user_prompt
+from paperfacts.keys import ComparisonOptions, ExtractionOptions
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import PROFILES_DIRNAME, load_profile
+from paperfacts.prompts import (
+    extraction_system_prompt,
+    field_system_prompt,
+    field_user_prompt,
+    inventory_system_prompt,
+    matching_system_prompt,
+    render_field_table,
+)
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout, write_text_atomic
 from paperfacts.workflow import (
@@ -38,8 +52,8 @@ from paperfacts.workflow import (
     compare_document,
     extract_document,
     load_artifact,
+    load_run_profile,
     parse_document,
-    run_batch,
     run_document,
 )
 
@@ -97,6 +111,15 @@ DataRootOpt = Annotated[
     Path | None, typer.Option("--data-root", help="data directory; defaults to $PAPERFACTS_DATA_ROOT or ./data")
 ]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="print INFO logs")]
+ProfileOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--profile",
+        metavar="NAME_OR_PATH",
+        help="profile profile: a name under profiles/, or a path to a profile file; "
+        "default: profile in config.json or $PAPERFACTS_PROFILE",
+    ),
+]
 PassesOpt = Annotated[
     int | None,
     typer.Option("--passes", min=1, help="extract each lane this many times and keep the majority (costs N calls)"),
@@ -157,9 +180,12 @@ def _settings(
     figures: bool | None = None,
     offline: bool = False,
     force: bool = False,
+    profile: str | None = None,
 ) -> Settings:
-    settings = Settings.from_env()
+    settings = _env_settings()
     changes: dict[str, object] = {}
+    if profile is not None:
+        changes["profile"] = profile
     if offline:
         changes["llm_offline"] = True
     if figures is not None:
@@ -180,6 +206,23 @@ def _settings(
     # And the one place it starts its miss record: a command's summary counts its own misses only.
     OFFLINE_MISSES.clear()
     return settings
+
+
+def _env_settings() -> Settings:
+    """config.json under the environment. A broken configuration is one red line naming the key and the file,
+    for every command, not a traceback."""
+    try:
+        return Settings.from_env()
+    except ConfigError as exc:
+        _fail("config", exc)
+
+
+def _profile(settings: Settings) -> DomainProfile:
+    """The profile this command runs under, loaded once here and passed to everything it calls."""
+    try:
+        return load_run_profile(settings)
+    except ConfigError as exc:
+        _fail("profile", exc)
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -274,17 +317,20 @@ def extract(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    profile_name: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Extract sample-level records from parsed Markdown with the LLM. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, force=force)
+    settings = _settings(data_root, passes, mode, force=force, profile=profile_name)
+    profile = _profile(settings)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
+            options = ExtractionOptions.from_settings(settings, profile, client.model)
             for name in backend.backends():
-                _echo_lines(render_lane(extract_document(document, name, settings, client, force=force)))
+                _echo_lines(render_lane(extract_document(document, name, settings, options, client, force=force)))
     except REPORTABLE_ERRORS as exc:
         _fail("extract", exc)
 
@@ -295,16 +341,20 @@ def compare(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    profile_name: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Match samples across the two lanes and compare their fields. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, force=force)
+    settings = _settings(data_root, passes, mode, force=force, profile=profile_name)
+    profile = _profile(settings)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
-            report = compare_document(document, settings, client, force=force)
+            report = compare_document(
+                document, settings, ComparisonOptions.from_settings(settings, profile), client, force=force
+            )
     except REPORTABLE_ERRORS as exc:
         _fail("compare", exc)
     _echo_lines(render_report(report))
@@ -319,12 +369,14 @@ def run(
     figures: FiguresOpt = None,
     force_figures: ForceFiguresOpt = False,
     offline: OfflineOpt = False,
+    profile_name: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Parse, extract, compare and automatically save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures)
+    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures, profile_name)
+    profile = _profile(settings)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -333,7 +385,7 @@ def run(
             typer.echo(f"[{stage}] {status} {detail}".rstrip())
 
     try:
-        result = run_document(document, settings, force=force, force_figures=force_figures, on_stage=on_stage)
+        result = run_document(document, settings, profile, force=force, force_figures=force_figures, on_stage=on_stage)
     except REPORTABLE_ERRORS as exc:
         _offline_summary(settings)
         _fail("run", exc)
@@ -370,10 +422,12 @@ def _batch_summary(
     def on_stage(stage: str, status: StageStatus, detail: str) -> None:
         typer.echo(f"[{stage}] {status} {detail}".rstrip())
 
+    profile = _profile(settings)
     try:
         result = run_batch(
             source,
             settings,
+            profile,
             output=output,
             force=force,
             force_figures=force_figures,
@@ -407,12 +461,13 @@ def batch(
     force_figures: ForceFiguresOpt = False,
     jobs: JobsOpt = None,
     offline: OfflineOpt = False,
+    profile_name: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures)
+    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures, profile_name)
     _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures, jobs=jobs)
 
 
@@ -422,19 +477,25 @@ def export(
     output: OutputOpt = None,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    profile_name: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Re-export current cached results to Excel, without parser or LLM calls."""
     _configure_logging(verbose)
+    settings = _settings(data_root, passes, mode, profile=profile_name)
     # One paper at a time: an export only reads the caches, so parallel papers would buy nothing.
-    _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True, jobs=1)
+    _batch_summary(source, settings, output, force=False, export_only=True, jobs=1)
 
 
 @app.command()
-def fields() -> None:
-    """List the field table the package actually loaded, so an edit to config.json can be checked at a glance."""
-    for spec in FIELD_SPECS:
+def fields(profile_name: ProfileOpt = None) -> None:
+    """List the field table of the profile a run would load, so an edit to it can be checked at a glance."""
+    # Not _settings(): a listing asks no model, so it leaves the in-flight limit and the miss record alone.
+    settings = _env_settings()
+    if profile_name is not None:
+        settings = dataclasses.replace(settings, profile=profile_name)
+    for spec in _profile(settings).fields:
         unit = spec.canonical_unit or "-"
         tolerance = f"rel={spec.rel_tol:g} abs={spec.abs_tol:g}" if spec.kind == "numeric" else "-"
         hint = f"  condition: {spec.condition_hint}" if spec.condition_hint else ""
@@ -444,10 +505,111 @@ def fields() -> None:
         typer.echo(f"    keywords: {', '.join(spec.keywords) or '-'}")
 
 
+def _profile_line(profile: DomainProfile) -> str:
+    counts = f"{len(profile.paper_fields)} paper + {len(profile.sample_fields)} sample fields"
+    return f"{profile.name:<20} {profile.maturity:<10} {counts:<28} {profile.content_hash[:12]}  {profile.title_zh}"
+
+
+@app.command()
+def profiles(
+    check: Annotated[
+        Path | None,
+        typer.Option("--check", metavar="PATH", help="validate this profile file instead of listing profiles/"),
+    ] = None,
+) -> None:
+    """List the profiles under profiles/, or validate one file while writing it (--check)."""
+    # Not the settings: listing or checking the profiles must work while config.json is broken, which is when one
+    # is checked.
+    repo_root = Path(os.environ.get(f"{ENV_PREFIX}REPO_ROOT", "").strip() or DEFAULT_REPO_ROOT)
+    if check is not None:
+        # The loader logs its warnings (a large field table, say); an author checking a file wants them here.
+        handler = BufferingHandler(capacity=1000)
+        handler.setLevel(logging.WARNING)
+        package_logger = logging.getLogger("paperfacts")
+        package_logger.addHandler(handler)
+        try:
+            # The checks a run makes too (a reserved name, a clash with a repository profile of the same name),
+            # so a file that passes here is not refused by the run it was written for. Resolved, so the value is
+            # read as a path even when it has no "/" and no ".json".
+            profile = load_run_profile(Settings(repo_root=repo_root, profile=str(check.resolve())))
+        except ConfigError as exc:
+            # Validation names every problem, one per line; each gets its own "error:".
+            for line in str(exc).splitlines():
+                typer.secho(f"error: {line}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        finally:
+            package_logger.removeHandler(handler)
+        typer.echo(_profile_line(profile))
+        _echo_lines(f"warning: {record.getMessage()}" for record in handler.buffer)
+        typer.echo("ok")
+        return
+    directory = repo_root / PROFILES_DIRNAME
+    failed = False
+    for path in sorted(directory.glob("*.json")):
+        try:
+            typer.echo(_profile_line(load_profile(path)))
+        except ConfigError as exc:
+            # One broken file should not hide the others from the listing.
+            for line in str(exc).splitlines():
+                typer.secho(f"{path.stem:<20} invalid: {line}", fg=typer.colors.RED, err=True)
+            failed = True
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def prompts(
+    profile_name: ProfileOpt = None,
+    field: Annotated[
+        str | None, typer.Option("--field", metavar="NAME", help="the per-field question for this field instead")
+    ] = None,
+) -> None:
+    """Print the system prompts a profile renders, exactly as the model gets them, each under the mode that sends
+    it. No model is called."""
+    settings = _env_settings()
+    if profile_name is not None:
+        settings = dataclasses.replace(settings, profile=profile_name)
+    profile = _profile(settings)
+    if field is not None:
+        spec = profile.by_name.get(field)
+        if spec is None:
+            typer.secho(
+                f"no field {field!r} in {profile.name}; it has: {', '.join(profile.by_name)}", fg="red", err=True
+            )
+            raise typer.Exit(code=1)
+        sections = {
+            "field system prompt (passage mode)": field_system_prompt(profile),
+            f"field line ({field})": render_field_table((spec,), profile.prompt.implausible_origin),
+            # The question's framing; the two placeholders are what a run fills from the paper.
+            f"field user prompt ({field}, passage mode)": field_user_prompt(
+                spec, "<sample list>", "<excerpts>", profile.prompt.implausible_origin
+            ),
+        }
+    else:
+        # Passage mode (the default) sends the inventory and field prompts and never the extraction prompt;
+        # document mode sends only the extraction prompt. Matching is the compare stage's, under either mode.
+        sections = {
+            "inventory system prompt (passage mode)": inventory_system_prompt(profile),
+            "field system prompt (passage mode)": field_system_prompt(profile),
+            "extraction system prompt (document mode)": extraction_system_prompt(profile),
+            "matching system prompt (compare, both modes)": matching_system_prompt(profile),
+        }
+        if profile.figures is not None and profile.figure_fields:
+            # Sent once per chart panel, with that figure's own caption and only the fields the caption names.
+            sections["figure user prompt (figures stage, only when figures.enabled; one per chart panel)"] = (
+                figure_user_prompt("<caption>", profile.figure_fields, profile.figures)
+            )
+    for title, text in sections.items():
+        typer.echo(f"===== {title} =====")
+        typer.echo(text)
+        typer.echo("")
+
+
 @app.command()
 def serve(
     host: Annotated[str | None, typer.Option(help="bind address; defaults to server.host")] = None,
     port: Annotated[int | None, typer.Option(help="port to listen on; defaults to server.port")] = None,
+    profile_name: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -457,12 +619,17 @@ def serve(
     from paperfacts.web.app import create_app
 
     _configure_logging(verbose)
-    settings = _settings(data_root)
+    settings = _settings(data_root, profile=profile_name)
+    profile = _profile(settings)
     host = host or settings.server_host
     port = port or settings.server_port
-    typer.echo(f"PaperFacts UI -> http://{host}:{port}   (data_root={settings.data_root}, model={settings.llm_model})")
+    typer.echo(
+        f"PaperFacts UI -> http://{host}:{port}   "
+        f"(data_root={settings.data_root}, model={settings.llm_model}, "
+        f"profile={profile.name} {profile.content_hash[:12]})"
+    )
     try:
-        web_app = create_app(settings)
+        web_app = create_app(settings, profile=profile)
     except ConfigError as exc:
         _fail("serve", exc)
     uvicorn.run(web_app, host=host, port=port, log_level="info" if verbose else "warning")

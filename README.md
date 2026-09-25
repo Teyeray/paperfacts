@@ -20,7 +20,8 @@ paper.pdf
 ```
 
 This file is the whole manual: installing it on a Mac, deploying it on the GPU server, using the web
-interface, every command, every configuration key, and what a blank cell means. `CLAUDE.md` is internal
+interface, every command, every configuration key, writing a domain profile for a new field of research, and
+what a blank cell means. `CLAUDE.md` is internal
 working conventions for people editing the code, and nothing here depends on reading it.
 
 ## Why two parsers
@@ -190,9 +191,10 @@ are counted, so a chunked upload without a length works and a larger one is refu
 
 ### How code reaches the server
 
-Development happens on the Mac, is committed and pushed to GitHub, and pulled on the server. **Do not try
-to operate the server over ssh from the dev machine.** Someone with a session on the server pulls and
-restarts it there.
+Development happens on the Mac, is committed and pushed to GitHub, and pulled on the server. Code is never
+edited on the server: production is updated only by `scripts/deploy.sh --pull` run there (over ssh or in a
+session on the machine), and experiments run in a separate worktree against their own copy of the data, never
+against production's `data/`.
 
 ## Using the web interface
 
@@ -271,12 +273,15 @@ uv run paperfacts run paper.pdf --figures  # the same, and read the paper's char
 uv run paperfacts batch template_files --output data/exports/template_files.xlsx
 uv run paperfacts batch template_files --jobs 4   # four papers at once; default web.max_parallel_documents
 uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
-uv run paperfacts fields                   # list the field table the package actually loaded
+uv run paperfacts fields                   # list the field table of the profile a run would load
+uv run paperfacts profiles                 # list profiles/: name, maturity, field counts, content hash, title
+uv run paperfacts profiles --check profiles/my_domain.json   # validate a profile while writing it
+uv run paperfacts prompts --profile tco --field thickness          # what the model is asked, no model call
 ```
 
 | Command | Purpose |
 |---|---|
-| `run <pdf>` | Parse, extract, compare and save `dataset.xlsx` for one paper |
+| `run <pdf>` | Parse, extract, compare and save `exports/<profile>.xlsx` for one paper |
 | `batch <pdf or dir>` | Recursively process every PDF and write one workbook for all of them |
 | `export <pdf or dir>` | Rebuild that workbook from cached results, with no parser and no LLM calls |
 | `parse <pdf>` | Parse into Markdown with provenance markers, a block list and the full artifact |
@@ -284,7 +289,9 @@ uv run paperfacts fields                   # list the field table the package ac
 | `compare <pdf>` | Match samples across lanes and compare their fields. Needs `extract` (which implies `parse`) |
 | `overlay <pdf>` | Draw block boxes onto page images, to check provenance by eye. Needs `parse` |
 | `serve` | Serve the web interface |
-| `fields` | Print the loaded field table, so an edit to `config.json` can be checked at a glance |
+| `fields` | Print the profile's field table (`--profile` for another), so an edit can be checked at a glance |
+| `profiles` | List the profiles in `profiles/` with their maturity, paper/sample field counts, content hash prefix and title. `--check PATH` validates one file instead: it prints the profile's line and any warnings then `ok`, or every error it finds, one `error:` line each, and exits 1. The listing reads `profiles/` without `config.json`, so it works while that file is broken |
+| `prompts` | Print the rendered inventory, per-field, extraction and matching system prompts of a profile (`--profile`), exactly as the model gets them, each labelled with the mode that sends it (passage mode never sends the extraction prompt; document mode sends only it). `--field NAME` prints the per-field system prompt, that field's line, and the question's framing with `<sample list>` and `<excerpts>` in place of what a run fills in. No model is called |
 
 The flags worth knowing:
 
@@ -297,6 +304,17 @@ The flags worth knowing:
   over `figures.enabled`; `--force-figures` re-reads the charts without redoing anything else.
 - `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
+- `--profile NAME_OR_PATH` on `run`, `batch`, `export`, `extract`, `compare` and `serve` runs the command
+  under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
+  after the profile, so a profile file given by path whose name is also a different `profiles/<name>.json` is
+  refused unless the two files are byte-identical, and the name `paperfacts` (the pre-profile workbook) is
+  reserved. `serve` reads its profile once:
+  `/api/health` reports its name and hash, `/api/profile` gives the page its title and copy (the header shows
+  the title, and the paper-level record is named the profile's way), and after any edit to the file on disk --
+  display text included, or a symlink pointed at another file -- every new job is refused until the server is
+  restarted; `/api/health`'s `profile_on_disk_changed` says so first. A file that cannot be read (deleted, or
+  caught mid-save) refuses the job with its own message. Run **one server per data root**: two servers under different profiles
+  over the same `data_root` can parse the same document at the same time.
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
   `--jobs 1` is the old one-after-another run.
 - `--offline` on `run` and `batch` answers every model request from the LLM cache and fails on a miss; see
@@ -463,15 +481,19 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `web.max_parallel_documents` | Documents processed at once, by the web job queue and by `batch` (unless `--jobs` says otherwise). Default 3 |
 | `overlay.dpi` | Default 150 |
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
-| `condition_keywords` | The words that mark a measurement condition worth recording |
 | `data_root` | Where everything is written. Default `data` |
+| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields, condition keywords and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). Default `tco` |
+
+`config.json` no longer holds `fields` or `condition_keywords`: they live in the profile (`fields` and
+`retrieval.condition_keywords`). A `config.json` that still has either is refused with an error naming the key,
+the file and the profile file to edit instead, so an old copy never looks as if its table were read.
 
 ### Environment overrides
 
 Every scalar setting also has a `PAPERFACTS_*` variable that wins over the file, which is how one machine
 points at its own services without editing the shared file:
 
-`PAPERFACTS_DATA_ROOT`, `PAPERFACTS_REPO_ROOT`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_MINERU_URL`,
+`PAPERFACTS_DATA_ROOT`, `PAPERFACTS_REPO_ROOT`, `PAPERFACTS_PROFILE`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_MINERU_URL`,
 `PAPERFACTS_PADDLE_URL`, `PAPERFACTS_PADDLE_RENDER_DPI`, `PAPERFACTS_PADDLE_VL_BACKEND`,
 `PAPERFACTS_PADDLE_VL_SERVER_URL`, `PAPERFACTS_PADDLE_VL_MODEL_NAME`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
 `PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`,
@@ -489,15 +511,16 @@ points at its own services without editing the shared file:
 `PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
 and a value that will not parse as a number names the variable in the error.
 
-Three settings are **file-only**, because a single environment variable is the wrong shape for them:
-`fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.
+One setting is **file-only**, with no `PAPERFACTS_*` variable: `comparison.ambiguous_match_confidence`. (The field table and condition keywords were the other two; they are the profile's
+now, and `PAPERFACTS_PROFILE` picks the profile.)
 
 Secrets live only in `.env`: `PAPERFACTS_LLM_API_KEY` and `PAPERFACTS_WEB_PASSWORD`. `.env` is loaded
 without overriding what the environment already holds.
 
 ### The field table
 
-`config.json`'s `fields` list **is** the schema. Each entry drives the description the model is given, the
+The profile's `fields` list (`profiles/tco.json` for the shipped one; [Domain profiles](#domain-profiles) has
+every attribute and how to write a profile of your own) **is** the schema. Each entry drives the description the model is given, the
 keywords retrieval searches for, the unit everything is converted to, and how close two numbers have to be
 to count as the same fact.
 
@@ -537,14 +560,38 @@ the confusions a unit cannot catch: the spin-coating rpm of an absorber read as 
 thickness of a wafer or a glass substrate read as the electrode's. The shipped table caps `rotation_speed`
 at 100 rpm and `thickness` at 5000 nm and floors `transmittance` at 60 %. A value that
 cannot be converted is kept, since there is no number to judge. A range changes the prompt and which values
-survive, so it moves both cache keys; a field without one keeps the keys it had.
+survive, so it moves both cache keys; a field without one keeps the keys it had. A numeric field with no
+`canonical_unit` (a count, such as the battery profile's `cycle_number`) may declare one too; it is judged on
+the number as parsed.
 
-A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
-`W`, `sccm`, `rpm`, `Pa`) or startup fails, naming the field and the file, rather than guessing. Adding a field is one table entry; the prompt,
+Two more numeric attributes decide how a quoted value is read. `range_policy` (`midpoint`, the default, or
+`reject`) decides what a range quoted as one value ("10-20") becomes in the lanes and in the comparison: its
+midpoint, or no value. A **dataset cell** always needs a single scalar whatever the policy, so a range never
+fills one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
+clause: by default "100 nm after annealing" is refused, since it describes another state of the sample; under
+`condition` ("92.5% after 100 cycles" for a capacity retention) the number is read and the clause is appended
+to the value's `condition` (`; `-joined when the model already gave one), so "after 50 cycles" and "after 100
+cycles" stay separate measurements in the comparison and the dataset cell. Both are cleaning and verdict
+rules, so changing either moves both keys.
+
+A quoted unit is compared with its spaces removed (`clean_unit`), so a profile's unit aliases that differ only
+by spaces ("mAh g-1" and "mAhg-1") are one spelling, and declaring both is refused as a duplicate. A profile's
+top-level `ignored_unit_suffixes` lists the words a paper may write after a unit to say whose quantity it is:
+the TCO profile lists the chamber gases (`Ar`, `O2`, `N2`, `H2`, `He`, `Kr`, `Xe`, `air`), so "1.1 Pa Ar" and
+"3 mTorr (O2)" read as pressures. A profile that lists none sets nothing aside.
+
+The prompt wording that used to carry TCO examples is profile text too, each with a neutral default: rule 2's
+table-header examples (`prompt.scaled_header_examples`, `prompt.plain_header_example`), what a number outside a
+field's plausible range usually is (`prompt.implausible_origin`), and the chart prompt's axis and tick-label
+examples (`figures.symbol_axis_example`, `figures.x_label_examples`).
+
+A `canonical_unit` must be one the built-in converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`,
+`cm`, `W`, `sccm`, `rpm`, `Pa`) or one the profile declares (see [Declared units](#declared-units)), or loading
+the profile fails, naming the field and the file, rather than guessing. Adding a field is one table entry; the prompt,
 normalisation and tolerances follow from it. `rel_tol` and `abs_tol` only decide verdicts, so editing one
 re-compares the stored facts instead of re-extracting them. Tolerances may not be negative, and
-`percent_or_fraction` is only accepted on a `%` field. `uv run paperfacts fields` prints what was actually
-loaded.
+`percent_or_fraction` is only accepted on a `%` field. `uv run paperfacts fields` prints the profile's
+table.
 
 A sample often has one field measured several ways -- transmittance averaged over 400-800 nm, at 550 nm,
 over 400-1800 nm -- and the dataset has one cell for it. The cell takes the measurement stated in the same
@@ -586,9 +633,296 @@ The twenty-three shipped fields are aimed at sputtered transparent-conductive-ox
 | `transmittance` | 透光率 | film | numeric | % |
 | `thickness` | 厚度 | film | numeric | nm |
 
-`transmittance` carries a `condition_hint` asking for the wavelength or spectral range; `density` and
+`transmittance` carries a `condition_hint` asking for the wavelength or spectral range, and a `condition_rule`
+that tells the model to always fill it. A field with a `condition_rule` must also give
+`missing_condition_note_zh`, the note a dataset cell whose value came without the condition gets
+(`原文提取结果未注明透光率波长或波段` for `transmittance`): the note is stored in the verdict, so it is profile text
+the comparison key covers, never generated from the display-only `label`; `density` and
 `transmittance` read a bare number as a percent or a fraction, and every other numeric field rejects a
 number with no unit rather than assuming one.
+
+## Domain profiles
+
+Everything PaperFacts knows about one field of research is in one JSON file, `profiles/<name>.json`: which
+fields to extract, how they are grouped, the domain wording of every prompt, the words that find how a sample
+was made, any units the built-in tables lack, and the Chinese display copy. The code holds the rules around
+that wording (quote verbatim, cite only ids you were shown, never guess a subset) and no word about any domain.
+Two profiles ship:
+
+| Profile | `maturity` | What it is |
+|---|---|---|
+| `tco` | `production` | Sputtered transparent-conductive-oxide films: 4 paper-level target fields and 19 sample-level fields. Its wording is byte-for-byte the prompts the corpus was measured with |
+| `battery_cathode` | `example` | Lithium-ion battery cathode materials: 13 sample-level fields, no paper-level group, four declared units (`mAh/g`, `C`, `V`, and `K` added to `℃`). Written as the template for a new domain; it has not been measured against a gold set |
+
+`maturity` is `production` or `example` (the default when it is left out). It is display only: the web header
+shows 示例配置 beside the title of an `example` profile, and `paperfacts profiles` lists it. Promote a profile to
+`production` once its output has been checked against hand-read papers (`eval/` has the scorer and the format).
+
+**Selecting one.** `profile` in `config.json` (default `tco`), `PAPERFACTS_PROFILE`, or `--profile NAME_OR_PATH`
+on one command. A bare name is `profiles/<name>.json` in the repository; a value containing `/` or ending in
+`.json` is a path, and a relative one is resolved against the directory the command runs in, not the repository
+(`--profile profiles/tco.json` works from the checkout's root only; the bare `tco` works from anywhere).
+The file is read and validated once per process, so a running server sees an edit only after a restart
+(`scripts/deploy.sh` restarts when anything under `profiles/` is newer than the running process).
+
+**What the file holds.** The top-level keys are `format` (always 1), `name` (must equal the file name without
+`.json`, and match `^[a-z][a-z0-9_]{0,39}$`), `title_zh`, `maturity`, `description_zh`, `groups`, `prompt`,
+`figures`, `retrieval`, `units`, `ignored_unit_suffixes`, `ui`, `fields`, and a free `$comment`. `format`,
+`name`, `groups`, `prompt`, `retrieval` and `fields` are required. An unknown key anywhere is refused with the
+list of valid ones, and every error names the file and the key.
+
+| Key | Holds |
+|---|---|
+| `groups` | `{name, level, label_zh}` each. `level` is `paper` (one record per paper, e.g. TCO's sputtering `target`) or `sample` (one value per sample). At least one sample-level group; paper-level groups may be none. The name is shown to the model in every field line (`group: film`); `label_zh` is display only |
+| `fields` | The field table ([below](#field-attributes-and-what-they-do)). Declaration order is question order and column order. At least one sample-level field; more than 40 logs a cost warning, more than 100 is refused |
+| `prompt` | The prompt slots ([below](#prompt-slots)) |
+| `figures` | The chart-reading slots: `subject`, `property_noun`, `chart_definition`, `axis_example`, and optionally `symbol_axis_example` and `x_label_examples`. Required exactly when some field is `figure_readable`, refused otherwise |
+| `retrieval` | `condition_keywords`, the words that mark a block describing how samples were made, and `condition_unit_pattern`, a regular expression (at most 500 characters, matched case-insensitively on lower-cased text) for a number in a condition's unit. Passage mode's inventory question is shown the blocks either one finds |
+| `units` | Units the built-in tables do not have ([below](#declared-units)) |
+| `ignored_unit_suffixes` | Words a paper writes after a unit to say whose quantity it is (TCO: the chamber gases, so "1.1 Pa Ar" reads as a pressure). At most 50; none by default |
+| `ui` | Chinese copy: `paper_level_label_zh` (the paper-level record in a column header or a fact's scope), `paper_level_short_zh` (the same where only a word fits), `entity_label_zh` (what one sample is called), `no_samples_message_zh` (shown in place of the sample table when the inventory found no in-scope sample). Each defaults to a neutral wording |
+
+### What a profile can and cannot express
+
+A profile changes the words, never the shape of the answer. The shape is fixed in code:
+
+- **One paper, one kind of sample.** Every paper yields at most one list of samples, all of the same kind (a
+  film, a cathode material), each one row. A paper whose facts belong to two kinds of entity at once -- devices
+  built from films, both with their own measurements -- fits only one of them per profile.
+- **Two levels.** A field is paper-level (one record per paper) or sample-level (one value per sample). There
+  is no third level: nothing per layer within a sample, per measurement within a sample, or per figure.
+- **Three kinds of field.** `numeric` (a number converted to one canonical unit), `composition` (a ratio or
+  formula, compared as normalised text) and `text` (optionally a closed set of `categories`). No list, table or curve is a
+  value.
+- **Paper-level fields are single-valued.** A paper-level field holds one value for the whole paper; a quantity
+  that differs between samples must be sample-level.
+- **A range is a midpoint or nothing.** A value quoted as a range ("10-20") becomes its midpoint or, under
+  `range_policy: reject`, no value; a bound (">80 %") fills no dataset cell.
+- **Charts are property-vs-condition only.** The opt-in figure reading reads a y value per marker off a chart
+  whose caption names a `figure_readable` field; spectra, micrographs, maps and schematics are not read.
+- **The prompts are English.** The templates around the slots are English, so slots are written in English;
+  only the display copy (`title_zh`, `label`, `ui`, ...) is Chinese.
+
+When a domain does not fit, narrow it until it does rather than stretch a slot: pick the one entity the gold
+data is about and make it the sample, move a per-layer quantity into one field per layer that matters
+(`etl_thickness`, `absorber_thickness`), and leave curves and spectra to the charts or out of scope. Two entity
+kinds are two profiles over the same papers, each with its own server and data root (see
+[A second profile beside the first](#a-second-profile-beside-the-first)). What still does not fit needs a code
+change, not a profile.
+
+### Writing a profile for a new domain
+
+1. **Copy the example.** `cp profiles/battery_cathode.json profiles/perovskite.json`, then set `name` to
+   `perovskite`, and write `title_zh` and `description_zh`. Leave `maturity` at `example`.
+2. **Groups.** Declare at least one `sample` group. Add a `paper` group only for facts that belong to the paper as
+   a whole and can never differ between its samples (TCO's sputtering target); a value the paper states once for
+   a whole sample series needs no paper group, because the model flags it `applies_to_all_samples` and the code
+   writes it onto every sample.
+3. **The three required slots.** `domain_subject` (what the papers are about, one phrase), `sample_definition`
+   (what counts as one sample, and what never does) and `field_scope` (which component every field describes,
+   and what to leave out). They carry most of the domain; the next section says why each exists. Every other
+   slot has a neutral default, but the defaults are generic, and domain examples in them measurably help.
+4. **Fields.** One entry per column. Write `description` for the model (it is the whole definition the model
+   gets), `keywords` for retrieval (the names a paper uses for the quantity, not its unit), `canonical_unit`,
+   tolerances, and a `valid_range` for any quantity another component of the paper is likely to be mistaken
+   for. `label` and `description_zh` are what the web page and the workbook print.
+5. **Units.** If a `canonical_unit` is not one of the twelve built-in ones, declare it under `units`.
+6. **Check it.** `uv run paperfacts profiles --check profiles/perovskite.json` validates without a model or a
+   configuration file: it prints the profile's line (name, maturity, paper/sample field counts, content hash,
+   title) and any warnings then `ok`, or every error it found, one `error:` line each, and exits 1. It makes the
+   checks a run makes too: the name `paperfacts` is reserved, and a file named like a repository profile but
+   differing from it is refused, since their workbooks would overwrite each other.
+7. **Read what the model will be asked.** `uv run paperfacts prompts --profile perovskite` prints the inventory,
+   field, extraction and matching system prompts exactly as sent; `--field NAME` prints the per-field system
+   prompt, that field's line, and the question around it with `<sample list>` and `<excerpts>` standing for what
+   a run fills in. A profile with `figure_readable` fields also gets the chart-reading question the figures stage
+   sends per chart panel (only when `figures.enabled`), with `<caption>` for the figure's caption and every
+   figure-readable field listed where a run lists only those the caption names. No model is called. Read rule 4,
+   5, 6 and 10 of each prompt with the slots in place.
+8. **Run a few papers.** `uv run paperfacts run paper.pdf --profile perovskite`, or a second server (below).
+   Iterate on display text and tolerances freely -- they re-key nothing or only the comparison, which is
+   recomputed from stored extractions at no model cost -- and batch prompt or field edits, which re-extract.
+9. **Measure before promoting.** Hand-check a few papers into a gold directory of their own (`eval/README.md`
+   has the format), score them with `eval/score.py --profile profiles/perovskite.json --gold <dir>`, and only
+   then set `maturity` to `production`. The scorer reads the profile through the package, and without `--keys`
+   it scores each paper's newest dataset built under that profile (by the fingerprint the dataset records).
+
+### Prompt slots
+
+Each slot is plain text of 1 to 2000 characters, inserted verbatim in a single pass (a slot may not contain a
+`{marker}` the templates fill). The failure each one exists to prevent is why it is worth writing well; the
+lessons come from the prompt comments and `.omc/research/`.
+
+| Slot | Required | Where it goes | What goes wrong without a good one |
+|---|---|---|---|
+| `domain_subject` | yes | The first line of every extraction prompt | The model does not know which of the paper's materials the questions are about |
+| `sample_definition` | yes | Rule 4 (document) and rule 1 (inventory) | On a paper that makes no sample of the domain, the inventory builds samples out of the paper's protagonist instead -- perovskite films and whole devices on a paper that only bought its ITO glass -- and both lanes agree, so the comparison cannot catch it (`feedback-e-field-confusion.md`) |
+| `field_scope` | yes | Rule 6 of the document and field prompts | A field described as "of the film" collects the absorber's thickness, the spin-coater's rpm and the device's transmittance, because each is a film too (`feedback-e-field-confusion.md`) |
+| `fact_noun`, `sample_plural`, `sample_singular` | | Headers and the inventory | Wording only |
+| `sample_unit`, `sample_examples`, `sample_id_example`, `condition_noun`, `condition_examples` | | Rule 4 / inventory rules 1-3 | The inventory's granularity, what makes two samples different: too coarse and the as-deposited and the annealed film become one sample; ids built from no condition cannot be paired across lanes |
+| `unit_examples` | | Rule 2 | Units rewritten or dropped instead of quoted as written |
+| `scaled_header_examples`, `plain_header_example` | | Rule 2 | A table headed `ρ × 10^4 (Ω cm)` loses its power of ten: 6.8 is stored as 6.8 Ω·cm, 10⁴ too high, and both lanes agree (`gold-eval-untuned.md`, cause 2). The model copies the factor into `unit_raw` and the code applies it |
+| `paper_key`, `paper_level_rule` | | The document prompt's JSON shape and rule 5 | A paper-level value attached to one sample, or a film's dopant reported as the target's composition. `paper_key` is the JSON key the model writes (TCO `target`, default `paper`); `paper_level_rule` is generated from the paper groups when left out, with its own wording for a profile that has none |
+| `no_samples_key`, `no_samples_clause`, `no_samples_condition`, `samples_present_condition` | | Inventory rule 6 | A paper that makes nothing in scope (a device paper on purchased ITO glass) is still asked every sample-level question and harvests the absorber's values. The flag is honoured only with an empty sample list, and must be false "when the excerpts simply do not say": one wrong `true` would empty a lane (`review-core.md`, A16) |
+| `subset_examples` | | The subset rule in both modes | A value stated for part of the series ("all films deposited at 100 °C") becomes one value with no sample: the gold set lost 36 substrate temperatures that way. The rule places it on each named sample, and only when the text says which samples form the subset |
+| `whole_series_examples` | | Rule 10 (document), rule 5 (field) | A value stated once for every sample is reported against no sample and lost, instead of being flagged `applies_to_all_samples` |
+| `partial_collective_example` | | Field rule 5 | A collective noun covering most but not all samples ("the sputtered films" when one is not) is flagged as whole-series, and the value lands on a sample it does not belong to |
+| `multi_condition_example` | | Rule 7 | Two measurements of one quantity (transmittance at 550 nm and averaged) merged into one, or one dropped |
+| `implausible_origin` | | Every field line with a `valid_range` | Told what an out-of-range number usually is, the model checks before quoting it (TCO: "a different layer, process step or quantity") |
+| `matching_condition_examples`, `matching_value_examples`, `matching_justification_example` | | The sample-matching prompt | Samples paired across the lanes by similar values rather than by the condition that defines them |
+
+A field's `condition_rule` fills rule 8 ("For `transmittance` always fill `condition` with the wavelength or
+spectral range"): without it a transmittance arrives with no wavelength and the dataset cell cannot say which
+measurement it holds. The internal names `target` (the paper-level record) and `no_tco_film` (the no-samples
+verdict) are kept in stored files and code for every profile; only the JSON keys the model sees come from
+`paper_key` and `no_samples_key`.
+
+### Field attributes and what they do
+
+| Attribute | Default | Role | Meaning |
+|---|---|---|---|
+| `name` | required | prompt, figure | Identifier (`^[a-z][a-z0-9_]{0,39}$`); the model answers with it. Reserved: `document_id`, `filename`, `sample_id`, `sample_label`, `conditions`, `available_fields`, `agree_fields`, `field`, `target`, `paper`, `unattributed`, `samples` |
+| `group` | required | prompt | One of the profile's groups; the field's `level` (paper or sample) is the group's, derived, never written |
+| `kind` | required | prompt | `numeric`, `composition` or `text` |
+| `description` | required | prompt, figure | What the model is told to look for |
+| `keywords` | `[]` | retrieval, figure | The names a paper uses for the quantity; passage-mode retrieval and chart selection match them as whole tokens |
+| `canonical_unit` | none | prompt, figure | The unit every value converts to; must be built-in or declared, with a retrieval pattern |
+| `label`, `description_zh` | `""` | display | Column header and its explanation |
+| `rel_tol`, `abs_tol` | 0 | verdict | Two values agree when they differ by at most `rel_tol` times the larger magnitude, or by `abs_tol`, whichever is larger |
+| `condition_hint` | none | prompt | What to record alongside the value, e.g. a wavelength |
+| `condition_rule` | none | prompt | Rule 8: the condition this field must always carry. Needs `condition_hint` and `missing_condition_note_zh` |
+| `missing_condition_note_zh` | none | verdict | The note on a dataset cell whose value came without its condition |
+| `bare_number` | `reject` | cleaning, figure | `reject`, `assume_canonical`, or `percent_or_fraction` (only with `%`) |
+| `categories` | `[]` | verdict | A text field's closed set of answers |
+| `valid_range` | none | prompt, cleaning | `{min, max}`, either end open, in `canonical_unit`: told to the model, and a converted value outside it is dropped |
+| `condition_preference` | `[]` | verdict | Which measurement fills the dataset cell when a sample has several |
+| `range_policy` | `midpoint` | cleaning, verdict | `midpoint` or `reject`: what a range quoted as one value becomes. Numeric only |
+| `after_clause` | `refuse` | cleaning, verdict | `refuse` or `condition`: what "92.5% after 100 cycles" becomes. Numeric only |
+| `figure_readable` | `false` | figure | Whether a chart's y axis may be read for this field; numeric with a unit only |
+| `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
+
+### Which edit re-keys what
+
+A stored result is named by the keys of exactly what it depends on (see
+[Caching](#caching-and-why-filenames-carry-keys)), and every field attribute's role decides which keys it reaches.
+Re-keying extraction means the next run re-asks the model (paid) unless the rendered requests are unchanged;
+re-keying the comparison recomputes it from the stored extractions, for free.
+
+| Edit | `extractor_key` | `comparison_key` | `figure_key` |
+|---|---|---|---|
+| Display: `label`, `description_zh`, `display_format`, a group's `label_zh`, `title_zh`, `description_zh`, `maturity`, `ui`, `$comment`, the file name | — | — | — |
+| Verdict: `rel_tol`, `abs_tol`, `categories`, `condition_preference`, `missing_condition_note_zh` | — | yes | — |
+| Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number` |
+| `keywords` | passage mode | — | for a `figure_readable` field |
+| `retrieval` | passage mode | — | — |
+| `units`, `ignored_unit_suffixes` | yes | yes | yes |
+| A `prompt` slot | yes, except the three `matching_*` slots (a slot only the inventory or field prompt uses: passage mode only) | only `sample_plural`, `condition_noun` and the `matching_*` slots | — |
+| `figures` slots, `figure_readable` | — | — | yes |
+
+Display edits are therefore safe on a live library. The file name is in no key, but it names the workbooks
+(`exports/<name>.xlsx`) and the readings directory (`figures/<name>/`), so a renamed profile writes new ones
+beside the old. Two profiles with identical non-display content share every key and every stored file.
+
+### Declared units
+
+```jsonc
+"units": {
+  "mAh/g": { "aliases": { "mAh/g": 1, "mAh g-1": 1, "mAh g^-1": 1, "Ah/kg": 1, "Ah/g": 1000 }, "case_sensitive": true },
+  "C":     { "aliases": { "C": 1 }, "case_sensitive": true, "retrieval": "\\d\\s*c\\b(?!\\s*°)" },
+  "V":     { "aliases": { "V": 1, "mV": 0.001 }, "case_sensitive": true },
+  "℃":     { "extends_builtin": true, "aliases": { "K": { "factor": 1, "offset": -273.15 } }, "exclude": ["C"] }
+}
+```
+
+- **Aliases** (`aliases`). Each spelling maps to a factor, or to `{factor, offset}`: a value quoted in it becomes
+  `value * factor + offset` in the canonical unit. 1 to 50 spellings; factors finite and above 0. A new unit lists
+  its own spelling with factor 1. A power of ten from a table header is applied first, then the offset.
+- **Offsets** are for temperature only (a canonical unit of `℃` or `K`), since K to ℃ is the one conversion a
+  factor cannot do, and are never applied to a bare number.
+- **Case.** Spellings are compared case-insensitively unless `case_sensitive` is true -- set it whenever a
+  prefix matters (`mS` against `MS`, `mAh` against `MAh`). Two spellings that are the same once folded are
+  refused.
+- **Spaces.** A spelling is compared with its spaces removed, as a quoted unit is, so `mAh g-1` also reads
+  `mAhg-1`; declaring both is refused as a duplicate.
+- **Retrieval.** Every canonical unit needs a pattern that finds a number in it in running text. By default it
+  is derived from the spellings: a digit, then the spelling lower-cased with its spaces optional, then a word
+  boundary when it ends in a letter or digit (so `V` does not match "Vis"). Give `retrieval` yourself when that
+  is too loose -- a bare `C` would match "°C". It is matched case-insensitively, on lower-cased text.
+- **Extending a built-in.** A built-in unit (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`, `W`, `sccm`,
+  `rpm`, `Pa`) can only gain spellings, with `extends_builtin` set to true; its own converter is always asked first, so
+  an extension never changes how a spelling it already reads converts. The TCO conventions stay: under `tco`,
+  573 K is ambiguous; under `battery_cathode`, it is 299.85 ℃.
+- **Excluding built-in spellings** (`exclude`, on an extension only). The built-in tables are TCO's conventions,
+  and a spelling can mean something else in another domain: to TCO a bare "C" after a number is degrees, to a
+  battery group it is a C-rate. List such spellings (matched case-insensitively) and the built-in converter
+  refuses them and its retrieval pattern stops finding them after a number, so under `battery_cathode` "1 C" is
+  neither a temperature nor a reason to show a block to a temperature question. Each must be a spelling the
+  built-in reads; an extension that only excludes may leave `aliases` out.
+
+### Cost
+
+Every field is one question per lane in passage mode. For one paper, uncached:
+
+    LLM calls ≈ 2 lanes × (1 inventory + passes × F) + M  [+ repairs]  [+ chart panels]
+
+- `F` is the number of fields asked in that lane, at most the profile's field count `N`: a field no block of the
+  lane mentions is not asked, and neither are the sample-level fields when the inventory says the paper has no
+  in-scope sample.
+- The inventory is asked once per lane whatever `extraction.passes` is.
+- `M` is 0 or 1: sample matching asks the model only when both lanes have samples left after pairing identical
+  ids.
+- A question whose answer fails validation costs one repair request, at most.
+- With the figures stage on, each chart panel is one vision request (at most `figures.max_per_document`,
+  retried once on failure).
+- Document mode is `2 × passes + M`.
+
+So TCO's 23 fields cost at most 49 calls per paper at one pass, the battery example's 13 at most 29. Most of the
+completion tokens are the inventory's reasoning (see `llm.inventory_reasoning_effort`), so the bill grows more
+slowly than the call count. A re-run is free: every answer is cached by request payload.
+
+### A second profile beside the first
+
+One server serves one profile. To offer another, start a second server with its own port **and its own data
+root**:
+
+```bash
+PAPERFACTS_PROFILE=battery_cathode PAPERFACTS_DATA_ROOT=data-battery uv run paperfacts serve --port 8001
+```
+
+Run one server per data root: the per-document and per-parser locks live in one process, so two servers over
+one `data_root` can parse the same document at once. Profiles may still share a data root outside a server --
+`paperfacts batch papers/ --profile battery_cathode` over the library a `tco` server uses, while it is idle --
+and then share the parses and the LLM cache: every derived file is named by keys that differ between the two,
+and the workbooks by profile name. A server reads its profile once; after the file changes on disk it refuses
+new jobs until it is restarted (`/api/health` reports `profile_on_disk_changed`).
+
+### Proving a refactor free
+
+A change meant to alter no answer -- moving code, renaming, touching a hashed module -- still re-keys, and the
+proof that it cost nothing is an offline re-derivation on a copy of the data:
+
+```bash
+PAPERFACTS_LLM_OFFLINE_REPORT=misses.json uv run paperfacts batch papers/ --offline --data-root /copy/of/data
+python scripts/diff_derived.py --data-root /copy/of/data --old <ek>.<ck> --new <ek>.<ck>
+uv run python eval/score.py --data-root /copy/of/data --keys <ek>.<ck>
+```
+
+`offline misses: 0` means every request the new code sends is one the old code already sent
+([Offline replay](#offline-replay)); `diff_derived.py` then compares every document's facts, comparison and
+dataset under the old keys against the new, ignoring only the keys, fingerprints and usage counters; and the
+scorer's cells against the gold set must not move. Never run this against production's `data/`.
+
+### Where a profile's output goes
+
+| Path | Per profile? |
+|---|---|
+| `raw/`, `parsed/`, `pages/`, `overlays/`, `identity.json`, `llm_cache/` | Shared by every profile |
+| `facts/`, `comparisons/`, `datasets/` | Named by keys, which differ between profiles |
+| `figures/<profile>/<figure_key>.json` | Per profile (TCO also reads the older flat `figures/<figure_key>.json`; `scripts/migrate_figures.py` moves them) |
+| `docs/<id>/exports/<profile>.xlsx`, `exports/<profile>.xlsx` | Per profile; the pre-profile `dataset.xlsx` and `exports/paperfacts.xlsx` are left where they are, and the name `paperfacts` is reserved |
+
+Lanes, comparison reports and datasets record the profile's fingerprint; comparing two lanes extracted under
+different profiles, or consolidating a report under another, is refused rather than mixed.
 
 ## Reading figures
 
@@ -604,8 +938,8 @@ re-reads only them, since each costs minutes of a different model.
   side that caption was written on. MinerU captions a panel of a multi-panel figure with the neighbouring
   panels' labels ("(a) (c)"), which name nothing, and hangs the figure's caption under whichever panel it
   was attached to, so reading order alone would hand panels to the next figure. A figure is read when that caption names a
-  film property (sheet resistance, resistivity, transmittance, thickness) by one of the field's retrieval
-  keywords, and then every panel is asked about separately, up to `figures.max_per_document` panels per
+  field the profile marks `figure_readable` (in the TCO profile: sheet resistance, resistivity,
+  transmittance, thickness) by one of the field's retrieval keywords, and then every panel is asked about separately, up to `figures.max_per_document` panels per
   paper. The boxes are MinerU's, or PaddleOCR-VL's when there is no MinerU parse. A panel that turns out to
   be a spectrum or an XRD pattern is refused by the model and yields nothing.
 - **What a reading is.** The model reports each marker's y in the axis's own unit, multiplier included
@@ -624,9 +958,16 @@ re-reads only them, since each costs minutes of a different model.
   the `figures` stage failed: the paper is still extracted, compared and exported. A request that failed,
   a reply cut off at the token limit (never cached) and an answer that could not be used are asked again
   on the next run -- the last with the cache bypassed -- while the answered panels replay from the LLM cache.
-- **Stored.** `figures/<figure_key>.json` per document. `figure_key` hashes the vision model and its
-  sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the film fields' descriptions,
-  keywords and units, and the source of `figures.py`, `normalize.py` and `passages.py`. Stored readings are
+- **Stored.** `figures/<profile>/<figure_key>.json` per document: two profiles with the same chart slots and
+  figure fields share a `figure_key`, and each keeps its own file. The TCO profile also reads the flat
+  `figures/<figure_key>.json` files stored before readings were kept per profile, until a data root is migrated
+  once with `uv run python scripts/migrate_figures.py --data-root data --apply` (without `--apply` it prints the
+  plan): each flat file moves into the directory of the profile it records, `tco` when it records none, and is
+  stamped with it; a file whose destination already exists is left for you to look at. `figure_key` hashes the vision model and its
+  sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the profile's `figures` slots, the
+  `figure_readable` fields' names, descriptions, keywords, units and bare-number policies, the declared units,
+  and the source of `figures.py`, `normalize.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and
+  `profile.py`. Stored readings are
   shown and exported even when the stage is switched off for a later run. With nothing under the current
   key, the newest older file is shown and marked stale (旧版本读数); readings citing figure blocks the
   current parse no longer has are marked too, and both notes appear in the stage detail.
@@ -689,10 +1030,15 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Cache | Keyed on | Invalidated by |
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
-| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader), the field schema minus the tolerances, categories, condition preferences and display text, the prompts, the document rendering, and the source of `extract.py`, `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py` and `continuation.py`; passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
-| Comparison (`comparison_key`) | the whole field schema including the tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py` and the matching prompt | changing a tolerance or a rule |
-| Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
+| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader); the profile's field attributes with the PROMPT or CLEANING role, its groups and its declared units; the rendered system prompts; the document rendering; and the source of `extract.py`, `records.py`, `fields.py`, `profile.py`, `units.py`, `text.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py` and `continuation.py`. Passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, the profile's `retrieval` section and unit patterns, and `passages.py`, `continuation.py`, `units.py` and `text.py` | changing any of them |
+| Comparison (`comparison_key`) | the same field attributes plus the VERDICT ones (tolerances, categories, condition preferences, `missing_condition_note_zh`), the groups and units, `ambiguous_match_confidence`, the matching prompt, and the source of `normalize.py`, `units.py`, `text.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py`, `fields.py` and `profile.py` | changing a tolerance or a rule |
+| Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the `figure_readable` fields and the chart slots, and the source of `figures.py`, `normalize.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and `profile.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
+
+The workbook layout (`workbook.py`), where chart readings are stored and which are shown (`readings.py`), the
+profile's display copy defaults (`ui_copy.py`), and the orchestration and transport (`workflow.py`, `batch.py`,
+`llm.py`, `config.py`, `cli.py`) are in no key: editing them renames no stored file. Nor is the profile's file
+name or any of its display text; [Domain profiles](#which-edit-re-keys-what) has the whole table.
 
 Extractions, comparisons and consolidated tables also record the parse they came from (a hash of the
 artifact's blocks). After a re-parse, a stored lane, comparison or table of the old parse is a miss (not
@@ -708,7 +1054,7 @@ costs one repair request and is never written as the answer (it is kept apart on
 [offline replay](#offline-replay)), and an invalid answer already in the cache is asked again rather than
 replayed. A sample matching that failed (the model answered badly twice) is shown for that run
 but not stored, so the next run asks again instead of serving the failure until `--force`. Neither is that
-run's consolidated table (`datasets/…json`, only `dataset.xlsx` is written): the stored table is what marks
+run's consolidated table (`datasets/…json`, only `exports/<profile>.xlsx` is written): the stored table is what marks
 a paper finished, so 「处理全部未完成」 and `deploy.sh --rerun` pick the paper up again.
 
 The same holds for one field question in passage mode that gets no valid answer (invalid twice, or cut off):
@@ -732,7 +1078,7 @@ the filenames it has. There is no hand-maintained version number anywhere, and t
 ```text
 data/
 ├── llm_cache/                          model answers, keyed by request payload
-├── exports/paperfacts.xlsx             the default batch workbook
+├── exports/<profile>.xlsx              the default batch workbook
 └── docs/<first 16 hex of sha256>/
     ├── identity.json                   full sha256, display name, origin
     ├── source.pdf                      the uploaded PDF (web uploads only)
@@ -743,8 +1089,8 @@ data/
     ├── facts/<backend>.<extractor_key>.json          one lane's sample-level extraction
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated table the web UI reads
-    ├── figures/<figure_key>.json       values read off charts by the opt-in figures stage
-    ├── dataset.xlsx                    this paper's workbook, written automatically by `run`
+    ├── figures/<profile>/<figure_key>.json   values read off charts by the opt-in figures stage
+    ├── exports/<profile>.xlsx          this paper's workbook, written automatically by `run`
     ├── overlays/<backend>/page_*.png   bbox overlays from `overlay`
     └── pages/<dpi>dpi/                 page renders for the web viewer
 ```
@@ -755,8 +1101,11 @@ different settings lands beside the old one instead of overwriting it.
 
 ## The Excel workbook
 
-`run` writes `data/docs/<sha>/dataset.xlsx` for one paper; `batch` and `export` write one workbook for a
-whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」. Six
+`run` writes `data/docs/<sha>/exports/<profile>.xlsx` for one paper (`<profile>` is the domain profile's
+name, `tco` by default; workbooks from before profiles, `dataset.xlsx` and `exports/paperfacts.xlsx`, are left
+where they are); `batch` and `export` write one workbook for a
+whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」, downloaded as
+`<profile>-<id>.xlsx` and `<profile>-corpus.xlsx`. Six
 sheets:
 
 | Sheet | Contents |
@@ -945,6 +1294,7 @@ as an assertion surface for prompt content.
 | Path | Contents |
 |---|---|
 | `src/paperfacts/` | One flat module per pipeline stage, listed in order in `__init__.py`, plus `web/` |
+| `profiles/` | The domain profiles; see [Domain profiles](#domain-profiles) |
 | `runners/` | The two PEP 723 parser scripts and their committed lockfiles |
 | `deploy/` | Linux GPU server deployment |
 | `tests/` | The pytest suite and the recorded parser fixtures |

@@ -2,12 +2,11 @@
 
 import { releaseFact } from "./facts.js";
 import { caveats, escapeHtml, fmt, toast } from "./html.js";
-import { LANES, LANE_LABEL, state } from "./state.js";
+import { LANES, LANE_LABEL, state, uiCopy } from "./state.js";
 import { revealViewer } from "./viewer.js";
 
-// The paper-level record and the unplaced values are shown under these names, and told apart from real
-// samples by `data-kind`, never by the name: a model is free to call a sample 靶材 or 未归属 too.
-const TARGET_SID = "靶材";
+// The paper-level record (under the profile's short name for it) and the unplaced values are told apart from
+// real samples by `data-kind`, never by the name: a model is free to call a sample either name too.
 const UNATTRIBUTED_SID = "未归属";
 
 export function renderLanes(root) {
@@ -19,16 +18,16 @@ function laneNode(lane, data) {
   const box = document.createElement("div");
   box.className = "lane";
   const reasoning = data?.usage?.reasoning_tokens ? `（推理 ${data.usage.reasoning_tokens}）` : "";
-  const meta = data ? `${data.samples.length} 样品 · ${data.usage?.total_tokens ?? "?"} tokens${reasoning} · key ${data.extractor_key}` : "";
+  const meta = data ? `${data.samples.length} ${uiCopy("entity_label_zh")} · ${data.usage?.total_tokens ?? "?"} tokens${reasoning} · key ${data.extractor_key}` : "";
   box.innerHTML = `<div class="lane-head ${lane === "mineru" ? "a" : "b"}"><span>${LANE_LABEL[lane]}</span><span class="meta">${escapeHtml(meta)}</span></div>`;
   if (!data) { box.append(note("还没有抽取结果。")); return box; }
-  if (data.target) box.append(sampleNode({ sample_id: TARGET_SID, label: "论文级", conditions: {}, fields: data.target.fields }, "target"));
-  if (!data.samples.length) box.append(note("模型没有识别出样品。"));
+  if (data.target) box.append(sampleNode({ sample_id: uiCopy("paper_level_short_zh"), label: uiCopy("paper_level_label_zh"), conditions: {}, fields: data.target.fields }, "target"));
+  if (!data.samples.length) box.append(note(`模型没有识别出${uiCopy("entity_label_zh")}。`));
   for (const sample of data.samples) box.append(sampleNode(sample));
   // Values the model found but could not place on any sample. Shown apart because nothing compares them:
   // hiding them would make the lane look emptier than it was.
   if (data.unattributed?.length) {
-    box.append(sampleNode({ sample_id: UNATTRIBUTED_SID, label: "没能对应到任何样品", conditions: {}, fields: data.unattributed }, "unattributed"));
+    box.append(sampleNode({ sample_id: UNATTRIBUTED_SID, label: `没能对应到任何${uiCopy("entity_label_zh")}`, conditions: {}, fields: data.unattributed }, "unattributed"));
   }
   if (data.failed_questions?.length) {
     const fields = data.failed_questions.map((q) => q.field).join("、");
@@ -64,7 +63,8 @@ function fieldNode(f) {
   row.dataset.field = f.field ?? "";
   const cond = f.condition ? ` <small>@${escapeHtml(f.condition)}</small>` : "";
   // Stated once for the whole series and written onto every sample: worth saying next to the number.
-  const series = f.series ? `<span class="flag series" title="论文对整个样品系列只写了一次，这里是按系列写到每个样品上的">全系列</span>` : "";
+  const entity = escapeHtml(uiCopy("entity_label_zh"));
+  const series = f.series ? `<span class="flag series" title="论文对整个${entity}系列只写了一次，这里是按系列写到每个${entity}上的">全系列</span>` : "";
   const norm = f.value != null ? ` <small>= ${fmt(f.value)} ${escapeHtml(f.unit ?? "")}</small>` : (f.normalization_note ? ` <small>(${escapeHtml(f.normalization_note)})</small>` : "");
   row.innerHTML = `<span class="fname">${escapeHtml(f.field)}</span><span class="fval">${escapeHtml(f.value_raw)} ${escapeHtml(f.unit_raw ?? "")}${cond}${norm}${series}${caveats(f)}</span><button type="button" class="src">${escapeHtml(f.source_ids.join(", ") || "无来源")}</button>`;
   row.querySelector(".src").addEventListener("click", () => {

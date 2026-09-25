@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import Future, as_completed
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -27,32 +27,60 @@ from paperfacts.dataset import (
     DocumentDataset,
     consolidate_document,
     incomplete_reason,
-    write_dataset,
     write_dataset_json,
 )
-from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, PaperFactsError, ParserError
+from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, ParserError
 from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
 from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
-from paperfacts.figures import FigureReadings, FiguresView
+from paperfacts.figures import FigureReadings
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
+from paperfacts.keys import ComparisonOptions, ExtractionOptions, comparison_key, extractor_key
 from paperfacts.llm import LlmClient, OpenAICompatibleClient
 from paperfacts.matching import match_samples
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import PROFILES_DIRNAME, load_profile, loaded_file_sha256, profile_path
+from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
 from paperfacts.threads import ContextThreadPoolExecutor
+from paperfacts.workbook import write_dataset
 
 logger = logging.getLogger(__name__)
 
 # The comparison is strictly between two lanes; a third parser would need compare_lanes redesigned.
 BACKEND_A, BACKEND_B = BACKENDS
+
+
+# The workbook name every export used before profiles, so a profile of that name would overwrite old ones.
+LEGACY_EXPORT_NAME = "paperfacts"
+
+
+def load_run_profile(settings: Settings) -> DomainProfile:
+    """The profile ``settings`` selects, as an entry point loads it: once, and refused when its name clashes.
+
+    Workbooks are named after the profile (``exports/<name>.xlsx``), so a profile loaded by path under the
+    name of a different repository profile would overwrite that profile's workbooks, and one named
+    ``paperfacts`` the pre-profile ones. Kept out of ``profile.py``, whose source is hashed into every key.
+    """
+    profile = load_profile(profile_path(settings))
+    if profile.name == LEGACY_EXPORT_NAME:
+        raise ConfigError(f"{profile.source}: the profile name {LEGACY_EXPORT_NAME!r} is reserved for old exports")
+    shipped = settings.repo_root / PROFILES_DIRNAME / f"{profile.name}.json"
+    if shipped.is_file() and shipped.resolve() != profile.source:
+        other = load_profile(shipped)
+        # The bytes, not content_hash: a copy differing only in display text would still title the workbooks.
+        if loaded_file_sha256(other) != loaded_file_sha256(profile):
+            raise ConfigError(
+                f"{profile.source} and {other.source} are both named {profile.name!r} but differ; their workbooks "
+                "would overwrite each other, so rename one"
+            )
+    return profile
 
 
 # ---- Parsing ----------------------------------------------------------------------------------------------
@@ -241,7 +269,13 @@ def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
 
 
 def read_lane(
-    layout: DataLayout, document_id: str, backend: Backend, key: str, *, artifact: ParsedArtifact | None = None
+    layout: DataLayout,
+    document_id: str,
+    backend: Backend,
+    key: str,
+    profile: DomainProfile,
+    *,
+    artifact: ParsedArtifact | None = None,
 ) -> LaneExtraction | None:
     """A stored lane, re-deriving what is cheap: grounding against the artifact, then normalisation.
 
@@ -271,28 +305,33 @@ def read_lane(
         lane = ground_lane(
             lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks)
         )
-    return normalize_lane(lane)
+    return normalize_lane(lane, profile)
 
 
 def extract_document(
     document: DocumentInput,
     backend: Backend,
     settings: Settings,
+    options: ExtractionOptions,
     client: LlmClient,
     *,
     force: bool = False,
 ) -> LaneExtraction:
     """Extract one lane. What is stored is the model's own wording; what is returned is normalised.
 
-    Changing the prompt, the model or the schema changes ``extractor_key`` and re-runs the extraction.
-    ``force`` bypasses both this cache and the LLM cache, and really re-asks.
+    ``options`` is the one carrier of what the lane is asked, the profile included: a caller extracting both
+    lanes builds it once for the document, so the two lanes cannot be asked differently. Changing the prompt,
+    the model or the schema changes ``extractor_key`` and re-runs the extraction. ``force`` bypasses both this
+    cache and the LLM cache, and really re-asks.
     """
+    if options.model != client.model:
+        # The file would be named after one model while another answered.
+        raise ValueError(f"extraction options for model {options.model!r} do not match the client's {client.model!r}")
     layout = DataLayout(settings.data_root)
-    options = ExtractionOptions.from_settings(settings, client.model)
     key = extractor_key(options)
     artifact = load_artifact(document, backend, settings)
     if not force:
-        cached = read_lane(layout, document.document_id, backend, key, artifact=artifact)
+        cached = read_lane(layout, document.document_id, backend, key, options.profile, artifact=artifact)
         if cached is not None and cached.failed_questions:
             # Only those questions reach the model again: their invalid answers were never cached.
             logger.info(
@@ -309,12 +348,13 @@ def extract_document(
         update={"artifact_sha256": artifact.content_hash()}
     )
     lane.write(layout.extraction_path(document.document_id, backend, key))
-    return normalize_lane(lane)
+    return normalize_lane(lane, options.profile)
 
 
 def compare_document(
     document: DocumentInput,
     settings: Settings,
+    comparison: ComparisonOptions,
     client: LlmClient,
     *,
     force: bool = False,
@@ -326,30 +366,35 @@ def compare_document(
     extraction again and cannot serve a stale verdict. ``force`` redoes matching and comparison only;
     extraction has its own cache and its own force.
 
-    ``lanes`` lets a caller that already holds both extractions hand them over instead of having them
-    loaded again; without it the lanes are read through :func:`extract_document`, whose cached path
-    rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader.
+    ``comparison`` is the one carrier of the profile; a caller that also consolidates passes the same value to
+    :func:`paperfacts.dataset.consolidate_document`, so the verdicts and the table cannot be decided under two
+    options. ``lanes`` lets a caller that already holds both extractions hand them over; without it they are
+    read through :func:`extract_document` under the settings' options, whose cached path rechecks grounding on
+    read. The standalone ``compare`` CLI command relies on that loader. Either way the report is named after
+    the extractor key the lanes themselves record, never one rebuilt here.
     """
     layout = DataLayout(settings.data_root)
-    path = layout.comparison_path(
-        document.document_id,
-        extractor_key_for(settings, client.model),
-        comparison_key(),
-    )
     if lanes is None:
-        lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
+        options = ExtractionOptions.from_settings(settings, comparison.profile, client.model)
+        lanes = {backend: extract_document(document, backend, settings, options, client) for backend in BACKENDS}
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
+    if lane_a.extractor_key != lane_b.extractor_key:
+        # One report of lanes asked two different ways would be a comparison of the asking, not of the parses.
+        raise ValueError(
+            f"the lanes were extracted under different keys ({lane_a.extractor_key} and {lane_b.extractor_key})"
+        )
+    path = layout.comparison_path(document.document_id, lane_a.extractor_key, comparison_key(comparison))
     # A stored report is never of an incomplete lane (see below), so with one it would be of other lanes.
     incomplete_lanes = bool(lane_a.failed_questions or lane_b.failed_questions)
     if path.is_file() and not force and not incomplete_lanes:
         cached = ComparisonReport.read(path)
-        if _compared_these(cached, lane_a, lane_b):
+        if compared_these(cached, lane_a, lane_b):
             logger.info("comparison cache_hit doc=%s", document.document_id[:16])
             return cached
         logger.info("stored comparison of doc=%s compared other parses; comparing again", document.document_id[:16])
 
-    matching = match_samples(lane_a, lane_b, client, refresh=force)
-    report = compare_lanes(lane_a, lane_b, matching)
+    matching = match_samples(lane_a, lane_b, client, comparison.profile, refresh=force)
+    report = compare_lanes(lane_a, lane_b, matching, comparison)
     reason = incomplete_reason(lanes, report)
     if reason:
         # An earlier run's report under these keys goes too: it came from other answers, and kept it would be
@@ -362,7 +407,7 @@ def compare_document(
     return report
 
 
-def _compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
+def compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
     """Whether ``report`` was built from lanes of the same parses as these. A hash missing on either side
     (a file from before it was recorded) is unknown, not a mismatch, so existing stores still read."""
     return all(
@@ -415,6 +460,7 @@ def _figures_detail(readings: FigureReadings) -> str:
 def _read_figures_stage(
     document: DocumentInput,
     settings: Settings,
+    profile: DomainProfile,
     *,
     force: bool,
     artifact: ParsedArtifact | None,
@@ -427,7 +473,9 @@ def _read_figures_stage(
     try:
         artifact = artifact or figure_artifact(document, settings)
         with build_vision_client(settings) as client:
-            readings = read_document_figures(document, settings, client, force=force, artifact=artifact, stop=stop)
+            readings = read_document_figures(
+                document, settings, profile, client, force=force, artifact=artifact, stop=stop
+            )
     except Cancelled:
         # Not this stage's failure: it was told to stop because another stage failed. The panels it had
         # read are cached, so the next run picks them up.
@@ -493,7 +541,7 @@ class PipelineResult:
     figures: FiguresView | None = None
 
 
-def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
+def store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
     """The web UI reads the consolidated table from disk, so every path that produces one writes it.
 
     The dataset carries the keys it was built under, which is what the JSON file is named after: an
@@ -504,23 +552,28 @@ def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
     return path
 
 
-def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
+def ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
     pass
 
 
 def run_document(
     document: DocumentInput,
     settings: Settings,
+    profile: DomainProfile,
     *,
     force: bool = False,
     force_figures: bool = False,
-    on_stage: StageCallback = _ignore_stage,
+    on_stage: StageCallback = ignore_stage,
 ) -> PipelineResult:
     """Run both lanes and automatically export consolidated data. Expensive steps are cached.
 
     ``force`` redoes parsing, extraction and comparison; ``force_figures`` re-reads the charts. They are
     separate because each costs minutes of a different model, and wanting one redone rarely means the other.
+
+    Every entry point (the CLI, the web app, a batch, a script) loads its profile once, with
+    :func:`load_run_profile`, and passes it.
     """
+    comparison = ComparisonOptions.from_settings(settings, profile)
     parse_reports: dict[Backend, ParseReport] = {}
     parsed: dict[Backend, ParsedArtifact | None] = {}
     outcomes: dict[Backend, tuple[ParsedArtifact, ParseReport]] = {}
@@ -561,16 +614,16 @@ def run_document(
         on_stage("figures", "running", "")
         artifact = next((parsed[backend] for backend in BACKENDS if parsed[backend] is not None), None)
         figures_future = figures_pool.submit(
-            _read_figures_stage, document, settings, force=force_figures, artifact=artifact, stop=stop_figures
+            _read_figures_stage, document, settings, profile, force=force_figures, artifact=artifact, stop=stop_figures
         )
     else:
-        figures = shown_figures(document.document_id, document.display_filename, settings)
+        figures = shown_figures(document.document_id, document.display_filename, settings, profile)
         on_stage("figures", "skipped", _figures_mark("skipped", "", figures))
     try:
-        lanes, report = _extract_and_compare(document, settings, force=force, on_stage=on_stage)
+        lanes, report = _extract_and_compare(document, settings, comparison, force=force, on_stage=on_stage)
         if figures_future is not None:
             figures_status, figures_detail = figures_future.result()
-            figures = shown_figures(document.document_id, document.display_filename, settings)
+            figures = shown_figures(document.document_id, document.display_filename, settings, profile)
             on_stage("figures", figures_status, _figures_mark(figures_status, figures_detail, figures))
     except BaseException:
         # The paper has failed: its charts would be read for nothing. The panels already out finish, and the
@@ -586,10 +639,10 @@ def run_document(
         figures_pool.shutdown(wait=True)
 
     on_stage("export", "running", "")
-    dataset = consolidate_document(document, lanes, report)
+    dataset = consolidate_document(document, lanes, report, comparison)
     layout = DataLayout(settings.data_root)
-    excel_path = layout.dataset_path(document.document_id)
-    write_dataset([dataset], excel_path, figure_rows=figures.rows if figures is not None else ())
+    excel_path = layout.dataset_path(document.document_id, profile.name)
+    write_dataset([dataset], excel_path, profile, figure_rows=figures.rows if figures is not None else ())
     dataset_json_path: Path | None = None
     if dataset.incomplete:
         # The stored dataset is what marks a paper finished (stored.is_finished), so it is kept back for the
@@ -600,7 +653,7 @@ def run_document(
         )
         on_stage("export", "done", f"{excel_path}; not kept as finished: {dataset.incomplete}")
     else:
-        dataset_json_path = _store_dataset(layout, dataset)
+        dataset_json_path = store_dataset(layout, dataset)
         on_stage("export", "done", str(excel_path))
     return PipelineResult(
         parse_reports=parse_reports,
@@ -667,11 +720,18 @@ def _every_lane[T](
 
 
 def _extract_and_compare(
-    document: DocumentInput, settings: Settings, *, force: bool, on_stage: StageCallback
+    document: DocumentInput,
+    settings: Settings,
+    comparison: ComparisonOptions,
+    *,
+    force: bool,
+    on_stage: StageCallback,
 ) -> tuple[dict[Backend, LaneExtraction], ComparisonReport]:
     """Both extraction lanes, then the comparison: the part of :func:`run_document` that uses the LLM."""
     lanes: dict[Backend, LaneExtraction] = {}
     with build_llm_client(settings) as client:
+        # One value for both lanes: whatever decides what a lane is asked cannot differ between them.
+        options = ExtractionOptions.from_settings(settings, comparison.profile, client.model)
         # The two lanes are independent and both spend their time waiting on the model, so they overlap.
         # Nothing here touches pdf.py: extraction reads the stored artifact JSON and never opens the PDF,
         # so PDFium's process-wide lock is not involved. Both lanes are handed the same `settings` and the
@@ -684,7 +744,7 @@ def _extract_and_compare(
             on_stage(f"extract:{backend}", "running", "")
         with ContextThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
             futures: dict[Backend, Future[LaneExtraction]] = {
-                backend: pool.submit(extract_document, document, backend, settings, client, force=force)
+                backend: pool.submit(extract_document, document, backend, settings, options, client, force=force)
                 for backend in BACKENDS
             }
             extracted = _every_lane(futures, "extract", on_stage=on_stage, describe=_lane_detail)
@@ -692,7 +752,7 @@ def _extract_and_compare(
                 lanes[backend] = lane
                 on_stage(f"extract:{backend}", "done", _lane_detail(lane))
         on_stage("compare", "running", "")
-        report = compare_document(document, settings, client, force=force, lanes=lanes)
+        report = compare_document(document, settings, comparison, client, force=force, lanes=lanes)
     counts = report.counts
     detail = (
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"
@@ -716,223 +776,11 @@ def _lane_detail(lane: LaneExtraction) -> str:
     )
 
 
-# ---- Directory batches and offline re-export -------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class BatchResult:
-    documents: tuple[DocumentDataset, ...]
-    failures: tuple[dict[str, str], ...]
-    duplicate_count: int
-    excel_path: Path
-
-
-def discover_pdfs(source: Path) -> tuple[Path, ...]:
-    """Keep discovery stable across runs, including uppercase PDF suffixes and nested folders."""
-    if source.is_file():
-        paths = (source,) if source.suffix.lower() == ".pdf" else ()
-    elif source.is_dir():
-        paths = tuple(sorted(p for p in source.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"))
-    else:
-        raise FileNotFoundError(source)
-    if not paths:
-        raise ConfigError(f"no PDF files found in {source}")
-    return paths
-
-
-def export_document(document: DocumentInput, settings: Settings) -> DocumentDataset:
-    """Rebuild a workbook row from current cached extractions without starting a parser or an LLM."""
-    layout = DataLayout(settings.data_root)
-    key = extractor_key_for(settings)
-    report_path = layout.comparison_path(document.document_id, key, comparison_key())
-    if not report_path.is_file():
-        raise FileNotFoundError(f"no current comparison for {document.display_filename}; run `paperfacts run` first")
-    report = ComparisonReport.read(report_path)
-    lanes: dict[Backend, LaneExtraction] = {}
-    for backend in BACKENDS:
-        lane = read_lane(layout, document.document_id, backend, key)
-        if lane is None:
-            raise FileNotFoundError(f"no current {backend} extraction for {document.display_filename}")
-        lanes[backend] = lane
-    if not _compared_these(report, lanes[BACKEND_A], lanes[BACKEND_B]):
-        raise FileNotFoundError(f"the comparison of {document.display_filename} predates its parse; run it again")
-    # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
-    # serves the report beside the table, and the two must be the same verdicts.
-    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
-    reason = incomplete_reason(lanes, report)
-    if reason:
-        raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")
-    report.write(report_path)
-    dataset = consolidate_document(document, lanes, report)
-    # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
-    _store_dataset(layout, dataset)
-    return dataset
-
-
-def run_batch(
-    source: Path,
-    settings: Settings,
-    *,
-    output: Path | None = None,
-    force: bool = False,
-    force_figures: bool = False,
-    export_only: bool = False,
-    jobs: int = 1,
-    on_stage: StageCallback = _ignore_stage,
-) -> BatchResult:
-    """Process unique PDFs, ``jobs`` at a time, and checkpoint the workbook after every attempted document.
-
-    Completed parse/extraction caches make interruption resumable, while expected per-paper errors remain
-    visible in the workbook and never stop the other papers. Whatever order the papers finish in, the
-    workbook, the failures and the returned datasets are in input order, so a parallel run writes the table
-    a serial one would. ``on_stage`` is called under a lock, one call at a time, with each paper's stages
-    prefixed by that paper's ``i/n name`` so interleaved progress stays readable.
-
-    Parsing stays one paper per parser (the parse locks in :mod:`paperfacts.parsers`) and model requests
-    share one in-flight limit (:mod:`paperfacts.llm`), so ``jobs`` overlaps the model waits of several
-    papers without multiplying the load on the GPU or the endpoint.
-
-    When a parallel batch is stopped (Ctrl-C, or an error that is not one paper's own), no new paper starts
-    and the running ones stop at their next stage boundary, raising :class:`Cancelled` there; the stage in
-    progress finishes first, because a request already paid for is worth caching. Stopped papers are neither
-    rows nor failures: the next run picks them up from the caches.
-    """
-    paths = discover_pdfs(source)
-    output = output or DataLayout(settings.data_root).batch_dataset_path()
-    if output.suffix.lower() != ".xlsx":
-        raise ConfigError("Excel output must have the .xlsx extension")
-    if force and export_only:
-        raise ConfigError("--force cannot be used with offline export")
-    if jobs < 1:
-        raise ConfigError(f"--jobs must be at least 1, got {jobs}")
-
-    # Two locks, so a paper reporting progress never waits for another paper's workbook checkpoint.
-    progress_lock = threading.Lock()
-    results_lock = threading.Lock()
-    cancel = threading.Event()
-    # Keyed by input position, and read back sorted, so completion order never reaches the output.
-    datasets: dict[int, DocumentDataset] = {}
-    figure_rows: dict[int, tuple[Mapping[str, object], ...]] = {}
-    failures: dict[int, dict[str, str]] = {}
-
-    def report(stage: str, status: StageStatus, detail: str) -> None:
-        with progress_lock:
-            on_stage(stage, status, detail)
-
-    def report_stage(prefix: str) -> StageCallback:
-        def mark(stage: str, status: StageStatus, detail: str) -> None:
-            # A stage boundary: the one place a running paper can be stopped without abandoning a request.
-            if cancel.is_set():
-                raise Cancelled("the batch was stopped")
-            report(f"{prefix} {stage}", status, detail)
-
-        return mark
-
-    def settle(
-        index: int, prefix: str, outcome: DocumentDataset | dict[str, str], rows: Sequence[Mapping[str, object]] = ()
-    ) -> None:
-        if isinstance(outcome, DocumentDataset):
-            # Its rows are written, with the unanswered cells refused, but the paper is not finished.
-            report(prefix, "done", f"incomplete: {outcome.incomplete}" if outcome.incomplete else "")
-        else:
-            report(prefix, "failed", outcome["error"])
-        with results_lock:
-            if isinstance(outcome, DocumentDataset):
-                datasets[index], figure_rows[index] = outcome, tuple(rows)
-            else:
-                failures[index] = outcome
-            # Export failures are fatal: claiming progress without a writable output would be misleading.
-            # Written under the lock, so a checkpoint never overwrites a later one.
-            write_dataset(
-                [datasets[i] for i in sorted(datasets)],
-                output,
-                failures=[failures[i] for i in sorted(failures)],
-                figure_rows=[row for i in sorted(figure_rows) for row in figure_rows[i]],
-            )
-
-    def failure(document_id: str, path: Path, exc: Exception) -> dict[str, str]:
-        logger.exception("batch failed for %s", path.name)
-        return {"document_id": document_id, "filename": path.name, "error": str(exc)}
-
-    # Hashing comes first and runs serially, so which copy of a duplicated PDF is processed is decided by
-    # input order rather than by whichever thread hashed first.
-    queue: list[tuple[int, str, DocumentInput]] = []
-    seen: set[str] = set()
-    duplicates = 0
-    for index, path in enumerate(paths, 1):
-        prefix = f"{index}/{len(paths)} {path.name}"
-        try:
-            document = DocumentInput.from_path(path)
-        except (PaperFactsError, OSError, ValueError) as exc:
-            settle(index, prefix, failure("", path, exc))
-            continue
-        if document.document_id in seen:
-            duplicates += 1
-            report(prefix, "skipped", "duplicate PDF content")
-            continue
-        seen.add(document.document_id)
-        queue.append((index, prefix, document))
-
-    def process(index: int, prefix: str, document: DocumentInput) -> None:
-        if cancel.is_set():
-            return
-        report(prefix, "running", "")
-        try:
-            if export_only:
-                dataset = export_document(document, settings)
-                figures = shown_figures(document.document_id, document.display_filename, settings)
-            else:
-                result = run_document(
-                    document,
-                    settings,
-                    force=force,
-                    force_figures=force_figures,
-                    on_stage=report_stage(prefix),
-                )
-                dataset, figures = result.dataset, result.figures
-        except Cancelled:
-            report(prefix, "skipped", "stopped with the batch; its finished stages are cached")
-        except (PaperFactsError, OSError, ValueError) as exc:
-            settle(index, prefix, failure(document.document_id, document.pdf_path, exc))
-        else:
-            settle(index, prefix, dataset, figures.rows if figures is not None else ())
-
-    if jobs == 1 or len(queue) <= 1:
-        # On the calling thread, exactly as the serial loop always ran: Ctrl-C interrupts the paper at once.
-        for item in queue:
-            process(*item)
-    else:
-        pool = ContextThreadPoolExecutor(max_workers=min(jobs, len(queue)), thread_name_prefix="paperfacts-document")
-        futures: list[Future[None]] = []
-        try:
-            futures += [pool.submit(process, *item) for item in queue]
-            # Completion order, so an unexpected error (a workbook that cannot be written) surfaces at once
-            # instead of after every paper queued ahead of it.
-            for future in as_completed(futures):
-                future.result()
-        except BaseException:
-            cancel.set()
-            running = sum(1 for future in futures if future.running())
-            report("batch", "failed", f"stopping; waiting for {running} running papers to reach a stage boundary")
-            raise
-        finally:
-            # After an error nothing new starts, and the papers already running are waited for: returning
-            # while they still write the workbook would let a checkpoint land after the caller gave up on it,
-            # and the interpreter joins these threads at exit anyway.
-            pool.shutdown(wait=True, cancel_futures=True)
-    return BatchResult(
-        tuple(datasets[i] for i in sorted(datasets)),
-        tuple(failures[i] for i in sorted(failures)),
-        duplicates,
-        output,
-    )
-
-
-def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings) -> bytes:
+def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings, profile: DomainProfile) -> bytes:
     """One workbook for several stored documents, each document's chart readings beside its data."""
-    figure_views = (shown_figures(d.document_id, d.filename, settings) for d in datasets)
+    figure_views = (shown_figures(d.document_id, d.filename, settings, profile) for d in datasets)
     rows = [row for view in figure_views if view for row in view.rows]
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "paperfacts.xlsx"
-        write_dataset(datasets, path, figure_rows=rows)
+        path = Path(directory) / f"{profile.name}.xlsx"
+        write_dataset(datasets, path, profile, figure_rows=rows)
         return path.read_bytes()

@@ -36,13 +36,14 @@ from paperfacts.config import (
     EXTRACTION_MODES,
 )
 from paperfacts.errors import ContextBudgetError, LlmResponseError
-from paperfacts.fields import FIELD_SPECS, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import ExtractionOptions, extraction_schema_fingerprint, extractor_key
+from paperfacts.keys import ExtractionOptions, extractor_key, profile_extraction_fingerprint
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
 from paperfacts.normalize import drop_implausible
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
+from paperfacts.profile import DomainProfile
 from paperfacts.prompts import (
     extraction_system_prompt,
     extraction_user_prompt,
@@ -54,7 +55,6 @@ from paperfacts.prompts import (
 )
 from paperfacts.records import (
     ExtractedRecords,
-    ExtractionResponse,
     FailedQuestion,
     FieldResponse,
     FieldValue,
@@ -62,10 +62,12 @@ from paperfacts.records import (
     InventorySample,
     LaneExtraction,
     ResponseCleaning,
+    ResponseModels,
     ResponseValue,
     TargetRecord,
     clean_samples,
     place_on_every_sample,
+    response_models,
     response_to_records,
     sample_key,
 )
@@ -263,13 +265,14 @@ def extract_lane(
         raw_response = raw_response or text
         _add_usage(usage, pass_usage)
 
-    records = drop_implausible(deduplicate(merge_passes(results)))
+    profile = options.profile
+    records = drop_implausible(deduplicate(merge_passes(results)), profile)
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,
         extractor_key=extractor_key(options),
         model=client.model,
-        schema_version=extraction_schema_fingerprint(),
+        profile_fingerprint=profile_extraction_fingerprint(profile),
         target=records.target,
         samples=records.samples,
         invalid_source_ids=records.invalid_source_ids,
@@ -279,8 +282,8 @@ def extract_lane(
         # empty without matching prose. The same condition that skips the sample-level questions below.
         no_tco_film=inventory is not None and _deposits_no_film(inventory.response),
         passes=passes,
-        # In FIELD_SPECS order, whichever pass failed first.
-        failed_questions=tuple(failed[spec.name] for spec in FIELD_SPECS if spec.name in failed),
+        # In the profile's field order, whichever pass failed first.
+        failed_questions=tuple(failed[spec.name] for spec in profile.fields if spec.name in failed),
         usage=usage,
         raw_response=raw_response,
     )
@@ -298,19 +301,26 @@ def _extract_whole_document(
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
     """Document mode: one question carrying the whole filtered paper."""
-    system = extraction_system_prompt()
+    profile = options.profile
+    system = extraction_system_prompt(profile)
     user = extraction_user_prompt(document.markdown)
     _check_context_budget(system, user, options)
     response, text, usage = complete_validated(
         client,
-        ExtractionResponse,
+        _response_models(profile).extraction,
         system=system,
         user=user,
         repair=lambda previous, error: repair_prompt(user, previous, error),
         refresh=refresh,
         cache_salt=cache_salt,
     )
-    return response_to_records(response, known_ids=frozenset(document.blocks)), usage, text
+    records = response_to_records(response, fields=profile.by_name, known_ids=frozenset(document.blocks))
+    return records, usage, text
+
+
+def _response_models(profile: DomainProfile) -> ResponseModels:
+    """The answer shapes under the JSON keys this profile's prompts tell the model to emit."""
+    return response_models(profile.prompt.paper_key, profile.prompt.no_samples_key)
 
 
 @dataclass(frozen=True)
@@ -354,13 +364,14 @@ def _take_inventory(
     The salt is empty, the salt pass 0 would have used, so a lane re-run with more passes still hits the
     inventory entry the earlier run cached.
     """
-    selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(options))
-    system = inventory_system_prompt()
+    profile = options.profile
+    selection = fit_budget(inventory_blocks(blocks, profile.retrieval), budget_chars=_budget_chars(options))
+    system = inventory_system_prompt(profile)
     user = inventory_user_prompt(render_markdown(selection))
     _check_context_budget(system, user, options)
     response, raw_text, usage = complete_validated(
         client,
-        InventoryResponse,
+        _response_models(profile).inventory,
         system=system,
         user=user,
         repair=lambda previous, error: repair_prompt(user, previous, error),
@@ -400,23 +411,26 @@ def _extract_passages(
     sample_list = _render_sample_list(inventory.response.samples)
     # What the inventory cited as describing the samples: the recipe paragraph every field question needs.
     sample_blocks = frozenset(source_id for sample in inventory.response.samples for source_id in sample.source_ids)
-    field_system = field_system_prompt()
+    profile = options.profile
+    field_system = field_system_prompt(profile)
 
-    # Which fields get asked, and with which blocks, is decided here in FIELD_SPECS order and nowhere else.
-    # Retrieval and the budget check stay on this thread, so the questions -- and the "never asked" reasons
-    # recorded beside them -- are the same bytes in the same order whatever `concurrency` is.
+    # Which fields get asked, and with which blocks, is decided here in the profile's field order and nowhere
+    # else. Retrieval and the budget check stay on this thread, so the questions -- and the "never asked"
+    # reasons recorded beside them -- are the same bytes in the same order whatever `concurrency` is.
     questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
-    for spec in FIELD_SPECS:
+    for spec in profile.fields:
         if spec.is_sample_level and _deposits_no_film(inventory.response):
             # A device paper on purchased ITO glass: asking anyway only harvests the absorber's thickness and
             # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
             # empty for any other reason -- it missed the sample text -- still gets every question, so one
             # missed inventory cannot cost the lane all its sample-level values.
-            dropped.append(f"{spec.name}: the paper deposits no TCO film of its own, so it was not asked about")
+            dropped.append(f"{spec.name}: the inventory found no in-scope sample, so it was not asked about")
             continue
         candidates = fit_budget(
-            candidate_blocks(spec, blocks, limit=options.candidate_limit, sample_blocks=sample_blocks),
+            candidate_blocks(
+                spec, blocks, units=profile.units, limit=options.candidate_limit, sample_blocks=sample_blocks
+            ),
             budget_chars=budget_chars,
         )
         if not candidates:
@@ -424,7 +438,9 @@ def _extract_passages(
             # so that "the model missed it" and "we never asked" stay distinguishable.
             dropped.append(f"{spec.name}: no block in this lane mentions it, so it was not asked about")
             continue
-        field_user = field_user_prompt(spec, sample_list, render_markdown(candidates))
+        field_user = field_user_prompt(
+            spec, sample_list, render_markdown(candidates), profile.prompt.implausible_origin
+        )
         _check_context_budget(field_system, field_user, options)
         questions.append((spec, tuple(candidates), field_user))
 
