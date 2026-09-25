@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 import paperfacts.readings
 import paperfacts.workflow as workflow
 from paperfacts.config import Settings
-from paperfacts.errors import Cancelled, ConfigError, LlmError
+from paperfacts.errors import Cancelled, ConfigError, LlmError, LlmOfflineMiss
 from paperfacts.figures import FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
@@ -222,6 +222,27 @@ def test_a_panel_whose_request_failed_marks_the_stage_failed(monkeypatch, docume
 
     assert figures[-1] == ("figures", "failed", "0 readings from 1 panels, 1 requests failed")
     assert result.figures is not None and result.figures.rows == ()
+
+
+def test_an_offline_miss_fails_the_paper_and_stores_neither_readings_nor_a_dataset(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    store_artifact(document, settings)
+    install_fake_pipeline(monkeypatch)
+    monkeypatch.setattr(
+        "paperfacts.workflow.build_vision_client",
+        lambda settings: FakeVisionClient(LlmOfflineMiss("offline: no cached answer")),
+    )
+    marks: list[tuple[str, str, str]] = []
+
+    with pytest.raises(LlmOfflineMiss):
+        run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
+
+    layout = DataLayout(settings.data_root)
+    assert not figures_file(document, settings).exists()
+    assert not layout.dataset_path(document.document_id).exists()
+    assert ("export", "running", "") not in marks
+    assert ("figures", "failed") not in [m[:2] for m in marks]  # not an outcome of the stage
 
 
 def test_a_refused_chart_is_a_done_stage_with_nothing_read(monkeypatch, document: DocumentInput, settings: Settings):

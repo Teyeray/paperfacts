@@ -89,6 +89,7 @@ class FakeLlmClient:
         cache_salt: str = "",
         reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
         accept: Accept | None = None,
+        repair: bool = False,
     ) -> LlmResult:
         # No cache here, so `accept` has nothing to gate; the real client's handling is tested in test_llm.
         with self._lock:

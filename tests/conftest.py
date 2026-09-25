@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from paperfacts.llm import OFFLINE_MISSES
 from paperfacts.models import DocumentGeometry, DocumentInput
 from paperfacts.pdf import read_geometry
 from support.factories import FIXTURES_DIR, RawOutputFactory, make_blank_pdf
@@ -49,6 +50,18 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if "parser" in item.keywords:
             item.add_marker(skip_parser)
+
+
+# ---- The process-wide offline miss record ---------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def no_offline_misses_carried_over():
+    """Every client reports into one module-level record; a test that misses must not leave its misses to
+    the next one's summary."""
+    OFFLINE_MISSES.clear()
+    yield
+    OFFLINE_MISSES.clear()
 
 
 # ---- PDF / document / geometry -------------------------------------------------------

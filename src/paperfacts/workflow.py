@@ -24,7 +24,7 @@ from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
 from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
-from paperfacts.errors import Cancelled, ConfigError, PaperFactsError, ParserError
+from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, PaperFactsError, ParserError
 from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
@@ -427,9 +427,10 @@ def _read_figures_stage(
     artifact: ParsedArtifact | None,
     stop: threading.Event | None = None,
 ) -> tuple[StageStatus, str]:
-    """The figures stage's work, run beside the extraction lanes. Never raises: it is an opt-in extra, and
-    a chart the vision model could not read must not cost the paper its extraction. It reports its outcome
-    instead of calling ``on_stage`` itself, so every stage mark still comes from the calling thread."""
+    """The figures stage's work, run beside the extraction lanes. Never raises but for an offline replay
+    miss: it is an opt-in extra, and a chart the vision model could not read must not cost the paper its
+    extraction. It reports its outcome instead of calling ``on_stage`` itself, so every stage mark still
+    comes from the calling thread."""
     try:
         artifact = artifact or figure_artifact(document, settings)
         with build_vision_client(settings) as client:
@@ -439,6 +440,10 @@ def _read_figures_stage(
         # read are cached, so the next run picks them up.
         logger.info("figure reading stopped for %s: the rest of the paper failed", document.display_filename)
         return "skipped", "stopped: the rest of the paper failed"
+    except LlmOfflineMiss:
+        # The one exception to the isolation: a replay that missed must fail the paper, not become a
+        # "failed" figures stage beside an exported dataset that looks like a complete replay.
+        raise
     except Exception as exc:  # isolation is the point: any failure here is this stage's alone
         logger.exception("figure reading failed for %s", document.display_filename)
         return "failed", f"{type(exc).__name__}: {exc}"[:300]

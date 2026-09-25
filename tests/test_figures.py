@@ -12,7 +12,7 @@ import pytest
 
 from paperfacts import figures, keys
 from paperfacts.config import Settings
-from paperfacts.errors import LlmError
+from paperfacts.errors import LlmError, LlmOfflineMiss
 from paperfacts.figures import (
     FigureReadings,
     figure_groups,
@@ -280,6 +280,12 @@ def test_an_unparseable_answer_and_a_failed_request_both_leave_the_file_incomple
     assert unreadable.unreadable() == frozenset({"mineru_p0_b0"})
     assert failed.panels[0].status == "error" and not failed.complete
     assert failed.unreadable() == frozenset()
+
+
+def test_an_offline_miss_is_not_a_failed_panel_but_the_run_s_failure():
+    # Stored as an "error" panel, a replay miss would look like the model's outcome for a request never sent.
+    with pytest.raises(LlmOfflineMiss):
+        run(artifact(*SELECTED), FakeVisionClient(LlmOfflineMiss("offline: no cached answer")))
 
 
 def test_the_panels_named_for_refresh_bypass_the_cache_and_no_others():

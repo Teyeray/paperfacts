@@ -17,7 +17,7 @@ import pytest
 
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.errors import ConfigError
+from paperfacts.errors import ConfigError, LlmOfflineMiss
 from paperfacts.extract import extract_lane
 from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
 from paperfacts.llm import OpenAICompatibleClient
@@ -368,6 +368,26 @@ def test_the_matching_model_is_called_when_the_sample_ids_differ(
 
     assert client.call_count == 3
     assert report.counts.samples_matched == 1
+
+
+def test_an_offline_miss_in_matching_stores_no_comparison(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    answers = iter([extraction_json(sample_id="A1"), extraction_json(sample_id="B1")])
+
+    def replay(system: str, user: str) -> str:
+        answer = next(answers, None)
+        if answer is None:
+            raise LlmOfflineMiss("offline: no cached answer")
+        return answer
+
+    with pytest.raises(LlmOfflineMiss):
+        compare_document(document, settings, FakeLlmClient(replay))
+
+    comparisons = DataLayout(settings.data_root).comparison_path(
+        document.document_id, extractor_key(ExtractionOptions("fake-model", mode="document")), comparison_key()
+    )
+    assert not comparisons.exists()
 
 
 def test_a_second_comparison_hits_the_cache_and_calls_nothing(
