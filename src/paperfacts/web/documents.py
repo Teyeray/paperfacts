@@ -61,13 +61,15 @@ class DocumentSummary(BaseModel):
     uploaded_at: str | None = None
 
 
-def _file_stamp(path: Path) -> tuple[int, int] | None:
-    """What changes when a file is replaced: its modification time and size, or None when it is absent."""
+def _file_stamp(path: Path) -> tuple[int, int, int] | None:
+    """What changes when a file is replaced, or None when it is absent. The inode is in it because every
+    stored file is replaced atomically, by a rename, which always gives it a new one: a same-size rewrite
+    within the filesystem's mtime granularity would otherwise leave the stamp unchanged."""
     try:
         stat = path.stat()
     except FileNotFoundError:
         return None
-    return (stat.st_mtime_ns, stat.st_size)
+    return (stat.st_ino, stat.st_mtime_ns, stat.st_size)
 
 
 class CorpusRow(BaseModel):
@@ -104,7 +106,7 @@ class Library:
         self.extractor_key = extractor_key_for(settings)
         self.comparison_key = comparison_key()
         self.figure_key = figure_key_for(settings)
-        self._counts_cache: dict[Path, tuple[tuple[int, int], ComparisonCounts]] = {}
+        self._counts_cache: dict[Path, tuple[tuple[tuple[int, int, int] | None, ...], ComparisonCounts | None]] = {}
         self._counts_lock = threading.Lock()
 
     # ---- listing and detail ----------------------------------------------------------------

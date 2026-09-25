@@ -16,6 +16,7 @@ own dedicated test case here:
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -274,6 +275,21 @@ def test_the_counts_follow_a_rewritten_report(library: Library):
     seed_report(library, counts=ComparisonCounts(agree=5, conflict=2, total=7))
 
     assert library.summary(DOC_KEY).counts == ComparisonCounts(agree=5, conflict=2, total=7)
+
+
+def test_the_counts_follow_a_same_size_rewrite_within_the_mtime_granularity(library: Library):
+    # A filesystem with 1-2 s timestamps can give the rewritten report the old mtime, and swapping agree for
+    # conflict keeps its size. The atomic rename still gives it a new inode, which is what the stamp notices.
+    first = seed_report(library, counts=ComparisonCounts(agree=1, total=1))
+    path = library.layout.comparison_path(DOC_SHA, first.extractor_key, first.comparison_key)
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(agree=1, total=1)
+    before = path.stat()
+
+    seed_report(library, counts=ComparisonCounts(conflict=1, total=1))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    assert path.stat().st_size == before.st_size
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(conflict=1, total=1)
 
 
 def test_the_counts_are_not_reparsed_while_the_report_is_unchanged(library: Library, monkeypatch):
