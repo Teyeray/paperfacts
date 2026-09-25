@@ -200,12 +200,13 @@ library.
 **A document page** reads top to bottom.
 
 1. The header carries the display name, the document id, 「强制重跑」 and 「重新处理」.
-2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `extract:mineru`,
-   `extract:paddleocr_vl`, `compare`, `export`.
+2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `figures` (读图, skipped unless
+   switched on), `extract:mineru`, `extract:paddleocr_vl`, `compare`, `export`.
 3. KPI tiles: the AGREE / CONFLICT / AMBIGUOUS / MISSING counts.
 4. 结果表（按样品） — the deliverable.
-5. 事实对照 and the page viewer beside it.
-6. 样品记录, collapsed.
+5. 图中读数, only when the paper's charts were read; see [Reading figures](#reading-figures).
+6. 事实对照 and the page viewer beside it.
+7. 样品记录, collapsed.
 
 ### 结果表（按样品）
 
@@ -248,6 +249,7 @@ PDF and can be re-rendered on another machine. The HTTP API is documented at `/a
 
 ```bash
 uv run paperfacts run paper.pdf            # parse both lanes, extract both, compare, write the workbook
+uv run paperfacts run paper.pdf --figures  # the same, and read the paper's charts with the vision model
 uv run paperfacts batch template_files --output data/exports/template_files.xlsx
 uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
 uv run paperfacts fields                   # list the field table the package actually loaded
@@ -272,6 +274,8 @@ The flags worth knowing:
 - `--passes N` extracts each lane N times and keeps only what a majority of passes produced. N times the
   calls, N times the cost.
 - `--mode document|passage` picks how the model is asked; see below.
+- `--figures` / `--no-figures` on `run` and `batch` switches the figures stage on or off for this run,
+  over `figures.enabled`; `--force-figures` re-reads the charts without redoing anything else.
 - `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
 - `--data-root` overrides the data directory; `--verbose` / `-v` prints INFO logs.
@@ -360,6 +364,19 @@ visibly weaker than a 3/3 one. Measured on three papers, a second pass reproduce
 pass's values at temperature 0. Two passes are therefore a reproducibility filter at twice the model cost,
 not a way to find more.
 
+### `figures`
+
+Reading property-vs-condition charts with a vision model; see [Reading figures](#reading-figures).
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Run the `figures` stage. Default `false`: it costs about a minute of the vision model per chart |
+| `model` | The vision model. Default `qwen3.7-plus`, the only one measured accurate enough; it uses the `llm` endpoint and key |
+| `max_per_document` | At most this many chart panels are read per paper. Default 12 |
+| `dpi` | DPI the chart is cropped from the page at. Default 200 |
+| `max_pixels` | Largest crop area sent; bigger crops are shrunk here, not by the endpoint. Default 2000000 |
+| `timeout_s` | Per request. Default 300; one failed request is retried once |
+
 ### `parsers`, `server`, `web`, `overlay`, `comparison`
 
 | Key | Meaning |
@@ -395,7 +412,9 @@ points at its own services without editing the shared file:
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`,
-`PAPERFACTS_WEB_PASSWORD`.
+`PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
+`PAPERFACTS_FIGURES_MAX_PER_DOCUMENT`, `PAPERFACTS_FIGURES_DPI`, `PAPERFACTS_FIGURES_MAX_PIXELS`,
+`PAPERFACTS_FIGURES_TIMEOUT_S`.
 
 `PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
 and a value that will not parse as a number names the variable in the error.
@@ -494,6 +513,47 @@ The twenty-three shipped fields are aimed at sputtered transparent-conductive-ox
 `transmittance` read a bare number as a percent or a fraction, and every other numeric field rejects a
 number with no unit rather than assuming one.
 
+## Reading figures
+
+Many papers give a sample's sheet resistance or resistivity only as a marker on a chart, "Rs vs O2 flow",
+where neither text lane can see it. The `figures` stage, off by default, crops such charts out of the page
+and asks a vision model (`qwen3.7-plus`) to read them. It starts after parsing, runs beside the two
+extraction lanes and is joined before export; switch it on with `figures.enabled`,
+`PAPERFACTS_FIGURES_ENABLED=true` or `--figures`. `--force` does not re-read charts and `--force-figures`
+re-reads only them, since each costs minutes of a different model.
+
+- **Which charts.** Figure and caption blocks that sit together on a page are split among the captions
+  that start "Fig." / "Figure" / "FIGURE" by geometry: each panel goes to the nearest such caption on the
+  side that caption was written on. MinerU captions a panel of a multi-panel figure with the neighbouring
+  panels' labels ("(a) (c)"), which name nothing, and hangs the figure's caption under whichever panel it
+  was attached to, so reading order alone would hand panels to the next figure. A figure is read when that caption names a
+  film property (sheet resistance, resistivity, transmittance, thickness) by one of the field's retrieval
+  keywords, and then every panel is asked about separately, up to `figures.max_per_document` panels per
+  paper. The boxes are MinerU's, or PaddleOCR-VL's when there is no MinerU parse. A panel that turns out to
+  be a spectrum or an XRD pattern is refused by the model and yields nothing.
+- **What a reading is.** The model reports each marker's y in the axis's own unit, multiplier included
+  ("25" on an axis titled "[10^2 Ω/sq]"), and the code converts it to the field's canonical unit. Every
+  reading is **approximate**, labelled ±10 % on a linear axis and ±20 % on a log axis or a chart with four
+  or more series: the measured p90 error was 6 % on ordinary charts and 13.6 % over all of them
+  (`.omc/research/figure-reading-accuracy.md`).
+- **What a reading is not.** The chart's x is shown for the reader only: the models round it to the nearest
+  tick label, so it never creates a sample or decides which sample a point is. Readings never fill a cell
+  of 结果表 or of the 论文数据 / 样品数据 sheets and never take part in the two-lane comparison; `dataset.py`
+  does not even import the stage. They have their own sheet, 图中读数, their own endpoint
+  (`GET /api/documents/{id}/figures`, read straight from the readings file), and their own section on the
+  document page, where clicking one outlines the chart on the page.
+- **Cost and failure.** About a minute per chart, two for a crowded one; requests overlap
+  `llm.concurrency` at a time, time out after `figures.timeout_s` and are retried once. A failure marks only
+  the `figures` stage failed: the paper is still extracted, compared and exported. A request that failed,
+  a reply cut off at the token limit (never cached) and an answer that could not be used are asked again
+  on the next run -- the last with the cache bypassed -- while the answered panels replay from the LLM cache.
+- **Stored.** `figures/<figure_key>.json` per document. `figure_key` hashes the vision model and its
+  sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the film fields' descriptions,
+  keywords and units, and the source of `figures.py`, `normalize.py` and `passages.py`. Stored readings are
+  shown and exported even when the stage is switched off for a later run. With nothing under the current
+  key, the newest older file is shown and marked stale (旧版本读数); readings citing figure blocks the
+  current parse no longer has are marked too, and both notes appear in the stage detail.
+
 ## Caching, and why filenames carry keys
 
 Nothing is recomputed unless something it depends on changed, and each cache is keyed by a content hash of
@@ -504,7 +564,8 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
 | Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
 | Comparison (`comparison_key`) | the field tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
-| LLM requests | the entire request payload | nothing — an identical request is free |
+| Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
+| LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
 serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own
@@ -531,6 +592,7 @@ data/
     ├── facts/<backend>.<extractor_key>.json          one lane's sample-level extraction
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated table the web UI reads
+    ├── figures/<figure_key>.json       values read off charts by the opt-in figures stage
     ├── dataset.xlsx                    this paper's workbook, written automatically by `run`
     ├── overlays/<backend>/page_*.png   bbox overlays from `overlay`
     └── pages/<dpi>dpi/                 page renders for the web viewer
@@ -543,7 +605,7 @@ different settings lands beside the old one instead of overwriting it.
 ## The Excel workbook
 
 `run` writes `data/docs/<sha>/dataset.xlsx` for one paper; `batch` and `export` write one workbook for a
-whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」. Five
+whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」. Six
 sheets:
 
 | Sheet | Contents |
@@ -552,6 +614,7 @@ sheets:
 | 样品数据 | Every sample after merging the two lanes, one row each, same columns |
 | 字段说明 | 字段, 中文名, 层级, 标准单位, 中文说明, 单值与缺失规则 |
 | 数据质量 | 文档ID, 文件名, 样品ID, 字段, 最终决策, 输出值, 标准单位, 条件, 合并证据来源, 证据来源通道, 系列级, 说明 |
+| 图中读数 | Chart readings, empty unless the figures stage ran: 图, 页码, 图块来源, 子图, 字段, 系列, 横轴（仅供参考）, 读数（近似值）, 标准单位, 精度, 图中原始读数, 纵轴刻度, 图注, 说明 |
 | 运行记录 | 文档ID, 文件名, 状态, 合并后样品数, 抽取版本, 比较版本, 说明 |
 
 论文数据 and 样品数据 both begin with 文档ID, 文件名, 样品ID, 样品标签, 样品及测量条件, 可用字段数 and

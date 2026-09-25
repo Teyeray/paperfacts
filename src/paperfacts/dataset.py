@@ -82,6 +82,26 @@ _QUALITY_COLUMNS = (
     ("series", "系列级"),
     ("detail", "说明"),
 )
+# Values a vision model read off charts. The rows come from paperfacts.figures (which this module does not
+# import: the readings are no part of any verdict here); this is only the sheet's layout.
+_FIGURE_COLUMNS = (
+    ("document_id", "文档ID"),
+    ("filename", "文件名"),
+    ("figure", "图"),
+    ("page", "页码"),
+    ("source_id", "图块来源"),
+    ("panel", "子图"),
+    ("field", "字段"),
+    ("series", "系列"),
+    ("x", "横轴（仅供参考，不用于对应样品）"),
+    ("value", "读数（近似值）"),
+    ("unit", "标准单位"),
+    ("precision", "精度"),
+    ("value_raw", "图中原始读数"),
+    ("scale", "纵轴刻度"),
+    ("caption", "图注"),
+    ("detail", "说明"),
+)
 
 
 class FieldColumn(BaseModel):
@@ -648,6 +668,8 @@ def _worksheet(
             "detail": 80,
             "sample_id": 28,
             "sample_label": 35,
+            "caption": 60,
+            "x": 36,
             "description": 68,
             "rule": 70,
         }.get(key, 23)
@@ -672,9 +694,17 @@ def _worksheet(
 
 
 def write_dataset(
-    documents: Sequence[DocumentDataset], output: Path, *, failures: Sequence[dict[str, str]] = ()
+    documents: Sequence[DocumentDataset],
+    output: Path,
+    *,
+    failures: Sequence[dict[str, str]] = (),
+    figure_rows: Sequence[Row] = (),
 ) -> None:
-    """Replace a workbook atomically; repeated PDF hashes produce exactly one paper row."""
+    """Replace a workbook atomically; repeated PDF hashes produce exactly one paper row.
+
+    ``figure_rows`` (from :func:`paperfacts.figures.figure_rows`) only fill the 图中读数 sheet: chart readings
+    are approximate and never compared, so they never reach a sample or paper row.
+    """
     unique = sorted(
         {document.document_id: document for document in documents}.values(), key=lambda document: document.document_id
     )
@@ -707,6 +737,7 @@ def write_dataset(
         "Fields",
     )
     _worksheet(workbook, "数据质量", _QUALITY_COLUMNS, [row for doc in unique for row in doc.quality_rows], "Quality")
+    _worksheet(workbook, "图中读数", _FIGURE_COLUMNS, figure_rows, "Figures")
     runs: list[Row] = [
         {
             "document_id": doc.document_id,

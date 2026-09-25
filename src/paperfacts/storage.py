@@ -15,6 +15,7 @@ one shows every intermediate state of one paper:
     ├── facts/<backend>.<extractor_key>.json           one lane's extraction, the model's own wording
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated per-sample table, for the web UI
+    ├── figures/<figure_key>.json                  values a vision model read off charts (opt-in stage)
     ├── overlays/<backend>/page_000.png                bbox overlays
     └── pages/<dpi>dpi/page_000.png                    page renders for the web viewer
 
@@ -87,6 +88,9 @@ class DataLayout:
 
     def comparison_path(self, document_id: str, extractor_key: str, comparison_key: str) -> Path:
         return self.doc_dir(document_id) / "comparisons" / f"{extractor_key}.{comparison_key}.json"
+
+    def figures_path(self, document_id: str, figure_key: str) -> Path:
+        return self.doc_dir(document_id) / "figures" / f"{figure_key}.json"
 
     def overlay_dir(self, document_id: str, backend: Backend) -> Path:
         return self.doc_dir(document_id) / "overlays" / backend

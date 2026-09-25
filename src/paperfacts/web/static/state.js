@@ -10,6 +10,7 @@ export const STAGE_LABEL = {
   "parse:paddleocr_vl": "解析 PaddleOCR-VL",
   "extract:mineru": "抽取 MinerU",
   "extract:paddleocr_vl": "抽取 PaddleOCR-VL",
+  figures: "读图",
   compare: "对齐比较",
 };
 const ACTIVE_JOB_STATUS = new Set(["queued", "running"]);
@@ -21,6 +22,7 @@ export const state = {
   summary: null,   // the current document's DocumentSummary
   report: null,    // ComparisonReport | null
   dataset: null,   // the consolidated per-sample table (DocumentDataset.as_dict) | null
+  figures: null,   // chart readings from the figures stage ({ stale, orphaned, rows }) | null
   corpus: null,    // the home view's library-wide table ({ fields, rows }) | null
   lanes: {},       // { mineru: LaneExtraction | null, paddleocr_vl: ... }
   artifacts: {},   // { mineru: ParsedArtifact | null, paddleocr_vl: ... }

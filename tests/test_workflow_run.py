@@ -137,12 +137,13 @@ def test_the_stage_names_cover_extraction_comparison_and_export():
     assert stage_names() == (
         "parse:mineru",
         "parse:paddleocr_vl",
+        "figures",
         "extract:mineru",
         "extract:paddleocr_vl",
         "compare",
         "export",
     )
-    assert len(stage_names()) == 2 * len(BACKENDS) + 2
+    assert len(stage_names()) == 2 * len(BACKENDS) + 3
 
 
 # ---- Orchestration ------------------------------------------------------------------------
@@ -158,6 +159,8 @@ def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: Docum
         ("parse:mineru", "done", "11 blocks"),
         ("parse:paddleocr_vl", "running", ""),
         ("parse:paddleocr_vl", "done", "11 blocks"),
+        # Opt-in and off by default, so it is announced as skipped and never runs.
+        ("figures", "skipped", "figures.enabled is false"),
         # The two lanes run as a pair, so both are announced before either can finish; their "done"
         # marks are still emitted in BACKENDS order, from the calling thread.
         ("extract:mineru", "running", ""),
@@ -169,7 +172,7 @@ def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: Docum
         ("export", "running", ""),
         ("export", "done", str(settings.data_root / "docs" / document.document_id[:16] / "dataset.xlsx")),
     ]
-    assert [name for name, status, _ in marks if status == "running"] == list(stage_names())
+    assert [name for name, status, _ in marks if status in {"running", "skipped"}] == list(stage_names())
 
 
 def test_a_cached_parse_says_so_in_the_stage_detail(monkeypatch, document: DocumentInput, settings: Settings):

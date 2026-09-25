@@ -7,6 +7,7 @@ import { PageViewer } from "./viewer.js";
 import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts.js";
 import { renderLanes } from "./samples.js";
 import { renderResults } from "./table.js";
+import { renderFigures } from "./figures.js";
 import { loadCorpus, renderCorpus } from "./corpus.js";
 import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from "./job.js";
 import { loadLibrary, renderLibrary } from "./library.js";
@@ -55,10 +56,11 @@ async function openDocument(id, factIndex) {
 }
 
 async function loadDocumentData(id) {
-  const [summary, report, dataset, ...rest] = await Promise.all([
+  const [summary, report, dataset, figures, ...rest] = await Promise.all([
     api(`/api/documents/${id}`),
     optional(api(`/api/documents/${id}/report`)),
     optional(api(`/api/documents/${id}/dataset`)),
+    optional(api(`/api/documents/${id}/figures`)),
     ...LANES.map((l) => optional(api(`/api/documents/${id}/extraction/${l}`))),
     ...LANES.map((l) => optional(api(`/api/documents/${id}/artifact/${l}`))),
   ]);
@@ -66,6 +68,7 @@ async function loadDocumentData(id) {
     summary,
     report,
     dataset,
+    figures,
     lanes: Object.fromEntries(LANES.map((l, i) => [l, rest[i]])),
     artifacts: Object.fromEntries(LANES.map((l, i) => [l, rest[LANES.length + i]])),
   };
@@ -92,6 +95,7 @@ function renderDocument() {
   renderStages(s("stages"));
   renderKpis(s("kpis"));
   renderResults(node.querySelector(".results"));
+  renderFigures(s("figures"));
   renderFilters(s("filters"));
   renderRows(s("rows"), s("rows-empty"));
   renderLanes(s("lanes"));
