@@ -8,12 +8,11 @@ service (a GPU server), an empty one means the ``runners/`` script as a subproce
 
 from __future__ import annotations
 
-import contextvars
 import logging
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -41,6 +40,7 @@ from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, Subpr
 from paperfacts.pdf import crop_region, png_bytes, read_geometry, render_page
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity
+from paperfacts.threads import ContextThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -593,20 +593,13 @@ def run_document(
 
     # The figures stage runs beside the two extraction lanes: it waits on a different model for minutes per
     # chart and shares nothing with them but the parse. It is joined before export, whatever it did.
-    figures_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="paperfacts-figures")
+    figures_pool = ContextThreadPoolExecutor(max_workers=1, thread_name_prefix="paperfacts-figures")
     figures_future: Future[tuple[StageStatus, str]] | None = None
     if settings.figures_enabled:
         on_stage("figures", "running", "")
         artifact = next((parsed[backend] for backend in BACKENDS if parsed[backend] is not None), None)
-        # Every task handed to a pool runs in a copy of the caller's context, so whatever the caller keyed
-        # on it -- the web job its log records belong to -- follows the work onto the pool's thread.
         figures_future = figures_pool.submit(
-            contextvars.copy_context().run,
-            _read_figures_stage,
-            document,
-            settings,
-            force=force_figures,
-            artifact=artifact,
+            _read_figures_stage, document, settings, force=force_figures, artifact=artifact
         )
     else:
         figures = shown_figures(document.document_id, document.display_filename, settings)
@@ -655,11 +648,9 @@ def _extract_and_compare(
         # -- it replaces the frozen Job under its lock on every transition -- but not every caller is it.)
         for backend in BACKENDS:
             on_stage(f"extract:{backend}", "running", "")
-        with ThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
+        with ContextThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
             futures: dict[Backend, Future[LaneExtraction]] = {
-                backend: pool.submit(
-                    contextvars.copy_context().run, extract_document, document, backend, settings, client, force=force
-                )
+                backend: pool.submit(extract_document, document, backend, settings, client, force=force)
                 for backend in BACKENDS
             }
             # Every lane's outcome is collected before any of them is acted on, so an exception nobody
@@ -851,9 +842,9 @@ def run_batch(
         for item in queue:
             process(*item)
     else:
-        pool = ThreadPoolExecutor(max_workers=min(jobs, len(queue)), thread_name_prefix="paperfacts-document")
+        pool = ContextThreadPoolExecutor(max_workers=min(jobs, len(queue)), thread_name_prefix="paperfacts-document")
         try:
-            futures = [pool.submit(contextvars.copy_context().run, process, *item) for item in queue]
+            futures = [pool.submit(process, *item) for item in queue]
             # Completion order, so an unexpected error (a workbook that cannot be written) surfaces at once
             # instead of after every paper queued ahead of it.
             for future in as_completed(futures):

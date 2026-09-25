@@ -27,12 +27,10 @@ tuned. This module's source is hashed into ``figure_key`` instead.
 
 from __future__ import annotations
 
-import contextvars
 import json
 import logging
 import re
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -50,6 +48,7 @@ from paperfacts.normalize import convert_to_canonical, normalize_text
 # passage-mode extractor_key and would rename every stored extraction for no change in behaviour.
 from paperfacts.passages import _names, _searchable
 from paperfacts.storage import write_text_atomic
+from paperfacts.threads import ContextThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -740,16 +739,10 @@ def read_figures(
     """
     requests = select_panels(artifact.blocks, limit=max_per_document)
     images = [_crop(render, request) for request in requests]
-    with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
+    with ContextThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
         futures = [
             pool.submit(
-                # The caller's context comes along, and with it the web job these requests' logs belong to.
-                contextvars.copy_context().run,
-                _read_panel,
-                request,
-                image,
-                client,
-                refresh=refresh or request.block.source_id in refresh_panels,
+                _read_panel, request, image, client, refresh=refresh or request.block.source_id in refresh_panels
             )
             for request, image in zip(requests, images, strict=True)
         ]
