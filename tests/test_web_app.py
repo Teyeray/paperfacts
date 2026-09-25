@@ -397,8 +397,16 @@ def seed_figures(library: Library, settings: Settings) -> None:
     ).write(library.layout.figures_path(DOC_SHA, key))
 
 
-def test_the_figure_readings_are_not_found_before_the_stage_ran(client: TestClient, parsed_only: str):
-    assert client.get(f"/api/documents/{parsed_only}/figures").status_code == 404
+def test_a_document_without_figure_readings_has_an_empty_list(client: TestClient, parsed_only: str):
+    # Most papers have no chart readings; a 404 here was a red console error on every document page.
+    response = client.get(f"/api/documents/{parsed_only}/figures")
+
+    assert response.status_code == 200
+    assert response.json()["rows"] == []
+
+
+def test_the_figure_readings_of_an_unknown_document_are_not_found(client: TestClient):
+    assert client.get(f"/api/documents/{UNKNOWN_ID}/figures").status_code == 404
 
 
 def test_the_figure_readings_are_served_from_their_own_file(
@@ -706,11 +714,17 @@ def mark_compared(library: Library, document_id: str) -> None:
     seed_report(library, document_sha=identity.sha256)
 
 
-def test_running_everything_skips_what_is_already_compared(
+def mark_finished(library: Library, document_id: str) -> None:
+    """Compared and exported under the current keys: the export is the last stage."""
+    mark_compared(library, document_id)
+    seed_dataset(library, document_id, corpus_payload(document_id))
+
+
+def test_running_everything_skips_what_is_already_finished(
     client: TestClient, library: Library, two_idle_documents: list[str]
 ):
     done, todo = two_idle_documents
-    mark_compared(library, done)
+    mark_finished(library, done)
 
     response = client.post("/api/documents/run-all")
 
@@ -719,6 +733,19 @@ def test_running_everything_skips_what_is_already_compared(
     assert [job["document_id"] for job in body["submitted"]] == [todo]
     assert [row["document_id"] for row in body["skipped"]] == [done]
     assert body["skipped"][0]["reason"]
+
+
+def test_a_document_whose_export_failed_is_still_unfinished(
+    client: TestClient, library: Library, two_idle_documents: list[str]
+):
+    # Compared but never exported: the run stopped one stage short, so a bulk run must pick it up again.
+    for document_id in two_idle_documents:
+        mark_compared(library, document_id)
+
+    body = client.post("/api/documents/run-all").json()
+
+    assert {job["document_id"] for job in body["submitted"]} == set(two_idle_documents)
+    assert body["skipped"] == []
 
 
 def test_forcing_a_run_of_everything_queues_the_finished_document_too(
