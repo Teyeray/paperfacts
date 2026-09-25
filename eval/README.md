@@ -95,3 +95,7 @@ detail and source ids so it can be traced.
 | 5c10f7a0128f15e0 | Bauden 2026, SnO2:Ta (pss b) | 6 | O2-flow series, one sample characterised, literature table |
 | e855631c6f46a0ee | Seok 2019, ITO on invar (Metals) | 8 (+1 ambiguous) | two substrates × four thicknesses |
 | ffd70c234c43ba93 | semi-transparent perovskite cells | 0 | no TCO deposited: every value is an extra |
+| 08562126a9b9aab8 | Guillén 2006, sputtered ITO thickness × vacuum anneal (TSF) | 7 | untuned; `ρ×10^4` table header, two transmittance ranges |
+| c3ab31d08acc066b | Damgaci 2024, ITO deposition temperature (Materials) | 6 (+2 ambiguous) | untuned; base pressure called "working pressure", text resistivity contradicts figure |
+| 1048c42316a5c9f8 | Seok 2019, GZO-graded ITO (STAM) | 7 (+1 ambiguous) | untuned; one ITO recipe shared by all electrodes but the SI-only GZO film |
+| 8977655673fa6d9a | Chen 2025, sputtered ATO electrodes (Solar Energy) | 4 (+7 ambiguous) | untuned; two targets, stability table repeats sheet resistance per state |

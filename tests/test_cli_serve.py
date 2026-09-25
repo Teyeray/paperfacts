@@ -94,3 +94,14 @@ def test_serve_is_listed_in_the_help():
 
     assert result.exit_code == 0
     assert "serve" in result.output
+
+
+def test_serve_refuses_offline_replay(uvicorn_calls: list[dict[str, Any]], tmp_path: Path, monkeypatch):
+    # A server under replay would fail every upload and pile its misses into a record no job reports.
+    monkeypatch.setenv("PAPERFACTS_LLM_OFFLINE", "1")
+
+    result = runner.invoke(app, ["serve", "--data-root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "offline replay is for `run` and `batch`" in result.output
+    assert uvicorn_calls == []

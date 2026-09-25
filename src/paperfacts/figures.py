@@ -38,7 +38,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from paperfacts.errors import Cancelled
+from paperfacts.errors import Cancelled, LlmOfflineMiss
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.llm import VisionClient
 from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
@@ -716,6 +716,10 @@ def _read_panel(
         result = client.complete_vision(
             system=SYSTEM_PROMPT, user=user_prompt(group.caption, request.fields), image_png=image, refresh=refresh
         )
+    except LlmOfflineMiss:
+        # A replay miss is not this panel's failure but the run's: stored as an ``error`` panel it would
+        # turn "this request changed" into a reading outcome, so it goes up and nothing is written.
+        raise
     except Exception as exc:  # any failure is this panel's alone; LlmError is the usual one
         logger.warning("figure %s: the vision request failed: %s", block.source_id, exc)
         return FigurePanel(**base, status="error", detail=f"{type(exc).__name__}: {exc}"[:500]), ()
