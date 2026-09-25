@@ -122,6 +122,22 @@ type ExtractionMode = Literal["document", "passage"]
 EXTRACTION_MODES: tuple[str, ...] = get_args(ExtractionMode.__value__)
 DEFAULT_EXTRACTION_MODE: ExtractionMode = "passage"
 
+# Figure reading (:mod:`paperfacts.figures`): a vision model reads property-vs-condition charts. Off by
+# default because it is an offline batch stage: about a minute per chart with the model below. The model,
+# the one-retry budget and the timeout come from the measurement in .omc/research/figure-reading-accuracy.md
+# (qwen3.7-plus: median error 2.2 %, p90 13.6 %; qwen3-vl-plus had a p90 of 150 % and is not usable).
+DEFAULT_FIGURES_ENABLED = False
+DEFAULT_FIGURES_MODEL = "qwen3.7-plus"
+DEFAULT_FIGURES_MAX_PER_DOCUMENT = 12
+# Crops are rendered at the DPI PaddleOCR-VL pages are, which is dense enough for small tick labels.
+DEFAULT_FIGURES_DPI = DEFAULT_RENDER_DPI
+# Bounds a crop's area so the endpoint never resizes it with an algorithm we do not control.
+DEFAULT_FIGURES_MAX_PIXELS = 2_000_000
+# One chart took up to 134 s in the measurement, and one request to a sibling model hung for 271 s.
+DEFAULT_FIGURES_TIMEOUT_S = 300.0
+_TRUE_WORDS = {"1", "true", "yes", "on"}
+_FALSE_WORDS = {"0", "false", "no", "off"}
+
 
 def config_path(environ: Mapping[str, str] | None = None) -> Path:
     """Where the configuration file lives. Found next to the repository root, not the working directory, so
@@ -276,6 +292,13 @@ class Settings:
     page_dpi_min: int = 50
     page_dpi_max: int = 220
     overlay_dpi: int = DEFAULT_OVERLAY_DPI
+    # The figures stage. Its endpoint and key are the LLM's: one Model Studio workspace serves both.
+    figures_enabled: bool = DEFAULT_FIGURES_ENABLED
+    figures_model: str = DEFAULT_FIGURES_MODEL
+    figures_max_per_document: int = DEFAULT_FIGURES_MAX_PER_DOCUMENT
+    figures_dpi: int = DEFAULT_FIGURES_DPI
+    figures_max_pixels: int = DEFAULT_FIGURES_MAX_PIXELS
+    figures_timeout_s: float = DEFAULT_FIGURES_TIMEOUT_S
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -353,6 +376,22 @@ class Settings:
             page_dpi_min=number("PAGE_DPI_MIN", file.get("server.page_dpi.min", int), int),
             page_dpi_max=number("PAGE_DPI_MAX", file.get("server.page_dpi.max", int), int),
             overlay_dpi=number("OVERLAY_DPI", file.get("overlay.dpi", int), int),
+            figures_enabled=_parse_bool("FIGURES_ENABLED", get("FIGURES_ENABLED"), file.get("figures.enabled", bool)),
+            figures_model=get("FIGURES_MODEL") or file.get("figures.model", str),
+            figures_max_per_document=_positive(
+                number("FIGURES_MAX_PER_DOCUMENT", file.get("figures.max_per_document", int), int),
+                "figures.max_per_document",
+                file.path,
+            ),
+            figures_dpi=_positive(number("FIGURES_DPI", file.get("figures.dpi", int), int), "figures.dpi", file.path),
+            figures_max_pixels=_positive(
+                number("FIGURES_MAX_PIXELS", file.get("figures.max_pixels", int), int),
+                "figures.max_pixels",
+                file.path,
+            ),
+            figures_timeout_s=_positive_seconds(
+                number("FIGURES_TIMEOUT_S", file.get("figures.timeout_s", float), float), "figures.timeout_s", file.path
+            ),
         )
 
     def require_llm_api_key(self) -> str:
@@ -377,6 +416,15 @@ def _positive(value: int, dotted: str, source: Path) -> int:
     if value < 1:
         raise ConfigError(
             f"{dotted} must be at least 1, got {value} (set in {source} or the matching {ENV_PREFIX} variable)"
+        )
+    return value
+
+
+def _positive_seconds(value: float, dotted: str, source: Path) -> float:
+    """A timeout of zero makes every request fail at once, which reads as a broken endpoint, not a setting."""
+    if value <= 0:
+        raise ConfigError(
+            f"{dotted} must be positive, got {value} (set in {source} or the matching {ENV_PREFIX} variable)"
         )
     return value
 
@@ -425,6 +473,19 @@ def _known_effort(raw: str, source: Path, *, dotted: str, variable: str, extra: 
             f"{dotted} is {raw!r}, expected {extra} or one of {efforts} (set in {source} or {ENV_PREFIX}{variable})"
         )
     return cast(ReasoningEffort, raw)
+
+
+def _parse_bool(name: str, raw: str | None, default: bool) -> bool:
+    """An on/off variable. Anything but the usual spellings is refused: "ture" silently reading as off would
+    skip a stage somebody asked for."""
+    if raw is None:
+        return default
+    word = raw.lower()
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    raise ConfigError(f"environment variable {ENV_PREFIX}{name} must be true or false, got {raw!r}")
 
 
 def _parse_number[T: (int, float)](name: str, raw: str | None, default: T, kind: type[T]) -> T:

@@ -49,6 +49,14 @@
   "overlay": {
     "dpi": 150
   },
+  "figures": {
+    "enabled": false,
+    "model": "qwen3.7-plus",
+    "max_per_document": 12,
+    "dpi": 200,
+    "max_pixels": 2000000,
+    "timeout_s": 300.0
+  },
   "condition_keywords": [
     "sample",
     "substrate",

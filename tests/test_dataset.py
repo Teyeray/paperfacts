@@ -398,7 +398,7 @@ def test_excel_reopens_with_numeric_fields_text_ids_and_no_pdf_formulas(tmp_path
         failures=[{"document_id": "b" * 64, "filename": "failed.pdf", "error": "parser failed"}],
     )
     workbook = load_workbook(output)
-    assert workbook.sheetnames == ["论文数据", "样品数据", "字段说明", "数据质量", "运行记录"]
+    assert workbook.sheetnames == ["论文数据", "样品数据", "字段说明", "数据质量", "图中读数", "运行记录"]
     sheet = workbook["论文数据"]
     assert sheet.max_row == 2
     assert sheet.freeze_panes == "D2"
@@ -612,3 +612,34 @@ def test_the_lane_column_reaches_the_quality_sheet(tmp_path):
     columns = {cell.value: cell.column for cell in sheet[1]}
     rows = {sheet.cell(row, columns["字段"]).value: row for row in range(2, sheet.max_row + 1)}
     assert sheet.cell(rows["thickness"], columns["证据来源通道"]).value == "mineru; paddleocr_vl"
+
+
+# ---- Figure readings: their own sheet, never a cell -------------------------------------------------
+
+
+def test_figure_rows_fill_only_their_own_sheet(tmp_path: Path):
+    output = tmp_path / "dataset.xlsx"
+    result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "100", "nm")])]))
+    row = {"document_id": DOC_ID, "figure": "Fig. 3", "value": None, "value_raw": "25 10^2 ohm/sq", "precision": "±20%"}
+
+    write_dataset([result], output, figure_rows=[row])
+
+    workbook = load_workbook(output)
+    sheet = workbook["图中读数"]
+    header = [cell.value for cell in sheet[1]]
+    cells = {header[i]: cell.value for i, cell in enumerate(sheet[2])}
+    assert cells["图"] == "Fig. 3" and cells["读数（近似值）"] is None and cells["精度"] == "±20%"
+    assert workbook["样品数据"].max_row == 2  # the sample sheet is what it would have been without the row
+
+
+def test_the_dataset_module_knows_nothing_of_figure_reading():
+    # Chart readings take part in no verdict, so the module whose source names every comparison must not
+    # depend on the one that reads charts: tuning the figures stage must never rename a stored comparison.
+    import ast
+
+    import paperfacts.dataset
+
+    tree = ast.parse(Path(paperfacts.dataset.__file__).read_text(encoding="utf-8"))
+    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert "paperfacts.figures" not in imported
+    assert "figure_rows" not in DatasetPayload.model_fields

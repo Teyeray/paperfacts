@@ -14,6 +14,7 @@ Flat modules, in pipeline order:
 - ``llm``         OpenAI-compatible client with a request cache and one repair round
 - ``records``     the model's response schema, the stored records, and the cleaning between them
 - ``extract``     the document the model reads and the extraction itself
+- ``figures``     a vision model reads property-vs-condition charts; paper-level, never compared
 - ``voting``      repeats collapsed within a pass, majority vote across passes
 - ``grounding``   the quoted text must occur in the block it cites
 - ``normalize``   text folding, number parsing, unit conversion

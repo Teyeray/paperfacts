@@ -102,6 +102,22 @@ ModeOpt = Annotated[
     ModeOption | None,
     typer.Option("--mode", help="how to ask the model: the whole paper at once, or one question per field"),
 ]
+FiguresOpt = Annotated[
+    bool | None,
+    typer.Option(
+        "--figures/--no-figures",
+        help="read property-vs-condition charts with the vision model (about a minute per chart); "
+        "default: figures.enabled in config.json",
+    ),
+]
+ForceFiguresOpt = Annotated[
+    bool,
+    typer.Option(
+        "--force-figures",
+        help="read the charts again, ignoring stored readings (vision model, about a minute per chart); "
+        "--force alone does not re-read them",
+    ),
+]
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="ignore caches and redo this step (extraction re-calls the LLM, which costs)")
 ]
@@ -110,9 +126,16 @@ ForceOpt = Annotated[
 REPORTABLE_ERRORS = (PaperFactsError, FileNotFoundError)
 
 
-def _settings(data_root: Path | None, passes: int | None = None, mode: ModeOption | None = None) -> Settings:
+def _settings(
+    data_root: Path | None,
+    passes: int | None = None,
+    mode: ModeOption | None = None,
+    figures: bool | None = None,
+) -> Settings:
     settings = Settings.from_env()
     changes: dict[str, object] = {}
+    if figures is not None:
+        changes["figures_enabled"] = figures
     if data_root is not None:
         changes["data_root"] = data_root
     if passes is not None:
@@ -241,12 +264,14 @@ def run(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    figures: FiguresOpt = None,
+    force_figures: ForceFiguresOpt = False,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Parse, extract, compare and automatically save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode)
+    settings = _settings(data_root, passes, mode, figures)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -255,21 +280,43 @@ def run(
             typer.echo(f"[{stage}] {status} {detail}".rstrip())
 
     try:
-        result = run_document(document, settings, force=force, on_stage=on_stage)
+        result = run_document(document, settings, force=force, force_figures=force_figures, on_stage=on_stage)
     except REPORTABLE_ERRORS as exc:
         _fail("run", exc)
     for lane in result.lanes.values():
         _echo_lines(render_lane(lane))
     _echo_lines(render_report(result.report))
+    if result.figures is not None and result.figures.rows:
+        warning = result.figures.warning()
+        typer.echo(
+            f"figure readings: {len(result.figures.rows)} (approximate; sheet 图中读数)"
+            + (f"; {warning}" if warning else "")
+        )
     typer.echo(f"Excel -> {result.excel_path}")
 
 
-def _batch_summary(source: Path, settings: Settings, output: Path | None, *, force: bool, export_only: bool) -> None:
+def _batch_summary(
+    source: Path,
+    settings: Settings,
+    output: Path | None,
+    *,
+    force: bool,
+    export_only: bool,
+    force_figures: bool = False,
+) -> None:
     def on_stage(stage: str, status: StageStatus, detail: str) -> None:
         typer.echo(f"[{stage}] {status} {detail}".rstrip())
 
     try:
-        result = run_batch(source, settings, output=output, force=force, export_only=export_only, on_stage=on_stage)
+        result = run_batch(
+            source,
+            settings,
+            output=output,
+            force=force,
+            force_figures=force_figures,
+            export_only=export_only,
+            on_stage=on_stage,
+        )
     except (*REPORTABLE_ERRORS, OSError) as exc:
         _fail("export" if export_only else "batch", exc)
     typer.echo(
@@ -288,12 +335,15 @@ def batch(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    figures: FiguresOpt = None,
+    force_figures: ForceFiguresOpt = False,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
-    _batch_summary(source, _settings(data_root, passes, mode), output, force=force, export_only=False)
+    settings = _settings(data_root, passes, mode, figures)
+    _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures)
 
 
 @app.command()

@@ -22,18 +22,28 @@ export class PageViewer {
     this.highlighted = new Set(initial?.highlighted ?? []);
     this.show = { ...Object.fromEntries(LANES.map((l) => [l, true])), ...(initial?.show ?? {}) };
     this.dim = initial?.dim ?? true;
+    // A figure located from the chart readings: drawn in a neutral colour, since it belongs to neither lane.
+    this.region = initial?.region ?? null;
     this._render();
   }
 
   // ---- public ----
   getState() {
-    return { page: this.page, highlighted: [...this.highlighted], show: { ...this.show }, dim: this.dim };
+    return { page: this.page, highlighted: [...this.highlighted], show: { ...this.show }, dim: this.dim, region: this.region };
   }
 
   highlight(sourceIds, { jump = true } = {}) {
     this.highlighted = new Set(sourceIds);
+    this.region = null;
     const pages = this.highlightedPages();
     if (jump && pages.length && !pages.includes(this.page)) this.page = pages[0];
+    this._render();
+  }
+
+  showRegion(region) {
+    this.highlighted = new Set();
+    this.region = region;
+    this.page = Math.min(Math.max(region.page, 0), this.pageCount - 1);
     this._render();
   }
 
@@ -63,7 +73,7 @@ export class PageViewer {
       return;
     }
     const page = document.createElement("div");
-    page.className = "page" + (this.dim && this.highlighted.size ? " dim" : "");
+    page.className = "page" + (this.dim && (this.highlighted.size || this.region) ? " dim" : "");
     const img = document.createElement("img");
     img.alt = `第 ${this.page + 1} 页`;
     img.src = `/api/documents/${this.documentId}/pages/${this.page}.png?dpi=${this.dpi}`;
@@ -148,6 +158,20 @@ export class PageViewer {
     }
     // draw the highlighted ones on top
     for (const hl of [...svg.querySelectorAll("rect.hl")]) svg.append(hl);
+    if (this.region && this.region.page === this.page) {
+      const { x1, y1, x2, y2 } = this.region.bbox;
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", (x1 * width).toFixed(1));
+      rect.setAttribute("y", (y1 * height).toFixed(1));
+      rect.setAttribute("width", ((x2 - x1) * width).toFixed(1));
+      rect.setAttribute("height", ((y2 - y1) * height).toFixed(1));
+      rect.setAttribute("vector-effect", "non-scaling-stroke");
+      rect.setAttribute("class", "region hl");
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = this.region.label ?? "";
+      rect.append(title);
+      svg.append(rect);
+    }
   }
 }
 

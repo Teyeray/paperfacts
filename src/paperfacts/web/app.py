@@ -18,6 +18,7 @@ Endpoints (all under ``/api``, JSON)::
     GET  /api/documents/{id}/artifact/{backend}    ParsedArtifact (blocks + Markdown + page geometry)
     GET  /api/documents/{id}/dataset               consolidated per-sample table (rows + field list)
     GET  /api/documents/{id}/dataset.xlsx          the same data as the Excel workbook
+    GET  /api/documents/{id}/figures               values read off the paper's charts (opt-in stage)
     GET  /api/documents/{id}/pages/{page}.png?dpi= rendered page image (cached)
     GET  /api/documents/{id}/jobs                  this document's job list
     GET  /api/jobs                                 every job of this process, newest first
@@ -48,13 +49,14 @@ from pydantic import BaseModel, ConfigDict
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload, write_dataset
+from paperfacts.figures import FiguresView
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobManager, JobRunner
-from paperfacts.workflow import run_document, stage_names
+from paperfacts.workflow import run_document, shown_figures, stage_names
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +182,8 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
             raise HTTPException(status_code=404, detail="No consolidated dataset yet")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "paperfacts.xlsx"
-            write_dataset(datasets, path)
+            figure_views = (shown_figures(d.document_id, d.filename, settings) for d in datasets)
+            write_dataset(datasets, path, figure_rows=[row for view in figure_views if view for row in view.rows])
             content = path.read_bytes()
         return Response(
             content=content,
@@ -279,6 +282,15 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         if dataset is None:
             raise HTTPException(status_code=404, detail="No consolidated dataset yet")
         return dataset
+
+    @app.get("/api/documents/{document_id}/figures")
+    def get_figures(document_id: str) -> FiguresView:
+        """The chart readings, read straight from their own file: they are never part of the dataset."""
+        summary = require_document(document_id)
+        figures = shown_figures(summary.document_id, summary.name, settings)
+        if figures is None:
+            raise HTTPException(status_code=404, detail="No figure readings")
+        return figures
 
     @app.get("/api/documents/{document_id}/dataset.xlsx")
     def get_dataset_excel(document_id: str) -> FileResponse:
