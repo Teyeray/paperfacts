@@ -1,0 +1,421 @@
+{
+  "doc_id": "08562126a9b9aab8",
+  "sha256": "08562126a9b9aab80b9485a5ce4048385d38ceaa49ad81f64536dc523a52704c",
+  "title": "Guillén & Herrero 2006, Polycrystalline growth and recrystallization processes in sputtered ITO thin films (Thin Solid Films 510:260)",
+  "notes": [
+    "Six films in Table 1: 170/350/700 nm ITO as-deposited at room temperature and each annealed in vacuum at 350 °C (20 min). A seventh, 350 nm annealed at 250 °C, is named in the text and Fig. 4; its only number (12 Ω/sq) is in the Fig. 4 legend.",
+    "Tvis/Tir are averages over 400-800 nm and 800-1500 nm with the glass substrate discounted; both are acceptable transmittance answers.",
+    "Power is given only as a density ('below 2 W/cm2'), so sputtering_power has no gold value; the O2/Ar partial-pressure ratio is not stated as a number.",
+    "Substrate temperature is 'room temperature'; the 20-40 °C rise is a measurement on static substrates, recorded as ambiguous.",
+    "Deposition time is a range (0-40 min) for the whole thickness series, not per sample; base pressure 1e-4 Pa is not the working pressure."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "In2O3:SnO2 90:10 wt.%",
+        "raw": "an oxide ceramic target 90 wt.% In2O3 and 10 wt.% SnO2",
+        "page": 1,
+        "accept": [
+          "90\\s*wt\\.?\\s*%.*10\\s*wt",
+          "90\\s*:\\s*10",
+          "10\\s*wt\\.?\\s*%\\s*SnO"
+        ]
+      }
+    ]
+  },
+  "series": {
+    "mode": [
+      {
+        "value": "RF",
+        "raw": "Deposition of the ITO thin films was performed by rf-magnetron sputtering",
+        "page": 1
+      }
+    ],
+    "working_pressure": [
+      {
+        "value": 0.4,
+        "raw": "The process total pressure was kept at 4 × 10−1 Pa",
+        "page": 1
+      }
+    ],
+    "substrate_temperature": [
+      {
+        "value": null,
+        "raw": "Temperature measurements performed onto static substrates showed only a small increase from 20 to 40 °C",
+        "page": 1,
+        "ambiguous": true,
+        "why": "unheated substrate; 20-40 °C is a range measured on static substrates"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "ITO-170nm-asdep",
+      "description": "170 nm ITO, as deposited at RT",
+      "match": {
+        "fields": {
+          "thickness": 170
+        },
+        "label": "as-?(dep|grown)",
+        "label_not": "anneal|ann\\d"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 170,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): t = 170 nm",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tvis = 91 %",
+            "page": 1,
+            "condition": "average 400-800 nm, glass substrate discounted"
+          },
+          {
+            "value": 90,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tir = 90 %",
+            "page": 1,
+            "condition": "average 800-1500 nm, glass substrate discounted"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 40,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Rsq = 40 Ω/sq",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00068,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): ρ×10^4 = 6.8 Ω cm",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-350nm-asdep",
+      "description": "350 nm ITO, as deposited at RT",
+      "match": {
+        "fields": {
+          "thickness": 350
+        },
+        "label": "as-?(dep|grown)",
+        "label_not": "anneal|ann\\d"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 350,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): t = 350 nm",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 89,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tvis = 89 %",
+            "page": 1,
+            "condition": "average 400-800 nm, glass substrate discounted"
+          },
+          {
+            "value": 84,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tir = 84 %",
+            "page": 1,
+            "condition": "average 800-1500 nm, glass substrate discounted"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 23,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Rsq = 23 Ω/sq",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.0008,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): ρ×10^4 = 8.0 Ω cm",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-700nm-asdep",
+      "description": "700 nm ITO, as deposited at RT",
+      "match": {
+        "fields": {
+          "thickness": 700
+        },
+        "label": "as-?(dep|grown)",
+        "label_not": "anneal|ann\\d"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 700,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): t = 700 nm",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 86,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tvis = 86 %",
+            "page": 1,
+            "condition": "average 400-800 nm, glass substrate discounted"
+          },
+          {
+            "value": 68,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tir = 68 %",
+            "page": 1,
+            "condition": "average 800-1500 nm, glass substrate discounted"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 12,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Rsq = 12 Ω/sq",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00084,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): ρ×10^4 = 8.4 Ω cm",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-170nm-ann350",
+      "description": "170 nm ITO, vacuum-annealed 350 °C 20 min",
+      "match": {
+        "fields": {
+          "thickness": 170
+        },
+        "label": "ann\\D{0,25}350"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 170,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): t = 170 nm",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 95,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tvis = 95 %",
+            "page": 1,
+            "condition": "average 400-800 nm, glass substrate discounted"
+          },
+          {
+            "value": 74,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tir = 74 %",
+            "page": 1,
+            "condition": "average 800-1500 nm, glass substrate discounted"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 15,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Rsq = 15 Ω/sq",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00025,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): ρ×10^4 = 2.5 Ω cm",
+            "page": 1
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 350,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tann = 350 °C",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 20,
+            "raw": "annealing of the sputtered layers was carried out at temperature between 250 and 350 °C during 20 min",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-350nm-ann350",
+      "description": "350 nm ITO, vacuum-annealed 350 °C 20 min",
+      "match": {
+        "fields": {
+          "thickness": 350
+        },
+        "label": "ann\\D{0,25}350"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 350,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): t = 350 nm",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tvis = 91 %",
+            "page": 1,
+            "condition": "average 400-800 nm, glass substrate discounted"
+          },
+          {
+            "value": 53,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tir = 53 %",
+            "page": 1,
+            "condition": "average 800-1500 nm, glass substrate discounted"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 7,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Rsq = 7 Ω/sq",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00024,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): ρ×10^4 = 2.4 Ω cm",
+            "page": 1
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 350,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tann = 350 °C",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 20,
+            "raw": "annealing of the sputtered layers was carried out at temperature between 250 and 350 °C during 20 min",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-700nm-ann350",
+      "description": "700 nm ITO, vacuum-annealed 350 °C 20 min",
+      "match": {
+        "fields": {
+          "thickness": 700
+        },
+        "label": "ann\\D{0,25}350"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 700,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): t = 700 nm",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tvis = 88 %",
+            "page": 1,
+            "condition": "average 400-800 nm, glass substrate discounted"
+          },
+          {
+            "value": 47,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tir = 47 %",
+            "page": 1,
+            "condition": "average 800-1500 nm, glass substrate discounted"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 4,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Rsq = 4 Ω/sq",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00028,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): ρ×10^4 = 2.8 Ω cm",
+            "page": 1
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 350,
+            "raw": "Table 1 (t, Tann, Tvis, Tir, Rsq, rho x 10^4): Tann = 350 °C",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 20,
+            "raw": "annealing of the sputtered layers was carried out at temperature between 250 and 350 °C during 20 min",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-350nm-ann250",
+      "description": "350 nm ITO, vacuum-annealed 250 °C 20 min (Fig. 4 b)",
+      "match": {
+        "fields": {
+          "thickness": 350
+        },
+        "label": "ann\\D{0,25}250"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 350,
+            "raw": "Fig. 4 ... for 350 nm thick ITO samples: (b) after 250 °C heating",
+            "page": 2
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 250,
+            "raw": "annealing at 250 °C leads to a steeper absorption cut-off",
+            "page": 3
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 20,
+            "raw": "annealing ... at temperature between 250 and 350 °C during 20 min",
+            "page": 1
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 12,
+            "raw": "Fig. 4 legend: glass/ITO, 250°C heated, 12 Ω/sq",
+            "page": 2,
+            "figure_only": true
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,413 @@
+{
+  "doc_id": "c3ab31d08acc066b",
+  "sha256": "c3ab31d08acc066b98a0c5589763aba9160a631dfb0a8abde955b9b1332cd9bb",
+  "title": "Damgaci et al. 2024, Impact of Temperature Optimization of ITO Thin Film on Tandem Solar Cell Efficiency (Materials 17:2784)",
+  "notes": [
+    "Six 100 nm ITO films on soda-lime glass, deposited at RT (25 °C), 150, 175, 200, 225, 250 °C; Ar 200 sccm, O2 3.3 sccm, 1850 W constant (Table 1).",
+    "The PDF carries a second, peer-review text layer (duplicated paragraphs/tables); only the typeset page is used.",
+    "Mode is written 'DC magnetron sputtering' but 'operating at 13.56 MHz' (an RF frequency): DC is recorded as ambiguous.",
+    "'working pressure of 7.3 × 10−6 mbar' is the base pressure reached before deposition; the deposition pressure is 2.1 × 10−2 mbar = 2.1 Pa.",
+    "Rsh is stated in text only for ITO-RT (102.7), ITO-200 (75.1) and ITO-250 (59.9); the others are Fig. 7 data labels. The text's resistivity '102.7 × 10−3 ohm.cm' contradicts Fig. 7 (1.027 × 10−3) and is ambiguous.",
+    "Table 4 transmittance is of film plus glass substrate. The 40 nm rear ITO and the 77 nm top-cell ITO are device layers (ambiguous samples). O2/Ar ratio is never stated as a percentage."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "ITO, In2O3:SnO2 90:10 (mass)",
+        "raw": "The sputtering target was ITO, with a mass ratio of In2O3 to SnO2 of 90% to 10%",
+        "page": 0,
+        "accept": [
+          "90\\s*:\\s*10",
+          "90\\s*%.*10\\s*%",
+          "90\\s*wt",
+          "10\\s*wt\\.?\\s*%\\s*SnO"
+        ]
+      }
+    ]
+  },
+  "series": {
+    "mode": [
+      {
+        "value": "DC",
+        "raw": "The films were deposited using direct current (DC) magnetron sputtering ... operating at 13.56 MHz",
+        "page": 2,
+        "ambiguous": true,
+        "why": "DC is stated, but 13.56 MHz is an RF frequency"
+      }
+    ],
+    "ar_flow_rate": [
+      {
+        "value": 200,
+        "raw": "keeping the gas ratios (Ar: 200 sccm and O2: 3.3 sccm) and power (1850 W) constant",
+        "page": 2
+      }
+    ],
+    "o2_flow_rate": [
+      {
+        "value": 3.3,
+        "raw": "keeping the gas ratios (Ar: 200 sccm and O2: 3.3 sccm)",
+        "page": 2
+      }
+    ],
+    "sputtering_power": [
+      {
+        "value": 1850,
+        "raw": "and power (1850 W) constant",
+        "page": 2
+      }
+    ],
+    "working_pressure": [
+      {
+        "value": 2.1,
+        "raw": "A deposition pressure of 2.1 × 10−2 mbar was maintained",
+        "page": 2
+      }
+    ],
+    "thickness": [
+      {
+        "value": 100,
+        "raw": "resulting in ITO films with a thickness of 100 nm",
+        "page": 2
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "ITO-RT",
+      "description": "100 nm ITO deposited at RT (25 °C)",
+      "match": {
+        "label": "(\\bRT\\b|room)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 25,
+            "raw": "temperatures ranging from room temperature (25 °C) to 250 °C",
+            "page": 0
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 77,
+            "raw": "Table 4: Average Transmittance (400-1200 nm) 77",
+            "page": 8,
+            "condition": "average 400-1200 nm, film with glass substrate"
+          },
+          {
+            "value": 77,
+            "raw": "Table 4: Transmittance (550 nm) 77",
+            "page": 8,
+            "condition": "550 nm, film with glass substrate"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 102.7,
+            "raw": "the highest Rsh value was 102.7 Ohm/sq in ITO-RT",
+            "page": 10
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.1027,
+            "raw": "the highest value was obtained as 102.7 × 10−3 ohm.cm in ITO-RT film",
+            "page": 10,
+            "ambiguous": true,
+            "why": "text writes the sheet-resistance number again with ×10^-3 ohm.cm; Fig. 7 and Rsh × 100 nm give 1e-3 scale, so the text value contradicts the figure"
+          },
+          {
+            "value": 0.001027,
+            "raw": "Fig. 7 data label 1.027 (ohm.cm)×10^-3",
+            "page": 10,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-150",
+      "description": "100 nm ITO deposited at 150 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 150
+        }
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 150,
+            "raw": "Table 1: ITO-150, Deposition Temperature 150",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 78,
+            "raw": "Table 4: Average Transmittance (400-1200 nm) 78",
+            "page": 8,
+            "condition": "average 400-1200 nm, film with glass substrate"
+          },
+          {
+            "value": 78,
+            "raw": "Table 4: Transmittance (550 nm) 78",
+            "page": 8,
+            "condition": "550 nm, film with glass substrate"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 98.4,
+            "raw": "Fig. 7 data label 98.4",
+            "page": 10,
+            "figure_only": true
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.000984,
+            "raw": "Fig. 7 data label 0.984 (ohm.cm)×10^-3",
+            "page": 10,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-175",
+      "description": "100 nm ITO deposited at 175 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 175
+        }
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 175,
+            "raw": "Table 1: ITO-175, Deposition Temperature 175",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 78,
+            "raw": "Table 4: Average Transmittance (400-1200 nm) 78",
+            "page": 8,
+            "condition": "average 400-1200 nm, film with glass substrate"
+          },
+          {
+            "value": 78,
+            "raw": "Table 4: Transmittance (550 nm) 78",
+            "page": 8,
+            "condition": "550 nm, film with glass substrate"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 90.5,
+            "raw": "Fig. 7 data label 90.5",
+            "page": 10,
+            "figure_only": true
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.0009050000000000001,
+            "raw": "Fig. 7 data label 0.905 (ohm.cm)×10^-3",
+            "page": 10,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-200",
+      "description": "100 nm ITO deposited at 200 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 200
+        }
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 200,
+            "raw": "Table 1: ITO-200, Deposition Temperature 200",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 80,
+            "raw": "Table 4: Average Transmittance (400-1200 nm) 80",
+            "page": 8,
+            "condition": "average 400-1200 nm, film with glass substrate"
+          },
+          {
+            "value": 78,
+            "raw": "Table 4: Transmittance (550 nm) 78",
+            "page": 8,
+            "condition": "550 nm, film with glass substrate"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 75.1,
+            "raw": "the sheet resistance was 75.1 Ω/sq for ITO deposited at 200 °C",
+            "page": 0
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.000751,
+            "raw": "Fig. 7 data label 0.751 (ohm.cm)×10^-3",
+            "page": 10,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-225",
+      "description": "100 nm ITO deposited at 225 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 225
+        }
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 225,
+            "raw": "Table 1: ITO-225, Deposition Temperature 225",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 79,
+            "raw": "Table 4: Average Transmittance (400-1200 nm) 79",
+            "page": 8,
+            "condition": "average 400-1200 nm, film with glass substrate"
+          },
+          {
+            "value": 79,
+            "raw": "Table 4: Transmittance (550 nm) 79",
+            "page": 8,
+            "condition": "550 nm, film with glass substrate"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 73.8,
+            "raw": "Fig. 7 data label 73.8",
+            "page": 10,
+            "figure_only": true
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.000738,
+            "raw": "Fig. 7 data label 0.738 (ohm.cm)×10^-3",
+            "page": 10,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-250",
+      "description": "100 nm ITO deposited at 250 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250
+        }
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "Table 1: ITO-250, Deposition Temperature 250",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 79,
+            "raw": "Table 4: Average Transmittance (400-1200 nm) 79",
+            "page": 8,
+            "condition": "average 400-1200 nm, film with glass substrate"
+          },
+          {
+            "value": 76,
+            "raw": "Table 4: Transmittance (550 nm) 76",
+            "page": 8,
+            "condition": "550 nm, film with glass substrate"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 59.9,
+            "raw": "the lowest Rsh value was 59.9 Ohm/sq in ITO-250",
+            "page": 10
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.0599,
+            "raw": "the lowest value was obtained as 59.9 × 10−3 ohm.cm in ITO-250",
+            "page": 10,
+            "ambiguous": true,
+            "why": "text writes the sheet-resistance number again with ×10^-3 ohm.cm; Fig. 7 and Rsh × 100 nm give 1e-3 scale, so the text value contradicts the figure"
+          },
+          {
+            "value": 0.000599,
+            "raw": "Fig. 7 data label 0.599 (ohm.cm)×10^-3",
+            "page": 10,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-rear-40nm",
+      "description": "40 nm rear ITO of the HJT bottom cell (device layer)",
+      "ambiguous": true,
+      "why": "device layer, not a studied film",
+      "match": {
+        "fields": {
+          "thickness": 40
+        }
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 40,
+            "raw": "deposition of 40 nm ITO and 220 nm silver (Ag) layers using the PVD system",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-top-77nm",
+      "description": "77 nm top ITO of the tandem cell (device layer)",
+      "ambiguous": true,
+      "why": "device layer, not a studied film",
+      "match": {
+        "fields": {
+          "thickness": 77
+        }
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 77,
+            "raw": "The layer thicknesses of the top cell were as follows: ITO 77 nm",
+            "page": 12
+          }
+        ]
+      }
+    }
+  ]
+}

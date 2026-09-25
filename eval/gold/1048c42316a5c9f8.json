@@ -1,0 +1,523 @@
+{
+  "doc_id": "1048c42316a5c9f8",
+  "sha256": "1048c42316a5c9f8c02a50e3371fe8965fbaa830cb4fb9704b72abc96b5646ad",
+  "title": "Seok et al. 2019, ZnO:Ga-graded ITO electrodes to control interface between PCBM and ITO in planar perovskite solar cells (STAM 20:389)",
+  "notes": [
+    "Seven electrodes: 125 nm ITO monolayer (0), GZO/ITO bilayers with 15 and 20 nm GZO, and GZO-graded ITO G5/G10/G15/G20 (graded region 5-20 nm, total 150 nm). All were RTA-annealed at 600 °C for 10 min.",
+    "ITO: DC 100 W, Ar 20 sccm, 3 mTorr, 4-in ITO target, room temperature. GZO: RF, ramped 0→180 W during grading; GZO target composition and bilayer GZO conditions are not stated.",
+    "Text values: G15 Rsh 15.6 Ω/sq, ρ 2.3e-4 Ω cm, T 95% @550 nm; ITO monolayer T 92.79%; bilayer T 90.43% (which bilayer unclear). Everything else for the electrodes is Fig. 2 only and not recorded.",
+    "The 20 nm GZO single layer (T 96.04%) is optimised only in the SI; recorded as an ambiguous sample. Table 1 FoM values and the 6.7 nm MoO3 / 100 nm Ag / PCBM layers are not fields.",
+    "Rotation 30 rpm is stated for bilayer and graded sputtering; for the ITO monolayer it is only implied."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "ITO",
+        "raw": "using a 4-in ITO target (Dasom RMS)",
+        "page": 1,
+        "ambiguous": true,
+        "why": "ITO and GZO targets co-sputtered; neither composition is stated",
+        "accept": [
+          "\\bITO\\b",
+          "indium tin oxide",
+          "GZO",
+          "Ga"
+        ]
+      }
+    ],
+    "inch": [
+      {
+        "value": 4,
+        "raw": "using a 4-in ITO target (Dasom RMS)",
+        "page": 1
+      }
+    ]
+  },
+  "series": {
+    "ar_flow_rate": [
+      {
+        "value": 20,
+        "raw": "Ar flow rate of 20 sccm",
+        "page": 1
+      }
+    ],
+    "working_pressure": [
+      {
+        "value": 0.399966,
+        "raw": "a working pressure of 3 mTorr",
+        "page": 1
+      }
+    ],
+    "annealing_temperature": [
+      {
+        "value": 600,
+        "raw": "all samples were rapidly thermally annealed at a temperature of 600 °C for 10 min",
+        "page": 2
+      }
+    ],
+    "annealing_time": [
+      {
+        "value": 10,
+        "raw": "rapidly thermally annealed at a temperature of 600 °C for 10 min",
+        "page": 2
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "ITO-monolayer",
+      "description": "125 nm ITO monolayer (0), DC 100 W, RTA 600 °C",
+      "match": {
+        "label": "monolayer",
+        "label_not": "graded|bilayer"
+      },
+      "fields": {
+        "mode": [
+          {
+            "value": "DC",
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1
+          }
+        ],
+        "sputtering_power": [
+          {
+            "value": 100,
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1
+          }
+        ],
+        "rotation_speed": [
+          {
+            "value": 30,
+            "raw": "During the bilayer sputtering or graded sputtering, the glass substrate rotating constantly at 30 rpm",
+            "page": 2,
+            "ambiguous": true,
+            "why": "stated for bilayer and graded sputtering only"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 125,
+            "raw": "Compared to 125-nm-thick ITO monolayer and GZO/ITO bilayer",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 92.79,
+            "raw": "the GZO-graded ITO showed higher optical transmittance than ITO monolayer (92.79%)",
+            "page": 4,
+            "condition": "550 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "GZO-ITO-bilayer-15",
+      "description": "GZO(15 nm)/ITO bilayer, two-step sputtering, RTA 600 °C",
+      "match": {
+        "label": "(?=.*bilayer)(?=.*\\b15)"
+      },
+      "fields": {
+        "mode": [
+          {
+            "value": "DC+RF",
+            "raw": "we prepared GZO/ITO bilayer electrode with 15 and 20-nm-thick GZO ETL using two-step sputtering",
+            "page": 1,
+            "ambiguous": true,
+            "why": "two-step sputtering; the GZO step's power mode is not stated for the bilayer"
+          }
+        ],
+        "rotation_speed": [
+          {
+            "value": 30,
+            "raw": "During the bilayer sputtering or graded sputtering, the glass substrate rotating constantly at 30 rpm",
+            "page": 2
+          }
+        ],
+        "sputtering_power": [
+          {
+            "value": 100,
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "ITO layer only; GZO layer power not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 15,
+            "raw": "GZO/ITO bilayer electrode with 15 and 20-nm-thick GZO ETL",
+            "page": 1,
+            "ambiguous": true,
+            "why": "GZO top layer only; the total is not stated in text (Fig. 2c legend: GZO(15nm)/ITO(125nm))"
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 90.43,
+            "raw": "The GZO/ITO bilayer cathode showed slightly lower optical transmittance of 90.43% at a wavelength of 550 nm",
+            "page": 3,
+            "condition": "550 nm",
+            "ambiguous": true,
+            "why": "not said which bilayer (15 or 20 nm GZO)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "GZO-ITO-bilayer-20",
+      "description": "GZO(20 nm)/ITO bilayer, two-step sputtering, RTA 600 °C",
+      "match": {
+        "label": "(?=.*bilayer)(?=.*\\b20)"
+      },
+      "fields": {
+        "mode": [
+          {
+            "value": "DC+RF",
+            "raw": "we prepared GZO/ITO bilayer electrode with 15 and 20-nm-thick GZO ETL using two-step sputtering",
+            "page": 1,
+            "ambiguous": true,
+            "why": "two-step sputtering; the GZO step's power mode is not stated for the bilayer"
+          }
+        ],
+        "rotation_speed": [
+          {
+            "value": 30,
+            "raw": "During the bilayer sputtering or graded sputtering, the glass substrate rotating constantly at 30 rpm",
+            "page": 2
+          }
+        ],
+        "sputtering_power": [
+          {
+            "value": 100,
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "ITO layer only; GZO layer power not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 20,
+            "raw": "GZO/ITO bilayer electrode with 15 and 20-nm-thick GZO ETL",
+            "page": 1,
+            "ambiguous": true,
+            "why": "GZO top layer only; the total is not stated in text (Fig. 2c legend: GZO(15nm)/ITO(125nm))"
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 90.43,
+            "raw": "The GZO/ITO bilayer cathode showed slightly lower optical transmittance of 90.43% at a wavelength of 550 nm",
+            "page": 3,
+            "condition": "550 nm",
+            "ambiguous": true,
+            "why": "not said which bilayer (15 or 20 nm GZO)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "G5",
+      "description": "GZO-graded ITO, 5 nm graded region, 150 nm total",
+      "match": {
+        "label": "\\bG5\\b|(?=.*grad)(?=.*\\b5[- ]?nm)",
+        "label_not": "bilayer"
+      },
+      "fields": {
+        "mode": [
+          {
+            "value": "DC+RF",
+            "raw": "Graded GZO layer was embedded onto ITO by DC and RF magnetron co-sputtering",
+            "page": 1
+          }
+        ],
+        "rotation_speed": [
+          {
+            "value": 30,
+            "raw": "During the bilayer sputtering or graded sputtering, the glass substrate rotating constantly at 30 rpm",
+            "page": 2
+          }
+        ],
+        "sputtering_power": [
+          {
+            "value": 100,
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "ITO DC power; the graded region ramps ITO 100→0 W and GZO 0→180 W RF"
+          },
+          {
+            "value": 180,
+            "raw": "RF power applied to GZO target was increased from 0 to 180 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "end point of the GZO RF ramp"
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 1.4666666666666666,
+            "raw": "simultaneously for 88 s as shown in power profile in Figure 1(a)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "duration of the graded ramp only; Figure S1 varies the profile with graded thickness"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 150,
+            "raw": "The total thickness of GZO-graded ITO film was fixed at 150 nm",
+            "page": 1
+          },
+          {
+            "value": 5,
+            "raw": "The GZO-graded region thickness on ITO electrode was fixed at 5, 10, 15, and 20 nm (G5)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "thickness of the graded region only, not the whole electrode"
+          }
+        ]
+      }
+    },
+    {
+      "id": "G10",
+      "description": "GZO-graded ITO, 10 nm graded region, 150 nm total",
+      "match": {
+        "label": "\\bG10\\b|(?=.*grad)(?=.*\\b10[- ]?nm)",
+        "label_not": "bilayer"
+      },
+      "fields": {
+        "mode": [
+          {
+            "value": "DC+RF",
+            "raw": "Graded GZO layer was embedded onto ITO by DC and RF magnetron co-sputtering",
+            "page": 1
+          }
+        ],
+        "rotation_speed": [
+          {
+            "value": 30,
+            "raw": "During the bilayer sputtering or graded sputtering, the glass substrate rotating constantly at 30 rpm",
+            "page": 2
+          }
+        ],
+        "sputtering_power": [
+          {
+            "value": 100,
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "ITO DC power; the graded region ramps ITO 100→0 W and GZO 0→180 W RF"
+          },
+          {
+            "value": 180,
+            "raw": "RF power applied to GZO target was increased from 0 to 180 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "end point of the GZO RF ramp"
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 1.4666666666666666,
+            "raw": "simultaneously for 88 s as shown in power profile in Figure 1(a)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "duration of the graded ramp only; Figure S1 varies the profile with graded thickness"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 150,
+            "raw": "The total thickness of GZO-graded ITO film was fixed at 150 nm",
+            "page": 1
+          },
+          {
+            "value": 10,
+            "raw": "The GZO-graded region thickness on ITO electrode was fixed at 5, 10, 15, and 20 nm (G10)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "thickness of the graded region only, not the whole electrode"
+          }
+        ]
+      }
+    },
+    {
+      "id": "G15",
+      "description": "GZO-graded ITO, 15 nm graded region, 150 nm total (optimum)",
+      "match": {
+        "label": "\\bG15\\b|(?=.*grad)(?=.*\\b15[- ]?nm)",
+        "label_not": "bilayer"
+      },
+      "fields": {
+        "mode": [
+          {
+            "value": "DC+RF",
+            "raw": "Graded GZO layer was embedded onto ITO by DC and RF magnetron co-sputtering",
+            "page": 1
+          }
+        ],
+        "rotation_speed": [
+          {
+            "value": 30,
+            "raw": "During the bilayer sputtering or graded sputtering, the glass substrate rotating constantly at 30 rpm",
+            "page": 2
+          }
+        ],
+        "sputtering_power": [
+          {
+            "value": 100,
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "ITO DC power; the graded region ramps ITO 100→0 W and GZO 0→180 W RF"
+          },
+          {
+            "value": 180,
+            "raw": "RF power applied to GZO target was increased from 0 to 180 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "end point of the GZO RF ramp"
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 1.4666666666666666,
+            "raw": "simultaneously for 88 s as shown in power profile in Figure 1(a)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "duration of the graded ramp only; Figure S1 varies the profile with graded thickness"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 150,
+            "raw": "The total thickness of GZO-graded ITO film was fixed at 150 nm",
+            "page": 1
+          },
+          {
+            "value": 15,
+            "raw": "The GZO-graded region thickness on ITO electrode was fixed at 5, 10, 15, and 20 nm (G15)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "thickness of the graded region only, not the whole electrode"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 15.6,
+            "raw": "the 15-nm-thick GZO-graded ITO (G15) electrode showed that the lowest sheet resistance is 15.6 Ohm/square",
+            "page": 3
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00023,
+            "raw": "At optimized graded thickness of 15 nm, the GZO–ITO combined electrode showed ... a resistivity of 2.3 × 10−4 Ohm cm",
+            "page": 0
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 95,
+            "raw": "Then 15-nm-thick GZO-graded ITO cathode showed the highest optical transmittance of 95% at a wavelength of 550 nm",
+            "page": 4,
+            "condition": "550 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "G20",
+      "description": "GZO-graded ITO, 20 nm graded region, 150 nm total",
+      "match": {
+        "label": "\\bG20\\b|(?=.*grad)(?=.*\\b20[- ]?nm)",
+        "label_not": "bilayer"
+      },
+      "fields": {
+        "mode": [
+          {
+            "value": "DC+RF",
+            "raw": "Graded GZO layer was embedded onto ITO by DC and RF magnetron co-sputtering",
+            "page": 1
+          }
+        ],
+        "rotation_speed": [
+          {
+            "value": 30,
+            "raw": "During the bilayer sputtering or graded sputtering, the glass substrate rotating constantly at 30 rpm",
+            "page": 2
+          }
+        ],
+        "sputtering_power": [
+          {
+            "value": 100,
+            "raw": "ITO film was deposited by applying a constant DC power of 100 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "ITO DC power; the graded region ramps ITO 100→0 W and GZO 0→180 W RF"
+          },
+          {
+            "value": 180,
+            "raw": "RF power applied to GZO target was increased from 0 to 180 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "end point of the GZO RF ramp"
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 1.4666666666666666,
+            "raw": "simultaneously for 88 s as shown in power profile in Figure 1(a)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "duration of the graded ramp only; Figure S1 varies the profile with graded thickness"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 150,
+            "raw": "The total thickness of GZO-graded ITO film was fixed at 150 nm",
+            "page": 1
+          },
+          {
+            "value": 20,
+            "raw": "The GZO-graded region thickness on ITO electrode was fixed at 5, 10, 15, and 20 nm (G20)",
+            "page": 1,
+            "ambiguous": true,
+            "why": "thickness of the graded region only, not the whole electrode"
+          }
+        ]
+      }
+    },
+    {
+      "id": "GZO-single-20nm",
+      "description": "optimised 20 nm GZO single layer (SI)",
+      "ambiguous": true,
+      "why": "comparison film optimised in the SI only; its deposition conditions are not in the paper",
+      "match": {
+        "label": "single",
+        "label_not": "bilayer|graded|monolayer"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 20,
+            "raw": "the optical transmittance of optimized GZO single layer with 20-nm thickness",
+            "page": 4
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 96.04,
+            "raw": "due to high optical transmittance (96.04%) of GZO single layer",
+            "page": 4,
+            "condition": "550 nm"
+          }
+        ]
+      }
+    }
+  ]
+}

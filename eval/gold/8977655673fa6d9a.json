@@ -1,0 +1,604 @@
+{
+  "doc_id": "8977655673fa6d9a",
+  "sha256": "8977655673fa6d9ae01cdbf51b9004467fdfb45e6cb7bb1b39fe4222e2e898f4",
+  "title": "Chen et al. 2025, Indium-less and indium-free inverted perovskite solar cells using sputtered tin oxide transparent electrodes (Solar Energy 287:113235)",
+  "notes": [
+    "Four characterised electrodes (Table 1): 140 nm ATO (optimised: RF 110 W, O2/Ar 6 %, 1.0 Pa, 500 °C), 280 nm ATO, 165 nm ITO (RF 60 W, pure Ar, 0.4 Pa), and a 140 nm ATO / 25 nm ITO bilayer.",
+    "Two targets: ATO Sb2O5:SnO2 = 5:95 wt% and ITO In2O3:SnO2 = 90:10 wt%. The ATO sweep ranges (O2/Ar 1-12.5 %, 0.6-1.2 Pa, RT-600 °C, 5-60 min) are ranges, not per-sample values.",
+    "Sweep points named in text (RT / 400 / 600 °C; 70 / 400 nm) and the 30 / 50 nm device electrodes (Table S1) have no conditions beyond one number: ambiguous samples.",
+    "Table 2 (stability) 'before' sheet resistances (ITO 34.1/33.2, ATO/ITO 210.3/223.2, ATO 1122.2/1200.1) disagree with Table 1 and are ambiguous; 'after' values are post-stress states and not recorded.",
+    "The abstract pairs 140 nm Hall data with 82.64 % transmittance, which the text later gives for the 280 nm film."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "Sb2O5:SnO2 = 5:95 wt%",
+        "raw": "an ATO ceramic target with a composition of Sb2O5:SnO2 = 5:95 wt% was utilized",
+        "page": 1,
+        "ambiguous": true,
+        "why": "two targets (ATO and ITO) for two film families; the field holds one composition",
+        "accept": [
+          "5\\s*:\\s*95",
+          "95\\s*:\\s*5",
+          "Sb2O5",
+          "\\bATO\\b",
+          "90\\s*:\\s*10",
+          "In2O3"
+        ]
+      }
+    ]
+  },
+  "series": {
+    "mode": [
+      {
+        "value": "RF",
+        "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W; ITO ... RF power of 60 W",
+        "page": 1
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "ATO-140nm",
+      "description": "140 nm ATO, optimised recipe",
+      "match": {
+        "fields": {
+          "thickness": 140
+        },
+        "label": "ATO",
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2,
+            "condition": "O2/Ar"
+          }
+        ],
+        "working_pressure": [
+          {
+            "value": 1.0,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 500,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2
+          }
+        ],
+        "thickness": [
+          {
+            "value": 140,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 701,
+            "raw": "Table 1: 140 nm ATO, sheet resistance 701",
+            "page": 2
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00981,
+            "raw": "Table 1: 140 nm ATO, resistivity 9.81 × 10-3",
+            "page": 2
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 82.82,
+            "raw": "The average transmittance in the visible spectrum of 380–780 nm for ATO and ITO films was 82.82 % and 81.99 %",
+            "page": 3,
+            "condition": "average 380-780 nm"
+          },
+          {
+            "value": 82.64,
+            "raw": "ATO films exhibited a carrier concentration, mobility, and average visible light transmittance of 1.88 × 1020 cm−3, 3.38 cm2/V⋅s, and 82.64 %",
+            "page": 0,
+            "condition": "average visible",
+            "ambiguous": true,
+            "why": "abstract pairs the 140 nm Hall data with the 280 nm film's transmittance"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-280nm",
+      "description": "280 nm ATO, indium-free front electrode",
+      "match": {
+        "fields": {
+          "thickness": 280
+        },
+        "label": "ATO",
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2,
+            "condition": "O2/Ar",
+            "ambiguous": true,
+            "why": "the optimised O2/Ar, pressure and temperature are stated for the 140 nm film; the 280 nm film is assumed to share them"
+          }
+        ],
+        "working_pressure": [
+          {
+            "value": 1.0,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2,
+            "ambiguous": true,
+            "why": "the optimised O2/Ar, pressure and temperature are stated for the 140 nm film; the 280 nm film is assumed to share them"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 500,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2,
+            "ambiguous": true,
+            "why": "the optimised O2/Ar, pressure and temperature are stated for the 140 nm film; the 280 nm film is assumed to share them"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 280,
+            "raw": "the 280 nm single-layer ATO film and the 140 nm ATO/25 nm ITO bilayer were selected",
+            "page": 4
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 583,
+            "raw": "Table 1: 280 nm ATO, 583; 'sheet resistances of ... 280 nm ATO films were measured to be ... 583 Ω'",
+            "page": 2
+          },
+          {
+            "value": 1122.2,
+            "raw": "Table 2: ATO Before Heat 1122.2",
+            "page": 3,
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          },
+          {
+            "value": 1200.1,
+            "raw": "Table 2: ATO Before Damp 1200.1",
+            "page": 3,
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.0163,
+            "raw": "Table 1: 280 nm ATO, resistivity 1.63 × 10-2",
+            "page": 2
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 82.64,
+            "raw": "The average transmittance of the 165 nm ITO, 140 nm ATO/25 nm ITO, and 280 nm ATO electrodes in the 380–780 nm wavelength range were 81.99 %, 81.90 %, and 82.64 %",
+            "page": 4,
+            "condition": "average 380-780 nm"
+          },
+          {
+            "value": 82.74,
+            "raw": "Table 2: ATO Before Heat Tavg 82.74",
+            "page": 3,
+            "condition": "average 380-780 nm",
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-165nm",
+      "description": "165 nm ITO reference, RF 60 W, pure Ar, 0.4 Pa",
+      "match": {
+        "label": "\\bITO\\b",
+        "label_not": "ATO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 60,
+            "raw": "The ITO films were deposited with base vacuum pressure of 5 × 10-4 Pa, RF power of 60 W",
+            "page": 1
+          }
+        ],
+        "working_pressure": [
+          {
+            "value": 0.4,
+            "raw": "RF power of 60 W, pure Ar gas pressure of 0.4 Pa",
+            "page": 1
+          }
+        ],
+        "o2_ratio": [
+          {
+            "value": 0,
+            "raw": "pure Ar gas pressure of 0.4 Pa",
+            "page": 1,
+            "condition": "O2/Ar",
+            "ambiguous": true,
+            "why": "pure Ar; no O2 share is stated as a number"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 165,
+            "raw": "The inverted PSCs using 165 nm ITO",
+            "page": 0
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 21,
+            "raw": "Table 1: 165 nm ITO, 21",
+            "page": 2
+          },
+          {
+            "value": 34.1,
+            "raw": "Table 2: ITO Before Heat 34.1",
+            "page": 3,
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          },
+          {
+            "value": 33.2,
+            "raw": "Table 2: ITO Before Damp 33.2",
+            "page": 3,
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.000354,
+            "raw": "Table 1: 165 nm ITO, resistivity 3.54 × 10-4",
+            "page": 2
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 81.99,
+            "raw": "The average transmittance of the 165 nm ITO ... in the 380–780 nm wavelength range were 81.99 %",
+            "page": 4,
+            "condition": "average 380-780 nm"
+          },
+          {
+            "value": 82.08,
+            "raw": "Table 2: ITO Before Heat Tavg 82.08",
+            "page": 3,
+            "condition": "average 380-780 nm",
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-ITO-bilayer",
+      "description": "140 nm ATO / 25 nm ITO bilayer",
+      "match": {
+        "label": "ATO\\s*/\\s*ITO|bilayer"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO ... RF power of 110 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "bilayer: the ATO and ITO layers were sputtered with different recipes"
+          },
+          {
+            "value": 60,
+            "raw": "ITO ... RF power of 60 W",
+            "page": 1,
+            "ambiguous": true,
+            "why": "bilayer: the ATO and ITO layers were sputtered with different recipes"
+          }
+        ],
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2,
+            "condition": "O2/Ar",
+            "ambiguous": true,
+            "why": "bilayer: the ATO and ITO layers were sputtered with different recipes"
+          }
+        ],
+        "working_pressure": [
+          {
+            "value": 1.0,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2,
+            "ambiguous": true,
+            "why": "bilayer: the ATO and ITO layers were sputtered with different recipes"
+          },
+          {
+            "value": 0.4,
+            "raw": "pure Ar gas pressure of 0.4 Pa",
+            "page": 1,
+            "ambiguous": true,
+            "why": "bilayer: the ATO and ITO layers were sputtered with different recipes"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 500,
+            "raw": "the optimized sputtering conditions with selected with O2/Ar ratio of 6 %, pressure of 1.0 Pa, substrate temperature of 500 °C, and films thickness of 140 nm",
+            "page": 2,
+            "ambiguous": true,
+            "why": "bilayer: the ATO and ITO layers were sputtered with different recipes"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 165,
+            "raw": "140 nm ATO/25 nm ITO bilayer",
+            "page": 1,
+            "ambiguous": true,
+            "why": "sum of the two layers; no total is stated"
+          },
+          {
+            "value": 140,
+            "raw": "140 nm ATO/25 nm ITO bilayer",
+            "page": 1,
+            "ambiguous": true,
+            "why": "ATO layer only"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 130,
+            "raw": "Table 1: ATO/ITO, 130",
+            "page": 2
+          },
+          {
+            "value": 210.3,
+            "raw": "Table 2: ATO/ITO Before Heat 210.3",
+            "page": 3,
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          },
+          {
+            "value": 223.2,
+            "raw": "Table 2: ATO/ITO Before Damp 223.2",
+            "page": 3,
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00214,
+            "raw": "Table 1: ATO/ITO, resistivity 2.14 × 10-3",
+            "page": 2
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 81.9,
+            "raw": "The average transmittance of the ... 140 nm ATO/25 nm ITO ... were ... 81.90 %",
+            "page": 4,
+            "condition": "average 380-780 nm"
+          },
+          {
+            "value": 81.97,
+            "raw": "Table 2: ATO/ITO Before Heat Tavg 81.97",
+            "page": 3,
+            "condition": "average 380-780 nm",
+            "ambiguous": true,
+            "why": "Table 2 values are before a stability test and disagree with Table 1 (which ATO thickness is not said)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-30nm",
+      "description": "30 nm ATO device electrode (Table S1)",
+      "ambiguous": true,
+      "why": "device electrode characterised only in the SI",
+      "match": {
+        "fields": {
+          "thickness": 30
+        },
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "thickness": [
+          {
+            "value": 30,
+            "raw": "Devices with ATO thicknesses of 280, 140, 50, and 30 nm",
+            "page": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-50nm",
+      "description": "50 nm ATO device electrode (Table S1)",
+      "ambiguous": true,
+      "why": "device electrode characterised only in the SI",
+      "match": {
+        "fields": {
+          "thickness": 50
+        },
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "thickness": [
+          {
+            "value": 50,
+            "raw": "Devices with ATO thicknesses of 280, 140, 50, and 30 nm",
+            "page": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-70nm",
+      "description": "70 nm ATO, thickness sweep point",
+      "ambiguous": true,
+      "why": "sweep point shown only in Fig. 1d; other conditions not stated",
+      "match": {
+        "label": "\\b70\\s*nm",
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "thickness": [
+          {
+            "value": 70,
+            "raw": "As the film thickness increased from 70 nm to 140 nm",
+            "page": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-400nm",
+      "description": "400 nm ATO, thickness sweep point",
+      "ambiguous": true,
+      "why": "sweep point shown only in Fig. S2c; other conditions not stated",
+      "match": {
+        "label": "\\b400\\s*nm",
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "thickness": [
+          {
+            "value": 400,
+            "raw": "further increasing the film thickness from 140 nm to 400 nm",
+            "page": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-RT",
+      "description": "ATO deposited at room temperature, sweep point",
+      "ambiguous": true,
+      "why": "sweep point shown only in Fig. 1c; other conditions not stated",
+      "match": {
+        "label": "(\\bRT\\b|room)",
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-400C",
+      "description": "ATO deposited at 400 °C, sweep point",
+      "ambiguous": true,
+      "why": "sweep point shown only in Fig. 1c; other conditions not stated",
+      "match": {
+        "label": "400\\s*°?\\s*C\\b",
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 400,
+            "raw": "the ATO films prepared at temperature of 400 °C or higher was crystallized",
+            "page": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "ATO-600C",
+      "description": "ATO deposited at 600 °C, sweep point",
+      "ambiguous": true,
+      "why": "sweep point shown only in Fig. 1c; other conditions not stated",
+      "match": {
+        "label": "600\\s*°?\\s*C\\b",
+        "label_not": "ITO"
+      },
+      "fields": {
+        "sputtering_power": [
+          {
+            "value": 110,
+            "raw": "ATO films were deposited under the following conditions: ... RF power of 110 W",
+            "page": 1
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 600,
+            "raw": "when the temperature further rose to 600 °C, the sheet resistance slightly increased",
+            "page": 2
+          }
+        ]
+      }
+    }
+  ]
+}
