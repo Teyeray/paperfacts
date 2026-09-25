@@ -31,6 +31,7 @@ _MULTIPLICATION = re.compile(r"[×✕✖⋅·]")
 # base of a power, not a number of its own.
 _DECORATION = re.compile(f"[^^{KEY_CHARACTERS}]+")
 _CARET = re.compile(r"\s*\^\s*")
+_EXPONENT = re.compile(r"[-+]?\d")
 
 
 def grounding_key(text: str) -> str:
@@ -137,10 +138,13 @@ def _continues_before(text: str, start: int) -> bool:
 
 def _continues_after(text: str, end: int) -> bool:
     """Whether a number continues past ``end``: a digit, a decimal point before a digit ("5" in "5.2"), or a
-    caret ("10" in "10^-4")."""
+    caret before an exponent ("10" in "10^-4"). A caret before anything else is no exponent -- a raised
+    unit, or a degree sign that escaped folding -- and the number before it is a number of its own.
+    """
     after = text[end] if end < len(text) else ""
     after2 = text[end + 1] if end + 1 < len(text) else ""
-    return after.isdigit() or after == "^" or (after == "." and after2.isdigit())
+    exponent = after == "^" and _EXPONENT.match(text, end + 1) is not None
+    return after.isdigit() or (after == "." and after2.isdigit()) or exponent
 
 
 def _grounded_across_boundary(

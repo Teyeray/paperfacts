@@ -118,19 +118,10 @@ def _pattern(keyword: str) -> re.Pattern[str]:
     return cached
 
 
-# LaTeX symbols a unit is written with, restored before the remaining commands are stripped: "300 $^{\circ}$C"
-# and "5 at.\%" otherwise lose the very character the unit patterns look for.
-_LATEX_SYMBOLS = {"\\circ": "°", "\\%": "%"}
-_RAISED_DEGREE = re.compile(r"\^\s*°")
-
-
 def _searchable(block: SourceBlock) -> str:
-    """The block as units are searched for: folded, LaTeX undone, lower case."""
-    text = normalize_text(block.content)
-    for command, symbol in _LATEX_SYMBOLS.items():
-        text = text.replace(command, symbol)
-    text = _RAISED_DEGREE.sub("°", delatex(text))
-    return _LATEX_COMMAND.sub(" ", text).lower()
+    """The block as units are searched for: folded, LaTeX undone (``delatex`` restores "°" and "%"), lower
+    case."""
+    return _LATEX_COMMAND.sub(" ", delatex(normalize_text(block.content))).lower()
 
 
 def _names(keywords: Sequence[str], text: str) -> int:

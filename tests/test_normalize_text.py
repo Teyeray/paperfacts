@@ -13,7 +13,7 @@ import unicodedata
 import pytest
 
 from paperfacts.fields import FIELD_BY_NAME
-from paperfacts.normalize import canonical_category, normalize_key, normalize_text, sample_key, text_key
+from paperfacts.normalize import canonical_category, delatex, normalize_key, normalize_text, sample_key, text_key
 
 # ---- Superscripts: must be handled before NFKC ------------------------------------------------------
 
@@ -275,3 +275,18 @@ def test_sample_key_folds_spellings_of_one_sample_alike(a, b):
 def test_sample_key_of_an_id_with_no_letters_or_digits_is_empty(blank):
     # An empty key is how extraction recognises an id it cannot use.
     assert sample_key(blank) == ""
+
+
+@pytest.mark.parametrize(
+    ("latex", "folded"),
+    [
+        ("500 $^{\\circ}$C", "500 ° C"),
+        ("500 $^\\circ$C", "500 ° C"),
+        ("25 ^{\\circ} C", "25 ° C"),
+        ("5 at.\\%", "5 at.%"),
+    ],
+)
+def test_delatex_restores_the_degree_and_percent_symbols(latex, folded):
+    # One table (normalize.LATEX_SYMBOLS) serves retrieval, grounding and unit parsing, so the three fold a
+    # LaTeX degree the same way.
+    assert " ".join(delatex(latex).split()) == folded

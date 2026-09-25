@@ -238,6 +238,15 @@ _WRAPPED_DIGITS = re.compile(r"(?<=[0-9.] )\s*\{\s*([0-9.])\s*\}")
 LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
 
 
+# LaTeX symbols a unit is written with, restored as the character before anything else is undone: "300
+# $^{\circ}$C" and "5 at.\%" otherwise lose the very character a unit is recognised by. The one table for
+# retrieval, grounding and unit parsing alike, so the three cannot fold the same text differently.
+LATEX_SYMBOLS = {"\\circ": "°", "\\%": "%"}
+# A degree sign typeset as a superscript ("^{°}" once \circ is restored) is just a degree sign; left as a
+# caret it reads as the start of an exponent, and "500" in "500 ^{\circ}C" as the base of a power.
+_RAISED_DEGREE = re.compile(r"\^\s*\{?\s*°\s*\}?")
+
+
 def delatex(text: str) -> str:
     """Undo the LaTeX MinerU produces for numbers in tables and formulas.
 
@@ -245,6 +254,9 @@ def delatex(text: str) -> str:
     prompt's "verbatim" rule keeps it that way. Spaces between digits are collapsed only when the text
     carries a LaTeX marker, so ordinary "10 20" is left alone.
     """
+    for command, symbol in LATEX_SYMBOLS.items():
+        text = text.replace(command, symbol)
+    text = _RAISED_DEGREE.sub("°", text)
     # A digit wrapped in a formatting command ("2 3 \\mathbf { 0 }", MinerU bolding a table cell's last digit)
     # is unwrapped first, so the run of spaced digits below still reads as one number.
     text = _WRAPPED_DIGITS.sub(r"\1", LATEX_WRAPPERS.sub("", text)) if "\\" in text else text

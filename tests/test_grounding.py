@@ -197,6 +197,16 @@ def test_ground_lane_leaves_everything_else_about_the_lane_unchanged():
         ("10^-4", "a resistivity of 10⁻⁴ Ω·cm", True, "the whole power matches"),
         ("10^-4", "a resistivity of $1 0 ^ { - 4 }$", True, "LaTeX power with spaced caret"),
         ("5", "the thickness was 5. The films", True, "a full stop is not a decimal point"),
+        # A raised degree sign is no exponent. MinerU's spellings, then PaddleOCR-VL's: 399 corpus temperatures
+        # stopped grounding when the caret after "500" was read as the start of a power.
+        ("500", "annealed at 500 $^{\\circ}$C for 1 h", True, "MinerU LaTeX degree"),
+        ("500", "annealed at 500 $^\\circ$C for 1 h", True, "MinerU LaTeX degree without braces"),
+        ("25", "at 25 ^{\\circ} C", True, "degree with the markers lost"),
+        ("150", "<td>$1 5 0 ^ { \\circ } \\mathrm { C }$</td>", True, "MinerU table cell"),
+        ("500", "annealed at 500 °C for 1 h", True, "PaddleOCR-VL degree sign"),
+        ("500", "annealed at 500℃ for 1 h", True, "PaddleOCR-VL degree Celsius sign"),
+        ("500", "annealed at $500^{\\circ}C$ for 1 h", True, "PaddleOCR-VL inline LaTeX"),
+        ("2", "an area of 1 cm$^{2}$", False, "a raised digit is still an exponent"),
     ],
 )
 def test_how_strictly_a_value_must_appear_in_the_block_it_cites(value_raw, block, grounded, why):
