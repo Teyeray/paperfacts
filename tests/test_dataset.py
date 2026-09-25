@@ -18,7 +18,7 @@ from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.records import FailedQuestion, FieldValue, TargetRecord
-from support.extraction import make_lane, make_sample
+from support.extraction import comparison_options, make_lane, make_sample
 from support.factories import DOC_ID
 
 
@@ -34,8 +34,8 @@ def dataset(a, b=None, matching=None, *, filename="paper.pdf"):
         unmatched_a=tuple(s.sample_id for s in a.samples), unmatched_b=tuple(s.sample_id for s in b.samples)
     )
     document = DocumentInput(document_id=DOC_ID, sha256=DOC_ID, pdf_path=Path(filename))
-    report = compare_lanes(a, b, matching)
-    return consolidate_document(document, {a.backend: a, b.backend: b}, report)
+    report = compare_lanes(a, b, matching, comparison_options())
+    return consolidate_document(document, {a.backend: a, b.backend: b}, report, comparison_options())
 
 
 def paired(a, b, *, confidence=1.0, filename="paper.pdf"):
@@ -627,7 +627,7 @@ def test_a_conflict_at_a_condition_narrowing_set_aside_does_not_refuse_the_chose
     assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
 
 
-def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell():
+def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell(tco_profile):
     # Fail closed: only a conflict wholly about candidates narrowing set aside is ignored. One whose values
     # match no candidate at all (a stale report, a changed normalisation) says nothing is known to be settled.
     spec = FIELD_BY_NAME["transmittance"]
@@ -642,10 +642,10 @@ def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell():
         FieldComparison(scope="sample:A|A", field="transmittance", status="conflict", a=stranger, b=None),
     ]
 
-    assert decide(spec, evidence, comparisons).status == "conflict"
+    assert decide(spec, evidence, comparisons, units=tco_profile.units).status == "conflict"
 
 
-def test_a_troubled_comparison_with_no_values_still_refuses_the_cell():
+def test_a_troubled_comparison_with_no_values_still_refuses_the_cell(tco_profile):
     # Nothing ties it to a condition narrowing set aside, so it is not known to be about another measurement.
     spec = FIELD_BY_NAME["transmittance"]
     evidence = [
@@ -658,7 +658,7 @@ def test_a_troubled_comparison_with_no_values_still_refuses_the_cell():
         FieldComparison(scope="sample:A|A", field="transmittance", status="ambiguous"),
     ]
 
-    assert decide(spec, evidence, comparisons).status == "ambiguous"
+    assert decide(spec, evidence, comparisons, units=tco_profile.units).status == "ambiguous"
 
 
 def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
@@ -852,10 +852,10 @@ def test_paper_selection_prefers_two_lane_agreement_then_stable_sample_id():
 
 def test_mismatched_document_ids_are_rejected():
     a, b = make_lane(), make_lane(backend="paddleocr_vl")
-    report = compare_lanes(a, b, SampleMatching())
+    report = compare_lanes(a, b, SampleMatching(), comparison_options())
     document = DocumentInput(document_id="b" * 64, sha256="b" * 64, pdf_path=Path("other.pdf"))
     with pytest.raises(ValueError, match="same PDF"):
-        consolidate_document(document, {a.backend: a, b.backend: b}, report)
+        consolidate_document(document, {a.backend: a, b.backend: b}, report, comparison_options())
 
 
 def test_the_json_view_survives_a_round_trip(tmp_path):
@@ -944,7 +944,12 @@ def test_the_display_name_is_the_filename_a_dataset_reports():
     a = make_lane(samples=[make_sample("A", [value("thickness", "100 nm")])])
     b = make_lane(backend="paddleocr_vl")
     matching = SampleMatching(unmatched_a=("A",))
-    result = consolidate_document(document, {a.backend: a, b.backend: b}, compare_lanes(a, b, matching))
+    result = consolidate_document(
+        document,
+        {a.backend: a, b.backend: b},
+        compare_lanes(a, b, matching, comparison_options()),
+        comparison_options(),
+    )
 
     assert result.filename == "Sputtered ITO.pdf"
     assert result.paper_row["filename"] == "Sputtered ITO.pdf"

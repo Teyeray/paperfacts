@@ -36,14 +36,14 @@ from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
 from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
 from paperfacts.figures import FigureReadings
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key
+from paperfacts.keys import ComparisonOptions, ExtractionOptions, comparison_key, extractor_key
 from paperfacts.llm import LlmClient, OpenAICompatibleClient
 from paperfacts.matching import match_samples
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.profile import default_profile
+from paperfacts.profile import DomainProfile, default_profile
 from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
@@ -242,7 +242,13 @@ def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
 
 
 def read_lane(
-    layout: DataLayout, document_id: str, backend: Backend, key: str, *, artifact: ParsedArtifact | None = None
+    layout: DataLayout,
+    document_id: str,
+    backend: Backend,
+    key: str,
+    profile: DomainProfile,
+    *,
+    artifact: ParsedArtifact | None = None,
 ) -> LaneExtraction | None:
     """A stored lane, re-deriving what is cheap: grounding against the artifact, then normalisation.
 
@@ -272,7 +278,7 @@ def read_lane(
         lane = ground_lane(
             lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks)
         )
-    return normalize_lane(lane)
+    return normalize_lane(lane, profile)
 
 
 def extract_document(
@@ -296,7 +302,7 @@ def extract_document(
     key = extractor_key(options)
     artifact = load_artifact(document, backend, settings)
     if not force:
-        cached = read_lane(layout, document.document_id, backend, key, artifact=artifact)
+        cached = read_lane(layout, document.document_id, backend, key, options.profile, artifact=artifact)
         if cached is not None and cached.failed_questions:
             # Only those questions reach the model again: their invalid answers were never cached.
             logger.info(
@@ -313,7 +319,7 @@ def extract_document(
         update={"artifact_sha256": artifact.content_hash()}
     )
     lane.write(layout.extraction_path(document.document_id, backend, key))
-    return normalize_lane(lane)
+    return normalize_lane(lane, options.profile)
 
 
 def compare_document(
@@ -337,7 +343,8 @@ def compare_document(
     layout = DataLayout(settings.data_root)
     profile = default_profile()
     options = ExtractionOptions.from_settings(settings, profile, client.model)
-    path = layout.comparison_path(document.document_id, extractor_key(options), comparison_key(profile))
+    comparison = ComparisonOptions.from_settings(settings, profile)
+    path = layout.comparison_path(document.document_id, extractor_key(options), comparison_key(comparison))
     if lanes is None:
         lanes = {
             backend: extract_document(document, backend, settings, client, options=options) for backend in BACKENDS
@@ -352,8 +359,8 @@ def compare_document(
             return cached
         logger.info("stored comparison of doc=%s compared other parses; comparing again", document.document_id[:16])
 
-    matching = match_samples(lane_a, lane_b, client, refresh=force)
-    report = compare_lanes(lane_a, lane_b, matching)
+    matching = match_samples(lane_a, lane_b, client, profile, refresh=force)
+    report = compare_lanes(lane_a, lane_b, matching, comparison)
     reason = incomplete_reason(lanes, report)
     if reason:
         # An earlier run's report under these keys goes too: it came from other answers, and kept it would be
@@ -590,10 +597,11 @@ def run_document(
         figures_pool.shutdown(wait=True)
 
     on_stage("export", "running", "")
-    dataset = consolidate_document(document, lanes, report)
+    profile = default_profile()
+    dataset = consolidate_document(document, lanes, report, ComparisonOptions.from_settings(settings, profile))
     layout = DataLayout(settings.data_root)
     excel_path = layout.dataset_path(document.document_id)
-    write_dataset([dataset], excel_path, figure_rows=figures.rows if figures is not None else ())
+    write_dataset([dataset], excel_path, profile, figure_rows=figures.rows if figures is not None else ())
     dataset_json_path: Path | None = None
     if dataset.incomplete:
         # The stored dataset is what marks a paper finished (stored.is_finished), so it is kept back for the
@@ -730,5 +738,5 @@ def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings) -> 
     rows = [row for view in figure_views if view for row in view.rows]
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "paperfacts.xlsx"
-        write_dataset(datasets, path, figure_rows=rows)
+        write_dataset(datasets, path, default_profile(), figure_rows=rows)
         return path.read_bytes()

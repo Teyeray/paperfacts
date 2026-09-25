@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from paperfacts.keys import ExtractionOptions, profile_extraction_fingerprint
+from paperfacts.config import Settings
+from paperfacts.keys import ComparisonOptions, ExtractionOptions, profile_extraction_fingerprint
 from paperfacts.models import Backend, PageGeometry, ParsedArtifact, SourceBlock
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, TargetRecord
 from support.factories import DOC_ID, make_block
@@ -111,6 +112,7 @@ def make_lane(
         extractor_key=extractor_key,
         model=model,
         schema_version=profile_extraction_fingerprint(shipped_profile()),
+        profile_fingerprint=profile_extraction_fingerprint(shipped_profile()),
         target=target,
         samples=tuple(samples),
         invalid_source_ids=tuple(invalid_source_ids),
@@ -136,3 +138,8 @@ def lane_options(client=None, *, mode, **overrides) -> ExtractionOptions:
         reasoning_effort=client.reasoning_effort,
         **overrides,
     )
+
+
+def comparison_options() -> ComparisonOptions:
+    """The options a comparison of :func:`make_lane` lanes runs under: the shipped profile's."""
+    return ComparisonOptions.from_settings(Settings(), shipped_profile())

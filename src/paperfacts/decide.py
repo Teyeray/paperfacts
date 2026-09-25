@@ -46,6 +46,7 @@ from paperfacts.normalize import (
     text_key,
 )
 from paperfacts.records import FieldValue, spell_number_word
+from paperfacts.units import UnitRegistry
 
 CellValue = str | float | int | bool | None
 
@@ -97,11 +98,12 @@ def decide(
     evidence: Sequence[tuple[Backend, FieldValue]],
     comparisons: Sequence[FieldComparison],
     *,
+    units: UnitRegistry,
     blocked: str | None = None,
     unanswered: bool = False,
     row_sources: frozenset[str] = frozenset(),
 ) -> Decision:
-    """The cell for ``spec`` given every lane's candidates for it.
+    """The cell for ``spec`` given every lane's candidates for it, converted in ``units`` (the profile's).
 
     ``blocked`` is why nothing on this sample may be committed (its sample match failed or is too weak), or
     None. ``unanswered`` says some lane's question about this field got no valid answer: the other lane's value
@@ -123,7 +125,7 @@ def decide(
     if blocked:
         return reject("ambiguous", blocked)
     trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
-    candidates = [_Candidate(backend, value, *_scalar(value, spec)) for backend, value in trusted]
+    candidates = [_Candidate(backend, value, *_scalar(value, spec, units)) for backend, value in trusted]
     # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
     # let it take its own condition out of the running, so the scalar's condition would win although no rule
     # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
@@ -394,7 +396,7 @@ def _lanes_measure_differently(final: Sequence[_Candidate], *, strict: bool) -> 
 # ---- Values ------------------------------------------------------------------------------------------------
 
 
-def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
+def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
     """``(cell value, note)``, or ``(None, reason)`` when the text states no single scalar."""
     if spec.kind != "numeric":
         return value.value_raw.strip(), None
@@ -431,7 +433,7 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     number, _ = parse_number(match.group("center"))
     if number is None or not math.isfinite(number):
         return None, "数值不可解析或非有限数"
-    canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, value_text=match.group("center"))
+    canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, units, value_text=match.group("center"))
     if canonical is None or not math.isfinite(canonical):
         return None, note or "单位无法转换为标准单位"
     notes.insert(0, note or "")

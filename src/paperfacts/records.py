@@ -148,11 +148,13 @@ def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
     extraction = create_model(
         ExtractionResponse.__name__,
         __base__=ExtractionResponse,
+        __doc__=ExtractionResponse.__doc__,
         target=(ResponseTarget | None, Field(default=None, validation_alias=paper_key)),
     )
     inventory = create_model(
         InventoryResponse.__name__,
         __base__=InventoryResponse,
+        __doc__=InventoryResponse.__doc__,
         no_tco_film=(
             bool,
             Field(

@@ -142,25 +142,29 @@ def test_only_the_substrate_thickness_is_dropped_from_the_real_response(real_art
     assert lane.target is not None
 
 
-def test_the_resistivity_written_in_plain_decimal_normalizes(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
+def test_the_resistivity_written_in_plain_decimal_normalizes(real_artifact, tco_profile):
+    lane = normalize_lane(
+        extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
+    )
 
     field = lane.sample("this-work-225C").get("resistivity")
     assert field.value == pytest.approx(0.3)
     assert field.unit == "Ω·cm"
 
 
-def test_the_scientific_notation_from_the_real_table_cell_normalizes(real_artifact):
+def test_the_scientific_notation_from_the_real_table_cell_normalizes(real_artifact, tco_profile):
     # The table cell is written as $6 . 4 \times 1 0 ^ { - 3 }$; when the model copies it as the
     # superscript "6.4 × 10⁻³" it must be read as 0.0064, not 6.4.
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
+    lane = normalize_lane(
+        extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
+    )
 
     field = lane.sample("muto-200C").get("resistivity")
     assert field.value == pytest.approx(6.4e-3)
     assert field.unit == "Ω·cm"
 
 
-def test_a_latex_exponent_copied_verbatim_is_parsed(real_artifact):
+def test_a_latex_exponent_copied_verbatim_is_parsed(real_artifact, tco_profile):
     """MinerU's table cell is LaTeX (``$4 \\times 1 0 ^ { - 3 }$``, with spaces between characters), and
     the prompt asks for a verbatim transcription.
 
@@ -169,7 +173,9 @@ def test_a_latex_exponent_copied_verbatim_is_parsed(real_artifact):
     ``$`` / ``\\times`` / braces and rejoins the split-up digits first, so the exponent must parse
     correctly.
     """
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
+    lane = normalize_lane(
+        extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
+    )
 
     field = lane.sample("mientus-25C").get("resistivity")
     assert field.value == pytest.approx(4e-3)
@@ -222,10 +228,12 @@ def test_spaces_between_digits_are_only_merged_inside_latex():
     assert parse_number("10 20") == (10.0, "2 numbers found, first used")
 
 
-def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_artifact):
+def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_artifact, tco_profile):
     # "40 × 10 cm" contains two numbers: the first is taken, with a note left so the reader knows the
     # value is incomplete.
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
+    lane = normalize_lane(
+        extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
+    )
 
     field = lane.target.get("inch")
     assert field.value == pytest.approx(40 / 2.54)
@@ -233,18 +241,22 @@ def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_
     assert "2 numbers found" in field.normalization_note
 
 
-def test_the_composition_text_is_kept_verbatim(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
+def test_the_composition_text_is_kept_verbatim(real_artifact, tco_profile):
+    lane = normalize_lane(
+        extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
+    )
 
     field = lane.target.get("component")
     assert field.value_raw == "Sn/Ta target 95:5 wt.%"
     assert field.value is None  # composition is text and should not have a number forced into it
 
 
-def test_the_provenance_survives_all_the_way_to_the_normalized_lane(real_artifact):
+def test_the_provenance_survives_all_the_way_to_the_normalized_lane(real_artifact, tco_profile):
     """Normalization only adds fields alongside; source_id must survive unchanged all the way through, or
     the value could never be traced back to a PDF page."""
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
+    lane = normalize_lane(
+        extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
+    )
 
     field = lane.sample("muto-200C").get("resistivity")
     assert field.source_ids == (TABLE_ID,)

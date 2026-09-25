@@ -20,7 +20,7 @@ from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, LlmOfflineMiss
 from paperfacts.extract import extract_lane
-from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
+from paperfacts.keys import ExtractionOptions, comparison_key_for, extractor_key, extractor_key_for
 from paperfacts.llm import OpenAICompatibleClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.parsers import SubprocessParser
@@ -359,7 +359,7 @@ def test_compare_document_extracts_both_lanes_then_matches_and_writes_the_report
     path = DataLayout(settings.data_root).comparison_path(
         document.document_id,
         extractor_key(ExtractionOptions(tco_profile, client.model, mode="document")),
-        comparison_key(tco_profile),
+        comparison_key_for(settings, tco_profile),
     )
     assert path.is_file()
     assert report.backend_a == BACKEND_A and report.backend_b == BACKEND_B
@@ -400,7 +400,7 @@ def test_an_offline_miss_in_matching_stores_no_comparison(
     comparisons = DataLayout(settings.data_root).comparison_path(
         document.document_id,
         extractor_key(ExtractionOptions(tco_profile, "fake-model", mode="document")),
-        comparison_key(tco_profile),
+        comparison_key_for(settings, tco_profile),
     )
     assert not comparisons.exists()
 

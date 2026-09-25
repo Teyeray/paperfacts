@@ -61,8 +61,8 @@ def test_a_failed_paper_is_recorded_and_remaining_papers_are_exported(monkeypatc
     snapshots = []
     from paperfacts.workbook import write_dataset
 
-    def capture_write(documents, path, *, failures=(), figure_rows=()):
-        write_dataset(documents, path, failures=failures)
+    def capture_write(documents, path, profile, *, failures=(), figure_rows=()):
+        write_dataset(documents, path, profile, failures=failures)
         if path == output:
             snapshots.append((len(documents), len(failures), path.is_file()))
 

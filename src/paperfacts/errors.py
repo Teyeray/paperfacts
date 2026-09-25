@@ -48,6 +48,12 @@ class LlmOfflineMiss(LlmError):
     """
 
 
+class ProfileMismatchError(PaperFactsError):
+    """Results produced under different domain profiles were about to be combined: two lanes, or a lane or
+    report and the options a comparison runs under. Their fields, units and verdict rules may differ, so any
+    agreement between them would be meaningless; the one fix is to re-run under a single profile."""
+
+
 class ContextBudgetError(PaperFactsError):
     """The paper does not fit in the model's context window."""
 
