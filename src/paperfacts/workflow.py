@@ -29,7 +29,7 @@ from paperfacts.dataset import (
     incomplete_reason,
     write_dataset_json,
 )
-from paperfacts.errors import Cancelled, LlmOfflineMiss, ParserError
+from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, ParserError
 from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
@@ -43,7 +43,7 @@ from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.profile import DomainProfile, load_profile, profile_path
+from paperfacts.profile import PROFILES_DIRNAME, DomainProfile, load_profile, profile_path
 from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
@@ -54,6 +54,31 @@ logger = logging.getLogger(__name__)
 
 # The comparison is strictly between two lanes; a third parser would need compare_lanes redesigned.
 BACKEND_A, BACKEND_B = BACKENDS
+
+
+# The workbook name every export used before profiles, so a profile of that name would overwrite old ones.
+LEGACY_EXPORT_NAME = "paperfacts"
+
+
+def load_run_profile(settings: Settings) -> DomainProfile:
+    """The profile ``settings`` selects, as an entry point loads it: once, and refused when its name clashes.
+
+    Workbooks are named after the profile (``exports/<name>.xlsx``), so a profile loaded by path under the
+    name of a different repository profile would overwrite that profile's workbooks, and one named
+    ``paperfacts`` the pre-profile ones. Kept out of ``profile.py``, whose source is hashed into every key.
+    """
+    profile = load_profile(profile_path(settings))
+    if profile.name == LEGACY_EXPORT_NAME:
+        raise ConfigError(f"{profile.source}: the profile name {LEGACY_EXPORT_NAME!r} is reserved for old exports")
+    shipped = settings.repo_root / PROFILES_DIRNAME / f"{profile.name}.json"
+    if shipped.is_file() and shipped.resolve() != profile.source:
+        other = load_profile(shipped)
+        if other.content_hash != profile.content_hash:
+            raise ConfigError(
+                f"{profile.source} and {other.source} are both named {profile.name!r} but differ; their workbooks "
+                "would overwrite each other, so rename one"
+            )
+    return profile
 
 
 # ---- Parsing ----------------------------------------------------------------------------------------------
@@ -552,10 +577,11 @@ def run_document(
 
     Every entry point (the CLI, the web app, a batch) loads its profile once and passes it. ``None`` means the
     profile ``settings`` selects, for a one-off script: the recorded payload generator predates the parameter
-    and must keep running unchanged.
+    and must keep running unchanged. Anything else relying on it is logged as a warning.
     """
     if profile is None:
-        profile = load_profile(profile_path(settings))
+        logger.warning("run_document without a profile: loading the one the settings select (%s)", settings.profile)
+        profile = load_run_profile(settings)
     comparison = ComparisonOptions.from_settings(settings, profile)
     parse_reports: dict[Backend, ParseReport] = {}
     parsed: dict[Backend, ParsedArtifact | None] = {}

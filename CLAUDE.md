@@ -170,6 +170,9 @@ this file is the part that is easy to get wrong.
   document twice while it is active returns the same job. A job's log is attributed by a context variable:
   every pool in the pipeline is `threads.ContextThreadPoolExecutor`, which runs each task in a copy of the
   caller's context; a plain `ThreadPoolExecutor` would drop its records from the log.
+- One server per data root. The per-document and per-parser locks are process-local, so two servers (say,
+  under two profiles) over one `data_root` can parse the same document at once. A server's profile is read
+  once; `pipeline_runner` refuses a job once the file's content hash on disk differs from the loaded one.
 - Parallel documents are bounded twice: `parsers.py` holds one lock per parser around the actual parse
   (not around a cache hit), and every model request takes a slot of `llm.IN_FLIGHT` around the HTTP call
   only -- never while waiting on a future or a backoff, which is what keeps the nested pools deadlock-free.

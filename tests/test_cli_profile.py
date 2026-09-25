@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +16,10 @@ from typer.testing import CliRunner
 
 from paperfacts.cli import app
 from paperfacts.config import Settings
-from paperfacts.errors import ParserError
+from paperfacts.errors import ConfigError, ParserError
 from paperfacts.keys import comparison_key_for, extractor_key_for, figure_key_for
 from paperfacts.profile import DomainProfile
+from paperfacts.workflow import load_run_profile, run_document
 from support.profiles import SHIPPED_PROFILE_PATH, profile_data
 
 runner = CliRunner()
@@ -102,3 +105,92 @@ def test_serve_builds_the_library_under_the_profile_the_environment_names(
     assert library.extractor_key != extractor_key_for(settings, tco_profile)
     assert library.comparison_key != comparison_key_for(settings, tco_profile)
     assert library.figure_key != figure_key_for(settings, tco_profile)
+
+
+def _stop(seen: list[DomainProfile]):
+    def record(*args: Any, **kwargs: Any) -> None:
+        seen.extend(arg for arg in args if isinstance(arg, DomainProfile))
+        raise ParserError("mineru", "run", "stop here, the profile has been observed")
+
+    return record
+
+
+@pytest.mark.parametrize("command", ["batch", "export", "extract", "compare"])
+def test_every_command_runs_under_the_profile_flag(
+    monkeypatch, command: str, demo_path: Path, two_page_pdf: Path, tmp_path: Path
+):
+    seen: list[DomainProfile] = []
+    monkeypatch.setattr("paperfacts.cli.run_batch", _stop(seen))
+    monkeypatch.setattr("paperfacts.cli.extract_document", _stop(seen))
+    monkeypatch.setattr("paperfacts.cli.compare_document", _stop(seen))
+    monkeypatch.setattr("paperfacts.cli.build_llm_client", lambda settings: contextlib.nullcontext())
+    source = two_page_pdf.parent if command in {"batch", "export"} else two_page_pdf
+
+    runner.invoke(app, [command, str(source), "--data-root", str(tmp_path / "data"), "--profile", str(demo_path)])
+
+    assert [profile.name for profile in seen] == ["demo"]
+
+
+def test_the_app_hands_its_jobs_the_profile_its_library_uses(monkeypatch, tmp_path: Path, demo_path: Path):
+    from paperfacts.web import app as web_app
+
+    handed: list[DomainProfile] = []
+    real = web_app.pipeline_runner
+
+    def recording(settings: Settings, profile: DomainProfile, library: Any) -> Any:
+        handed.append(profile)
+        return real(settings, profile, library)
+
+    monkeypatch.setattr(web_app, "pipeline_runner", recording)
+    settings = Settings(data_root=tmp_path / "data", repo_root=tmp_path, profile=str(demo_path))
+
+    application = web_app.create_app(settings)
+
+    assert handed == [application.state.library.profile]
+    assert handed[0] is application.state.library.profile
+
+
+# ---- A profile's name decides its workbook's name ----------------------------------------------------------
+
+
+def _write_profile(path: Path, changes: dict[str, Any] | None = None) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = profile_data({"name": path.stem, **(changes or {})})
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_a_profile_by_path_may_not_shadow_a_different_repository_profile_of_its_name(tmp_path: Path):
+    shipped = _write_profile(tmp_path / "repo" / "profiles" / "demo.json")
+    elsewhere = _write_profile(tmp_path / "mine" / "demo.json", {"prompt.domain_subject": "something else"})
+
+    with pytest.raises(ConfigError) as refused:
+        load_run_profile(Settings(repo_root=tmp_path / "repo", profile=str(elsewhere)))
+
+    assert str(shipped.resolve()) in str(refused.value) and str(elsewhere.resolve()) in str(refused.value)
+
+
+def test_a_copy_of_a_repository_profile_is_accepted(tmp_path: Path):
+    _write_profile(tmp_path / "repo" / "profiles" / "demo.json")
+    copy = _write_profile(tmp_path / "mine" / "demo.json")
+
+    assert load_run_profile(Settings(repo_root=tmp_path / "repo", profile=str(copy))).name == "demo"
+
+
+def test_the_legacy_export_name_is_reserved(tmp_path: Path):
+    path = _write_profile(tmp_path / "paperfacts.json")
+
+    with pytest.raises(ConfigError, match="reserved"):
+        load_run_profile(Settings(repo_root=tmp_path, profile=str(path)))
+
+
+def test_run_document_without_a_profile_warns(monkeypatch, caplog, document, tmp_path: Path):
+    def stop(settings: Settings) -> DomainProfile:
+        raise RuntimeError("stop here, the fallback has been taken")
+
+    monkeypatch.setattr("paperfacts.workflow.load_run_profile", stop)
+
+    with caplog.at_level(logging.WARNING, logger="paperfacts.workflow"), pytest.raises(RuntimeError):
+        run_document(document, Settings(data_root=tmp_path / "data"))
+
+    assert any("without a profile" in record.getMessage() for record in caplog.records)

@@ -8,6 +8,7 @@ crops are real PNGs of an empty page and the requests never leave the process.
 from __future__ import annotations
 
 import dataclasses
+import json
 import threading
 from pathlib import Path
 
@@ -19,14 +20,14 @@ import paperfacts.workflow as workflow
 from paperfacts.config import Settings
 from paperfacts.errors import Cancelled, ConfigError, LlmError, LlmOfflineMiss
 from paperfacts.figures import FigureReadings
-from paperfacts.keys import figure_key_for
+from paperfacts.keys import figure_key_for, figure_profile_fingerprint
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
 from paperfacts.profile import DomainProfile
 from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import run_document
 from support.factories import make_block
-from support.profiles import SHIPPED_PROFILE_PATH, shipped_profile
+from support.profiles import SHIPPED_PROFILE_PATH, make_profile, shipped_profile
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
 from test_workflow_run import install_fake_pipeline
 
@@ -415,6 +416,66 @@ def test_a_page_is_rendered_once_for_all_its_panels(
     readings = read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
 
     assert len(readings.panels) == 3 and renders == [0]
+
+
+# ---- Readings belong to the profile they were read under ------------------------------------------------
+
+
+def test_stored_readings_record_the_profile_they_were_read_under(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    store_artifact(document, settings)
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+
+    stored = json.loads(figures_file(document, settings).read_text(encoding="utf-8"))
+
+    assert stored["profile"] == "tco"
+    assert stored["profile_fingerprint"] == figure_profile_fingerprint(tco_profile)
+
+
+def test_another_profiles_readings_are_never_its_stale_fallback(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    # One data root, two profiles: nothing is stored under the demo profile's figure_key, and the newest
+    # file in the directory is TCO's. Shown as the demo profile's stale readings, TCO's chart values would
+    # appear on a page about another domain.
+    store_artifact(document, settings)
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+
+    assert shown_figures(document.document_id, "paper.pdf", settings, make_profile()) is None
+    assert shown_figures(document.document_id, "paper.pdf", settings, tco_profile) is not None
+
+
+def test_a_file_from_before_profiles_is_the_tco_profiles_fallback_only(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    store_artifact(document, settings)
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+    current = figures_file(document, settings)
+    legacy = json.loads(current.read_text(encoding="utf-8"))
+    del legacy["profile"], legacy["profile_fingerprint"]
+    (current.parent / "older0000000.json").write_text(json.dumps(legacy), encoding="utf-8")
+    current.unlink()
+
+    view = shown_figures(document.document_id, "paper.pdf", settings, tco_profile)
+
+    assert view is not None and view.stale and len(view.rows) == 2
+    assert shown_figures(document.document_id, "paper.pdf", settings, make_profile()) is None
+
+
+def test_a_reading_of_a_field_the_profile_does_not_have_is_left_out(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    store_artifact(document, settings)
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+    path = figures_file(document, settings)
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored["readings"][0]["field"] = "no_such_field"
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+    view = shown_figures(document.document_id, "paper.pdf", settings, tco_profile)
+
+    assert view is not None and [row["field"] for row in view.rows] == [stored["readings"][1]["field"]]
 
 
 # ---- stopping the stage when the rest of the paper fails ------------------------------------------------

@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from paperfacts.config import Settings
 from paperfacts.figures import FigureReading, FigureReadings, read_figures
-from paperfacts.keys import figure_key_for
+from paperfacts.keys import figure_key_for, figure_profile_fingerprint
 from paperfacts.llm import VisionClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
 from paperfacts.pdf import crop_region, png_bytes, render_page
@@ -116,12 +116,29 @@ def figure_artifact(
     raise FileNotFoundError(f"no parse artifact for {document.display_filename}; run `paperfacts parse` first")
 
 
-def _stored_file(path: Path) -> FigureReadings | None:
+# Every file stored before profiles existed was read under the TCO field table.
+LEGACY_PROFILE = "tco"
+
+
+class StoredReadings(FigureReadings):
+    """Readings as stored: with the profile they were read under, so the stale fallback of another profile
+    over the same data root never shows them. Declared here, not in ``figures.py``, whose source is hashed
+    into figure_key; None on files stored before the field existed."""
+
+    profile: str | None = None
+    profile_fingerprint: str | None = None
+
+
+def _belongs(readings: StoredReadings, profile: DomainProfile) -> bool:
+    return (readings.profile or LEGACY_PROFILE) == profile.name
+
+
+def _stored_file(path: Path) -> StoredReadings | None:
     """A stored readings file, or None when there is none or it will not load (it is then read again)."""
     if not path.is_file():
         return None
     try:
-        return FigureReadings.read(path)
+        return StoredReadings.read(path)
     except (OSError, ValueError) as exc:
         logger.warning("stored figure readings at %s are unreadable (%s); ignoring them", path, exc)
         return None
@@ -146,9 +163,10 @@ def shown_figures(document_id: str, filename: str, settings: Settings, profile: 
     """The chart readings to show for a document, whether or not the stage is switched on.
 
     Switching the stage off stops the asking, not the showing. When nothing is stored under the current
-    figure_key (the model, the prompt or the field table moved since), the newest older file stands in and
-    is marked stale rather than hiding readings that were paid for. Readings citing figure blocks the
-    current parse no longer has are marked too.
+    figure_key (the model, the prompt or the field table moved since), the newest older file of the same
+    profile stands in and is marked stale rather than hiding readings that were paid for. Readings citing
+    figure blocks the current parse no longer has are marked too, and readings of a field the profile does
+    not have are left out.
     """
     layout = DataLayout(settings.data_root)
     current = layout.figures_path(document_id, figure_key_for(settings, profile))
@@ -161,11 +179,15 @@ def shown_figures(document_id: str, filename: str, settings: Settings, profile: 
         )
         for path in older:
             readings = _stored_file(path)
-            if readings is not None:
+            if readings is not None and _belongs(readings, profile):
                 stale = True
                 break
+            readings = None
     if readings is None:
         return None
+    readings = readings.model_copy(
+        update={"readings": tuple(reading for reading in readings.readings if reading.field in profile.by_name)}
+    )
     artifact = None
     if readings.backend is not None and layout.artifact_path(document_id, readings.backend).is_file():
         artifact = ParsedArtifact.read(layout.artifact_path(document_id, readings.backend))
@@ -233,5 +255,7 @@ def read_document_figures(
         refresh_panels=previous.unreadable() if previous is not None else frozenset(),
         stop=stop,
     )
-    readings.write(path)
+    StoredReadings(
+        **dict(readings), profile=profile.name, profile_fingerprint=figure_profile_fingerprint(profile)
+    ).write(path)
     return readings

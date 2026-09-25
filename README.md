@@ -298,7 +298,12 @@ The flags worth knowing:
 - `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
 - `--profile NAME_OR_PATH` on `run`, `batch`, `export`, `extract`, `compare` and `serve` runs the command
-  under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`).
+  under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
+  after the profile, so a profile file given by path whose name is also a different `profiles/<name>.json` is
+  refused, and the name `paperfacts` (the pre-profile workbook) is reserved. `serve` reads its profile once:
+  `/api/health` reports its name and hash, and after the file is edited on disk every new job is refused
+  until the server is restarted. Run **one server per data root**: two servers under different profiles
+  over the same `data_root` can parse the same document at the same time.
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
   `--jobs 1` is the old one-after-another run.
 - `--offline` on `run` and `batch` answers every model request from the LLM cache and fails on a miss; see
