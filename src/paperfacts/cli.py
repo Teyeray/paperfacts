@@ -347,6 +347,13 @@ def run(
             + (f"; {warning}" if warning else "")
         )
     typer.echo(f"Excel -> {result.excel_path}")
+    if result.dataset.incomplete:
+        typer.echo(f"Incomplete, not kept as finished: {result.dataset.incomplete}; the next run asks again")
+        unanswered = [row for row in result.dataset.quality_rows if row.get("decision") == "unanswered"]
+        if unanswered:
+            # The comparison counts above print these as missing: the failing lane simply has no value there.
+            fields = ", ".join(dict.fromkeys(str(row["field"]) for row in unanswered))
+            typer.echo(f"{len(unanswered)} cells unanswered ({fields}), counted as missing in the comparison above")
     _offline_summary(settings)
 
 
@@ -377,9 +384,11 @@ def _batch_summary(
     except (*REPORTABLE_ERRORS, OSError) as exc:
         _offline_summary(settings)
         _fail("export" if export_only else "batch", exc)
+    incomplete = sum(1 for document in result.documents if document.incomplete)
     typer.echo(
-        f"Completed: {len(result.documents)} papers; failed: {len(result.failures)}; "
-        f"duplicates skipped: {result.duplicate_count}"
+        f"Completed: {len(result.documents)} papers"
+        + (f" ({incomplete} incomplete, asked again next run)" if incomplete else "")
+        + f"; failed: {len(result.failures)}; duplicates skipped: {result.duplicate_count}"
     )
     typer.echo(f"Excel -> {result.excel_path}")
     _offline_summary(settings)

@@ -12,6 +12,7 @@ without asking the model again.
 
 from __future__ import annotations
 
+import itertools
 import re
 import unicodedata
 from collections.abc import Callable
@@ -177,9 +178,21 @@ _NAMED = re.compile(r"^[^=]*=\s*")
 _LATEX_COMMAND = re.compile(r"\\[A-Za-z]+")
 # "25 and 70": two values, not a value and a remark.
 _CONJOINED = re.compile(r"\d\s*\S*\s+(?:and|or)\s+\d", re.IGNORECASE)
-# A measurement condition stated after the value ("550 nm at 80%", "1.2 × 10^-4 at 300 K"): its numbers
-# describe when the value was measured, not the value.
-_CONDITION = re.compile(r"\s+(?:at|@)\s+(?=.*\d).*$", re.IGNORECASE)
+# "30, 40", "550 nm: 85%": numbers listed or labelled one by another, looked for only between two numbers,
+# so the comma of a thousands separator ("1,200"), which is part of its number, is never one.
+_LIST_SEPARATOR = re.compile(r"[,;:]")
+# A number followed by a unit of its own and then another number ("140 nm ATO/25 nm", "3 h 30 min"): a
+# second quantity stands beside the first, and which one is the value is not the parser's to guess. A lone
+# "x" is the multiplication sign of "40 x 10 cm", not a unit.
+_OWN_UNIT = re.compile(rf"^\s*(?!x\b){_UNIT_TOKEN}")
+# Where a measurement or process condition stated after the value begins ("550 nm at 80%", "1.2 × 10^-4 at
+# 300 K", "400 °C for 2 h", "500 °C under N2"): its numbers describe when the value was measured, not the value.
+# Not "in": that is also the inch, and "2 in x 3 in" would read as 2. Not "after": see _AFTER.
+_CONDITION = re.compile(r"\s+(?:at|@|for|during|under)\s+(?=.*\d)", re.IGNORECASE)
+# "85% after 10 cycles", "100 nm after annealing": another state of the sample, not a condition of this value.
+_AFTER = re.compile(r"\s+after\s+\S", re.IGNORECASE)
+# The words of a condition tail that may name a unit ("2 h", "550 nm", "°C").
+_TAIL_WORD = re.compile(r"[^\d\s,;:()\[\]]+")
 NUMBER_RE = re.compile(_NUM)
 """Every plain number in a piece of text. Public because the comparison layer reads the numbers out of a
 measurement condition ("550 nm") and must use the same notion of "a number" this module parses with."""
@@ -261,6 +274,28 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     with a refusal -- or passes it on. A refusal is always better than a guess: the comparison turns None
     into AMBIGUOUS, while a wrong number is indistinguishable from a real measurement.
     """
+    text, notes, _ = set_aside(raw)
+    if _AFTER.search(text):
+        return None, _join(
+            [*notes, "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"]
+        )
+    # The digits of a formula or a unit exponent are set aside before the value's own numbers are counted.
+    unglued = _GLUED_DIGITS.sub(" ", text)
+    if unglued != text:
+        notes.append("digits of a formula or unit exponent ignored")
+        text = unglued.strip()
+    value, reading = _read(text)
+    return value, _join([*notes, *reading])
+
+
+def set_aside(raw: str) -> tuple[str, list[str], str]:
+    """``(value text, notes, condition)``: ``raw`` without what surrounds the value -- typesetting, a qualifier,
+    a name before "=", a condition after it -- a note for each thing set aside, and the condition itself ("" when
+    there is none). The same for every spelling, scientific, plain or compound, and for the dataset cell
+    (``decide``), so none of them reads a condition's number as the value.
+
+    A condition is set aside only where the value before it keeps a number: "deposited for 10 min" is the
+    quote of a value that opens with its verb, not a condition with no value in front of it."""
     # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
     text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw)))
     # A command delatex has no reading for is typesetting; left in place, its letters would glue to the
@@ -271,22 +306,16 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     if match:
         notes.append(f"qualifier '{match.group('q')}' dropped")
         text = text[match.end() :].strip()
-    # The same two rules for every spelling, scientific or plain: a stated condition and the digits of a
-    # formula or a unit exponent are set aside before the value's own numbers are counted.
     named = _NAMED.match(text)
     if named and text[named.end() :]:
         notes.append(f"name {text[: named.end()].rstrip(' =')!r} before '=' ignored")
         text = text[named.end() :]
-    condition = _CONDITION.search(text)
-    if condition:
-        notes.append(f"condition {condition.group(0).strip()!r} ignored")
-        text = text[: condition.start()].strip()
-    unglued = _GLUED_DIGITS.sub(" ", text)
-    if unglued != text:
-        notes.append("digits of a formula or unit exponent ignored")
-        text = unglued.strip()
-    value, reading = _read(text)
-    return value, _join([*notes, *reading])
+    for start in _CONDITION.finditer(text):
+        if NUMBER_RE.search(text[: start.start()]):
+            condition = text[start.start() :].strip()
+            notes.append(f"condition {condition!r} ignored")
+            return text[: start.start()].strip(), notes, condition
+    return text, notes, ""
 
 
 _Reading = tuple[float | None, list[str]]
@@ -386,8 +415,10 @@ def _range(text: str) -> _Reading | None:
 
 
 def _first_number(text: str) -> _Reading:
-    """The fallback: one number is the value. Several separated by words or spaces ("550 nm at 80%", "40 x
-    10 cm") keep the first with a note; a range buried among other numbers has no first value to keep."""
+    """The fallback: one number is the value. Several separated only by spaces or a multiplication sign ("300
+    500", "40 x 10 cm") keep the first with a note. A range buried among other numbers, a list ("30, 40"), and a
+    number carrying its own unit before another ("550 nm: 85%", "140 nm ATO/25 nm ITO") have no first value
+    worth keeping: each is a second quantity beside the first, and they are refused."""
     numbers = NUMBER_RE.findall(text)
     if not numbers:
         return _refuse("no number found")
@@ -397,6 +428,12 @@ def _first_number(text: str) -> _Reading:
         return _refuse("a range among other numbers; ambiguous")
     if _CONJOINED.search(text):
         return _refuse("two values joined by 'and' or 'or'; ambiguous")
+    spans = list(NUMBER_RE.finditer(text))
+    gaps = [text[a.end() : b.start()] for a, b in itertools.pairwise(spans)]
+    if any(_LIST_SEPARATOR.search(gap) for gap in gaps):
+        return _refuse("numbers separated by ',', ';' or ':'; ambiguous")
+    if _OWN_UNIT.match(gaps[0]):
+        return _refuse("a number with its own unit followed by another number; ambiguous")
     return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"]
 
 
@@ -549,23 +586,64 @@ def check_canonical_units(specs: tuple[FieldSpec, ...], source: Path) -> None:
 check_canonical_units(FIELD_SPECS, FIELDS_SOURCE)
 
 
-# A power-of-ten factor written into the unit: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm" (normalize_text has
-# already folded "×" to "x" and superscript digits to "^-4"). The caret, or an explicit "x10", is required,
-# so a unit that merely starts with digits can never be read as a factor.
-_SCALE_FACTOR = re.compile(r"^(?:x\s*10\s*\^?|10\s*\^)\s*(?P<e>[-+]?\d+)")
+# A power-of-ten factor in a transcribed table header: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm", "ρ × 10^4"
+# (normalize_text has already folded "×" to "x" and superscript digits to "^-4"). The caret, or an explicit
+# "x10", is required, so a unit that merely starts with digits can never be read as a factor.
+_SCALE_FACTOR = re.compile(r"(?:(?P<x>x)\s*10\s*\^?|10\s*\^)\s*(?P<e>[-+]?\d+)")
+# The symbol or name of the quantity a header names before its factor: "ρ", "R_s", "Resistivity", "\rho".
+_QUANTITY_SYMBOL = re.compile(r"\\?[A-Za-z\u0370-\u03ffΩμ□_]+")
+_OPENING, _CLOSING = "([", ")]"
 
 
-def split_scale_factor(unit_raw: str) -> tuple[float, str]:
-    """``(factor, unit)``: a scale factor written into the unit belongs to the value, not to the unit.
+def split_scale_factor(unit_raw: str, is_unit: Callable[[str], object]) -> tuple[float | None, str]:
+    """``(factor, unit)``: the factor the cell is multiplied by to give the value, and the unit left over; the
+    factor is None when the header does not say which way its power of ten goes.
 
-    Papers head a table column "ρ (×10⁻⁴ Ω·cm)" and the model transcribes the whole parenthesis as the unit,
-    leaving the value a bare "19.4". Without this the unit is unrecognised and the fact is lost.
+    A table header carries a power of ten in one of two conventions, which the model copies into ``unit_raw``:
+
+    - on the **unit** -- "×10^-4 Ω·cm", "(10^-4 Ω cm)", "ρ (×10^-4 Ω cm)", "ρ × 10^-4 Ω·cm": the column is in
+      units of 10^-4 Ω·cm, so a cell of 6.8 is 6.8 × 10^-4 Ω·cm, and the factor multiplies.
+    - on the **quantity** -- "ρ × 10^4 (Ω cm)": the column holds ρ multiplied by 10^4, the unit bracketed apart,
+      so the same cell is again 6.8 × 10^-4 Ω·cm, and the factor divides.
+
+    The same exponent sign means opposite things, and both lanes read one header the same way, so a wrong guess
+    would pass as agreement. What decides is where the brackets are, so they are read before anything is cleaned
+    away. A header that fits neither is refused: a unit before the factor (``is_unit`` names the field's units),
+    a factor glued to a symbol with nothing joining them, a factor bracketed alone beside the symbol
+    ("ρ (×10^-4) (Ω cm)": the column's multiplier, or ρ's?), or a factor on the quantity with no unit after it.
     """
-    unit = clean_unit(LATEX_WRAPPERS.sub(" ", delatex(normalize_text(unit_raw))))
-    match = _SCALE_FACTOR.match(unit)
+    text = LATEX_WRAPPERS.sub(" ", delatex(normalize_text(unit_raw))).strip()
+    match = _SCALE_FACTOR.search(text)
     if match is None:
-        return 1.0, unit
-    return 10.0 ** int(match.group("e")), unit[match.end() :].lstrip(".x*")
+        return 1.0, clean_unit(text)
+    factor = 10.0 ** int(match.group("e"))
+    head, tail = text[: match.start()].strip(), text[match.end() :].strip()
+
+    def unit_of(rest: str) -> str:
+        return clean_unit(rest.strip(_OPENING + _CLOSING + " ")).lstrip(".x*")
+
+    if not head.rstrip(_OPENING):
+        # The factor leads what follows, bracketed or not: "×10^-4 Ω·cm", "(10^-4 Ω cm)".
+        return factor, unit_of(tail)
+    symbol = head.rstrip(_OPENING).strip()
+    if not _QUANTITY_SYMBOL.fullmatch(symbol) or is_unit(symbol) is not None:
+        return None, clean_unit(text)
+    if head[-1] in _OPENING:
+        inside, _, _after = tail.partition(_CLOSING[_OPENING.index(head[-1])])
+        if unit_of(inside):
+            return factor, unit_of(inside)  # "ρ (10^-4 Ω cm)": the factor leads the bracketed unit
+        return None, clean_unit(text)  # "ρ (×10^-4) (Ω cm)": bracketed alone, it says nothing about direction
+    if not match.group("x"):
+        return None, clean_unit(text)  # "ρ 10^4 Ω cm": nothing joins the symbol and the factor
+    if tail[:1] in _OPENING and unit_of(tail):
+        if factor < 1:
+            # "ρ ×10^-4 (Ω cm)" formally says ρ was multiplied by 10^-4, but authors who write a negative power on
+            # the quantity usually mean the unit's multiplier; the two readings differ by 10^8, so neither is taken.
+            return None, clean_unit(text)
+        return 1 / factor, unit_of(tail)  # "ρ × 10^4 (Ω cm)": ρ multiplied, the unit bracketed apart
+    if tail and tail[0] not in _OPENING:
+        return factor, unit_of(tail)  # "ρ × 10^-4 Ω·cm": the factor leads the unit written after it
+    return None, clean_unit(text)  # "ρ × 10^4": on the quantity, but no unit says so
 
 
 def has_scale_factor(text: str) -> bool:
@@ -591,20 +669,38 @@ def convert_to_canonical(
         return value, None, None
     if unit_raw is None:
         return _bare_number(spec, value)
-    scale, unit = split_scale_factor(unit_raw)
+    scale, unit = split_scale_factor(unit_raw, CONVERTERS[canonical])
+    if scale is None:
+        return (
+            None,
+            None,
+            f"power of ten in {unit_raw!r}: cannot tell whether it scales the quantity or the unit; ambiguous",
+        )
     if scale != 1.0 and value_text is not None and has_scale_factor(value_text):
         # "1.2 × 10⁻⁴" under a column headed "(×10⁻⁴ Ω·cm)" is either 1.2e-4 or 1.2e-8 depending on whether
         # the author applied the header. Applying the factor twice would manufacture a value; refuse.
         return None, None, "scale factor in both value and unit; ambiguous"
-    scale_note = f"scale factor {scale:g} taken from the unit" if scale != 1.0 else None
+    scale_note = f"scale factor {scale:g} taken from the header in the unit" if scale != 1.0 else None
     value *= scale
     if not unit:
         canonical_value, canonical_unit, note = _bare_number(spec, value)
         return canonical_value, canonical_unit, _join([n for n in (scale_note, note) if n])
     factor = CONVERTERS[canonical](unit)
     if factor is None:
+        # "1.1 Pa Ar", "3 mTorr (O2)": a pressure or flow named with the gas it belongs to. The gas says whose
+        # quantity it is, not what unit, so the unit is read without it -- only when the rest is a known unit.
+        gasless = _GAS_SUFFIX.sub("", unit)
+        if gasless != unit and gasless:
+            factor = CONVERTERS[canonical](gasless)
+            if factor is not None:
+                note = f"gas name in the unit ({unit[len(gasless) :].strip('()')}) set aside"
+                return value * factor, canonical, _join([n for n in (scale_note, note) if n])
         return None, None, f"unknown unit {unit_raw!r} for {canonical}"
     return value * factor, canonical, scale_note
+
+
+# A gas species written after a unit, bracketed or not (units are compared with their spaces removed).
+_GAS_SUFFIX = re.compile(r"\(?(?:Ar|O2|N2|H2|He|Kr|Xe|air)\)?$")
 
 
 def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | None, str | None]:
@@ -625,6 +721,48 @@ def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | Non
 # ---- Applying it to a lane ----------------------------------------------------------------------------------
 
 
+# "3 h 30 min", "2 hours and 15 minutes", "1 min 30 s": one duration written in two units, larger first.
+_COMPOUND = re.compile(
+    rf"^(?P<a>{_UNSIGNED})\s*(?P<ua>[a-zA-Z]+)\s*(?:and\s+)?(?P<b>{_UNSIGNED})\s*(?P<ub>[a-zA-Z]+)$", re.IGNORECASE
+)
+# The canonical units whose quantity is written as a sum of units. Only a duration is: anywhere else a second
+# unit restates the same value ("0.5 Pa 3.75 mTorr", "2 in 50 mm"), and adding the two doubles it.
+_SUMMED_UNITS = {"min"}
+
+
+def compound_value(spec: FieldSpec, text: str) -> float | None:
+    """The canonical value of a duration spelled in two of its units, larger first ("3 h 30 min" -> 210), or
+    None for anything else. The larger part must be whole and the smaller one less than one of the larger unit:
+    "1 h 90 min" is no way anyone writes 150 minutes, and "0.5 h 30 min" restates 30 minutes. Both units carry
+    their own factor, so the model's ``unit_raw`` -- which can name only one of them -- plays no part. ``text``
+    is the value alone: callers set aside what surrounds it (:func:`set_aside`).
+
+    The one reader of compound durations, for the comparison (:func:`normalize_field`) and for the dataset
+    cell (``decide``) alike, so the two never read one string differently."""
+    if spec.canonical_unit not in _SUMMED_UNITS:
+        return None
+    match = _COMPOUND.match(normalize_text(text).strip())
+    if match is None:
+        return None
+    convert = CONVERTERS[spec.canonical_unit]
+    big, small = convert(match.group("ua")), convert(match.group("ub"))
+    if big is None or small is None or big <= small or not match.group("a").isdigit():
+        # A fractional larger part ("0.5 h 30 min") is a restatement, not a sum: nobody writes 30 min that way.
+        return None
+    part = float(_plain(match.group("b"))) * small
+    if part >= big:
+        return None
+    return float(_plain(match.group("a"))) * big + part
+
+
+def _names_unit_of(spec: FieldSpec, text: str) -> bool:
+    """Whether ``text`` names a unit of the field's own quantity ("2 h" for a time, "°C" for a temperature)."""
+    if spec.canonical_unit is None:
+        return False
+    convert = CONVERTERS[spec.canonical_unit]
+    return any(convert(word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
+
+
 def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
@@ -632,6 +770,16 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
     word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    bare, context_notes, condition = set_aside(spelled)
+    if condition and _names_unit_of(spec, condition) and not _names_unit_of(spec, bare):
+        # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
+        note = f"the condition {condition!r} holds this field's quantity and the value does not; ambiguous"
+        return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
+    compound = compound_value(spec, bare)
+    if compound is not None:
+        compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"
+        note = "; ".join(n for n in (word_note, *context_notes, compound_note) if n)
+        return field.model_copy(update={"value": compound, "unit": spec.canonical_unit, "normalization_note": note})
     number, parse_note = parse_number(spelled)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})

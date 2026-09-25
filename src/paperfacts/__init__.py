@@ -26,4 +26,5 @@ Flat modules, in pipeline order:
 - ``dataset``     merge source evidence into unique values and export machine-learning tables to Excel
 - ``keys``        the cache keys that name stored extractions and comparisons
 - ``workflow``    orchestration; ``cli``, ``report`` and ``web`` are thin layers over it
+- ``stored``      what is stored for a document and whether it is still current (keys and parse)
 """

@@ -587,6 +587,15 @@ def test_a_reply_cut_off_at_max_tokens_is_an_error_and_is_not_cached(tmp_path: P
     assert not cache_dir.exists()
 
 
+def test_an_empty_reply_cut_off_at_max_tokens_is_the_same_response_error(tmp_path: Path):
+    # A reasoning model can spend the whole budget before writing a character. It is the same truncation, so it
+    # must cost one field question (extract catches LlmResponseError), not the lane.
+    llm = make_llm(lambda request: httpx.Response(200, json=_chat("", "length")), cache_dir=tmp_path / "llm_cache")
+
+    with pytest.raises(LlmResponseError, match="max_tokens"):
+        llm.complete_json(system="S", user="U")
+
+
 def test_content_that_is_not_text_is_an_llm_error():
     llm = make_llm(lambda request: httpx.Response(200, json=chat_response([{"type": "text", "text": "{}"}])))
 

@@ -158,9 +158,9 @@ def test_a_thousands_separator_does_not_split_the_number():
 
 
 def test_the_first_number_wins_when_several_are_present_and_the_count_is_recorded():
-    value, note = parse_number("550 nm, 80%")
+    value, note = parse_number("300 500")
 
-    assert value == 550.0
+    assert value == 300.0
     assert note == "2 numbers found, first used"
 
 
@@ -329,6 +329,30 @@ SPELLINGS = [
     ("1.2e-4", 1.2e-4, None),
     ("1.2x10^-4", 1.2e-4, None),
     ("15.6 to 16.3 nm", 15.95, "midpoint"),
+    # A list is several values, and a number carrying its own unit before another number is a value beside
+    # a second quantity: "550 nm: 85%" is a transmittance of 85 at 550 nm, never 550.
+    ("30, 40", None, "separated by"),
+    ("550 nm, 80%", None, "separated by"),
+    ("550 nm: 85%", None, "separated by"),
+    ("20; 30", None, "separated by"),
+    ("140 nm ATO/25 nm ITO", None, "its own unit"),
+    ("∅32 mm × 40 mm", None, "its own unit"),
+    # parse_number sees no field, so a compound duration is refused here; normalize_field reads it.
+    ("3 h 30 min", None, "its own unit"),
+    ("2 in x 3 in", None, "its own unit"),
+    # A condition introduced by "for", "during", "under" or "after" is set aside like one after "at". Not
+    # "in": that is also the inch.
+    ("400 °C for 2 h", 400.0, "condition 'for 2 h' ignored"),
+    ("400 °C in air for 1 h", 400.0, "condition 'for 1 h' ignored"),
+    ("500 °C under N2 for 1 h", 500.0, "condition 'under N2 for 1 h' ignored"),
+    ("90% for 550 nm", 90.0, "condition 'for 550 nm' ignored"),
+    # "after" introduces another state of the sample (after bending, after annealing), not a condition.
+    ("100 nm after annealing at 400 °C", None, "after"),
+    ("85% after 10 cycles", None, "after"),
+    ("15 after 1000 bending cycles", None, "after"),
+    # A tail is set aside only when the value keeps a number of its own: a quote opening with the verb reads.
+    ("deposited for 10 min", 10.0, None),
+    ("12 Ω/sq during 30 min", 12.0, "condition"),
 ]
 
 

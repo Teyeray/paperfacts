@@ -1,10 +1,11 @@
 """Score PaperFacts datasets against the hand-built gold set in eval/gold/.
 
-Pure standard library, so it runs anywhere the data is (a checkout on the server needs no extra env):
+Run it in the package's environment: a text field's closed categories are matched by the package's own rule
+(``normalize.canonical_category``), so the score can never disagree with the pipeline about what "RF" is.
 
-    python eval/score.py --data-root data                     # newest dataset of every gold document
-    python eval/score.py --data-root data --out report.md --json report.json
-    python eval/score.py --dataset 80c3b69d570c2b6d=path/to/dataset.json
+    uv run python eval/score.py --data-root data                     # newest dataset of every gold document
+    uv run python eval/score.py --data-root data --out report.md --json report.json
+    uv run python eval/score.py --dataset 80c3b69d570c2b6d=path/to/dataset.json
 
 The rules (sample alignment, cell outcomes, what counts toward precision and recall) are documented in
 eval/README.md; the code below implements exactly those rules and nothing else.
@@ -21,6 +22,8 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from paperfacts.normalize import canonical_category
+
 REPO = Path(__file__).resolve().parent.parent
 TARGET_GROUP = "target"
 OUTCOMES = ("correct", "soft", "wrong", "missing", "extra", "disputed")
@@ -33,6 +36,7 @@ class Spec:
     kind: str
     rel_tol: float
     abs_tol: float
+    categories: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,25 +52,22 @@ class Cell:
 
 
 def load_specs(config: Path) -> dict[str, Spec]:
+    """The field table as scoring needs it. Tolerances are optional and 0 when absent, as in ``fields.py``."""
     fields = json.loads(config.read_text(encoding="utf-8"))["fields"]
-    return {f["name"]: Spec(f["name"], f["group"], f["kind"], float(f["rel_tol"]), float(f["abs_tol"])) for f in fields}
+    return {
+        f["name"]: Spec(
+            f["name"],
+            f["group"],
+            f["kind"],
+            float(f.get("rel_tol", 0.0)),
+            float(f.get("abs_tol", 0.0)),
+            tuple(f.get("categories", ())),
+        )
+        for f in fields
+    }
 
 
 # ---------------------------------------------------------------------------------------------- value matching
-
-
-def _mode_key(text: str) -> frozenset[str]:
-    """Closed category set of the `mode` field, so 'RF magnetron sputtering' equals 'RF'."""
-    s = text.lower()
-    keys = set()
-    if "pulse" in s:
-        keys.add("pulsed dc")
-        s = re.sub(r"pulsed[\s-]*dc|dc[\s-]*pulsed", " ", s)
-    if re.search(r"\brf\b|radio", s):
-        keys.add("rf")
-    if re.search(r"\bdc\b|direct", s):
-        keys.add("dc")
-    return frozenset(keys)
 
 
 def _norm(text: str) -> str:
@@ -82,8 +83,11 @@ def value_matches(spec: Spec, got: object, cell: dict) -> bool:
             return math.isclose(float(got), float(gold), rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
         except (TypeError, ValueError):
             return False
-    if spec.name == "mode":
-        return bool(_mode_key(str(gold))) and _mode_key(str(got)) == _mode_key(str(gold))
+    # A field with closed categories: 'RF magnetron sputtering' is 'RF'. Text that names no category is
+    # compared as text below, exactly as the pipeline falls back.
+    wanted = canonical_category(spec.categories, str(gold))
+    if wanted is not None:
+        return canonical_category(spec.categories, str(got)) == wanted
     if _norm(got) == _norm(gold):
         return True
     return any(re.search(p, str(got), re.I) for p in cell.get("accept", ()))

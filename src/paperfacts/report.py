@@ -20,6 +20,8 @@ def render_lane(lane: LaneExtraction) -> Iterator[str]:
         f"ungrounded={len(lane.ungrounded())} unattributed={len(lane.unattributed)}{passes} "
         f"tokens={lane.usage.get('total_tokens', '?')} model={lane.model} key={lane.extractor_key}"
     )
+    for question in lane.failed_questions:
+        yield f"    (no valid answer to the {question.field} question; asked again next run: {question.detail})"
     if lane.target:
         for field in lane.target.fields:
             yield f"    target.{_value(field)}  ← {', '.join(field.source_ids) or '(no source)'}"

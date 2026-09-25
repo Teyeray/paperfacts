@@ -41,7 +41,7 @@ from paperfacts.config import (
     load_config,
 )
 from paperfacts.errors import ConfigError
-from paperfacts.fields import FIELD_SPECS, load_condition_keywords, load_field_specs
+from paperfacts.fields import FIELD_SPECS, FieldSpec, load_condition_keywords, load_field_specs
 
 SHIPPED = config_path({})
 
@@ -822,6 +822,28 @@ def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(monkeypatch
     finally:
         keys.schema_fingerprint.cache_clear()
         keys.extraction_schema_fingerprint.cache_clear()
+
+
+# Every FieldSpec cell the extraction key hashes: what the model is told, and what cleaning its answer reads.
+EXTRACTION_CELLS = {
+    "name",
+    "group",
+    "kind",
+    "description",
+    "canonical_unit",
+    "condition_hint",
+    "bare_number",
+    "valid_range",
+}
+
+
+def test_every_field_cell_is_classified_for_the_cache_keys():
+    # A cell nobody classified lands in extractor_key by default and renames every stored extraction. Adding
+    # one means deciding here which key it belongs to (and, if excluded, in keys.py).
+    cells = {field.name for field in dataclasses.fields(FieldSpec)}
+
+    assert cells == EXTRACTION_CELLS | keys._SCHEMA_EXCLUDED | keys._VERDICT_ONLY
+    assert not EXTRACTION_CELLS & (keys._SCHEMA_EXCLUDED | keys._VERDICT_ONLY)
 
 
 def test_a_tolerance_moves_only_the_comparison_key(monkeypatch):

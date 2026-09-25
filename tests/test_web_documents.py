@@ -25,11 +25,20 @@ from paperfacts.compare import ComparisonCounts
 from paperfacts.config import Settings
 from paperfacts.keys import ExtractionOptions, extractor_key
 from paperfacts.models import BACKENDS, DocumentInput
+from paperfacts.records import FailedQuestion
 from paperfacts.storage import write_text_atomic
 from paperfacts.web.documents import Library
 from support.extraction import make_field, make_sample
 from support.factories import make_block
-from support.web import DOC_KEY, DOC_SHA, seed_artifact, seed_cli_document, seed_extraction, seed_report
+from support.web import (
+    DOC_KEY,
+    DOC_SHA,
+    seed_artifact,
+    seed_cli_document,
+    seed_dataset,
+    seed_extraction,
+    seed_report,
+)
 
 PDF_BYTES = b"%PDF-1.7\n% fake but well-formed enough for the upload path\n"
 OTHER_PDF_BYTES = b"%PDF-1.7\n% a different document\n"
@@ -326,6 +335,73 @@ def test_a_report_of_an_earlier_parse_does_not_count(library: Library):
 
     assert library.summary(DOC_KEY).compared is False
     assert library.report(DOC_KEY) is None
+
+
+def test_a_dataset_of_an_earlier_parse_is_neither_served_nor_finished(library: Library):
+    # After a forced re-parse whose extraction then failed, the old table's source ids would open whatever
+    # block now holds that ordinal, and counted as finished the paper would never be run again.
+    old = seed_artifact(library, "mineru", blocks=(make_block(content="old"),))
+    seed_dataset(library, DOC_KEY, {"document_id": DOC_SHA, "artifact_sha256": {"mineru": old.content_hash()}})
+    assert library.dataset(DOC_KEY) is not None
+    assert library.finished(DOC_KEY) is True
+
+    seed_artifact(library, "mineru", blocks=(make_block(content="re-parsed"),))
+
+    assert library.dataset(DOC_KEY) is None
+    assert library.finished(DOC_KEY) is False
+
+
+def test_a_dataset_that_recorded_no_parse_is_still_served(library: Library):
+    # Written before the hashes were recorded: unknown, not a mismatch, as for comparisons.
+    seed_artifact(library, "mineru")
+    seed_dataset(library, DOC_KEY, {"document_id": DOC_SHA})
+
+    assert library.dataset(DOC_KEY) is not None
+    assert library.finished(DOC_KEY) is True
+
+
+def stage(library: Library, name: str):
+    return next(stage for stage in library.summary(DOC_KEY).stages if stage.name == name)
+
+
+def test_a_lane_with_an_unanswered_question_shows_as_a_failed_extraction(library: Library):
+    # After a reload nothing else says why the paper is not finished: compare and export just stay pending.
+    lane = seed_extraction(library, "mineru")
+    lane.model_copy(
+        update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
+    ).write(library.layout.extraction_path(DOC_SHA, "mineru", library.extractor_key))
+
+    extract = stage(library, "extract:mineru")
+
+    assert extract.status == "failed"
+    assert "thickness" in extract.detail
+    assert stage(library, "extract:paddleocr_vl").status == "pending"
+
+
+def test_an_unreadable_lane_does_not_show_as_done(library: Library):
+    path = library.layout.extraction_path(DOC_SHA, "mineru", library.extractor_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ torn", encoding="utf-8")
+
+    extract = stage(library, "extract:mineru")
+
+    assert extract.status == "failed"
+    assert "unreadable" in extract.detail
+
+
+def test_results_of_an_earlier_parse_show_as_pending_stages(library: Library):
+    # The same rule as /report, /dataset and run all: a comparison or table of another parse is not done.
+    old = seed_artifact(library, "mineru", blocks=(make_block(content="old"),))
+    report = seed_report(library)
+    report.model_copy(update={"artifact_sha256_a": old.content_hash()}).write(
+        library.layout.comparison_path(DOC_SHA, report.extractor_key, report.comparison_key)
+    )
+    seed_dataset(library, DOC_KEY, {"document_id": DOC_SHA, "artifact_sha256": {"mineru": old.content_hash()}})
+    assert (stage(library, "compare").status, stage(library, "export").status) == ("done", "done")
+
+    seed_artifact(library, "mineru", blocks=(make_block(content="re-parsed"),))
+
+    assert (stage(library, "compare").status, stage(library, "export").status) == ("pending", "pending")
 
 
 # ---- name and uploaded_at both come from identity ----------------------------------------------------

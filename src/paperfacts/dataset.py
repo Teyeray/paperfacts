@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
@@ -115,6 +115,9 @@ class DatasetPayload(BaseModel):
     filename: str = ""
     extractor_key: str = ""
     comparison_key: str = ""
+    # Per lane, the content hash of the parse the table was built from (see ParsedArtifact.content_hash): its
+    # cells cite blocks by position. A lane absent here is unknown (a file from before it was recorded).
+    artifact_sha256: dict[Backend, str] = {}
     fields: tuple[FieldColumn, ...] = ()
     paper_row: dict[str, CellValue] = {}
     sample_rows: tuple[dict[str, CellValue], ...] = ()
@@ -144,6 +147,10 @@ class DocumentDataset:
     quality_rows: tuple[Row, ...]
     extractor_key: str = ""
     comparison_key: str = ""
+    artifact_sha256: Mapping[Backend, str] = field(default_factory=dict)
+    # Why this run's table is not a finished result (incomplete_reason), or "". Such a table is written to the
+    # run's workbook but never stored as dataset.json, so it never crosses the payload.
+    incomplete: str = ""
 
     def to_payload(self) -> DatasetPayload:
         """The serialisable view the web UI and ``dataset.json`` share.
@@ -156,6 +163,7 @@ class DocumentDataset:
             filename=self.filename,
             extractor_key=self.extractor_key,
             comparison_key=self.comparison_key,
+            artifact_sha256=dict(self.artifact_sha256),
             fields=field_columns(),
             paper_row=dict(self.paper_row),
             sample_rows=tuple(dict(row) for row in self.sample_rows),
@@ -180,6 +188,7 @@ class DocumentDataset:
             quality_rows=tuple(MappingProxyType(dict(row)) for row in payload.quality_rows),
             extractor_key=payload.extractor_key,
             comparison_key=payload.comparison_key,
+            artifact_sha256=dict(payload.artifact_sha256),
         )
 
 
@@ -254,6 +263,20 @@ def _scope_comparisons(scope: _Scope, report: ComparisonReport) -> tuple[FieldCo
     )
 
 
+def incomplete_reason(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> str:
+    """Why a run's comparison and consolidated table must not be stored as finished, or "" when they may be.
+
+    Each reason is a model that answered badly this time, not a verdict about the paper. Stored, the result
+    would be served on every later run -- and the stored table marks the paper finished, so "run all" would
+    never retry it; unstored, the next run asks again, and only the failed request reaches the model, since
+    invalid answers are never cached (llm.complete_validated).
+    """
+    if report.matching.failed:
+        return "sample matching failed"
+    unanswered = [f"{backend}:{q.field}" for backend, lane in lanes.items() for q in lane.failed_questions]
+    return f"no valid answer to {', '.join(unanswered)}" if unanswered else ""
+
+
 def consolidate_document(
     document: DocumentInput, lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport
 ) -> DocumentDataset:
@@ -264,6 +287,8 @@ def consolidate_document(
         raise ValueError("document, extraction lanes and comparison report must refer to the same PDF")
     if any(lane.extractor_key != report.extractor_key for lane in lanes.values()):
         raise ValueError("extraction lanes and comparison report have different extractor keys")
+    incomplete = incomplete_reason(lanes, report)
+    unanswered = {question.field for lane in lanes.values() for question in lane.failed_questions}
     lanes = {backend: normalize_lane(lane) for backend, lane in lanes.items()}
     metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.display_filename}
     quality: list[Row] = []
@@ -297,7 +322,10 @@ def consolidate_document(
             if field.field == spec.name
         ]
         target[spec.name] = decide(
-            spec, evidence, [c for c in report.comparisons if c.scope == "target" and c.field == spec.name]
+            spec,
+            evidence,
+            [c for c in report.comparisons if c.scope == "target" and c.field == spec.name],
+            unanswered=spec.name in unanswered,
         )
     for spec in TARGET_FIELDS:
         record("target", spec, target[spec.name])
@@ -327,6 +355,7 @@ def consolidate_document(
                 evidence,
                 [c for c in scope_comparisons if c.field == spec.name],
                 blocked=_matching_blocked(scope),
+                unanswered=spec.name in unanswered,
                 row_sources=row_sources,
             )
             decisions[spec.name] = decision
@@ -391,6 +420,15 @@ def consolidate_document(
         tuple(quality),
         report.extractor_key,
         report.comparison_key,
+        {
+            backend: sha
+            for backend, sha in (
+                (report.backend_a, report.artifact_sha256_a),
+                (report.backend_b, report.artifact_sha256_b),
+            )
+            if sha is not None
+        },
+        incomplete,
     )
 
 
@@ -492,11 +530,13 @@ def write_dataset(
         {
             "document_id": doc.document_id,
             "filename": doc.filename,
-            "status": "success",
+            "status": "incomplete" if doc.incomplete else "success",
             "samples": len(doc.sample_rows),
             "extractor_key": doc.extractor_key,
             "comparison_key": doc.comparison_key,
-            "detail": "论文行采用一个完整样品；空白为缺失或未通过唯一值质量规则。",
+            "detail": f"未完成，下次运行重问：{doc.incomplete}"
+            if doc.incomplete
+            else "论文行采用一个完整样品；空白为缺失或未通过唯一值质量规则。",
         }
         for doc in unique
     ]

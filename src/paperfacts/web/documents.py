@@ -38,7 +38,8 @@ from paperfacts.storage import (
     stored_pdf,
     write_bytes_atomic,
 )
-from paperfacts.workflow import Stage, is_finished, read_lane, stored_comparison, stored_stages
+from paperfacts.stored import is_finished, stored_comparison, stored_dataset, stored_stages
+from paperfacts.workflow import Stage, read_lane
 
 logger = logging.getLogger(__name__)
 
@@ -211,10 +212,8 @@ class Library:
         Validation happens here, at the disk boundary: a file in the wrong shape raises
         ``ValidationError`` rather than travelling on as an untyped dict.
         """
-        path = self.layout.dataset_json_path(document_id, self.extractor_key, self.comparison_key)
-        if not path.is_file():
-            return None
-        return DatasetPayload.model_validate_json(path.read_text(encoding="utf-8"))
+        # Through workflow, so a table of an earlier parse counts as absent here too.
+        return stored_dataset(self.layout, document_id, self.extractor_key, self.comparison_key)
 
     def corpus(self) -> CorpusPayload:
         """The library-wide results table: one row per document that has a dataset under the current keys.

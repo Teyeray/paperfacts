@@ -773,6 +773,24 @@ def test_a_field_question_that_fails_propagates_instead_of_being_swallowed():
         extract(FakeLlmClient(explode), concurrency=4)
 
 
+@pytest.mark.parametrize("concurrency", [1, 4])
+def test_a_field_question_answered_badly_twice_costs_that_field_not_the_lane(concurrency: int):
+    # At temperature 0 a question whose answer is always malformed (a table that always truncates) would
+    # otherwise fail the paper on every run.
+    answers = responder(
+        sheet_resistance="this is not JSON",
+        ar_flow_rate=values_json({"sample_id": "A", "value_raw": "100", "unit_raw": "sccm"}),
+    )
+
+    lane = extract(FakeLlmClient(answers), concurrency=concurrency)
+
+    [failed] = lane.failed_questions
+    assert failed.field == "sheet_resistance"
+    assert "twice failed" in failed.detail
+    assert lane.sample("A").get("ar_flow_rate") is not None
+    assert lane.sample("A").get("sheet_resistance") is None
+
+
 def test_a_concurrency_below_one_is_rejected_before_any_call_is_made():
     client = FakeLlmClient([])
 
@@ -790,6 +808,18 @@ THREE_SAMPLES = [
     {"sample_id": "B", "label": "O2 200 sccm", "conditions": {"flow": "200 sccm"}},
     {"sample_id": "C", "label": "O2 300 sccm", "conditions": {"flow": "300 sccm"}},
 ]
+
+
+@pytest.mark.parametrize("system", [field_system_prompt(), extraction_system_prompt()])
+def test_both_modes_tell_the_model_to_copy_a_header_power_of_ten_into_the_unit(system):
+    # Guillén 2006 heads a column "ρ × 10^4 (Ω cm)"; both lanes stored its 6.8 as 6.8 Ω·cm. The code applies
+    # the factor (normalize.split_scale_factor) only if the model copies it, and it must never apply it itself.
+    assert '"ρ × 10^4 (Ω cm)"' in system
+    # Both examples carry the symbol, as the rule asks; a header without a factor gives the unit alone, which
+    # is all a unit converter recognises.
+    assert '"ρ (×10^-4 Ω·cm)"' in system
+    assert '"Thickness (nm)"' in system and 'just "nm"' in system
+    assert "never apply the factor yourself" in system
 
 
 def test_the_field_question_asks_for_the_series_flag_and_says_when_it_is_true():

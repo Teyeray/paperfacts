@@ -7,7 +7,7 @@ import pytest
 from openpyxl import load_workbook
 from pydantic import ValidationError
 
-from paperfacts.compare import compare_lanes
+from paperfacts.compare import FieldComparison, compare_lanes
 from paperfacts.dataset import (
     DatasetPayload,
     DocumentDataset,
@@ -15,10 +15,11 @@ from paperfacts.dataset import (
     write_dataset,
     write_dataset_json,
 )
-from paperfacts.fields import FIELD_SPECS
+from paperfacts.decide import decide
+from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
-from paperfacts.records import FieldValue, TargetRecord
+from paperfacts.records import FailedQuestion, FieldValue, TargetRecord
 from support.extraction import make_lane, make_sample
 from support.factories import DOC_ID
 
@@ -614,6 +615,103 @@ def test_a_paper_stating_550_nm_and_400_to_1100_nm_keeps_its_550_nm_value():
     assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
 
 
+def test_a_conflict_at_a_condition_narrowing_set_aside_does_not_refuse_the_chosen_one():
+    # Both lanes agree at 550 nm, the condition the rules prefer; their 400-1100 nm averages differ by more
+    # than the tolerance. That conflict is about a candidate the cell never states.
+    def lane(backend, average):
+        return [
+            value("transmittance", "90.1", "%", condition="at 550 nm", backend=backend),
+            value("transmittance", average, "%", condition="average 400-1100 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru", "87.4"), lane("paddleocr_vl", "89.0"))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
+
+
+def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell():
+    # Fail closed: only a conflict wholly about candidates narrowing set aside is ignored. One whose values
+    # match no candidate at all (a stale report, a changed normalisation) says nothing is known to be settled.
+    spec = FIELD_BY_NAME["transmittance"]
+    evidence = [
+        (backend, value("transmittance", raw, "%", condition=condition, backend=backend, grounded=True))
+        for backend in ("mineru", "paddleocr_vl")
+        for raw, condition in (("90.1", "at 550 nm"), ("87.4", "average 400-1100 nm"))
+    ]
+    stranger = value("transmittance", "70", "%", condition="at 550 nm", grounded=True)
+    comparisons = [
+        FieldComparison(scope="sample:A|A", field="transmittance", status="agree", a=evidence[0][1], b=evidence[2][1]),
+        FieldComparison(scope="sample:A|A", field="transmittance", status="conflict", a=stranger, b=None),
+    ]
+
+    assert decide(spec, evidence, comparisons).status == "conflict"
+
+
+def test_a_troubled_comparison_with_no_values_still_refuses_the_cell():
+    # Nothing ties it to a condition narrowing set aside, so it is not known to be about another measurement.
+    spec = FIELD_BY_NAME["transmittance"]
+    evidence = [
+        (backend, value("transmittance", raw, "%", condition=condition, backend=backend, grounded=True))
+        for backend in ("mineru", "paddleocr_vl")
+        for raw, condition in (("90.1", "at 550 nm"), ("87.4", "average 400-1100 nm"))
+    ]
+    comparisons = [
+        FieldComparison(scope="sample:A|A", field="transmittance", status="agree", a=evidence[0][1], b=evidence[2][1]),
+        FieldComparison(scope="sample:A|A", field="transmittance", status="ambiguous"),
+    ]
+
+    assert decide(spec, evidence, comparisons).status == "ambiguous"
+
+
+def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
+    def lane(backend, at_550):
+        return [
+            value("transmittance", at_550, "%", condition="at 550 nm", backend=backend),
+            value("transmittance", "87.4", "%", condition="average 400-1100 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru", "90.1"), lane("paddleocr_vl", "92.0"))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (None, "conflict")
+
+
+def test_a_field_one_lane_never_answered_is_refused_in_both_lanes():
+    # Committing the other lane's 150 nm as single_source would read as "lane A found nothing", which is not
+    # what happened: lane A was never given a valid answer. Lane symmetry is the measurement.
+    a = make_lane(samples=[make_sample("A", [value("sheet_resistance", "12", "Ω/sq")])]).model_copy(
+        update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off"),)}
+    )
+    b = make_lane(
+        backend="paddleocr_vl",
+        samples=[
+            make_sample(
+                "A",
+                [
+                    value("thickness", "150", "nm", backend="paddleocr_vl"),
+                    value("sheet_resistance", "12", "Ω/sq", backend="paddleocr_vl"),
+                ],
+            )
+        ],
+    )
+    matching = SampleMatching(
+        pairs=(SampleMatch(a_id="A", b_id="A", confidence=1.0, method="llm", justification="test"),)
+    )
+
+    result = dataset(a, b, matching)
+
+    assert (result.paper_row["thickness"], decision(result, "thickness")["decision"]) == (None, "unanswered")
+    assert decision(result, "sheet_resistance")["decision"] == "agree"
+    assert "no valid answer to mineru:thickness" in result.incomplete
+
+
+@pytest.mark.parametrize("raw", ["3 h 30 min", "~3 h 30 min", "3 h 30 min at 400 °C"])
+def test_a_compound_duration_reaches_the_cell(raw):
+    # The comparison read these as 210 min; the cell must read them the same way, not refuse them.
+    result = paired(*both([value("annealing_time", raw, "h")]))
+
+    assert (result.paper_row["annealing_time"], decision(result, "annealing_time")["decision"]) == (210.0, "agree")
+
+
 def test_two_peaks_inside_one_preference_entry_are_still_refused():
     fields = [
         value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
@@ -865,6 +963,18 @@ def test_from_payload_reverses_to_payload_exactly():
 
     assert restored == result
     assert restored.to_payload() == result.to_payload()
+
+
+def test_the_dataset_records_the_parses_it_came_from():
+    # Its cells cite blocks by position, so a reader must be able to tell a table of an earlier parse.
+    a = make_lane(samples=[make_sample("A")]).model_copy(update={"artifact_sha256": "a" * 64})
+    b = make_lane(backend="paddleocr_vl").model_copy(update={"artifact_sha256": "b" * 64})
+
+    result = dataset(a, b)
+    restored = DocumentDataset.from_payload(DatasetPayload.model_validate_json(result.to_payload().model_dump_json()))
+
+    assert result.artifact_sha256 == {"mineru": "a" * 64, "paddleocr_vl": "b" * 64}
+    assert restored == result
 
 
 def test_a_dataset_file_in_the_wrong_shape_fails_at_the_boundary():

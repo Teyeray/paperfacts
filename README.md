@@ -120,8 +120,10 @@ verify: `scripts/deploy.sh --pull --rerun` does exactly that and then re-runs, f
 document whose stored results the new cache keys displaced. `scripts/deploy.sh --help` lists the rest
 (`--check` reports whether the running service is stale). It refuses to restart only while a job is queued or
 running (`GET /api/jobs`; `--force` overrides), since a restart drops those; a document that was never run or
-failed for good does not block it. The web password is read from `.env` the way the service reads it, and
-reaches `curl` on stdin, never on its command line.
+failed for good does not block it. Every setting it needs is read the way the service reads it: the web
+password from `.env`; the web user and the paddle lane's settings from `.env` (`PAPERFACTS_WEB_USERNAME`,
+`PAPERFACTS_PADDLE_VL_*`, quoted or not) and otherwise from `config.json`. The credentials reach `curl` on
+stdin, never on its command line.
 
 **The current server has a single GPU (id 0).** All three services default to it; GPU ids are set per
 service by env var (Docker Compose's `device_ids`, or `CUDA_VISIBLE_DEVICES` for the host scripts), so a
@@ -692,17 +694,29 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
-Extractions and comparisons also record the parse they came from (a hash of the artifact's blocks).
-After a re-parse, a stored lane or comparison of the old parse is a miss and is derived again: source ids
+Extractions, comparisons and consolidated tables also record the parse they came from (a hash of the
+artifact's blocks). After a re-parse, a stored lane, comparison or table of the old parse is a miss (not
+served, and the paper is not finished) and is derived again: source ids
 are positional, so the old citations would point at whatever block now has that ordinal. Re-deriving is
 free from the LLM cache whenever the rendered prompts are byte-identical. Files written before the hash was
-recorded have none and are read as before.
+recorded have none and are read as before -- which for a consolidated table means it is served even after a
+re-parse. Re-export once after upgrading (`paperfacts export data/docs`, offline and free) to record the
+hashes in every stored table.
 
 Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
 costs one repair request and is never written as the answer (it is kept apart only for
 [offline replay](#offline-replay)), and an invalid answer already in the cache is asked again rather than
 replayed. A sample matching that failed (the model answered badly twice) is shown for that run
-but not stored, so the next run asks again instead of serving the failure until `--force`.
+but not stored, so the next run asks again instead of serving the failure until `--force`. Neither is that
+run's consolidated table (`datasets/…json`, only `dataset.xlsx` is written): the stored table is what marks
+a paper finished, so 「处理全部未完成」 and `deploy.sh --rerun` pick the paper up again.
+
+The same holds for one field question in passage mode that gets no valid answer (invalid twice, or cut off):
+it costs that field, not the lane. The lane is stored with the question in `failed_questions` and its other
+fields intact; that field's cells are `unanswered` in both lanes; the run's workbook marks the paper
+`incomplete` in 运行记录 (and `run`/`batch` say so); the comparison and table of that run are not stored, and the next run extracts the lane again,
+which re-asks only that question (every other answer replays from the cache). The inventory question and
+transport failures still fail the lane.
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
 serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own
@@ -801,9 +815,10 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 |---|---|
 | `agree` | Both lanes produced the same value. Committed |
 | `single_source` | One lane produced it, grounded and cited. Committed |
-| `conflict` | The lanes produced different values |
+| `conflict` | The lanes produced different values. Once a condition is chosen, only a conflict involving a candidate at that condition counts: differing 400-1100 nm averages do not refuse a cell whose preferred 550 nm values agree |
 | `ambiguous` | The lanes could not be decided between, or the sample match fell below `ambiguous_match_confidence` |
 | `ungrounded` | No evidence both located in the text and carrying a valid citation |
+| `unanswered` | One lane's question about this field got no valid answer. Refused in both lanes, so the other lane's value never passes as single-source; the next run asks that question again |
 | `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
 | `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
@@ -828,9 +843,22 @@ Approximate values and measurements with ± uncertainty keep their centre value 
 `(4.5 ± 0.2) × 10⁻⁴`. A spelling with no single safe reading is refused and compared as ambiguous rather
 than guessed: a ratio such as `1:4` or `10/10`, a pair that does not ascend (`10-4` is as likely 10⁻⁴
 without its caret as a range), a range whose exponent is written once (`1.2-1.5 × 10⁻³`), bounds in two
-different units, two values joined by "and", or scientific notation with other numbers beside it. A range
+different units, two values joined by "and", a list (`30, 40`), a number with its own unit before another
+number (`550 nm: 85%`, `140 nm ATO/25 nm ITO`), or scientific notation with other numbers beside it. One
+duration written in two of its units, larger first, is one value: `3 h 30 min` is 210 min, `1 min 30 s` is
+1.5 min, in the comparison and the dataset cell alike (`1 h 90 min` is refused). Only a duration is a sum:
+elsewhere a second unit restates the value (`0.5 Pa 3.75 mTorr`), and that is refused. A power of ten in a
+table header is copied by the model into `unit_raw` and applied by the code in the convention the header
+wrote: leading the unit (`ρ (10^-4 Ω cm)`, `×10^-4 Ω·cm`, `ρ × 10^-4 Ω·cm`) the cell is multiplied by it;
+on the quantity with the unit bracketed apart (`ρ × 10^4 (Ω cm)`) it is divided, so a cell of 6.8 is
+6.8 × 10⁻⁴ Ω·cm either way. A header that says neither (`Ω·cm × 10^-4`, a factor bracketed alone beside the
+symbol as in `ρ (×10^-4) (Ω cm)`, `ρ × 10^4` with no unit), or a cell that carries its own power of ten as
+well, is refused. A range
 keeps its midpoint whether or not each bound repeats the unit (`80%–85%`, `500 °C to 530 °C`). A condition
-after the value (`550 nm at 80%`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
+after the value (`550 nm at 80%`, `400 °C for 2 h`, `500 °C under N2`; `at`, `for`, `during`, `under`, and only
+when a number stays before it, so `deposited for 10 min` still reads 10; a condition holding the field's own
+quantity when the value does not, such as annealing time `400 °C for 2 h`, is refused; `after` introduces
+another state of the sample, so `85% after 10 cycles` is refused), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
 unit exponent (`H2`, `cm^-3`) are set aside with a note, never read as the value. On a field whose bare
 number may be a fraction, only a value below 1 is read as one: a bare `1` is 1 %, not 100 %. A value
 the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to
