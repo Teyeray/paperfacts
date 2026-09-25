@@ -151,9 +151,10 @@ this file is the part that is easy to get wrong.
 - Controls that re-render their own table carry a `data-focus` key and the re-render goes through
   `keepFocus`, so keyboard focus survives. Clickable rows and cells are focusable and act on Enter/Space.
 - The HTTP edge (`web/app.py`'s one middleware): Basic auth compared as UTF-8 bytes, a same-origin check
-  on every non-GET request, frame/nosniff headers on every response, and the upload's `Content-Length`
-  checked before its body is read. `/api/jobs` is briefs without logs; finished jobs are pruned to the
-  newest 200.
+  on every non-GET request (`Sec-Fetch-Site` decides alone when present; Origin/Referer against Host is
+  only the fallback), and frame/nosniff headers on every response. The upload size is the upload route's
+  own first step: a declared `Content-Length` is the fast path, the bytes that arrive are counted anyway,
+  so a chunked body is fine. `/api/jobs` is briefs without logs; finished jobs are pruned to the newest 200.
 - Background jobs run on `web.max_parallel_documents` workers, never two on the same document; a worker
   takes the oldest queued job whose document is free. A `Job` is a frozen value in a lock-guarded dict,
   replaced whole on every transition, so a poller never sees a half-applied state. Submitting the same

@@ -26,7 +26,7 @@ Endpoints (all under ``/api``, JSON)::
 
 All business logic lives in :mod:`paperfacts.workflow` (the job body is ``run_document``); this
 module only does the HTTP mapping, and guards its edge: the login, a same-origin check on every request
-that changes something, frame and sniffing headers, and an upload size checked before the body is read.
+that changes something, frame and sniffing headers, and an upload size counted as the body arrives.
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 from starlette.datastructures import UploadFile
+from starlette.types import Message
 
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
@@ -69,7 +70,6 @@ STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_CHUNK_BYTES = 1 << 20
 # Room for the multipart boundary and part headers around the one file an upload carries.
 UPLOAD_OVERHEAD_BYTES = 64 * 1024
-UPLOAD_PATH = "/api/documents"
 EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # On every response, the login prompt included: nothing here is meant to be framed (the run buttons could
@@ -113,10 +113,16 @@ def same_origin(request: Request) -> bool:
     the operator visits could queue a forced rerun of the whole library. Browsers state where a request
     came from (``Sec-Fetch-Site``, ``Origin``, ``Referer``); a request that states nothing is not from a
     browser, and a client that is not a browser cannot be tricked into sending the operator's login.
-    Only the host is compared: behind the tunnel the page is https while this server sees plain http.
+
+    ``Sec-Fetch-Site`` is the browser's own verdict, which page script cannot set, so when it is there it
+    decides alone (``none`` is the user typing the URL or following a bookmark). Comparing hosts instead
+    would refuse the real UI behind any proxy that rewrites ``Host``. Only a browser that sends no Fetch
+    Metadata falls back to the host comparison, and only the host: behind the tunnel the page is https
+    while this server sees plain http.
     """
-    if request.headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
-        return False
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site in {"same-origin", "none"}
     source = request.headers.get("origin") or request.headers.get("referer")
     if source is None:
         return True
@@ -124,23 +130,6 @@ def same_origin(request: Request) -> bool:
         return False
     hosts = {request.headers.get("host"), (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()}
     return urlsplit(source).netloc in hosts - {None, ""}
-
-
-def upload_too_large(request: Request, settings: Settings) -> Response | None:
-    """The answer to an upload refused by its declared size alone, before a byte of its body is read.
-
-    Starlette spools a multipart file to disk without any limit, so a limit checked in the route only
-    decides whether to keep a body that already filled the temp directory. A body that does not declare
-    its length is refused for the same reason; a browser always declares it for a form.
-    """
-    if request.method != "POST" or request.url.path != UPLOAD_PATH:
-        return None
-    declared = request.headers.get("content-length")
-    if declared is None:
-        return JSONResponse({"detail": "Upload needs a Content-Length"}, status_code=411)
-    if not declared.isdigit() or int(declared) > settings.max_upload_bytes + UPLOAD_OVERHEAD_BYTES:
-        return JSONResponse({"detail": _too_large(settings.max_upload_bytes)}, status_code=413)
-    return None
 
 
 def pipeline_runner(settings: Settings, library: Library) -> JobRunner:
@@ -201,8 +190,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         The app is published through a tunnel on this machine, so this is all that stands between the
         internet and a library that can upload PDFs and spend LLM tokens. The password gate is off unless a
         password is configured, which is what a laptop wants; a 401 carrying ``WWW-Authenticate`` is what
-        makes a browser ask for the login instead of showing the app. The origin check and the upload size
-        apply either way.
+        makes a browser ask for the login instead of showing the app. The origin check applies either way.
         """
         response = _refusal(request)
         if response is None:
@@ -220,7 +208,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         if request.method not in SAFE_METHODS and not same_origin(request):
             logger.warning("refused a cross-origin %s %s", request.method, request.url.path)
             return JSONResponse({"detail": "Cross-origin request refused"}, status_code=403)
-        return upload_too_large(request, settings)
+        return None
 
     def require_document(document_id: str) -> None:
         # A malformed id is as absent as an unknown one, and the detail says only that: the id convention
@@ -266,7 +254,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         )
 
     @app.post(
-        UPLOAD_PATH,
+        "/api/documents",
         status_code=202,
         openapi_extra={
             "requestBody": {
@@ -285,8 +273,18 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     )
     async def upload_document(request: Request, force: Annotated[bool, Query()] = False) -> UploadAccepted:
         """One PDF per request. The form is parsed here rather than through a ``File()`` parameter because
-        only this call can cap the parts: left to the default, one request may carry a thousand files."""
-        async with request.form(max_files=1, max_fields=0) as form:
+        only this call can cap the parts: left to the default, one request may carry a thousand files.
+
+        The size is checked before the body is parsed, because Starlette spools a multipart file to disk
+        without any limit. A declared length over the limit is refused unread; the bytes that actually
+        arrive are counted too, so a chunked body (which declares nothing) or one that lies is refused the
+        moment it passes the limit.
+        """
+        limit = settings.max_upload_bytes + UPLOAD_OVERHEAD_BYTES
+        declared = request.headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > limit):
+            raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
+        async with _capped(request, limit, settings.max_upload_bytes).form(max_files=1, max_fields=0) as form:
             file = form.get("file")
             if not isinstance(file, UploadFile):
                 raise HTTPException(status_code=422, detail="Expected one PDF in the multipart field 'file'")
@@ -459,6 +457,22 @@ class _RevalidatedStaticFiles(StaticFiles):
         response = super().file_response(*args, **kwargs)
         response.headers["cache-control"] = "no-cache"
         return response
+
+
+def _capped(request: Request, limit: int, max_upload_bytes: int) -> Request:
+    """The same request, whose body raises 413 once more than ``limit`` bytes of it have arrived."""
+    received = 0
+
+    async def receive() -> Message:
+        nonlocal received
+        message = await request.receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise HTTPException(status_code=413, detail=_too_large(max_upload_bytes))
+        return message
+
+    return Request(request.scope, receive)
 
 
 async def _read_limited(file: UploadFile, limit: int) -> bytes:

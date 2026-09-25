@@ -178,10 +178,13 @@ sends HTTP Basic credentials, so an open tunnel cannot upload PDFs or spend toke
 open, which is what a laptop wants. Run it long-lived in tmux.
 
 Either way, a request that changes something (every POST) is refused with 403 when the browser says it
-came from another site (`Sec-Fetch-Site`, `Origin` or `Referer` naming another host; `X-Forwarded-Host`
-is honoured behind a proxy), so a page elsewhere cannot use a logged-in browser to queue work. Every
-response forbids framing and MIME sniffing. An upload carries one PDF and must declare a `Content-Length`
-within `server.max_upload_mb`; a larger one is refused before its body is read.
+came from another site, so a page elsewhere cannot use a logged-in browser to queue work. The browser's
+`Sec-Fetch-Site` decides when it is sent (`same-origin` or `none` pass), so a proxy that rewrites `Host`
+does not lock out the UI; only without it are `Origin` or `Referer` compared with `Host` (or
+`X-Forwarded-Host`). A request naming no origin at all (curl, `scripts/deploy.sh`) is not a browser and
+passes. Every response forbids framing and MIME sniffing. An upload carries one PDF within
+`server.max_upload_mb`: a declared `Content-Length` over it is refused unread, and the bytes that arrive
+are counted, so a chunked upload without a length works and a larger one is refused as it passes the limit.
 
 ### How code reaches the server
 

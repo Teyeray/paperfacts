@@ -3,7 +3,7 @@ shapes the frontend draws progress from.
 
 The app is reachable through a public tunnel with the operator's Basic login cached in their browser, so
 a page elsewhere can make that browser send requests here. Those requests are what the origin check is
-for; the size check keeps an upload from filling the disk before the route ever sees it.
+for; the size check keeps an upload from filling the disk before its form is parsed.
 """
 
 from __future__ import annotations
@@ -96,6 +96,9 @@ def test_the_login_prompt_carries_the_same_headers(settings: Settings):
         {"Referer": "https://evil.example/page"},
         {"Sec-Fetch-Site": "cross-site"},
         {"Sec-Fetch-Site": "same-site", "Origin": "http://testserver"},
+        # the browser's verdict decides alone: a matching host does not overrule it
+        {"Sec-Fetch-Site": "cross-site", "Origin": "http://testserver"},
+        {"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example", "X-Forwarded-Host": "evil.example"},
     ],
 )
 def test_a_cross_origin_request_that_changes_something_is_refused(
@@ -124,10 +127,30 @@ def test_a_cross_origin_upload_never_reaches_the_library(client: TestClient, lib
         {"Origin": "https://testserver", "Sec-Fetch-Site": "same-origin"},  # https at the tunnel, http here
         {"Referer": "http://testserver/#/doc/0123456789abcdef"},
         {"Origin": "https://paperfacts.example.org", "X-Forwarded-Host": "paperfacts.example.org"},
+        {"Sec-Fetch-Site": "none"},  # typed into the address bar or opened from a bookmark
     ],
 )
 def test_a_same_origin_request_goes_through(client: TestClient, headers: dict[str, str]):
     assert client.post("/api/documents/run-all", headers=headers).status_code == 202
+
+
+def test_the_browsers_same_origin_verdict_survives_a_proxy_that_rewrites_host(client: TestClient):
+    # A proxy that sets Host to its upstream (nginx `proxy_set_header Host $proxy_host`, cloudflared's
+    # httpHostHeader) and no X-Forwarded-Host: the hosts no longer match, but the browser already said.
+    headers = {
+        "Host": "127.0.0.1:8000",
+        "Origin": "https://paperfacts.yangruiming.org",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
+    assert client.post("/api/documents/run-all", headers=headers).status_code == 202
+
+
+def test_without_fetch_metadata_a_rewritten_host_falls_back_to_refusing(client: TestClient):
+    # An older browser that sends only Origin: the host comparison is all there is, and it does not match.
+    headers = {"Host": "127.0.0.1:8000", "Origin": "https://paperfacts.yangruiming.org"}
+
+    assert client.post("/api/documents/run-all", headers=headers).status_code == 403
 
 
 def test_reading_is_never_refused_for_its_origin(client: TestClient):
@@ -135,7 +158,7 @@ def test_reading_is_never_refused_for_its_origin(client: TestClient):
     assert client.get("/api/documents", headers={"Origin": "https://evil.example"}).status_code == 200
 
 
-# ---- upload limits, before the body is read ----------------------------------------------------------
+# ---- upload limits, before the body is parsed ---------------------------------------------------------
 
 
 def test_an_upload_declaring_more_than_the_limit_is_refused_unread(settings: Settings, pdf_bytes: bytes):
@@ -151,15 +174,62 @@ def test_an_upload_declaring_more_than_the_limit_is_refused_unread(settings: Set
     assert "MB" in response.json()["detail"]
 
 
-def test_an_upload_without_a_declared_length_is_refused(client: TestClient):
-    def chunks() -> Iterator[bytes]:
-        yield b"--x\r\n"
-
-    response = client.post(
-        "/api/documents", content=chunks(), headers={"Content-Type": "multipart/form-data; boundary=x"}
+def multipart(data: bytes, boundary: str = "x") -> bytes:
+    return (
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="paper.pdf"\r\n'
+            "Content-Type: application/pdf\r\n\r\n"
+        ).encode()
+        + data
+        + f"\r\n--{boundary}--\r\n".encode()
     )
 
-    assert response.status_code == 411
+
+def chunked(body: bytes, size: int = 4096) -> Iterator[bytes]:
+    # A generator body makes the client send Transfer-Encoding: chunked with no Content-Length, as a proxy
+    # that re-frames the request would.
+    for start in range(0, len(body), size):
+        yield body[start : start + size]
+
+
+def test_a_chunked_upload_without_a_declared_length_is_accepted(client: TestClient, library: Library, pdf_bytes: bytes):
+    response = client.post(
+        "/api/documents",
+        content=chunked(multipart(pdf_bytes)),
+        headers={"Content-Type": "multipart/form-data; boundary=x"},
+    )
+
+    assert "content-length" not in response.request.headers
+    assert response.status_code == 202
+    assert [summary.name for summary in library.list()] == ["paper.pdf"]
+
+
+def test_a_chunked_upload_is_refused_once_its_bytes_pass_the_limit(settings: Settings, pdf_bytes: bytes):
+    small = dataclasses.replace(settings, max_upload_bytes=1024)
+    with TestClient(create_app(small)) as client:
+        response = client.post(
+            "/api/documents",
+            content=chunked(multipart(pdf_bytes + b"x" * (256 * 1024))),
+            headers={"Content-Type": "multipart/form-data; boundary=x"},
+        )
+
+    assert response.status_code == 413
+    assert Library(small).list() == []
+
+
+def test_it_is_the_bytes_that_are_counted_not_the_file(settings: Settings, pdf_bytes: bytes):
+    # The multipart parser skips a preamble before the first boundary, so a small file can arrive in a large
+    # body. Only a count of what arrived refuses it; the file-size check after parsing would not.
+    small = dataclasses.replace(settings, max_upload_bytes=len(pdf_bytes) + 1024)
+    with TestClient(create_app(small)) as client:
+        response = client.post(
+            "/api/documents",
+            content=chunked(b"y" * (256 * 1024) + b"\r\n" + multipart(pdf_bytes)),
+            headers={"Content-Type": "multipart/form-data; boundary=x"},
+        )
+
+    assert response.status_code == 413
 
 
 def test_one_upload_carries_one_file(client: TestClient, library: Library, pdf_bytes: bytes):
