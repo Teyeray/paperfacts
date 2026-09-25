@@ -751,7 +751,13 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `ungrounded` | No evidence both located in the text and carrying a valid citation |
 | `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
-| `non_scalar` | A range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
+| `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
+
+Two things are not refusals. A bound or range beside a scalar (`>80 %` next to `80.6 %`) is set aside with a
+note and the scalar decides the cell; only a cell holding nothing else is `non_scalar`. And several condition
+texts in one lane that all give the same number within the field's tolerance ("100 nm, by TEM cross-section",
+"100 nm, not reduced by the forming gas") are one measurement, committed with the texts joined -- unless the
+conditions name different numbers: 85 % at 450 nm and 85 % at 600 nm stay two measurements.
 
 Approximate values and measurements with ± uncertainty keep their centre value and carry a note, including
 `(4.5 ± 0.2) × 10⁻⁴`. A spelling with no single safe reading is refused and compared as ambiguous rather

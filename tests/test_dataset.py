@@ -155,6 +155,67 @@ def test_approximation_and_uncertainty_keep_documented_center(raw, expected):
     assert "中心值" in decision(result, "thickness")["detail"]
 
 
+def test_a_lower_bound_beside_a_scalar_is_set_aside_rather_than_refusing_the_cell():
+    # Bauden O2-100sccm: both lanes quote 80.6 % (380-780 nm) and ">80 %" (500-2500 nm).
+    def lane(backend):
+        return [
+            value("transmittance", "80.6", "%", condition="380-780 nm", backend=backend),
+            value("transmittance", ">80", "%", condition="500-2500 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (80.6, "agree")
+    assert "已排除不是唯一标量的候选" in row["detail"] and ">80" in row["detail"]
+    assert row["conditions"] == "380-780 nm"
+
+
+def test_a_cell_holding_only_bounds_and_ranges_is_still_non_scalar():
+    def lane(backend):
+        return [
+            value("transmittance", ">80", "%", condition="500-2500 nm", backend=backend),
+            value("transmittance", "80-85", "%", condition="400-800 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    assert decision(result, "transmittance")["decision"] == "non_scalar"
+
+
+def test_one_value_under_differently_worded_conditions_is_one_measurement():
+    # GZO HN450: every candidate is 100 nm, under free-text notes rather than measurement conditions.
+    def lane(backend):
+        return [
+            value("thickness", "100", "nm", condition="measured by TEM cross-section", backend=backend),
+            value(
+                "thickness",
+                "100",
+                "nm",
+                condition="thickness not reduced after forming gas post-treatment",
+                backend=backend,
+            ),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "thickness")
+    assert (result.paper_row["thickness"], row["decision"]) == (100, "agree")
+    assert "视为同一测量" in row["detail"]
+    assert "measured by TEM cross-section" in row["conditions"] and "forming gas" in row["conditions"]
+
+
+def test_different_values_under_differently_worded_conditions_stay_refused():
+    fields = [
+        value("thickness", "100", "nm", condition="measured by TEM cross-section"),
+        value("thickness", "140", "nm", condition="by profilometry"),
+    ]
+
+    result = paired(fields, [])
+
+    assert decision(result, "thickness")["decision"] == "multiple_conditions"
+
+
 def test_a_comparison_cannot_hide_different_same_condition_values_in_one_lane():
     result = paired(
         [value("thickness", "300", "nm"), value("thickness", "400", "nm")],
@@ -323,7 +384,7 @@ def test_zhaos_average_over_400_to_1100_nm_is_preferred_over_the_other_ranges():
 def test_two_peaks_inside_one_preference_entry_are_still_refused():
     fields = [
         value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
-        value("transmittance", "96.0", "%", condition="max 400-800 nm after anneal"),
+        value("transmittance", "97.5", "%", condition="max 400-800 nm after anneal"),
     ]
 
     result = paired(fields, [])

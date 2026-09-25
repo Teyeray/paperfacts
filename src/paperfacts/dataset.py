@@ -425,6 +425,24 @@ def _held_to(
     return kept or None
 
 
+def _one_measurement(spec: FieldSpec, parsed: Sequence[tuple[Backend, FieldValue, CellValue]]) -> bool:
+    """Whether a lane's several condition texts are notes on one measurement rather than several.
+
+    "100 nm, by TEM cross-section" and "100 nm, not reduced by the forming gas" give one number (within the
+    field's tolerance) under two wordings: that is one thickness. Conditions naming different numbers are
+    never merged this way, however equal the values: 85 % at 450 nm and 85 % at 600 nm are two measurements.
+    """
+    for backend in BACKENDS:
+        same_lane = [(value.condition, scalar) for lane, value, scalar in parsed if lane == backend]
+        for index, (condition, scalar) in enumerate(same_lane):
+            for other_condition, other in same_lane[index + 1 :]:
+                if conditions_measure_differently(condition, other_condition):
+                    return False
+                if not _within_tolerance(scalar, other, spec):
+                    return False
+    return True
+
+
 def _decide(
     spec: FieldSpec,
     evidence: Sequence[tuple[Backend, FieldValue]],
@@ -458,35 +476,59 @@ def _decide(
         return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
     if len(trusted) != len(evidence):
         details.append("已排除未定位到原文或缺少有效引用的候选")
+    # A bound (">80 %") or a range beside a scalar is a weaker statement of the same property, not a rival
+    # measurement: it is set aside, and only a cell holding nothing but such statements is refused.
+    parsed: list[tuple[Backend, FieldValue, CellValue]] = []
+    notes: dict[int, str] = {}
+    unparsed: list[tuple[Backend, FieldValue, str]] = []
+    for backend, value in trusted:
+        scalar, note = _scalar(value, spec)
+        if scalar is None:
+            unparsed.append((backend, value, note or "无法生成唯一标量"))
+            continue
+        parsed.append((backend, value, scalar))
+        if note:
+            notes[id(value)] = note
+    if not parsed:
+        return reject("non_scalar", unparsed[0][2])
+    if unparsed:
+        dropped = _joined(
+            [f"{backend}: {value.value_raw} {value.unit_raw or ''}".strip() for backend, value, _ in unparsed]
+        )
+        details.append(f"已排除不是唯一标量的候选（{dropped}）：{unparsed[0][2]}")
+        conditions = _joined([value.condition or "" for _, value, _ in parsed])
+        sources = _joined(sorted({source for _, value, _ in parsed for source in value.source_ids}))
     # Per lane only: the two lanes word the same condition differently ("after sputtering" vs
     # "after deposition"), so only a lane disagreeing with itself is evidence of several measurements.
     # The key is normalize_key, the same one compare.py and extract.py judge conditions by, so a
     # condition the comparison report called one thing is never two here.
     narrowed = any(
-        len({normalize_key(value.condition) for lane, value in trusted if lane == backend}) > 1 for backend in BACKENDS
+        len({normalize_key(value.condition) for lane, value, _ in parsed if lane == backend}) > 1
+        for backend in BACKENDS
     )
+    one_measurement = False
     if narrowed:
-        chosen_condition = _one_condition(spec, trusted, row_sources)
-        if chosen_condition is None:
+        chosen_condition = _one_condition(spec, [(backend, value) for backend, value, _ in parsed], row_sources)
+        if chosen_condition is not None:
+            # The cell now states one of several measurements, so it names only that one's condition and blocks.
+            kept, reason = chosen_condition
+            kept_ids = {id(value) for _, value in kept}
+            parsed = [item for item in parsed if id(item[1]) in kept_ids]
+            conditions = _joined([value.condition or "" for _, value, _ in parsed])
+            sources = _joined(sorted({source for _, value, _ in parsed for source in value.source_ids}))
+            details.append(f"该样品有多种测量条件；{reason}")
+        elif _one_measurement(spec, parsed):
+            one_measurement = True
+            details.append("同一解析通道的多种条件表述给出同一数值，视为同一测量")
+        else:
             return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
-        # The cell now states one of several measurements, so it names only that one's condition and blocks.
-        trusted, reason = chosen_condition
-        conditions = _joined([value.condition or "" for _, value in trusted])
-        sources = _joined(sorted({source for _, value in trusted for source in value.source_ids}))
-        details.append(f"该样品有多种测量条件；{reason}")
-    parsed: list[tuple[Backend, FieldValue, CellValue]] = []
-    for backend, value in trusted:
-        scalar, note = _scalar(value, spec)
-        if scalar is None:
-            return reject("non_scalar", note or "无法生成唯一标量")
-        parsed.append((backend, value, scalar))
-        if note:
-            details.append(note)
+    details.extend(notes[id(value)] for _, value, _ in parsed if id(value) in notes)
+    same = _within_tolerance if one_measurement else _same_value
     # compare.py keeps the first value per condition. Inspect every extraction candidate
     # here so two different same-condition values cannot disappear behind that first one.
     for backend in BACKENDS:
         same_lane = [scalar for lane, _, scalar in parsed if lane == backend]
-        if same_lane and any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
+        if same_lane and any(not same(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
     chosen = min(parsed, key=lambda item: (-item[1].agreement, BACKENDS.index(item[0]), item[1].value_raw))
     # Agreement is two lanes vouching for the very value committed. The comparison's "agree" can be about a
@@ -497,7 +539,7 @@ def _decide(
         and all(_within_tolerance(chosen[2], scalar, spec) for _, _, scalar in parsed)
         and (narrowed or any(c.status == "agree" for c in comparisons))
     )
-    if not agreed and any(not _same_value(chosen[2], scalar, spec) for _, _, scalar in parsed):
+    if not agreed and any(not same(chosen[2], scalar, spec) for _, _, scalar in parsed):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
     return _commit(spec, chosen, parsed, agreed=agreed, conditions=conditions, sources=sources, details=details)
 
