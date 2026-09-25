@@ -11,20 +11,25 @@ enforced structurally rather than by asking nicely:
 
 :func:`response_to_records` does the conversion and the cleaning (schema filter, non-numeric values,
 citation validation) in one pass for document mode; passage mode assembles its records in
-:mod:`paperfacts.extract` but cleans each value through the same :class:`ResponseCleaning`, so neither mode
-can quietly become more permissive than the other.
+:mod:`paperfacts.extract`. Both clean each value through the same :class:`ResponseCleaning`, build their
+sample list through :func:`clean_samples` and place a whole-series value through
+:func:`place_on_every_sample`, so neither mode can quietly become more permissive than the other.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.fields import FIELD_BY_NAME, FieldSpec
 from paperfacts.models import Backend
+from paperfacts.normalize import sample_key
+
+logger = logging.getLogger(__name__)
 
 # ---- Response models: field names are exactly the JSON keys the prompt asks for ----------------
 
@@ -38,6 +43,9 @@ class ResponseField(BaseModel):
     condition: str | None = None
     source_ids: list[str] = Field(default_factory=list)
     note: str | None = None
+    applies_to_all_samples: bool = Field(
+        default=False, description="a sample-level value under the target that the paper states for every sample"
+    )
 
 
 class ResponseSample(BaseModel):
@@ -261,7 +269,6 @@ class ResponseCleaning:
         source_ids: Sequence[str],
         note: str | None,
         known_ids: frozenset[str],
-        series: bool = False,
     ) -> FieldValue | None:
         """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
         text = value_raw.strip()
@@ -275,8 +282,74 @@ class ResponseCleaning:
             condition=_clean(condition),
             source_ids=self.keep_ids(source_ids, known_ids),
             note=_clean(note),
-            series=series,
         )
+
+
+class ListedSample(Protocol):
+    """A sample as either mode's answer lists it: the inventory's entry, or document mode's sample."""
+
+    sample_id: str
+    label: str
+    conditions: dict[str, str]
+    source_ids: list[str]
+
+
+def clean_samples(
+    listed: Sequence[ListedSample], cleaning: ResponseCleaning, known_ids: frozenset[str]
+) -> tuple[list[SampleRecord], list[int | None]]:
+    """The sample list both modes build their records on, and where each listed entry went.
+
+    Returns the records (without fields) and, per listed entry, the index of the record it became: a repeat
+    of an id already listed points at the first one, and an entry with no usable id points nowhere (None).
+    Both cases are audited in ``cleaning.dropped``. Ids are compared by :func:`sample_key`, the key that
+    also pairs the lanes, so the two modes and the two lanes agree on what "the same sample" is.
+    """
+    records: list[SampleRecord] = []
+    placement: list[int | None] = []
+    index_by_key: dict[str, int] = {}
+    for item in listed:
+        sample_id = item.sample_id.strip()
+        key = sample_key(sample_id)
+        # min_length on the response model still admits "  " or "#": such a sample can be neither matched
+        # nor reported.
+        if not key:
+            cleaning.dropped.append("inventory: a sample was listed with no usable id")
+            placement.append(None)
+            continue
+        if key in index_by_key:
+            # One sample listed twice under one id: everything filed under that id belongs to the first.
+            cleaning.dropped.append(f"inventory: sample {sample_id!r} repeats an id already listed")
+            placement.append(index_by_key[key])
+            continue
+        index_by_key[key] = len(records)
+        placement.append(len(records))
+        records.append(
+            SampleRecord(
+                sample_id=sample_id,
+                label=item.label.strip(),
+                conditions={str(name).strip(): str(value).strip() for name, value in item.conditions.items()},
+                source_ids=cleaning.keep_ids(item.source_ids, known_ids),
+            )
+        )
+    return records, placement
+
+
+def place_on_every_sample(
+    value: FieldValue, sample_fields: Sequence[list[FieldValue]], unattributed: list[FieldValue]
+) -> bool:
+    """Place a value the paper states for the whole series ("all films were RF sputtered").
+
+    It is written onto every sample with ``series=True`` -- a value the paper placed on all of them at once,
+    explicitly flagged by the model, never inferred by code. With no sample to carry it the flag would claim
+    a placement the record does not have, so it is kept unattributed instead. Returns whether it fanned out.
+    """
+    if not sample_fields:
+        unattributed.append(value.model_copy(update={"series": False}))
+        return False
+    series = value.model_copy(update={"series": True})
+    for fields in sample_fields:
+        fields.append(series)
+    return True
 
 
 def response_to_records(response: ExtractionResponse, *, known_ids: frozenset[str]) -> ExtractedRecords:
@@ -288,59 +361,81 @@ def response_to_records(response: ExtractionResponse, *, known_ids: frozenset[st
     but a prompt is a request, not an enforcement mechanism; the observed failure is a film's dopant
     concentration being reported as the sputtering target's composition.
 
+    The one sample-level value allowed under the target is one flagged ``applies_to_all_samples``: the paper
+    states it once for the whole series, and it is written onto every sample exactly as passage mode does.
+    A sample listed without a usable id keeps its values, unattributed; a sample listed twice has its
+    values filed under the first listing. Both are audited, as in passage mode.
+
     Citations naming a block the model was not shown are stripped from the value and collected into
     ``invalid_source_ids``, so the audit is never silent.
     """
     cleaning = ResponseCleaning()
+    samples, placement = clean_samples(response.samples, cleaning, known_ids)
+    sample_fields: list[list[FieldValue]] = [[] for _ in samples]
+    unattributed: list[FieldValue] = []
 
-    def fields_of(items: list[ResponseField], *, sample_level: bool) -> tuple[FieldValue, ...]:
-        kept: list[FieldValue] = []
-        for item in items:
-            spec = FIELD_BY_NAME.get(item.field)
-            if spec is None:
-                cleaning.dropped.append(f"{item.field}: not in schema")
-                continue
-            if spec.is_sample_level != sample_level:
-                scope = "a sample" if sample_level else "the target"
-                cleaning.dropped.append(f"{item.field}: {spec.group}-level field reported under {scope}")
-                continue
-            value = cleaning.value(
-                spec,
-                value_raw=item.value_raw,
-                unit_raw=item.unit_raw,
-                condition=item.condition,
-                source_ids=item.source_ids,
-                note=item.note,
-                known_ids=known_ids,
-            )
-            if value is not None:
-                kept.append(value)
-        return tuple(kept)
+    def cleaned(item: ResponseField, spec: FieldSpec) -> FieldValue | None:
+        return cleaning.value(
+            spec,
+            value_raw=item.value_raw,
+            unit_raw=item.unit_raw,
+            condition=item.condition,
+            source_ids=item.source_ids,
+            note=item.note,
+            known_ids=known_ids,
+        )
+
+    def in_schema(item: ResponseField) -> FieldSpec | None:
+        spec = FIELD_BY_NAME.get(item.field)
+        if spec is None:
+            cleaning.dropped.append(f"{item.field}: not in schema")
+        return spec
 
     target = None
     if response.target is not None:
         # Validate first: if every field is dropped, invented ids still belong in the audit.
         target_ids = cleaning.keep_ids(response.target.source_ids, known_ids)
-        fields = fields_of(response.target.fields, sample_level=False)
+        fields: list[FieldValue] = []
+        for item in response.target.fields:
+            spec = in_schema(item)
+            if spec is None:
+                continue
+            if spec.is_sample_level and not item.applies_to_all_samples:
+                cleaning.dropped.append(f"{item.field}: {spec.group}-level field reported under the target")
+                continue
+            value = cleaned(item, spec)
+            if value is None:
+                continue
+            if spec.is_sample_level:
+                place_on_every_sample(value, sample_fields, unattributed)
+            else:
+                fields.append(value)
         if fields:
-            target = TargetRecord(source_ids=target_ids, fields=fields)
-    samples = tuple(
-        SampleRecord(
-            sample_id=sample_id,
-            label=sample.label.strip(),
-            conditions={str(k).strip(): str(v).strip() for k, v in sample.conditions.items()},
-            source_ids=cleaning.keep_ids(sample.source_ids, known_ids),
-            fields=fields_of(sample.fields, sample_level=True),
-        )
-        for sample in response.samples
-        # min_length on the raw field still admits "  "; a sample with no id cannot be matched or reported.
-        if (sample_id := sample.sample_id.strip())
-    )
+            target = TargetRecord(source_ids=target_ids, fields=tuple(fields))
+
+    for listed, index in zip(response.samples, placement, strict=True):
+        for item in listed.fields:
+            spec = in_schema(item)
+            if spec is None:
+                continue
+            if not spec.is_sample_level:
+                cleaning.dropped.append(f"{item.field}: {spec.group}-level field reported under a sample")
+                continue
+            value = cleaned(item, spec)
+            if value is None:
+                continue
+            # A value filed under a sample the list could not keep has no owner to be compared under.
+            (unattributed if index is None else sample_fields[index]).append(value)
+
     return ExtractedRecords(
         target=target,
-        samples=samples,
+        samples=tuple(
+            sample.model_copy(update={"fields": tuple(values)})
+            for sample, values in zip(samples, sample_fields, strict=True)
+        ),
         invalid_source_ids=tuple(sorted(cleaning.invalid)),
         dropped=tuple(cleaning.dropped),
+        unattributed=tuple(unattributed),
     )
 
 

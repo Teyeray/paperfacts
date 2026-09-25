@@ -14,9 +14,14 @@ import re
 import unicodedata
 from collections.abc import Callable
 from functools import cache
+from typing import TYPE_CHECKING
 
 from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FieldSpec
-from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord
+
+if TYPE_CHECKING:
+    # Types only: records.py keys its sample list with sample_key from here, so a runtime import would be
+    # a cycle. The functions below only ever call model_copy on what they are given.
+    from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord
 
 # ---- Text ------------------------------------------------------------------------------------------------
 # Superscript digits are folded **before** NFKC, which would collapse "10⁻⁴" to "10-4" and lose the exponent.

@@ -705,7 +705,9 @@ its same-page neighbour counts as grounded. A quote lying entirely inside the ne
 
 Two more rules shape the table. **Series fan-out**: when the model states that a value holds for every
 listed sample, the code writes it onto each of them and marks it 系列级, rather than leaving it
-unattributed. **The single-sample rule**: a cell is committed only when exactly one value survives for
+unattributed. Both modes do this the same way; document mode asks for such a value once, under the target.
+A sample the model lists without a usable id keeps its values as unattributed, and a sample listed twice is
+kept once; both are recorded in the lane's audit. **The single-sample rule**: a cell is committed only when exactly one value survives for
 that sample and field. Everything else is a refusal, and the refusal has a name:
 
 | Decision | What happened |

@@ -598,6 +598,22 @@ def test_the_same_number_in_two_units_stays_two_values():
 # ---- The inventory's own mistakes ---------------------------------------------------------------------
 
 
+def test_a_paper_level_value_flagged_for_every_sample_is_not_stored_as_a_series_value():
+    # The flag only means something for a sample-level field; on the target it used to leave series=True.
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(TWO_SAMPLES),
+            component=values_json({"sample_id": None, "value_raw": "ITO", "applies_to_all_samples": True}),
+        )
+    )
+    blocks = (*make_blocks(), make_block(page=0, order=2, content="The target composition was ITO."))
+
+    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+
+    assert lane.target.get("component").series is False
+    assert all(sample.fields == () for sample in lane.samples)
+
+
 def test_samples_distinguished_by_a_greek_letter_or_a_suffix_case_stay_separate():
     # normalize_key merged "α-ITO" with "β-ITO" (and "ITO-a" with "ITO-A"): the second was dropped as a
     # repeat and every value naming it landed on the first.

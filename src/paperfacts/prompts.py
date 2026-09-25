@@ -84,6 +84,7 @@ Rules:
 9. Every value is verified against the block you cite for it: if `value_raw` cannot be found in that
    block's text, the value is recorded as unverified. Cite the block that literally contains the
    characters you copied, and copy them exactly.
+10. `applies_to_all_samples` is true ONLY for a sample-level field (group "process" or "film") that the paper states once for the whole series -- "all films", "for all samples" -- and never ties to one sample. Report such a value once, under "target", with `applies_to_all_samples: true`; it is copied onto every sample. Never true for a value tied to only some of the samples, and false everywhere else, including every FIELD under a sample.
 
 Fields to extract:
 {fields}

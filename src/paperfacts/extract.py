@@ -67,8 +67,9 @@ from paperfacts.records import (
     LaneExtraction,
     ResponseCleaning,
     ResponseValue,
-    SampleRecord,
     TargetRecord,
+    clean_samples,
+    place_on_every_sample,
     response_to_records,
 )
 from paperfacts.threads import ContextThreadPoolExecutor
@@ -476,30 +477,9 @@ def passage_records(
     cleaning = ResponseCleaning()
     cleaning.dropped.extend(dropped)
 
-    samples: list[SampleRecord] = []
-    sample_fields: list[list[FieldValue]] = []
-    index_by_key: dict[str, int] = {}
-    for item in inventory.samples:
-        sample_id = item.sample_id.strip()
-        key = sample_key(sample_id)
-        # min_length still admits "  ". A repeat means the model listed one sample twice under one id, and
-        # every later value for it would land on the first: worth recording, not worth guessing about.
-        if not key:
-            cleaning.dropped.append("inventory: a sample was listed with no usable id")
-            continue
-        if key in index_by_key:
-            cleaning.dropped.append(f"inventory: sample {sample_id!r} repeats an id already listed")
-            continue
-        index_by_key[key] = len(samples)
-        samples.append(
-            SampleRecord(
-                sample_id=sample_id,
-                label=item.label.strip(),
-                conditions={str(name).strip(): str(value).strip() for name, value in item.conditions.items()},
-                source_ids=cleaning.keep_ids(item.source_ids, inventory_ids),
-            )
-        )
-        sample_fields.append([])
+    samples, _ = clean_samples(inventory.samples, cleaning, inventory_ids)
+    sample_fields: list[list[FieldValue]] = [[] for _ in samples]
+    index_by_key = {sample_key(sample.sample_id): index for index, sample in enumerate(samples)}
 
     target_fields: list[FieldValue] = []
     target_ids: list[str] = []
@@ -516,17 +496,15 @@ def passage_records(
                 source_ids=item.source_ids,
                 note=item.note,
                 known_ids=harvest.known_ids,
-                series=bool(item.applies_to_all_samples) and not item.sample_id,
             )
             if value is None:
                 continue
             if not harvest.spec.is_sample_level:
-                # The question itself decided the scope, so a stray sample_id on a paper-level field is
-                # noise rather than the scope error document mode has to guard against.
+                # The question itself decided the scope, so a stray sample_id or series flag on a paper-level
+                # field is noise rather than the scope error document mode has to guard against.
                 target_fields.append(value)
                 target_ids.extend(value.source_ids)
                 continue
-            index = index_by_key.get(sample_key(item.sample_id)) if item.sample_id else None
             if item.applies_to_all_samples and item.sample_id:
                 # An id and the series flag contradict each other. The id is the more specific claim and
                 # the one the prompt asks to be copied verbatim, so it wins; the flag is noise.
@@ -535,17 +513,10 @@ def passage_records(
                     harvest.spec.name,
                     item.sample_id,
                 )
-            elif value.series and not samples:
-                # Nothing to fan out to; the flag would claim a placement the record does not have.
-                value = value.model_copy(update={"series": False})
-            elif value.series:
-                # The paper states this once for the whole series ("all films were RF sputtered"). That is
-                # not an unplaceable value, it is a value the paper placed on every sample at once, so it
-                # is written onto each of them -- explicitly flagged, never inferred from the text by code.
-                for fields in sample_fields:
-                    fields.append(value)
-                series_fanned_out += 1
+            elif item.applies_to_all_samples:
+                series_fanned_out += place_on_every_sample(value, sample_fields, unattributed)
                 continue
+            index = index_by_key.get(sample_key(item.sample_id)) if item.sample_id else None
             if index is None and not item.sample_id and len(samples) == 1:
                 # The prompt allows a null sample_id when the excerpts do not say which sample a value
                 # belongs to. With exactly one sample in the inventory there is nothing to say: the lone
