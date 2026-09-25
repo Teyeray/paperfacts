@@ -338,7 +338,9 @@ def compare_document(
     if lanes is None:
         lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
-    if path.is_file() and not force:
+    # A stored report is never of an incomplete lane (see below), so with one it would be of other lanes.
+    incomplete_lanes = bool(lane_a.failed_questions or lane_b.failed_questions)
+    if path.is_file() and not force and not incomplete_lanes:
         cached = ComparisonReport.read(path)
         if _compared_these(cached, lane_a, lane_b):
             logger.info("comparison cache_hit doc=%s", document.document_id[:16])
@@ -349,7 +351,10 @@ def compare_document(
     report = compare_lanes(lane_a, lane_b, matching)
     reason = incomplete_reason(lanes, report)
     if reason:
+        # An earlier run's report under these keys goes too: it came from other answers, and kept it would be
+        # served to a later run and keep the paper counted as compared.
         logger.warning("%s for doc=%s; the comparison is not stored", reason, document.document_id[:16])
+        path.unlink(missing_ok=True)
     else:
         report.write(path)
     logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
@@ -581,7 +586,11 @@ def run_document(
     dataset_json_path: Path | None = None
     if dataset.incomplete:
         # The stored dataset is what marks a paper finished (stored.is_finished), so it is kept back for the
-        # same reasons as the comparison. The workbook of this run is still written.
+        # same reasons as the comparison, and an earlier run's table under these keys is removed with it: left
+        # in place it would keep the paper finished. The workbook of this run is still written.
+        layout.dataset_json_path(document.document_id, dataset.extractor_key, dataset.comparison_key).unlink(
+            missing_ok=True
+        )
         on_stage("export", "done", f"{excel_path}; not kept as finished: {dataset.incomplete}")
     else:
         dataset_json_path = _store_dataset(layout, dataset)

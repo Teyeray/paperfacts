@@ -227,6 +227,22 @@ def test_a_run_whose_matching_failed_is_not_finished(monkeypatch, document: Docu
     assert final["compare"][0] == "failed" and "sample matching failed" in final["compare"][1]
 
 
+def test_a_run_that_is_not_kept_removes_the_previous_runs_table(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    # A forced re-run that fails its matching must not leave the earlier complete table standing: it would keep
+    # the paper finished, beside lanes that no longer produced it.
+    install_fake_pipeline(monkeypatch, matching=SampleMatching(failed=True, failure="invalid JSON twice"))
+    layout = DataLayout(settings.data_root)
+    stale = layout.dataset_json_path(document.document_id, "0123456789ab", "ba9876543210")
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}", encoding="utf-8")
+
+    run(document, settings, force=True)
+
+    assert not stale.exists()
+
+
 def test_a_run_with_an_unanswered_field_question_is_not_finished(
     monkeypatch, document: DocumentInput, settings: Settings
 ):

@@ -451,6 +451,29 @@ def test_a_comparison_of_a_lane_with_an_unanswered_question_is_not_stored(
     assert not path.is_file()
 
 
+def test_an_incomplete_lane_replaces_the_stored_comparison_instead_of_reusing_it(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    # The stored report came from complete lanes. Served now, it would be consolidated against a lane that is
+    # missing a field; removed, the paper reads as unfinished until a complete run stores one again.
+    good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
+    client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good, good])
+    lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
+    stored = compare_document(document, settings, client, lanes=lanes)
+    path = DataLayout(settings.data_root).comparison_path(
+        document.document_id, stored.extractor_key, stored.comparison_key
+    )
+    assert path.is_file()
+    lanes[BACKEND_A] = lanes[BACKEND_A].model_copy(
+        update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
+    )
+
+    compare_document(document, settings, client, lanes=lanes)
+
+    assert client.call_count == 4  # matched again rather than served from the stored report
+    assert not path.exists()
+
+
 def test_an_offline_export_stores_the_comparison_it_rebuilt(
     settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
 ):
