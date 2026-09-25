@@ -120,8 +120,10 @@ verify: `scripts/deploy.sh --pull --rerun` does exactly that and then re-runs, f
 document whose stored results the new cache keys displaced. `scripts/deploy.sh --help` lists the rest
 (`--check` reports whether the running service is stale). It refuses to restart only while a job is queued or
 running (`GET /api/jobs`; `--force` overrides), since a restart drops those; a document that was never run or
-failed for good does not block it. The web password is read from `.env` the way the service reads it, and
-reaches `curl` on stdin, never on its command line.
+failed for good does not block it. Every setting it needs is read the way the service reads it: the web
+password from `.env`; the web user and the paddle lane's settings from `.env` (`PAPERFACTS_WEB_USERNAME`,
+`PAPERFACTS_PADDLE_VL_*`, quoted or not) and otherwise from `config.json`. The credentials reach `curl` on
+stdin, never on its command line.
 
 **The current server has a single GPU (id 0).** All three services default to it; GPU ids are set per
 service by env var (Docker Compose's `device_ids`, or `CUDA_VISIBLE_DEVICES` for the host scripts), so a

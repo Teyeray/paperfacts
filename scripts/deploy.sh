@@ -121,9 +121,28 @@ sys.stdout.write(value or "")
 PY
 }
 
+config_value() {  # $1 = dotted key in config.json ("web.username"): its value, or nothing when absent or null
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+node = json.load(open("config.json", encoding="utf-8"))
+for part in sys.argv[1].split("."):
+    node = node.get(part) if isinstance(node, dict) else None
+sys.stdout.write("" if node is None else str(node))
+PY
+}
+
+setting() {  # $1 = PAPERFACTS_* key, $2 = its config.json key: .env wins over config.json, as in config.py
+    local value
+    value="$(env_value "$1")"
+    [ -n "$value" ] || value="$(config_value "$2")"
+    printf '%s' "$value"
+}
+
 WEB_PASSWORD="$(env_value PAPERFACTS_WEB_PASSWORD)"
 [ -n "$WEB_PASSWORD" ] || die "PAPERFACTS_WEB_PASSWORD is empty in .env"
-WEB_USERNAME="$(python3 -c 'import json;print(json.load(open("config.json"))["web"]["username"])')"
+WEB_USERNAME="$(setting PAPERFACTS_WEB_USERNAME web.username)"
 # curl reads the credentials from a config on stdin (-K -), never from its argv: on a shared GPU host every
 # user can read every process's command line through ps. printf is a shell builtin, so it has no argv either.
 # Inside a quoted curl config value only backslash and double quote need escaping; python does it (fed on
@@ -488,9 +507,9 @@ CODE_UI="$(curl_auth -sS --max-time 10 -o /dev/null -w '%{http_code}' -A "$UA" "
 [ "$CODE_UI" = 200 ] && ok "web UI 200" || warn "web UI returned $CODE_UI"
 
 LANE_DOWN=0
-PADDLE_BACKEND="$(sed -n 's/^PAPERFACTS_PADDLE_VL_BACKEND=//p' .env | head -n1)"
-PADDLE_URL="$(sed -n 's/^PAPERFACTS_PADDLE_VL_SERVER_URL=//p' .env | head -n1)"
-PADDLE_MODEL="$(sed -n 's/^PAPERFACTS_PADDLE_VL_MODEL_NAME=//p' .env | head -n1)"
+PADDLE_BACKEND="$(setting PAPERFACTS_PADDLE_VL_BACKEND parsers.paddle_vl_backend)"
+PADDLE_URL="$(setting PAPERFACTS_PADDLE_VL_SERVER_URL parsers.paddle_vl_server_url)"
+PADDLE_MODEL="$(setting PAPERFACTS_PADDLE_VL_MODEL_NAME parsers.paddle_vl_model_name)"
 if [ "$PADDLE_BACKEND" = "vllm-server" ]; then
     MODELS="$(curl -sS --max-time 10 "${PADDLE_URL%/}/models" 2>/dev/null || true)"
     case "$MODELS" in
