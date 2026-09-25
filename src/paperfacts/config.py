@@ -122,6 +122,8 @@ DEFAULT_MAX_UPLOAD_MB = 200
 DEFAULT_MAX_PARALLEL_DOCUMENTS = 3
 DEFAULT_PAGE_DPI = 110
 DEFAULT_OVERLAY_DPI = 150
+# The domain profile: a bare name is profiles/<name>.json under the repository root (paperfacts.profile).
+DEFAULT_PROFILE = "tco"
 
 # How the model is asked for the facts: the whole paper in one question, or one question per field over the
 # blocks retrieved for it (see :mod:`paperfacts.extract`). Passage mode is the default because on the three
@@ -254,6 +256,8 @@ def _warn_if_fields_came_from_elsewhere(path: Path) -> None:
 class Settings:
     data_root: Path = Path("data")
     repo_root: Path = DEFAULT_REPO_ROOT
+    # A profile name, or a path to a profile file (anything with a "/" or ending in ".json").
+    profile: str = DEFAULT_PROFILE
     uv_bin: str = "uv"
     mineru_url: str | None = None
     paddle_url: str | None = None
@@ -343,6 +347,7 @@ class Settings:
         settings = cls(
             data_root=Path(get("DATA_ROOT") or file.get("data_root", str)),
             repo_root=repo_root,
+            profile=get("PROFILE") or file.get("profile", str),
             uv_bin=get("UV_BIN") or file.get("parsers.uv_bin", str),
             mineru_url=get("MINERU_URL") or file.text_or_none("parsers.mineru_url"),
             paddle_url=get("PADDLE_URL") or file.text_or_none("parsers.paddle_url"),

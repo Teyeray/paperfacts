@@ -1,5 +1,6 @@
-"""Turn the text the model transcribed into comparable canonical values: text folding, number parsing, unit
-conversion, and applying all three to a lane.
+"""Turn the text the model transcribed into comparable canonical values: number parsing, unit conversion, and
+applying both to a lane. The text folding they share is :mod:`paperfacts.text`; the unit tables are
+:mod:`paperfacts.units`.
 
 Pure functions, millisecond-fast, the one layer that offers a determinism guarantee. The model only
 transcribes (``value_raw`` / ``unit_raw``); every conversion happens here, because a model's unit conversion
@@ -14,7 +15,6 @@ from __future__ import annotations
 
 import itertools
 import re
-import unicodedata
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
@@ -22,69 +22,8 @@ from pathlib import Path
 from paperfacts.errors import ConfigError
 from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FIELDS_SOURCE, FieldSpec
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
-
-# ---- Text ------------------------------------------------------------------------------------------------
-# Superscript digits are folded **before** NFKC, which would collapse "10⁻⁴" to "10-4" and lose the exponent.
-
-_SUPERSCRIPTS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
-_SUBSCRIPTS = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
-_SUPERSCRIPT_RUN = re.compile(r"[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+")
-# MinerU's Markdown writes sub/superscripts as HTML tags: SnO<sub>2</sub>, 10<sup>-4</sup>
-_HTML_SUP = re.compile(r"<sup>\s*([^<]*?)\s*</sup>", re.IGNORECASE)
-_HTML_SUB = re.compile(r"<sub>\s*([^<]*?)\s*</sub>", re.IGNORECASE)
-# Only variants NFKC does not already fold (OHM SIGN, MICRO SIGN and NBSP are covered by NFKC).
-_REPLACEMENTS = {
-    "−": "-",  # minus sign U+2212
-    "–": "-",  # en dash
-    "—": "-",  # em dash
-    "‐": "-",  # hyphen U+2010 (NFKC also folds the non-breaking hyphen U+2011 to it)
-    "‒": "-",  # figure dash
-    "―": "-",  # horizontal bar
-    "×": "x",  # multiplication sign
-    "⋅": ".",  # dot operator U+22C5
-    "·": ".",  # middle dot U+00B7
-    "•": ".",  # bullet U+2022, read off a chart axis as "Ω•cm"
-    "∙": ".",  # bullet operator U+2219
-    "’": "'",
-    "∼": "~",  # tilde operator U+223C, what papers actually print for "approximately"
-}
-# Characters that carry meaning in a value: digits, letters, units and the punctuation inside numbers.
-KEY_CHARACTERS = "0-9a-zΩμ%./:+-"
-_NON_KEY = re.compile(f"[^{KEY_CHARACTERS}]+")
-_SPACES = re.compile(r"\s+")
-
-
-def _ascii_superscripts(text: str) -> str:
-    def repl(match: re.Match[str]) -> str:
-        run = match.group(0)
-        sign = "-" if run.startswith("⁻") else ""
-        digits = run.lstrip("⁺⁻").translate(_SUPERSCRIPTS)
-        return f"^{sign}{digits}"
-
-    return _SUPERSCRIPT_RUN.sub(repl, text)
-
-
-def normalize_text(text: str) -> str:
-    """Normalise spelling while preserving meaning: sub/superscripts to ASCII, Unicode variants folded,
-    whitespace collapsed."""
-    text = _HTML_SUP.sub(lambda m: f"^{m.group(1)}", text)
-    text = _HTML_SUB.sub(lambda m: m.group(1), text)
-    text = _ascii_superscripts(text).translate(_SUBSCRIPTS)
-    text = unicodedata.normalize("NFKC", text)
-    for source, target in _REPLACEMENTS.items():
-        text = text.replace(source, target)
-    return _SPACES.sub(" ", text).strip()
-
-
-def normalize_key(text: str | None) -> str:
-    """A key for "are these the same" comparisons of text, conditions and compositions. Never use it for
-    units: lowercasing collides mΩ with MΩ; use :func:`clean_unit` there. Nor for sample ids: it deletes
-    Greek letters and folds a case-distinguished suffix; use :func:`paperfacts.records.sample_key` there."""
-    if not text:
-        return ""
-    # .lower() turns Ω into ω; put it back before the whitelist filter or Ω would be stripped.
-    return _NON_KEY.sub("", normalize_text(text).lower().replace("ω", "Ω"))
-
+from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
+from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS
 
 # ---- Closed category sets --------------------------------------------------------------------------------
 # A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
@@ -199,71 +138,6 @@ measurement condition ("550 nm") and must use the same notion of "a number" this
 _QUALIFIERS = re.compile(
     r"^(?P<q>>=|<=|approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅≥≤<>])\s*", re.IGNORECASE
 )
-
-_LATEX_MARKERS = ("$", "\\")
-# \Omega and \mu are unit symbols rather than spacing: a cell reading "\times 10^{-4} \Omega cm" is a
-# resistivity, and without them the unit is unrecognised.
-_LATEX_COMMANDS = {
-    r"\times": " x ",
-    r"\cdot": " x ",
-    r"\pm": "±",
-    r"\sim": "~",
-    r"\approx": "≈",
-    r"\Omega": "Ω",
-    r"\omega": "Ω",
-    r"\mu": "μ",
-    r"\,": " ",
-    r"\;": " ",
-    "\\ ": " ",
-}
-_DIGIT_GAP = re.compile(r"(?<=[0-9.])\s+(?=[0-9.])")
-# The LaTeX spacing signature: a run of single characters, each a digit or a lone ".", separated by single
-# spaces ("4 0 0", "8 . 4", "1 0"). Two multi-digit numbers ("300 500", "40 x 10") never look like this, so
-# collapsing the run cannot merge two genuinely separate numbers. Two single-digit numbers ("2 5") do look
-# like it and are read as 25: in a table cell that is the right reading, and it is the accepted trade-off.
-_SPACED_DIGITS = re.compile(r"(?<![0-9.])[0-9.](?: [0-9.])+(?![0-9.])")
-_CARET_GAP = re.compile(r"\^\s*([-+]?)\s*(?=\d)")
-
-
-# Formatting commands that survive delatex and split what they wrap: MinerU writes the unit Ω·cm as
-# "\Omega { \cdot } \mathrm { c m }" and the formula SnO2 as "\mathrm { S n O } _ { 2 }".
-_WRAPPED_DIGITS = re.compile(r"(?<=[0-9.] )\s*\{\s*([0-9.])\s*\}")
-LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
-
-
-# LaTeX symbols a unit is written with, restored as the character before anything else is undone: "300
-# $^{\circ}$C" and "5 at.\%" otherwise lose the very character a unit is recognised by. The one table for
-# retrieval, grounding and unit parsing alike, so the three cannot fold the same text differently.
-LATEX_SYMBOLS = {"\\circ": "°", "\\%": "%"}
-# A degree sign typeset as a superscript ("^{°}" once \circ is restored) is just a degree sign; left as a
-# caret it reads as the start of an exponent, and "500" in "500 ^{\circ}C" as the base of a power.
-_RAISED_DEGREE = re.compile(r"\^\s*\{?\s*°\s*\}?")
-
-
-def delatex(text: str) -> str:
-    """Undo the LaTeX MinerU produces for numbers in tables and formulas.
-
-    ``6.4 × 10⁻³`` arrives as ``$6 . 4 \\times 1 0 ^ { - 3 }$``, a space between every character, and the
-    prompt's "verbatim" rule keeps it that way. Spaces between digits are collapsed only when the text
-    carries a LaTeX marker, so ordinary "10 20" is left alone.
-    """
-    for command, symbol in LATEX_SYMBOLS.items():
-        text = text.replace(command, symbol)
-    text = _RAISED_DEGREE.sub("°", text)
-    # A digit wrapped in a formatting command ("2 3 \\mathbf { 0 }", MinerU bolding a table cell's last digit)
-    # is unwrapped first, so the run of spaced digits below still reads as one number.
-    text = _WRAPPED_DIGITS.sub(r"\1", LATEX_WRAPPERS.sub("", text)) if "\\" in text else text
-    text = re.sub(r"\^\s*\{\s*([-+]?\s*\d+)\s*\}", lambda m: "^" + m.group(1).replace(" ", ""), text)
-    # MinerU drops the LaTeX markers from some cells ("4 0 0 °C", "1 0 ^ { - 4 }"), so this run has to be
-    # collapsed on its own signature rather than on the presence of "$" or a backslash.
-    text = _SPACED_DIGITS.sub(lambda m: m.group(0).replace(" ", ""), text)
-    if not any(marker in text for marker in _LATEX_MARKERS):
-        return text
-    for command, replacement in _LATEX_COMMANDS.items():
-        text = text.replace(command, replacement)
-    text = text.replace("$", " ").replace("{", " ").replace("}", " ")
-    text = _DIGIT_GAP.sub("", text)
-    return _CARET_GAP.sub(r"^\1", text)
 
 
 def parse_number(raw: str) -> tuple[float | None, str | None]:
@@ -478,95 +352,8 @@ def _join(notes: list[str]) -> str | None:
 
 
 # ---- Units -----------------------------------------------------------------------------------------------
-# One recogniser per canonical unit, each handling only certain conversions. An unrecognised unit is never
-# guessed: it returns None with a reason and the comparison layer decides AMBIGUOUS. What a bare number
-# means is decided by ``FieldSpec.bare_number``, never by field name here.
-
-# Case is meaningful (m = milli, M = mega): the regexes ignore case for the unit word, never for the prefix.
-_PREFIX = {"": 1.0, "k": 1e3, "K": 1e3, "M": 1e6, "m": 1e-3, "μ": 1e-6, "n": 1e-9}
-_OHM = r"(?:Ω|(?i:ohms?))"
-# The separator may be "/", a dot (normalize_text folds "·" to "."), or the word "per"; "Ω/L" is OCR
-# damage rather than a spelling of "per square" and stays unrecognised.
-_PER_SQUARE = re.compile(rf"^(?P<p>[kKMmμn]?){_OHM}\s*(?:[./]|per)?\s*(?i:sq|square|□)\.?(?:\^?-1)?$")
-# The separator class needs "-" because "Ω-cm" / "ohm-cm" is at least as common in papers as the dotted
-# spellings; the hyphen survives where "·" and "⋅" are folded to "." by normalize_text.
-_RESISTIVITY = re.compile(rf"^(?P<p>[kKMmμn]?){_OHM}\s*[.x*-]?\s*(?i:cm)$")
-_LENGTH = {"nm": 1.0, "μm": 1e3, "um": 1e3, "mm": 1e6, "cm": 1e7, "å": 0.1, "angstrom": 0.1}
-_TIME = {
-    "min": 1.0,
-    "mins": 1.0,
-    "minute": 1.0,
-    "minutes": 1.0,
-    "h": 60.0,
-    "hr": 60.0,
-    "hrs": 60.0,
-    "hour": 60.0,
-    "hours": 60.0,
-    "s": 1 / 60,
-    "sec": 1 / 60,
-    "seconds": 1 / 60,
-}
-# A paper writes inches as a double prime; OCR renders it as one of four characters.
-_INCH_MARKS = ('"', "''", "″", "′′")
-_SIZE = {"inch": 1.0, "inches": 1.0, "in": 1.0, "mm": 1 / 25.4, "cm": 1 / 2.54} | dict.fromkeys(_INCH_MARKS, 1.0)
-_PERCENT = {"%": 1.0, "percent": 1.0}
-# NFKC folds ℃ (U+2103) to "°C" before the table's lowercased lookup, so one key catches all three
-# spellings. Kelvin is deliberately absent: K → ℃ needs an offset (−273.15), not a factor, and this
-# interface is a factor -- an unknown unit is reported as ambiguous rather than converted wrongly.
-_TEMPERATURE = {"°c": 1.0, "c": 1.0}
-# Distances in a deposition chamber; nm is left out on purpose: no target-holder gap is written in
-# nanometres, and admitting it would misread every film thickness as a candidate distance.
-_DISTANCE = {"cm": 1.0, "mm": 0.1, "m": 100.0, "μm": 1e-4, "um": 1e-4, "inch": 2.54, "in": 2.54} | dict.fromkeys(
-    _INCH_MARKS, 2.54
-)
-# sccm is defined as cm³/min at standard conditions, so the two spellings are the same unit.
-_FLOW = {"sccm": 1.0, "cm3/min": 1.0}
-_ROTATION = {"rpm": 1.0, "r/min": 1.0, "rev/min": 1.0}
-# Power prefixes are case-sensitive (mW ≠ MW), so the table's lowercasing cannot be used here.
-_POWER = re.compile(r"^(?P<p>[kKMmμn]?)[Ww]$")
-# Working pressure in Pa. "mPa" and "MPa" differ only in case, so those two are looked up as written and
-# everything else case-folded.
-_PRESSURE_EXACT = {"mPa": 1e-3, "MPa": 1e6}
-_PRESSURE = {"pa": 1.0, "hpa": 100.0, "kpa": 1e3, "mbar": 100.0, "bar": 1e5, "torr": 133.322, "mtorr": 0.133322}
-
-
-def _pressure(unit: str) -> float | None:
-    return _PRESSURE_EXACT.get(unit, _PRESSURE.get(unit.lower()) if unit.lower() != "mpa" else None)
-
-
-Converter = Callable[[str], float | None]
-
-
-def _by_table(table: dict[str, float]) -> Converter:
-    def convert(unit: str) -> float | None:
-        return table.get(unit.lower())
-
-    return convert
-
-
-def _by_pattern(pattern: re.Pattern[str]) -> Converter:
-    def convert(unit: str) -> float | None:
-        match = pattern.match(unit)
-        return None if match is None else _PREFIX[match.group("p")]
-
-    return convert
-
-
-# Canonical unit -> "multiply by what to reach it".
-CONVERTERS: dict[str, Converter] = {
-    "Ω/sq": _by_pattern(_PER_SQUARE),
-    "Ω·cm": _by_pattern(_RESISTIVITY),
-    "nm": _by_table(_LENGTH),
-    "min": _by_table(_TIME),
-    "inch": _by_table(_SIZE),
-    "%": _by_table(_PERCENT),
-    "℃": _by_table(_TEMPERATURE),
-    "cm": _by_table(_DISTANCE),
-    "sccm": _by_table(_FLOW),
-    "rpm": _by_table(_ROTATION),
-    "W": _by_pattern(_POWER),
-    "Pa": _pressure,
-}
+# The converters are paperfacts.units' built-ins. What a bare number means is decided by
+# ``FieldSpec.bare_number``, never by field name here.
 
 
 def check_canonical_units(specs: tuple[FieldSpec, ...], source: Path) -> None:
@@ -649,11 +436,6 @@ def split_scale_factor(unit_raw: str, is_unit: Callable[[str], object]) -> tuple
 def has_scale_factor(text: str) -> bool:
     """Whether a transcribed *value* already carries its own power of ten ("1.2 x 10^-4", "1.2e-4")."""
     return _SCI.search(delatex(normalize_text(text))) is not None
-
-
-def clean_unit(unit_raw: str) -> str:
-    """Whitespace and decoration stripped, case preserved; no interpretation."""
-    return normalize_text(unit_raw).replace(" ", "").rstrip(".")
 
 
 def convert_to_canonical(

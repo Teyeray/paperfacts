@@ -465,13 +465,14 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
 | `condition_keywords` | The words that mark a measurement condition worth recording |
 | `data_root` | Where everything is written. Default `data` |
+| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields and domain wording; for now the run still reads `config.json`'s own `fields` and `condition_keywords` ([The field table](#the-field-table)), which `profiles/tco.json` mirrors. Default `tco` |
 
 ### Environment overrides
 
 Every scalar setting also has a `PAPERFACTS_*` variable that wins over the file, which is how one machine
 points at its own services without editing the shared file:
 
-`PAPERFACTS_DATA_ROOT`, `PAPERFACTS_REPO_ROOT`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_MINERU_URL`,
+`PAPERFACTS_DATA_ROOT`, `PAPERFACTS_REPO_ROOT`, `PAPERFACTS_PROFILE`, `PAPERFACTS_UV_BIN`, `PAPERFACTS_MINERU_URL`,
 `PAPERFACTS_PADDLE_URL`, `PAPERFACTS_PADDLE_RENDER_DPI`, `PAPERFACTS_PADDLE_VL_BACKEND`,
 `PAPERFACTS_PADDLE_VL_SERVER_URL`, `PAPERFACTS_PADDLE_VL_MODEL_NAME`, `PAPERFACTS_SUBPROCESS_TIMEOUT_S`,
 `PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`,

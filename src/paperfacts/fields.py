@@ -15,70 +15,120 @@ into the cache keys (:mod:`paperfacts.keys`), so changing any cell invalidates e
 depended on it.
 
 ``keywords`` are the names a paper uses for the field, not its units: units are recognised separately by
-:mod:`paperfacts.passages`, which knows which of them are specific enough to identify a field on their own.
+:mod:`paperfacts.units`, which knows which of them are specific enough to identify a field on their own.
 Keywords are matched as whole tokens, case-insensitively, after Unicode folding.
+
+Every attribute carries its :class:`FieldRole` set in its dataclass metadata: which stages read it (the
+prompt, the cleaning of an answer, a verdict, retrieval, figure reading), or that it is display text only.
+``tests/test_field_roles.py`` pins the roles against the attribute sets :mod:`paperfacts.keys` hashes, so
+adding an attribute is a decision about which keys it belongs to.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, get_args
 
 from paperfacts.config import ConfigDocument, configuration
 from paperfacts.errors import ConfigError
 
-FieldGroup = Literal["target", "process", "film"]
+# Whether a field belongs to the paper as a whole or to each of its samples. A profile declares it per group.
+FieldLevel = Literal["paper", "sample"]
+# config.json's groups and their levels: its field table declares no groups of its own.
+CONFIG_GROUP_LEVELS: Mapping[str, FieldLevel] = {"target": "paper", "process": "sample", "film": "sample"}
 # A number as a measurement condition states it: "550", "400" and "800" in "average 400–800 nm".
 CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # numeric: a number with a unit; composition: a chemical formula; text: anything else
 FieldKind = Literal["numeric", "composition", "text"]
 # What a bare number with no unit means. Declared per field so normalisation never special-cases a name.
 BareNumberPolicy = Literal["reject", "assume_canonical", "percent_or_fraction"]
+# How a workbook prints a numeric cell: plainly, or in scientific notation for values spanning decades.
+DisplayFormat = Literal["plain", "scientific"]
+# What a range quoted as one value ("10-20") becomes: its midpoint, or no value at all.
+RangePolicy = Literal["midpoint", "reject"]
+
+
+class FieldRole(StrEnum):
+    """A stage that reads a field attribute. An attribute's roles decide which cache keys hash it."""
+
+    PROMPT = "prompt"  # rendered into what the model is asked
+    CLEANING = "cleaning"  # decides which of the model's values survive, or what they convert to
+    VERDICT = "verdict"  # decides a comparison or a dataset cell
+    RETRIEVAL = "retrieval"  # decides which blocks a passage-mode question is shown
+    FIGURE = "figure"  # decides which charts are read, what the vision model is told, or a reading's value
+    DISPLAY = "display"  # reaches no model and no decision, so it is never hashed
+
+
+def _roles(*roles: FieldRole) -> dict[str, frozenset[FieldRole]]:
+    return {"roles": frozenset(roles)}
+
+
+def field_roles(name: str) -> frozenset[FieldRole]:
+    """The roles of the :class:`FieldSpec` attribute ``name``."""
+    return next(item.metadata["roles"] for item in dataclass_fields(FieldSpec) if item.name == name)
 
 
 @dataclass(frozen=True)
 class FieldSpec:
     """One extractable field, exactly as ``config.json`` describes it."""
 
-    name: str
-    group: FieldGroup
-    kind: FieldKind
-    description: str
-    keywords: tuple[str, ...]
-    canonical_unit: str | None = None
+    name: str = field(metadata=_roles(FieldRole.PROMPT, FieldRole.FIGURE))
+    # A group the table declares; the field line shows it to the model ("group: film").
+    group: str = field(metadata=_roles(FieldRole.PROMPT))
+    kind: FieldKind = field(metadata=_roles(FieldRole.PROMPT))
+    description: str = field(metadata=_roles(FieldRole.PROMPT, FieldRole.FIGURE))
+    keywords: tuple[str, ...] = field(metadata=_roles(FieldRole.RETRIEVAL, FieldRole.FIGURE))
+    canonical_unit: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.FIGURE))
     # A short Chinese name for the column header. Display only: it reaches no prompt and no verdict, so it
     # stays out of the cache keys (see keys._SCHEMA_EXCLUDED). Empty means the UI falls back to ``name``.
-    label: str = ""
+    label: str = field(default="", metadata=_roles(FieldRole.DISPLAY))
     # The Chinese explanation of the field, for the web header tooltip and the Excel field sheet. Display
     # only, like ``label``: no prompt and no verdict reads it, so it stays out of the cache keys.
-    description_zh: str = ""
+    description_zh: str = field(default="", metadata=_roles(FieldRole.DISPLAY))
     # Numeric tolerance: |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
-    rel_tol: float = 0.0
-    abs_tol: float = 0.0
-    condition_hint: str | None = None
-    bare_number: BareNumberPolicy = "reject"
+    rel_tol: float = field(default=0.0, metadata=_roles(FieldRole.VERDICT))
+    abs_tol: float = field(default=0.0, metadata=_roles(FieldRole.VERDICT))
+    condition_hint: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT))
+    bare_number: BareNumberPolicy = field(default="reject", metadata=_roles(FieldRole.CLEANING, FieldRole.FIGURE))
     # A closed set of canonical answers for a text field, e.g. ("DC", "RF", "DC+RF"). When a field has one,
     # comparison goes through paperfacts.normalize.canonical_category instead of raw text equality, so
     # "DC and RF magnetron co-sputtering" and "DC and RF" stop reading as two different modes.
-    categories: tuple[str, ...] = ()
+    categories: tuple[str, ...] = field(default=(), metadata=_roles(FieldRole.VERDICT))
     # Plausible (min, max) in canonical_unit, either end open. A value outside it is almost always a
     # different quantity the model mistook for this one -- the spin-coating rpm of an absorber read as the
     # substrate rotation, a perovskite layer's thickness read as the electrode's -- so the model is told the
     # range and a converted value outside it is dropped with an audited reason.
-    valid_range: tuple[float | None, float | None] = (None, None)
+    valid_range: tuple[float | None, float | None] = field(
+        default=(None, None), metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING)
+    )
     # Which measurement fills the dataset cell when a sample has several, in order of preference: each entry
     # names the numbers a condition states ("400-800" for an average over 400-800 nm, "550" for one
     # wavelength). A verdict rule only -- the model is never told it -- so it is kept out of the schema
     # fingerprint and hashed into comparison_key alone.
-    condition_preference: tuple[str, ...] = ()
+    condition_preference: tuple[str, ...] = field(default=(), metadata=_roles(FieldRole.VERDICT))
+    # Resolved from the field's group by the loader, never written in a field entry. The default suits a
+    # sample-level group only: a FieldSpec built by hand for a paper-level group must pass it.
+    level: FieldLevel = field(
+        default="sample", metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT)
+    )
+    # What ``condition`` must always hold for this field ("the wavelength or spectral range"): for a quantity
+    # whose value means nothing without the condition it was measured under.
+    condition_rule: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT))
+    # The dataset note when such a field's value arrives without its condition; None gives a generic one.
+    missing_condition_note_zh: str | None = field(default=None, metadata=_roles(FieldRole.VERDICT))
+    # Whether a chart's y axis may be read for this field: a numeric property of the sample itself.
+    figure_readable: bool = field(default=False, metadata=_roles(FieldRole.FIGURE))
+    display_format: DisplayFormat = field(default="plain", metadata=_roles(FieldRole.DISPLAY))
+    range_policy: RangePolicy = field(default="midpoint", metadata=_roles(FieldRole.CLEANING, FieldRole.VERDICT))
 
     @property
     def is_sample_level(self) -> bool:
-        return self.group != "target"
+        return self.level == "sample"
 
     def describe_range(self) -> str | None:
         """The plausible range in words, e.g. "at most 100 rpm", or None when the field declares none. Both ends
@@ -98,8 +148,12 @@ class FieldSpec:
         return (low is None or value >= low) and (high is None or value <= high)
 
 
-def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
-    """One validated entry of ``config.json``'s ``fields`` list."""
+# Attributes a field entry never states: the loader derives them.
+_DERIVED = {"level"}
+
+
+def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, FieldLevel]) -> FieldSpec:
+    """One validated entry of a ``fields`` list; ``levels`` maps each declared group to its level."""
     where = f"{source}: fields[{position}]"
     if not isinstance(entry, Mapping):
         raise ConfigError(f"{where} must be an object, got {type(entry).__name__}")
@@ -108,7 +162,7 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         raise ConfigError(f"{where} needs a non-empty 'name'")
     where = f"{source}: field {name!r}"
 
-    known = {spec.name for spec in dataclass_fields(FieldSpec)}
+    known = {spec.name for spec in dataclass_fields(FieldSpec)} - _DERIVED
     unknown = sorted(set(entry) - known)
     if unknown:
         raise ConfigError(f"{where} has unknown key(s) {', '.join(unknown)}; valid keys are {', '.join(sorted(known))}")
@@ -171,9 +225,29 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
             f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {entry.get('canonical_unit')!r}"
         )
 
+    numeric = entry.get("kind") == "numeric"
+    condition_rule = text_or_none("condition_rule")
+    if condition_rule is not None and (not condition_rule.strip() or entry.get("condition_hint") is None):
+        # The rule tells the model to fill a condition that the field line must first say the field has.
+        raise ConfigError(f"{where}: condition_rule must be a non-empty string and needs a condition_hint")
+    missing_note = text_or_none("missing_condition_note_zh")
+    if missing_note is not None and not missing_note.strip():
+        raise ConfigError(f"{where}: missing_condition_note_zh must be a non-empty string when present")
+    figure_readable = entry.get("figure_readable", False)
+    if type(figure_readable) is not bool:
+        raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
+    if figure_readable and (not numeric or entry.get("canonical_unit") is None):
+        raise ConfigError(f"{where}: figure_readable needs a numeric field with a canonical_unit")
+    for key in ("display_format", "range_policy"):
+        if key in entry and not numeric:
+            raise ConfigError(f"{where}: {key} is only meaningful for a numeric field, not a {entry.get('kind')!r} one")
+    display_format = choice("display_format", get_args(DisplayFormat)) if "display_format" in entry else "plain"
+    range_policy = choice("range_policy", get_args(RangePolicy)) if "range_policy" in entry else "midpoint"
+    group = choice("group", tuple(levels))
+
     return FieldSpec(
         name=name,
-        group=choice("group", get_args(FieldGroup)),  # type: ignore[arg-type]
+        group=group,
         kind=choice("kind", get_args(FieldKind)),  # type: ignore[arg-type]
         description=description,
         keywords=tuple(keywords),
@@ -187,6 +261,12 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         categories=tuple(categories),
         valid_range=_valid_range(entry, where),
         condition_preference=tuple(preference),
+        level=levels[group],
+        condition_rule=condition_rule,
+        missing_condition_note_zh=missing_note,
+        figure_readable=figure_readable,
+        display_format=display_format,  # type: ignore[arg-type]
+        range_policy=range_policy,  # type: ignore[arg-type]
     )
 
 
@@ -209,10 +289,23 @@ def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, fl
     return (None if low is None else float(low), None if high is None else float(high))
 
 
+# Attributes only a profile may set. Nothing reads them from config.json's table, so accepting them there would
+# be an edit that silently does nothing.
+PROFILE_ONLY = ("condition_rule", "missing_condition_note_zh", "figure_readable", "display_format", "range_policy")
+
+
 def load_field_specs(document: ConfigDocument) -> tuple[FieldSpec, ...]:
     """The whole field table, validated. An empty table is refused: it would extract nothing, silently."""
     entries = document.entries("fields")
-    specs = tuple(_field_spec(entry, index, str(document.path)) for index, entry in enumerate(entries))
+    for index, entry in enumerate(entries):
+        found = [key for key in PROFILE_ONLY if isinstance(entry, Mapping) and key in entry]
+        if found:
+            raise ConfigError(
+                f"{document.path}: fields[{index}]: {', '.join(found)} can only be set in a profile (profiles/*.json)"
+            )
+    specs = tuple(
+        field_spec(entry, index, str(document.path), CONFIG_GROUP_LEVELS) for index, entry in enumerate(entries)
+    )
     if not specs:
         raise ConfigError(f"{document.path}: fields is empty, so there is nothing to extract")
     duplicates = sorted({spec.name for spec in specs if sum(s.name == spec.name for s in specs) > 1})
@@ -246,5 +339,5 @@ CONDITION_KEYWORDS: tuple[str, ...] = load_condition_keywords(_CONFIG)
 AMBIGUOUS_MATCH_CONFIDENCE: float = _CONFIG.get("comparison.ambiguous_match_confidence", float)
 
 FIELD_BY_NAME: dict[str, FieldSpec] = {spec.name: spec for spec in FIELD_SPECS}
-TARGET_FIELDS: tuple[FieldSpec, ...] = tuple(spec for spec in FIELD_SPECS if spec.group == "target")
+TARGET_FIELDS: tuple[FieldSpec, ...] = tuple(spec for spec in FIELD_SPECS if not spec.is_sample_level)
 SAMPLE_FIELDS: tuple[FieldSpec, ...] = tuple(spec for spec in FIELD_SPECS if spec.is_sample_level)

@@ -101,9 +101,9 @@ this file is the part that is easy to get wrong.
   `extractor_key_for(settings)`, so writer and reader cannot disagree -- never spell the settings out a
   second time. It also hashes the field schema *minus* the verdict-only cells (tolerances, categories,
   condition preferences, display text), the prompts, and the source of the extraction modules (`extract.py`,
-  `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`,
-  `continuation.py`); passage mode adds its two prompts plus `retrieval_fingerprint` (the keywords,
-  `passages.py` and `continuation.py`). `comparison_key` hashes the whole field schema including
+  `records.py`, `fields.py`, `profile.py`, `units.py`, `text.py`, `adapters.py`, `prompts.py`, `normalize.py`,
+  `grounding.py`, `voting.py`, `continuation.py`); passage mode adds its two prompts plus `retrieval_fingerprint`
+  (the keywords, `passages.py`, `continuation.py`, `units.py` and `text.py`). `comparison_key` hashes the whole field schema including
   tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `decide.py`, `dataset.py` and the matching prompt.
   A tolerance edit therefore re-keys comparisons only. Anything that is at its built-in
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a

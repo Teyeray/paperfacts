@@ -39,7 +39,8 @@ from paperfacts.config import DEFAULT_CANDIDATE_LIMIT
 from paperfacts.continuation import continuation_partners
 from paperfacts.fields import CONDITION_KEYWORDS, FieldSpec
 from paperfacts.models import SourceBlock
-from paperfacts.normalize import delatex, normalize_text
+from paperfacts.text import delatex, normalize_text
+from paperfacts.units import BUILTIN_RETRIEVAL
 
 logger = logging.getLogger(__name__)
 
@@ -49,38 +50,6 @@ DENSE_TYPES: frozenset[str] = frozenset({"table", "caption"})
 # extraction.candidate_limit in config.json caps the unit-only blocks, together with the named ones: named
 # blocks are never cut, and the unit-only ones fill whatever places they left.
 
-
-# How each canonical unit is recognised **inside running text**. :mod:`paperfacts.normalize` has unit
-# patterns too, but those are anchored: they answer "is this whole string the unit?" for a value the model
-# already quoted. Searching prose for a unit is a different question and needs looser expressions.
-#
-# A unit match ranks below a name match rather than being filtered out, because the two failure modes are
-# not symmetric. "%" and "nm" appear in every paper, so treating them as proof would drown the prompt;
-# refusing them outright loses the paper that writes "films of 2108 nm" without the word "thickness". As a
-# weaker class they only fill places no named block wanted.
-# Lowercase omega, not the ohm sign: searchable() lowercases, and "Ω".lower() is "ω". normalize_key has to
-# undo the same fold for the same reason. Spelling it uppercase here would silently match only "ohm".
-_OHM = r"(?:ohms?|ω)"
-# Every pattern runs on searchable() text, which is lower case: an upper-case letter in one never matches.
-# "W" was written that way once, and sputtering_power went unasked in 22 of 54 lanes that said "60 W".
-UNIT_PATTERNS: dict[str, re.Pattern[str]] = {
-    "Ω/sq": re.compile(rf"{_OHM}\s*(?:/|per)?\s*(?:sq|square|□)"),
-    "Ω·cm": re.compile(rf"{_OHM}\s*[.x*·-]?\s*cm"),
-    # "4 in." and "2 inch" are target sizes; a bare "in" is the English word, so a digit must precede it.
-    "inch": re.compile(r"\d\s*(?:inch|inches|in\.|\")"),
-    "nm": re.compile(r"\d\s*(?:nm|µm|μm|um)\b"),
-    "min": re.compile(r"\d\s*(?:min|mins|minutes?|h|hr|hrs|hours?|s|sec|secs|seconds?)\b"),
-    "%": re.compile(r"\d\s*%"),
-    # K is admitted as a retrieval signal even though the converter refuses it: a block saying "annealed
-    # at 573 K" belongs in the prompt, and the honest ambiguous verdict is the comparison's job, not
-    # retrieval's.
-    "℃": re.compile(r"\d\s*(?:°\s*[ck]\b|℃|c\b|k\b)"),
-    "cm": re.compile(r"\d\s*(?:cm|mm|m|µm|μm|um)\b"),
-    "W": re.compile(r"\d\s*[km]?w\b"),
-    "sccm": re.compile(r"\d\s*(?:sccm|slm)\b"),
-    "rpm": re.compile(r"\d\s*(?:rpm|r/min)\b"),
-    "Pa": re.compile(r"\d\s*(?:[mkh]?pa|m?torr|m?bar)\b"),
-}
 
 # A deposition condition stated as a number with its unit. This is what distinguishes one sample from
 # another ("100 sccm", "150 W", "300 °C"), so a block carrying one belongs in the inventory question even
@@ -170,7 +139,7 @@ def candidate_blocks(
     """
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
-    unit = UNIT_PATTERNS.get(spec.canonical_unit or "")
+    unit = BUILTIN_RETRIEVAL.get(spec.canonical_unit or "")
     named: set[int] = set()
     unit_only: list[tuple[bool, int]] = []
     for index, block in enumerate(blocks):

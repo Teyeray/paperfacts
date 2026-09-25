@@ -9,7 +9,11 @@ Flat modules, in pipeline order:
 - ``parsers``     hand a PDF to MinerU / PaddleOCR-VL, as a subprocess or over HTTP
 - ``adapters``    native parser output -> blocks -> Markdown with provenance markers
 - ``overlay``     block boxes drawn on page images, to check provenance by eye
-- ``fields``      the target field table: units, tolerances, bare-number policy
+- ``text``        text folding shared by every stage that compares spellings
+- ``units``       built-in unit converters and retrieval patterns, and a profile's declared units
+- ``fields``      the target field table: units, tolerances, bare-number policy, each attribute's roles
+- ``ui_copy``     a profile's Chinese display copy; in no cache key
+- ``profile``     a domain profile: groups, fields, prompt slots, retrieval, units
 - ``continuation`` paragraphs a page or column break cut in two, linked across the break
 - ``prompts``     the extraction and matching prompts
 - ``llm``         OpenAI-compatible client with a request cache and one repair round
@@ -19,7 +23,7 @@ Flat modules, in pipeline order:
 - ``readings``    the figures stage on disk: stored readings, the ones shown (and their rows), reading anew
 - ``voting``      repeats collapsed within a pass, majority vote across passes
 - ``grounding``   the quoted text must occur in the block it cites
-- ``normalize``   text folding, number parsing, unit conversion
+- ``normalize``   number parsing, unit conversion
 - ``matching``    which sample in lane A is which sample in lane B
 - ``compare``     field-by-field comparison of the two lanes
 - ``decide``      one dataset cell's verdict: which candidate the cell states, or why it states none

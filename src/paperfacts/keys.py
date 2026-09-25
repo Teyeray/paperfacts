@@ -52,7 +52,16 @@ _PACKAGE_DIR = Path(__file__).parent
 # Cells that change a verdict or retrieval but never what the model is asked; each has its own fingerprint.
 # ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
 # verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
-_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh", "condition_preference"}
+_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh", "condition_preference"} | {
+    # No stage reads these yet, so no stored result depends on them: ``level`` restates the group, which is
+    # hashed, and the rest keep today's behaviour at their defaults until the code that reads them lands.
+    "level",
+    "condition_rule",
+    "missing_condition_note_zh",
+    "figure_readable",
+    "display_format",
+    "range_policy",
+}
 # Cells only a verdict reads: the numeric tolerance of a comparison. Nothing in extraction -- no prompt, no
 # cleaning rule, not drop_implausible -- looks at them, so they stay out of extractor_key.
 _VERDICT_ONLY = {"rel_tol", "abs_tol"}
@@ -131,7 +140,7 @@ def retrieval_fingerprint() -> str:
     material = {
         "keywords": {spec.name: list(spec.keywords) for spec in FIELD_SPECS},
         "condition_keywords": list(CONDITION_KEYWORDS),
-        "code": source_fingerprint("passages.py", "continuation.py"),
+        "code": source_fingerprint("passages.py", "continuation.py", "units.py", "text.py"),
     }
     return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
 
@@ -147,6 +156,8 @@ def extraction_code_fingerprint() -> str:
     are duplicates of each other and which sample a value lands on, and ``normalize.py`` converts the value
     ``drop_implausible`` judges (``continuation.py`` decides which blocks grounding joins across a page
     break); ``voting.py`` decides which of the model's repeated claims survive the majority vote.
+    ``text.py`` and ``units.py`` hold the folding and the unit tables ``normalize.py`` applies, and
+    ``profile.py`` the prompt-slot defaults a profile falls back on.
     Over-invalidation is cheap here: an unchanged request replays from the LLM cache, so re-deriving the
     records costs nothing but a second of CPU.
 
@@ -156,6 +167,9 @@ def extraction_code_fingerprint() -> str:
     return source_fingerprint(
         "extract.py",
         "fields.py",
+        "profile.py",
+        "units.py",
+        "text.py",
         "voting.py",
         "records.py",
         "adapters.py",
@@ -168,7 +182,7 @@ def extraction_code_fingerprint() -> str:
 
 @cache
 def normalization_fingerprint() -> str:
-    return source_fingerprint("normalize.py")
+    return source_fingerprint("normalize.py", "units.py", "text.py")
 
 
 @cache
@@ -177,8 +191,9 @@ def comparison_code_fingerprint() -> str:
     re-reads two stored extractions -- so a change here must never be served from a file written by the old
     rules. ``matching.py`` is in here because which samples were paired decides every verdict below them, and
     ``dataset.py`` and ``decide.py`` because the consolidated table they write is stored under this key and is
-    itself a set of verdicts (which cells are committed, which are refused)."""
-    return source_fingerprint("compare.py", "matching.py", "dataset.py", "decide.py")
+    itself a set of verdicts (which cells are committed, which are refused). ``profile.py`` holds the defaults
+    the matching prompt's slots fall back on."""
+    return source_fingerprint("compare.py", "matching.py", "dataset.py", "decide.py", "profile.py")
 
 
 @dataclass(frozen=True)
@@ -310,8 +325,8 @@ def figure_key(
     nothing here is omitted at a baseline: every input is in the material from the start.
 
     ``dpi`` and ``max_pixels`` change the image the model is shown; ``max_per_document`` which charts are
-    read. ``figures.py`` holds the prompt, the selection and the conversion into readings; ``normalize.py``
-    the unit arithmetic; ``passages.py`` the keyword matching that selects a chart.
+    read. ``figures.py`` holds the prompt, the selection and the conversion into readings; ``normalize.py``,
+    ``units.py`` and ``text.py`` the unit arithmetic; ``passages.py`` the keyword matching that selects a chart.
     """
     material = {
         "model": model,
@@ -321,7 +336,7 @@ def figure_key(
         "max_pixels": max_pixels,
         "max_per_document": max_per_document,
         "fields": figure_field_fingerprint(),
-        "code": source_fingerprint("figures.py", "normalize.py", "passages.py"),
+        "code": source_fingerprint("figures.py", "normalize.py", "passages.py", "units.py", "text.py"),
     }
     return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
 

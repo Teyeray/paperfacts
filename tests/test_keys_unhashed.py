@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from paperfacts import keys
 
-UNHASHED = {"workbook.py", "readings.py", "llm.py", "config.py", "cli.py", "workflow.py", "batch.py"}
+UNHASHED = {"workbook.py", "readings.py", "llm.py", "config.py", "cli.py", "workflow.py", "batch.py", "ui_copy.py"}
 
 
 def _hashed_modules(monkeypatch) -> set[str]:
@@ -35,3 +35,11 @@ def test_the_unhashed_modules_appear_in_no_key_list(monkeypatch):
 
     assert {"extract.py", "dataset.py", "figures.py", "passages.py"} <= hashed  # the recording saw the lists
     assert not hashed & UNHASHED
+
+
+def test_the_profile_modules_are_hashed_where_what_they_hold_is_read(monkeypatch):
+    # text.py folds and units.py converts what normalize.py and passages.py read; profile.py holds the slot
+    # defaults the prompts are built from.
+    hashed = _hashed_modules(monkeypatch)
+
+    assert {"text.py", "units.py", "profile.py"} <= hashed

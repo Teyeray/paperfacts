@@ -42,12 +42,13 @@ from paperfacts.errors import Cancelled, LlmOfflineMiss
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.llm import VisionClient
 from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
-from paperfacts.normalize import convert_to_canonical, normalize_text
+from paperfacts.normalize import convert_to_canonical
 
 # Keyword matching is passages.py's, so a caption names a field under exactly the rules a passage-mode
 # question uses to find it in the text.
 from paperfacts.passages import keyword_hits, searchable
 from paperfacts.storage import write_text_atomic
+from paperfacts.text import normalize_text
 from paperfacts.threads import ContextThreadPoolExecutor
 
 logger = logging.getLogger(__name__)

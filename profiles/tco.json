@@ -1,82 +1,86 @@
 {
-  "$comment": "PaperFacts configuration: edit this file to change anything about a run. Secrets never live here -- the API key goes in .env (see .env.example). The PAPERFACTS_* environment variables listed in README.md still win over this file, which is how a deployment overrides one value without editing it.",
-  "data_root": "data",
-  "profile": "tco",
-  "server": {
-    "host": "127.0.0.1",
-    "port": 8000,
-    "max_upload_mb": 200,
-    "page_dpi": {
-      "default": 110,
-      "min": 50,
-      "max": 220
+  "$comment": "The TCO profile: sputtered transparent conductive oxide films. Written by scripts/extract_tco_profile.py from config.json and the prompts as they stood; every slot is a verbatim slice of today's prompts, so editing one changes what the model is asked.",
+  "format": 1,
+  "name": "tco",
+  "title_zh": "透明导电氧化物（TCO）薄膜",
+  "maturity": "production",
+  "description_zh": "磁控溅射透明导电氧化物薄膜：靶材、沉积工艺与薄膜的电学、光学性能。",
+  "groups": [
+    {
+      "name": "target",
+      "level": "paper",
+      "label_zh": "靶材"
+    },
+    {
+      "name": "process",
+      "level": "sample",
+      "label_zh": "工艺"
+    },
+    {
+      "name": "film",
+      "level": "sample",
+      "label_zh": "薄膜"
     }
-  },
-  "web": {
-    "username": "paperfacts",
-    "max_parallel_documents": 3
-  },
-  "llm": {
-    "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-    "model": "deepseek-v4.1-flash",
-    "timeout_s": 600.0,
-    "context_tokens": 200000,
-    "temperature": 0.0,
-    "max_tokens": 65536,
-    "concurrency": 4,
-    "max_in_flight": 8,
-    "reasoning_effort": null,
-    "inventory_reasoning_effort": null,
-    "retry_attempts": 4,
-    "retry_backoff_s": 2.0,
-    "offline": false
-  },
-  "extraction": {
-    "mode": "passage",
-    "passes": 1,
-    "candidate_limit": 8
-  },
-  "comparison": {
-    "ambiguous_match_confidence": 0.6
-  },
-  "parsers": {
-    "mineru_url": null,
-    "paddle_url": null,
-    "paddle_render_dpi": 200,
-    "paddle_vl_backend": null,
-    "paddle_vl_server_url": null,
-    "paddle_vl_model_name": null,
-    "subprocess_timeout_s": 3600.0,
-    "http_timeout_s": 900.0,
-    "uv_bin": "uv"
-  },
-  "overlay": {
-    "dpi": 150
+  ],
+  "prompt": {
+    "domain_subject": "transparent conductive oxide (TCO) thin films",
+    "sample_definition": "A sample is a TCO or transparent-electrode film that this paper deposits itself. The other layers of a device -- a perovskite or organic absorber / active layer, charge-transport layers, thin buffer layers (e.g. evaporated MoOx, WOx, NbOy, VOx, or nanoparticle SnO2 / ZnO under an electrode), metal contacts -- are never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When the paper varies only those other layers, the TCO film it deposits is still a single sample. A multilayer transparent electrode (oxide/metal/oxide such as ITO/Ag/ITO or WO3/Ag/WO3) is one film: its thin metal interlayer is part of it, not a metal contact. Changes to the TCO film itself do make separate samples: each deposition condition, each thickness of any of its layers, and each post-treatment (as-deposited, annealed at 150 °C, annealed at 230 °C...) is its own sample. So is each substrate the paper compares the film's properties on (glass vs. a metal foil); the same film merely deposited on a second substrate to characterise it (Si for XRD, a TEM grid) is the same sample.",
+    "field_scope": "Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A value that belongs to another layer (a perovskite or organic absorber / active layer, a transport layer, a metal contact, the substrate) or to a whole device is not a value of this field, however well its name fits: leave it out.",
+    "fact_noun": "materials-science facts",
+    "sample_plural": "film samples",
+    "sample_singular": "film",
+    "sample_unit": "film sample / deposition condition set",
+    "sample_examples": "(e.g. one per O2 flow rate, per power, per substrate temperature)",
+    "sample_id_example": "O2-100sccm",
+    "condition_noun": "deposition conditions",
+    "condition_examples": "(flow rates, power, temperature, pressure, time...)",
+    "unit_examples": "\"Ω/sq\", \"μm\", \"sccm\"",
+    "paper_key": "target",
+    "paper_level_rule": "Target fields (group \"target\") describe the sputtering target and belong to the paper, not to a sample: put them under \"target\" only, never under a sample. `component` is the TARGET composition; a film's dopant concentration is not a component value. Use null for \"target\" only if the paper says nothing about the target.",
+    "no_samples_key": "no_tco_film",
+    "no_samples_clause": "the paper deposits no such film",
+    "no_samples_condition": "the paper deposits no TCO or transparent-electrode film of its own (it only uses purchased ITO/FTO glass, say)",
+    "samples_present_condition": "such a film is deposited",
+    "subset_examples": "\"all films deposited at 100 °C\", \"the annealed films\", \"the samples on glass\"",
+    "whole_series_examples": "\"all films\", \"for all samples\"",
+    "partial_collective_example": "\"the sputtered films\", when one listed sample is not sputtered",
+    "multi_condition_example": "transmittance at 550 nm and averaged",
+    "matching_condition_examples": "(flow rate, power, temperature, time...)",
+    "matching_value_examples": "(sheet resistance, thickness...)",
+    "matching_justification_example": "both are the 100 sccm O2 sample"
   },
   "figures": {
-    "enabled": false,
-    "model": "qwen3.7-plus",
-    "max_per_document": 12,
-    "dpi": 200,
-    "max_pixels": 2000000,
-    "timeout_s": 300.0
+    "subject": "thin films (e.g. sputtered transparent conductive oxides)",
+    "property_noun": "film properties",
+    "chart_definition": "a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name)",
+    "axis_example": "axis \"Sheet resistance [10^2 ohm/sq]\" with a marker at the \"25\" gridline => y = 25, unit \"10^2 ohm/sq\""
   },
-  "condition_keywords": [
-    "sample",
-    "substrate",
-    "deposition",
-    "deposited",
-    "sputtering",
-    "sputtered",
-    "annealing",
-    "annealed",
-    "flow",
-    "flow rate",
-    "power",
-    "pressure",
-    "temperature",
-    "atmosphere"
-  ],
+  "retrieval": {
+    "condition_keywords": [
+      "sample",
+      "substrate",
+      "deposition",
+      "deposited",
+      "sputtering",
+      "sputtered",
+      "annealing",
+      "annealed",
+      "flow",
+      "flow rate",
+      "power",
+      "pressure",
+      "temperature",
+      "atmosphere"
+    ],
+    "condition_unit_pattern": "\\d\\s*(?:sccm|W\\b|°C|℃|K\\b|Pa\\b|mtorr|torr|mbar|kv\\b|ma\\b|rpm|min\\b|h\\b|s\\b|(?:vol|at)\\.?\\s*%)"
+  },
+  "units": {},
+  "ui": {
+    "paper_level_label_zh": "靶材（论文级）",
+    "paper_level_short_zh": "靶材",
+    "entity_label_zh": "样品",
+    "no_samples_message_zh": "该论文没有自己沉积的 TCO 膜，所以没有样品级数据。"
+  },
   "fields": [
     {
       "name": "component",
@@ -117,7 +121,8 @@
       "rel_tol": 0.05,
       "abs_tol": 0.0,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "display_format": "scientific"
     },
     {
       "name": "density",
@@ -518,7 +523,8 @@
       "rel_tol": 0.02,
       "abs_tol": 0.0,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "figure_readable": true
     },
     {
       "name": "resistivity",
@@ -537,7 +543,9 @@
       "rel_tol": 0.05,
       "abs_tol": 0.0,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "figure_readable": true,
+      "display_format": "scientific"
     },
     {
       "name": "transmittance",
@@ -576,7 +584,10 @@
         "400-700",
         "550",
         "400-1100"
-      ]
+      ],
+      "condition_rule": "the wavelength or spectral range",
+      "missing_condition_note_zh": "原文提取结果未注明透光率波长或波段",
+      "figure_readable": true
     },
     {
       "name": "thickness",
@@ -601,7 +612,8 @@
       "bare_number": "reject",
       "valid_range": {
         "max": 5000
-      }
+      },
+      "figure_readable": true
     }
   ]
 }
