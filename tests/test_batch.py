@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 
 import pytest
@@ -11,6 +12,7 @@ from typer.testing import CliRunner
 from paperfacts.cli import app
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, ParserError
+from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import discover_pdfs, run_batch, run_document
@@ -103,12 +105,15 @@ def test_a_paper_with_an_unanswered_question_is_listed_as_incomplete(monkeypatch
 
 def test_cli_run_says_when_its_result_is_not_kept(monkeypatch, tmp_path):
     source = make_blank_pdf(tmp_path / "paper.pdf")
-    install_fake_pipeline(monkeypatch, unanswered="thickness")
+    paired = SampleMatching(pairs=(SampleMatch(a_id="S0", b_id="S0", confidence=1.0, method="llm", justification="t"),))
+    install_fake_pipeline(monkeypatch, unanswered="thickness", matching=paired)
 
     cli = CliRunner().invoke(app, ["run", str(source), "--data-root", str(tmp_path / "data")])
 
     assert cli.exit_code == 0, cli.output
     assert "Incomplete, not kept as finished: no valid answer to mineru:thickness" in cli.output
+    # The comparison counts above print such a field as missing; the cells say what it really is.
+    assert re.search(r"[1-9]\d* cells unanswered \(thickness\)", cli.output), cli.output
 
 
 def test_offline_export_never_runs_parser_or_llm(monkeypatch, tmp_path):
