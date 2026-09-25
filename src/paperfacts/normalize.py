@@ -185,9 +185,10 @@ _LIST_SEPARATOR = re.compile(r"[,;:]")
 # second quantity stands beside the first, and which one is the value is not the parser's to guess. A lone
 # "x" is the multiplication sign of "40 x 10 cm", not a unit.
 _OWN_UNIT = re.compile(rf"^\s*(?!x\b){_UNIT_TOKEN}")
-# A measurement condition stated after the value ("550 nm at 80%", "1.2 × 10^-4 at 300 K"): its numbers
-# describe when the value was measured, not the value.
-_CONDITION = re.compile(r"\s+(?:at|@)\s+(?=.*\d).*$", re.IGNORECASE)
+# A measurement or process condition stated after the value ("550 nm at 80%", "1.2 × 10^-4 at 300 K", "400 °C
+# for 2 h", "500 °C under N2"): its numbers describe when the value was measured, not the value. Not "in":
+# that is also the inch, and "2 in x 3 in" would read as 2.
+_CONDITION = re.compile(r"\s+(?:at|@|for|during|under|after)\s+(?=.*\d).*$", re.IGNORECASE)
 NUMBER_RE = re.compile(_NUM)
 """Every plain number in a piece of text. Public because the comparison layer reads the numbers out of a
 measurement condition ("550 nm") and must use the same notion of "a number" this module parses with."""

@@ -339,6 +339,15 @@ SPELLINGS = [
     ("∅32 mm × 40 mm", None, "its own unit"),
     # parse_number sees no field, so a compound duration is refused here; normalize_field reads it.
     ("3 h 30 min", None, "its own unit"),
+    ("2 in x 3 in", None, "its own unit"),
+    # A condition introduced by "for", "during", "under" or "after" is set aside like one after "at". Not
+    # "in": that is also the inch.
+    ("400 °C for 2 h", 400.0, "condition 'for 2 h' ignored"),
+    ("400 °C in air for 1 h", 400.0, "condition 'for 1 h' ignored"),
+    ("500 °C under N2 for 1 h", 500.0, "condition 'under N2 for 1 h' ignored"),
+    ("90% for 550 nm", 90.0, "condition 'for 550 nm' ignored"),
+    ("100 nm after annealing at 400 °C", 100.0, "condition"),
+    ("12 Ω/sq during 30 min", 12.0, "condition"),
 ]
 
 

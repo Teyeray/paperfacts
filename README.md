@@ -791,7 +791,7 @@ duration written in two of its units, larger first, is one value: `3 h 30 min` i
 1.5 min, in the comparison and the dataset cell alike (`1 h 90 min` is refused). Only a duration is a sum:
 elsewhere a second unit restates the value (`0.5 Pa 3.75 mTorr`), and that is refused. A range
 keeps its midpoint whether or not each bound repeats the unit (`80%–85%`, `500 °C to 530 °C`). A condition
-after the value (`550 nm at 80%`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
+after the value (`550 nm at 80%`, `400 °C for 2 h`, `500 °C under N2`; `at`, `for`, `during`, `under`, `after`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
 unit exponent (`H2`, `cm^-3`) are set aside with a note, never read as the value. On a field whose bare
 number may be a fraction, only a value below 1 is read as one: a bare `1` is 1 %, not 100 %. A value
 the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to
