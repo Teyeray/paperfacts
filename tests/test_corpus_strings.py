@@ -17,12 +17,12 @@ import pytest
 
 from paperfacts.normalize import compound_value, parse_number
 from paperfacts.records import sample_key
-from paperfacts.units import BUILTIN_UNITS
 from support.profiles import shipped_profile
 
 # The shipped profile's field table, at module level because constants and parametrize lists need it before
 # any fixture runs.
 FIELD_BY_NAME = shipped_profile().by_name
+TCO_UNITS = shipped_profile().units
 
 CORPUS = Path(__file__).parent / "fixtures" / "corpus"
 VALUES = json.loads((CORPUS / "values.json").read_text(encoding="utf-8"))
@@ -63,9 +63,7 @@ def test_no_corpus_string_is_read_as_a_compound_duration():
     # normalize_field reads a compound duration before parse_number sees it, so the pins above do not cover
     # it; none of the corpus strings is one, and a rule change that makes one so must be looked at.
     compound = [
-        row["value_raw"]
-        for row in VALUES
-        if compound_value(FIELD_BY_NAME[row["field"]], row["value_raw"], BUILTIN_UNITS)
+        row["value_raw"] for row in VALUES if compound_value(FIELD_BY_NAME[row["field"]], row["value_raw"], TCO_UNITS)
     ]
 
     assert compound == []

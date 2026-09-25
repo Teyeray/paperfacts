@@ -111,7 +111,6 @@ def make_lane(
         backend=backend,
         extractor_key=extractor_key,
         model=model,
-        schema_version=profile_extraction_fingerprint(shipped_profile()),
         profile_fingerprint=profile_extraction_fingerprint(shipped_profile()),
         target=target,
         samples=tuple(samples),

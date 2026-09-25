@@ -13,7 +13,6 @@ import dataclasses
 import pytest
 
 from paperfacts.normalize import normalize_field, parse_number
-from paperfacts.units import BUILTIN_UNITS
 from support.extraction import make_field
 from support.profiles import shipped_profile
 
@@ -114,8 +113,8 @@ def test_number_words_under_either_range_policy(policy):
     # policy gives it a value; a single number word is one value, which reject has no reason to refuse.
     spec = dataclasses.replace(shipped_profile().by_name["thickness"], range_policy=policy)
 
-    words_range = normalize_field(make_field("thickness", "two to three", unit_raw="nm"), spec, BUILTIN_UNITS)
-    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, BUILTIN_UNITS)
+    words_range = normalize_field(make_field("thickness", "two to three", unit_raw="nm"), spec, shipped_profile().units)
+    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, shipped_profile().units)
 
     assert words_range.value is None
     assert "midpoint" not in (words_range.normalization_note or "")

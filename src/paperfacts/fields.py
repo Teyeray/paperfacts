@@ -1,11 +1,13 @@
 """A field: what to extract, in what unit, and how close counts as the same.
 
-The table itself is a domain profile's ``fields`` (``profiles/<name>.json``, read by :mod:`paperfacts.profile`),
-and this module holds no table of its own: every stage is handed the profile it runs under. Changing a field is
-therefore an edit to a JSON file rather than to Python -- which is the point, since which facts a group wants
-out of its papers is the thing that differs between groups. Every entry is validated on the way in by
-:func:`field_spec`: an unknown key or a misspelled group is a :class:`ConfigError` naming the field, not a
-surprise three stages later. A field's level (paper or sample) is its group's, as the profile declares it.
+The table itself is a domain profile's ``fields`` (``profiles/<name>.json``, read by
+:mod:`paperfacts.profile_loader`), and this module holds no table of its own: every stage is handed the profile it
+runs under. Changing a field is therefore an edit to a JSON file rather than to Python -- which is the point,
+since which facts a group wants out of its papers is the thing that differs between groups. Every entry is
+validated on the way in by :func:`paperfacts.profile_loader.field_spec`: an unknown key or a misspelled group is a
+:class:`ConfigError` naming the field, not a surprise three stages later. A field's level (paper or sample) is its
+group's, as the profile declares it. This module holds the attribute defaults the cache keys omit, which is why
+its source is hashed.
 
 One table drives five things: the field descriptions given to the model, unit conversion, what to do with
 a bare number that has no unit, the numeric tolerance used when comparing the two lanes, and -- through
@@ -25,19 +27,13 @@ adding an attribute is a decision about which keys it belongs to.
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
-from typing import Any, Literal, get_args
-
-from paperfacts.errors import ConfigError
+from typing import Literal
 
 # Whether a field belongs to the paper as a whole or to each of its samples. A profile declares it per group.
 FieldLevel = Literal["paper", "sample"]
-# A number as a measurement condition states it: "550", "400" and "800" in "average 400–800 nm".
-CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # numeric: a number with a unit; composition: a chemical formula; text: anything else
 FieldKind = Literal["numeric", "composition", "text"]
 # What a bare number with no unit means. Declared per field so normalisation never special-cases a name.
@@ -91,7 +87,9 @@ class FieldSpec:
     # Numeric tolerance: |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
     rel_tol: float = field(default=0.0, metadata=_roles(FieldRole.VERDICT))
     abs_tol: float = field(default=0.0, metadata=_roles(FieldRole.VERDICT))
-    condition_hint: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT))
+    # PROMPT for the field line; VERDICT because a field with a hint is measured along an axis the paper states
+    # beside the value, so the numbers in two conditions decide whether two values are one measurement.
+    condition_hint: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.VERDICT))
     bare_number: BareNumberPolicy = field(default="reject", metadata=_roles(FieldRole.CLEANING, FieldRole.FIGURE))
     # A closed set of canonical answers for a text field, e.g. ("DC", "RF", "DC+RF"). When a field has one,
     # comparison goes through paperfacts.normalize.canonical_category instead of raw text equality, so
@@ -117,8 +115,10 @@ class FieldSpec:
     )
     # What ``condition`` must always hold for this field ("the wavelength or spectral range"): for a quantity
     # whose value means nothing without the condition it was measured under.
-    condition_rule: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT))
-    # The dataset note when such a field's value arrives without its condition; None gives a generic one.
+    # VERDICT as well: a dataset cell of such a field whose value arrives without its condition carries a note.
+    condition_rule: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.VERDICT))
+    # The dataset note when such a field's value arrives without its condition. Required with condition_rule
+    # (the loader refuses one without the other), so no generic wording is ever stored in its place.
     missing_condition_note_zh: str | None = field(default=None, metadata=_roles(FieldRole.VERDICT))
     # Whether a chart's y axis may be read for this field: a numeric property of the sample itself.
     figure_readable: bool = field(default=False, metadata=_roles(FieldRole.FIGURE))
@@ -149,146 +149,3 @@ class FieldSpec:
     def in_range(self, value: float) -> bool:
         low, high = self.valid_range
         return (low is None or value >= low) and (high is None or value <= high)
-
-
-# Attributes a field entry never states: the loader derives them.
-_DERIVED = {"level"}
-
-
-def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, FieldLevel]) -> FieldSpec:
-    """One validated entry of a ``fields`` list; ``levels`` maps each declared group to its level."""
-    where = f"{source}: fields[{position}]"
-    if not isinstance(entry, Mapping):
-        raise ConfigError(f"{where} must be an object, got {type(entry).__name__}")
-    name = entry.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise ConfigError(f"{where} needs a non-empty 'name'")
-    where = f"{source}: field {name!r}"
-
-    known = {spec.name for spec in dataclass_fields(FieldSpec)} - _DERIVED
-    unknown = sorted(set(entry) - known)
-    if unknown:
-        raise ConfigError(f"{where} has unknown key(s) {', '.join(unknown)}; valid keys are {', '.join(sorted(known))}")
-
-    def choice(key: str, allowed: tuple[str, ...]) -> str:
-        value = entry.get(key)
-        if value not in allowed:
-            raise ConfigError(f"{where}: {key} must be one of {', '.join(allowed)}, got {value!r}")
-        return str(value)
-
-    def tolerance(key: str) -> float:
-        # A negative tolerance makes |a - b| <= tol impossible even for a == b: every value would conflict.
-        value = entry.get(key, 0.0)
-        if type(value) not in (int, float) or value < 0:
-            raise ConfigError(f"{where}: {key} must be a number of at least 0, got {value!r}")
-        return float(value)
-
-    def text_or_none(key: str) -> str | None:
-        value = entry.get(key)
-        if value is not None and not isinstance(value, str):
-            raise ConfigError(f"{where}: {key} must be a string or null, got {value!r}")
-        return value
-
-    keywords = entry.get("keywords", [])
-    if not isinstance(keywords, list) or not all(isinstance(word, str) and word for word in keywords):
-        raise ConfigError(f"{where}: keywords must be a list of non-empty strings")
-    description = entry.get("description")
-    if not isinstance(description, str) or not description.strip():
-        raise ConfigError(f"{where} needs a non-empty 'description'; it is what the model is told to look for")
-
-    label = entry.get("label", "")
-    if not isinstance(label, str) or ("label" in entry and not label.strip()):
-        raise ConfigError(f"{where}: label must be a non-empty string when present, got {entry.get('label')!r}")
-
-    description_zh = entry.get("description_zh", "")
-    if not isinstance(description_zh, str) or ("description_zh" in entry and not description_zh.strip()):
-        raise ConfigError(
-            f"{where}: description_zh must be a non-empty string when present, got {entry.get('description_zh')!r}"
-        )
-
-    preference = entry.get("condition_preference", [])
-    if not isinstance(preference, list) or not all(
-        isinstance(word, str) and CONDITION_NUMBER.search(word) for word in preference
-    ):
-        raise ConfigError(
-            f"{where}: condition_preference must be a list of strings each naming a number, like '400-800'"
-        )
-
-    categories = entry.get("categories", [])
-    if not isinstance(categories, list) or not all(isinstance(word, str) and word.strip() for word in categories):
-        raise ConfigError(f"{where}: categories must be a list of non-empty strings")
-    if categories and entry.get("kind") != "text":
-        raise ConfigError(f"{where}: categories is only meaningful for a text field, not a {entry.get('kind')!r} one")
-
-    bare_number = choice("bare_number", get_args(BareNumberPolicy)) if "bare_number" in entry else "reject"
-    if bare_number == "percent_or_fraction" and entry.get("canonical_unit") != "%":
-        # The policy reads a bare 0.8 as 80: meaningful for a percentage, an invented number for anything
-        # else (0.8 would become 80 nm).
-        raise ConfigError(
-            f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {entry.get('canonical_unit')!r}"
-        )
-
-    numeric = entry.get("kind") == "numeric"
-    condition_rule = text_or_none("condition_rule")
-    if condition_rule is not None and (not condition_rule.strip() or entry.get("condition_hint") is None):
-        # The rule tells the model to fill a condition that the field line must first say the field has.
-        raise ConfigError(f"{where}: condition_rule must be a non-empty string and needs a condition_hint")
-    missing_note = text_or_none("missing_condition_note_zh")
-    if missing_note is not None and not missing_note.strip():
-        raise ConfigError(f"{where}: missing_condition_note_zh must be a non-empty string when present")
-    figure_readable = entry.get("figure_readable", False)
-    if type(figure_readable) is not bool:
-        raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
-    if figure_readable and (not numeric or entry.get("canonical_unit") is None):
-        raise ConfigError(f"{where}: figure_readable needs a numeric field with a canonical_unit")
-    for key in ("display_format", "range_policy", "after_clause"):
-        if key in entry and not numeric:
-            raise ConfigError(f"{where}: {key} is only meaningful for a numeric field, not a {entry.get('kind')!r} one")
-    display_format = choice("display_format", get_args(DisplayFormat)) if "display_format" in entry else "plain"
-    range_policy = choice("range_policy", get_args(RangePolicy)) if "range_policy" in entry else "midpoint"
-    after_clause = choice("after_clause", get_args(AfterClause)) if "after_clause" in entry else "refuse"
-    group = choice("group", tuple(levels))
-
-    return FieldSpec(
-        name=name,
-        group=group,
-        kind=choice("kind", get_args(FieldKind)),  # type: ignore[arg-type]
-        description=description,
-        keywords=tuple(keywords),
-        canonical_unit=text_or_none("canonical_unit"),
-        label=label,
-        description_zh=description_zh,
-        rel_tol=tolerance("rel_tol"),
-        abs_tol=tolerance("abs_tol"),
-        condition_hint=text_or_none("condition_hint"),
-        bare_number=bare_number,  # type: ignore[arg-type]
-        categories=tuple(categories),
-        valid_range=_valid_range(entry, where),
-        condition_preference=tuple(preference),
-        level=levels[group],
-        condition_rule=condition_rule,
-        missing_condition_note_zh=missing_note,
-        figure_readable=figure_readable,
-        display_format=display_format,  # type: ignore[arg-type]
-        range_policy=range_policy,  # type: ignore[arg-type]
-        after_clause=after_clause,  # type: ignore[arg-type]
-    )
-
-
-def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, float | None]:
-    if "valid_range" not in entry:
-        return (None, None)
-    bounds = entry["valid_range"]
-    if not isinstance(bounds, Mapping) or not set(bounds) <= {"min", "max"}:
-        raise ConfigError(f"{where}: valid_range must be an object with 'min' and/or 'max', got {bounds!r}")
-    if entry.get("kind") != "numeric":
-        raise ConfigError(f"{where}: valid_range is only meaningful for a numeric field, not a {entry.get('kind')!r}")
-    low, high = bounds.get("min"), bounds.get("max")
-    for key, value in (("min", low), ("max", high)):
-        if value is not None and type(value) not in (int, float):
-            raise ConfigError(f"{where}: valid_range.{key} must be a number or null, got {value!r}")
-    if low is None and high is None:
-        raise ConfigError(f"{where}: valid_range needs at least one of 'min' and 'max'")
-    if low is not None and high is not None and low >= high:
-        raise ConfigError(f"{where}: valid_range.min ({low}) must be below valid_range.max ({high})")
-    return (None if low is None else float(low), None if high is None else float(high))

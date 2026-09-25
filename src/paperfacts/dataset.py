@@ -16,42 +16,28 @@ from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict
 
+from paperfacts.columns import FieldColumn
 from paperfacts.compare import ComparisonReport, FieldComparison, check_profile
 from paperfacts.decide import CellValue, Decision, decide, joined
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.normalize import normalize_lane
-from paperfacts.profile import DomainProfile
 from paperfacts.records import LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
 Row = Mapping[str, CellValue]
 
 
-class FieldColumn(BaseModel):
-    """What a reader needs to know about one column, built once for both the web UI and the Excel sheet.
-
-    ``label`` and ``description`` are display only and may be empty when ``config.json`` declares neither;
-    ``unit`` is absent for a text field.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    label: str = ""
-    unit: str | None = None
-    scope: str
-    description: str = ""
-
-
 class DatasetPayload(BaseModel):
     """One document's consolidated dataset as it crosses the disk and HTTP boundaries.
 
     The same model is written to ``dataset.json``, parsed back from it and returned by the endpoint, so
-    the browser's contract is declared once and FastAPI can publish a schema for it. The field list
-    travels with the data because the rows carry values only: the browser needs the canonical unit and
-    the paper/sample scope to build a header it can trust.
+    the browser's contract is declared once and FastAPI can publish a schema for it. The field list is
+    the endpoint's alone: the rows carry values only, so the browser needs the canonical unit and the
+    paper/sample scope to build a header it can trust, but the list is display text built from the profile
+    the server runs under (:func:`paperfacts.columns.field_columns`). It is never written to disk, and a
+    file that still has one is read without it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -71,20 +57,6 @@ class DatasetPayload(BaseModel):
     profile_fingerprint: str | None = None
 
 
-def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
-    """``profile``'s fields as columns, in the order the dataset writes them."""
-    return tuple(
-        FieldColumn(
-            name=spec.name,
-            label=spec.label,
-            unit=spec.canonical_unit,
-            scope="sample" if spec.is_sample_level else "target",
-            description=spec.description_zh,
-        )
-        for spec in profile.fields
-    )
-
-
 @dataclass(frozen=True)
 class DocumentDataset:
     document_id: str
@@ -98,7 +70,6 @@ class DocumentDataset:
     # Why this run's table is not a finished result (incomplete_reason), or "". Such a table is written to the
     # run's workbook but never stored as dataset.json, so it never crosses the payload.
     incomplete: str = ""
-    fields: tuple[FieldColumn, ...] = ()
     profile_fingerprint: str | None = None
 
     def to_payload(self) -> DatasetPayload:
@@ -113,7 +84,6 @@ class DocumentDataset:
             extractor_key=self.extractor_key,
             comparison_key=self.comparison_key,
             artifact_sha256=dict(self.artifact_sha256),
-            fields=self.fields,
             paper_row=dict(self.paper_row),
             sample_rows=tuple(dict(row) for row in self.sample_rows),
             quality_rows=tuple(dict(row) for row in self.quality_rows),
@@ -137,14 +107,13 @@ class DocumentDataset:
             extractor_key=payload.extractor_key,
             comparison_key=payload.comparison_key,
             artifact_sha256=dict(payload.artifact_sha256),
-            fields=payload.fields,
             profile_fingerprint=payload.profile_fingerprint,
         )
 
 
 def write_dataset_json(dataset: DocumentDataset, path: Path) -> None:
     """Write one document's consolidated dataset for the web UI, atomically like every other artifact."""
-    payload = dataset.to_payload().model_dump_json(indent=2)
+    payload = dataset.to_payload().model_dump_json(indent=2, exclude={"fields"})
     write_atomic(path, lambda tmp: tmp.write_text(payload, encoding="utf-8"))
 
 
@@ -387,6 +356,5 @@ def consolidate_document(
             if sha is not None
         },
         incomplete,
-        field_columns(profile),
         fingerprint,
     )

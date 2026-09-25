@@ -225,8 +225,9 @@ def load_config(path: Path) -> ConfigDocument:
         if key in data:
             # Loud rather than ignored: a table left here looks live while every run reads the profile's, so an
             # edit to it would silently do nothing.
-            # Imported here: profile.py imports this module. Its rule, so a profile given as a path is named as one.
-            from paperfacts.profile import profile_path
+            # Imported here: profile_loader.py imports this module. Its rule, so a profile given as a path is named
+            # as one.
+            from paperfacts.profile_loader import profile_path
 
             profile = data["profile"] if isinstance(data.get("profile"), str) else "<name>"
             raise ConfigError(

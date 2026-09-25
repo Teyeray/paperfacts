@@ -14,6 +14,7 @@ Flat modules, in pipeline order:
 - ``fields``      the target field table: units, tolerances, bare-number policy, each attribute's roles
 - ``ui_copy``     a profile's Chinese display copy; in no cache key
 - ``profile``     a domain profile: groups, fields, prompt slots, retrieval, units
+- ``profile_loader`` reads and checks a profile file into those values; in no cache key
 - ``continuation`` paragraphs a page or column break cut in two, linked across the break
 - ``prompts``     the extraction and matching prompts
 - ``llm``         OpenAI-compatible client with a request cache and one repair round
@@ -28,6 +29,7 @@ Flat modules, in pipeline order:
 - ``compare``     field-by-field comparison of the two lanes
 - ``decide``      one dataset cell's verdict: which candidate the cell states, or why it states none
 - ``dataset``     merge source evidence into unique values: the machine-learning rows
+- ``columns``     what a reader is told about each of those columns; display only, in no cache key
 - ``workbook``    the Excel export of those rows; presentation only, in no cache key
 - ``keys``        the cache keys that name stored extractions and comparisons
 - ``workflow``    orchestration; ``cli``, ``report`` and ``web`` are thin layers over it

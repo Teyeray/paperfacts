@@ -17,7 +17,7 @@ from paperfacts.config import (
 )
 from paperfacts.errors import ConfigError
 from paperfacts.fields import FieldRole, FieldSpec
-from paperfacts.profile import parse_profile
+from paperfacts.profile_loader import parse_profile
 from support.profiles import SHIPPED_PROFILE_PATH, make_profile
 
 # A field entry with only the keys that have no default, used to check what the optional ones fall back to.

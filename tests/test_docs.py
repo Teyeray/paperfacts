@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 import paperfacts
-from paperfacts import keys, profile, units
+from paperfacts import keys, profile_loader
 from paperfacts.cli import app
 from paperfacts.fields import FieldSpec
 from paperfacts.profile import FigureSlots, GroupSpec, PromptSlots
@@ -41,8 +41,8 @@ def test_every_profile_attribute_is_in_the_readme(cls):
 
 
 def test_every_top_level_profile_key_and_unit_key_is_in_the_readme():
-    assert _missing(list(profile._TOP_KEYS), README) == []
-    assert _missing(list(units._UNIT_KEYS), README) == []
+    assert _missing(list(profile_loader._TOP_KEYS), README) == []
+    assert _missing(list(profile_loader._UNIT_KEYS), README) == []
 
 
 def test_every_cli_command_is_in_the_readme_command_table():

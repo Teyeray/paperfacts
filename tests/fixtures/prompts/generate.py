@@ -18,7 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from paperfacts import extract, figures, matching, prompts
 from paperfacts.config import Settings
-from paperfacts.profile import load_profile, profile_path
+from paperfacts.profile_loader import load_profile, profile_path
 from paperfacts.records import (
     ExtractionResponse,
     FieldResponse,
@@ -86,12 +86,14 @@ def snapshot() -> dict[str, str]:
         "matching_system": prompts.matching_system_prompt(PROFILE),
         "matching_user": prompts.matching_user_prompt("mineru", "- S1", "paddleocr_vl", "- S1"),
         "repair": prompts.repair_prompt("original question", "{bad json", "Expecting value"),
-        "field_table": prompts.render_field_table(PROFILE.fields),
+        "field_table": prompts.render_field_table(PROFILE.fields, PROFILE.prompt.implausible_origin),
         "figures_system": figures.SYSTEM_PROMPT,
         "figures_user": figures.user_prompt(CAPTION, PROFILE.figure_fields, PROFILE.figures),
     }
     for spec in PROFILE.fields:
-        rendered[f"field_user:{spec.name}"] = prompts.field_user_prompt(spec, SAMPLE_LIST, MARKDOWN)
+        rendered[f"field_user:{spec.name}"] = prompts.field_user_prompt(
+            spec, SAMPLE_LIST, MARKDOWN, PROFILE.prompt.implausible_origin
+        )
     for name, (model, answer) in INVALID_ANSWERS.items():
         rendered[f"validation_error:{name}"] = validation_error(model, answer)
     rendered["sample_list"] = extract._render_sample_list(INVENTORY)

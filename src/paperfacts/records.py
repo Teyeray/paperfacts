@@ -291,7 +291,8 @@ class LaneExtraction(BaseModel):
     backend: Backend
     extractor_key: str
     model: str
-    schema_version: str
+    # Older files also carry ``schema_version``, which held this same fingerprint. It is no longer written, and an
+    # unknown key is ignored on reading, so such a file still loads.
     profile_fingerprint: str | None = Field(
         default=None,
         description="keys.profile_extraction_fingerprint of the profile the lane was extracted under; None in "

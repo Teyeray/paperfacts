@@ -794,7 +794,7 @@ beside the old. Two profiles with identical non-display content share every key 
   "mAh/g": { "aliases": { "mAh/g": 1, "mAh g-1": 1, "mAh g^-1": 1, "Ah/kg": 1, "Ah/g": 1000 }, "case_sensitive": true },
   "C":     { "aliases": { "C": 1 }, "case_sensitive": true, "retrieval": "\\d\\s*c\\b(?!\\s*°)" },
   "V":     { "aliases": { "V": 1, "mV": 0.001 }, "case_sensitive": true },
-  "℃":     { "extends_builtin": true, "aliases": { "K": { "factor": 1, "offset": -273.15 } } }
+  "℃":     { "extends_builtin": true, "aliases": { "K": { "factor": 1, "offset": -273.15 } }, "exclude": ["C"] }
 }
 ```
 
@@ -816,6 +816,12 @@ beside the old. Two profiles with identical non-display content share every key 
   `rpm`, `Pa`) can only gain spellings, with `extends_builtin` set to true; its own converter is always asked first, so
   an extension never changes how a spelling it already reads converts. The TCO conventions stay: under `tco`,
   573 K is ambiguous; under `battery_cathode`, it is 299.85 ℃.
+- **Excluding built-in spellings** (`exclude`, on an extension only). The built-in tables are TCO's conventions,
+  and a spelling can mean something else in another domain: to TCO a bare "C" after a number is degrees, to a
+  battery group it is a C-rate. List such spellings (matched case-insensitively) and the built-in converter
+  refuses them and its retrieval pattern stops finding them after a number, so under `battery_cathode` "1 C" is
+  neither a temperature nor a reason to show a block to a temperature question. Each must be a spelling the
+  built-in reads; an extension that only excludes may leave `aliases` out.
 
 ### Cost
 

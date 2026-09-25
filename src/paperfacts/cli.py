@@ -32,7 +32,8 @@ from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.profile import PROFILES_DIRNAME, DomainProfile, load_profile
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import PROFILES_DIRNAME, load_profile
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,

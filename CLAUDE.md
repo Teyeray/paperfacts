@@ -31,10 +31,14 @@ this file is the part that is easy to get wrong.
   that defines a name.
 - Every exception class is in `errors.py`.
 - Domain modules: `text.py` (a leaf: text folding, `clean_unit`), `units.py` (built-in converters and retrieval
-  patterns, declared units), `fields.py` (`FieldSpec` and its roles), `profile.py` (`DomainProfile`, the slots,
-  the loader). Presentation: `ui_copy.py`, `workbook.py`, `readings.py`. `batch.py` is directory runs and
-  offline export; `stored.py` is what is stored for a document and whether it is current. `units.py` and
-  `passages.py` must not import `normalize.py` (that is why `text.py` exists).
+  patterns, the `UnitRegistry` of declared units), `fields.py` (`FieldSpec` and its roles), `profile.py`
+  (`DomainProfile` and the slots: value types and their defaults, hashed), `profile_loader.py` (reading and
+  checking a profile file, `field_spec`, `load_units`, the regex checks: unhashed, since everything it decides
+  reaches a key as a value). Presentation: `ui_copy.py`, `workbook.py`, `columns.py`, `readings.py`. `batch.py`
+  is directory runs and offline export; `stored.py` is what is stored for a document and whether it is current.
+  `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists).
+- No module converts or retrieves with a unit table of its own: every conversion goes through the
+  `UnitRegistry` of the profile it runs under (`profile.units`), including in tests and fixture generators.
 
 ## Configuration
 
@@ -47,8 +51,8 @@ this file is the part that is easy to get wrong.
   change a default; change `config.json` or the profile. The same holds for the slot defaults (`PromptSlots` in
   `profile.py`) and the attribute defaults (`FieldSpec` in `fields.py`): both modules are hashed and an attribute
   at its default is left out of the key material.
-- A profile is loaded once per entry point (`load_profile`, cached per resolved path) and passed explicitly as a
-  `DomainProfile`; no module holds a domain table (`tests/test_no_domain_globals.py`). Python string constants
+- A profile is loaded once per entry point (`profile_loader.load_profile`, cached per resolved path) and passed
+  explicitly as a `DomainProfile`; no module holds a domain table (`tests/test_no_domain_globals.py`). Python string constants
   and `web/static/` stay domain-free (`tests/test_domain_free.py`): a domain word belongs in a profile slot or in
   `ui`. Every profile error is a `ConfigError` naming the file and the key; `parse_profile` checks every section
   and every field before raising one error with a line per problem.
@@ -146,9 +150,11 @@ this file is the part that is easy to get wrong.
   - figure code: `figures`, `normalize`, `passages`, `units`, `text`, `fields`, `profile`.
   Editing any of them re-keys. A module that holds a default the keys omit must be hashed.
 - Presentation and orchestration stay out of hashed modules: the Excel layout is `workbook.py`, not
-  `dataset.py` (which only assembles the rows, a set of verdicts); display copy defaults are `ui_copy.py`, not
-  `profile.py`. `workbook`, `readings`, `ui_copy`, `llm`, `config`, `cli`, `workflow` and `batch` are in no key
-  list, and `tests/test_keys_unhashed.py` holds that. Do not move display or storage code into a hashed module.
+  `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
+  `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading
+  a profile file is `profile_loader.py`. `workbook`, `columns`, `readings`, `ui_copy`, `profile_loader`, `llm`,
+  `config`, `cli`, `workflow` and `batch` are in no key list, and `tests/test_keys_unhashed.py` holds that. Do not
+  move display, storage or loading code into a hashed module.
 
 ## Figures
 

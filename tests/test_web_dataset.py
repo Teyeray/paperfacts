@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from paperfacts.columns import field_columns
 from paperfacts.config import Settings
-from paperfacts.dataset import field_columns
 from paperfacts.figures import FigureReading, FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import NormalizedBBox

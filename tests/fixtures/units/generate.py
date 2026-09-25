@@ -12,7 +12,7 @@ Three tables, every canonical unit against every spelling:
 
 - ``factors``: the factor a converter returns for a cleaned unit (None when it refuses it);
 - ``conversions``: ``normalize.convert_to_canonical`` of the value 2 with that spelling as ``unit_raw`` (scale
-  factors, gas suffixes and bare numbers included), as ``[value, unit, note]``;
+  factors, gas suffixes and bare numbers included) in the TCO profile's units, as ``[value, unit, note]``;
 - ``retrieval``: whether a unit's retrieval pattern finds the spelling in lower-cased text after a number.
 """
 
@@ -21,11 +21,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from paperfacts.config import Settings
 from paperfacts.fields import FieldSpec
-from paperfacts.normalize import CONVERTERS, convert_to_canonical
-from paperfacts.units import BUILTIN_RETRIEVAL
+from paperfacts.normalize import convert_to_canonical
+from paperfacts.profile_loader import load_profile, profile_path
+from paperfacts.units import BUILTIN_CONVERTERS, BUILTIN_RETRIEVAL
 
 HERE = Path(__file__).parent
+# The shipped TCO profile's units, from the built-in settings: the built-in tables and the gas names it sets aside,
+# which is what every conversion was read with when this file was recorded.
+UNITS = load_profile(profile_path(Settings())).units
 
 # Every key of every built-in table, the spellings the anchored patterns accept, and near misses: wrong case,
 # wrong prefix, OCR damage, units of other quantities.
@@ -66,14 +71,16 @@ SPELLINGS = (
 
 
 def main() -> None:
-    factors = {canonical: {unit: convert(unit) for unit in SPELLINGS} for canonical, convert in CONVERTERS.items()}
+    factors = {
+        canonical: {unit: convert(unit) for unit in SPELLINGS} for canonical, convert in BUILTIN_CONVERTERS.items()
+    }
     conversions = {}
-    for canonical in CONVERTERS:
+    for canonical in BUILTIN_CONVERTERS:
         # The bare-number policy only matters for an empty unit; "reject" is the table's default.
         spec = FieldSpec(
             name="probe", group="film", kind="numeric", description="probe", keywords=(), canonical_unit=canonical
         )
-        conversions[canonical] = {unit: list(convert_to_canonical(spec, 2.0, unit)) for unit in SPELLINGS}
+        conversions[canonical] = {unit: list(convert_to_canonical(spec, 2.0, unit, UNITS)) for unit in SPELLINGS}
     texts = [f"of 2 {unit.lower()} here" for unit in SPELLINGS] + [f"2{unit.lower()}" for unit in SPELLINGS]
     retrieval = {
         canonical: {text: pattern.search(text) is not None for text in texts}

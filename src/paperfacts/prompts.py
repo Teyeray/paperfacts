@@ -172,10 +172,6 @@ _PLAUSIBLE = (
     " Plausible values are {range}; a number outside that range almost always belongs to {origin}, so check"
     " before reporting it."
 )
-# The origin a caller that hands no profile gets -- only the pinned prompt snapshot's generator -- is the wording
-# every stored TCO extraction was asked with. Extraction always passes its profile's own
-# (PromptSlots.implausible_origin).
-_UNPROFILED_ORIGIN = "a different layer, process step or quantity"
 
 
 def render(template: str, values: Mapping[str, str]) -> str:
@@ -219,7 +215,7 @@ def _values(profile: DomainProfile) -> dict[str, str]:
     return values
 
 
-def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str = _UNPROFILED_ORIGIN) -> str:
+def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> str:
     """One line per field. ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`."""
     lines = []
     for spec in specs:
@@ -263,10 +259,9 @@ def field_system_prompt(profile: DomainProfile) -> str:
     return render(_FIELD_SYSTEM, _values(profile))
 
 
-def field_user_prompt(
-    spec: FieldSpec, sample_list: str, markdown: str, implausible_origin: str = _UNPROFILED_ORIGIN
-) -> str:
-    """``sample_list`` is rendered by the caller, which owns the record types; this module stays free of them."""
+def field_user_prompt(spec: FieldSpec, sample_list: str, markdown: str, implausible_origin: str) -> str:
+    """``sample_list`` is rendered by the caller, which owns the record types; this module stays free of them.
+    ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`."""
     return (
         f"Field to extract:\n{render_field_table((spec,), implausible_origin)}\n\n"
         f"Samples this paper reports:\n{sample_list}\n\n"

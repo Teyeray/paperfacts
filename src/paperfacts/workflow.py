@@ -43,7 +43,8 @@ from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.profile import PROFILES_DIRNAME, DomainProfile, load_profile, loaded_file_sha256, profile_path
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import PROFILES_DIRNAME, load_profile, loaded_file_sha256, profile_path
 from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic

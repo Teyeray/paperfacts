@@ -15,7 +15,8 @@ from paperfacts import prompts
 from paperfacts.decide import _scalar
 from paperfacts.errors import ConfigError
 from paperfacts.normalize import drop_implausible, normalize_field, parse_number, split_after_clause
-from paperfacts.profile import DomainProfile, PromptSlots, load_profile
+from paperfacts.profile import DomainProfile, PromptSlots
+from paperfacts.profile_loader import load_profile
 from paperfacts.records import ExtractedRecords, SampleRecord
 from support.extraction import make_field
 from support.profiles import SHIPPED_PROFILE_PATH, make_profile

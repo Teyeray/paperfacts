@@ -100,3 +100,17 @@ def test_the_profile_file_name_is_not_hashed():
     renamed = make_profile({"name": "other"}, source=Path("elsewhere/other.json"))
 
     assert all_keys(renamed) == all_keys(make_profile())
+
+
+def test_a_chart_slot_at_its_default_is_left_out_of_the_figure_material(monkeypatch):
+    # As with a field attribute: a slot added later with a default must not rename every stored reading.
+    slots = {"subject": "coatings", "property_noun": "coating properties", "chart_definition": "a chart"}
+    profile = make_profile({"fields.1.figure_readable": True, "figures": slots | {"axis_example": "axis x"}})
+    seen: list[object] = []
+    real = keys._dumps
+    monkeypatch.setattr(keys, "_dumps", lambda material: seen.append(material) or real(material))
+
+    keys.figure_profile_fingerprint.__wrapped__(profile)
+
+    (material,) = seen
+    assert material["slots"] == slots | {"axis_example": "axis x"}  # type: ignore[index]

@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from paperfacts.errors import ConfigError
-from paperfacts.profile import MAX_SLOT_LENGTH, parse_profile
+from paperfacts.profile_loader import MAX_SLOT_LENGTH, parse_profile
 from support.profiles import DELETE, make_profile, profile_data
 
 SOURCE = Path("profiles/demo.json")
@@ -106,6 +106,11 @@ def test_the_demo_profile_is_valid():
         # Retrieval
         pytest.param({"retrieval.condition_unit_pattern": "(unclosed"}, "condition_unit_pattern", id="bad-regex"),
         pytest.param({"retrieval.condition_unit_pattern": "a" * 501}, "condition_unit_pattern", id="long-regex"),
+        pytest.param({"retrieval.condition_unit_pattern": r"\d(\s+)+c"}, "exponential", id="nested-repeat"),
+        pytest.param({"retrieval.condition_unit_pattern": r"\d(?:a|a)*"}, "exponential", id="repeated-alternation"),
+        pytest.param(
+            {"units": {"mg/L": {"aliases": {"mg/L": 1}, "retrieval": r"(\d+\s*)*mg"}}}, "exponential", id="unit-redos"
+        ),
         pytest.param({"retrieval.condition_keywords": "annealed"}, "condition_keywords", id="keywords-not-a-list"),
         pytest.param({"retrieval.keywords": []}, "keywords", id="unknown-retrieval-key"),
         # Units
@@ -146,7 +151,7 @@ def test_zero_paper_groups_are_allowed():
 
 
 def test_many_fields_are_allowed_with_a_warning(caplog):
-    with caplog.at_level(logging.WARNING, logger="paperfacts.profile"):
+    with caplog.at_level(logging.WARNING, logger="paperfacts.profile_loader"):
         profile = make_profile({"fields": [field(1, name=f"f{i}") for i in range(41)]})
 
     assert len(profile.fields) == 41
@@ -156,3 +161,16 @@ def test_many_fields_are_allowed_with_a_warning(caplog):
 def test_a_profile_that_is_not_an_object_is_refused():
     with pytest.raises(ConfigError, match="JSON object"):
         parse_profile([], SOURCE)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"\d\s*(?:°C|℃|K\b|h\b|min\b|(?:wt|at|mol)\.?\s*%)",
+        r"\d\s*c\b(?!\s*°)",
+        r"\d\s*(?:ab)+",
+        r"\d{1,3}(?:\.\d+)?\s*nm",
+    ],
+)
+def test_a_pattern_that_nests_no_repetition_is_accepted(pattern):
+    assert make_profile({"retrieval.condition_unit_pattern": pattern}).retrieval.condition_unit_pattern == pattern

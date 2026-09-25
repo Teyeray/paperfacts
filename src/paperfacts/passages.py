@@ -41,8 +41,8 @@ from paperfacts.continuation import continuation_partners
 from paperfacts.fields import FieldSpec
 from paperfacts.models import SourceBlock
 from paperfacts.profile import RetrievalSpec
-from paperfacts.text import delatex, normalize_text
-from paperfacts.units import UnitRegistry
+from paperfacts.text import delatex, is_word_edge, normalize_text
+from paperfacts.units import BUILTIN_RETRIEVAL, UnitRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 DENSE_TYPES: frozenset[str] = frozenset({"table", "caption"})
 # extraction.candidate_limit in config.json caps the unit-only blocks, together with the named ones: named
 # blocks are never cut, and the unit-only ones fill whatever places they left.
+
+# A profile's own regular expressions -- the condition unit pattern, a declared unit's retrieval -- search at most
+# this much of a block. The loader refuses the nested quantifiers that backtrack catastrophically; this bounds
+# what one it could not recognise can cost. The longest block in the recorded parses is about 2 000 characters,
+# so a real paragraph is searched whole. The built-in patterns are the package's own and search everything.
+PROFILE_PATTERN_SPAN = 20_000
 
 # Compiled on first use and kept: the keyword tables are small and a profile never changes while it is loaded.
 _PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
@@ -66,12 +72,13 @@ _LATEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
 
 def _pattern(keyword: str) -> re.Pattern[str]:
     """Match a keyword as a whole token. A keyword ending in punctuation (``d =``, ``%T``) keeps that edge
-    open, since ``\\b`` would demand a word character that is not there."""
+    open, since ``\\b`` would demand a word character that is not there; so does one ending in a Chinese or
+    Japanese character (:func:`paperfacts.text.is_word_edge`), whose text has no spaces for ``\\b`` to find."""
     cached = _PATTERN_CACHE.get(keyword)
     if cached is None:
         folded = _DOUBLED_LETTER.sub(r"\1", normalize_text(keyword).lower())
-        prefix = r"\b" if folded[:1].isalnum() else ""
-        suffix = r"\b" if folded[-1:].isalnum() else ""
+        prefix = r"\b" if is_word_edge(folded[:1]) else ""
+        suffix = r"\b" if is_word_edge(folded[-1:]) else ""
         cached = _PATTERN_CACHE[keyword] = re.compile(prefix + re.escape(folded) + suffix)
     return cached
 
@@ -115,7 +122,7 @@ def _is_inventory_block(block: SourceBlock, condition_unit: re.Pattern[str], key
     if block.type in DENSE_TYPES or block.type == "title":
         return True
     text = searchable(block)
-    if condition_unit.search(text):
+    if condition_unit.search(text[:PROFILE_PATTERN_SPAN]):
         return True
     # A condition word alone is not enough: "the deposition process" appears in every discussion paragraph.
     # Paired with a number it is almost always the sentence that states how a sample was made.
@@ -141,10 +148,11 @@ def candidate_blocks(
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
     unit = None if spec.canonical_unit is None else units.retrieval(spec.canonical_unit)
+    span = None if unit is None or unit in BUILTIN_RETRIEVAL.values() else PROFILE_PATTERN_SPAN
     named: set[int] = set()
     unit_only: list[tuple[bool, int]] = []
     for index, block in enumerate(blocks):
-        match = _classify(spec, block, unit)
+        match = _classify(spec, block, unit, span)
         if match == "named":
             named.add(index)
         elif match == "unit":
@@ -185,14 +193,17 @@ def _has_digit(block: SourceBlock) -> bool:
     return any(character.isdigit() for character in block.content)
 
 
-def _classify(spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None) -> Literal["named", "unit"] | None:
-    """Whether ``block`` names ``spec`` by a keyword, only carries its unit, or does not qualify at all."""
+def _classify(
+    spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None, span: int | None
+) -> Literal["named", "unit"] | None:
+    """Whether ``block`` names ``spec`` by a keyword, only carries its unit (searched in its first ``span``
+    characters), or does not qualify at all."""
     text = searchable(block)
     if spec.kind == "numeric" and not any(character.isdigit() for character in text):
         return None  # a number cannot be quoted from a block that has none
     if keyword_hits(spec.keywords, text):
         return "named"
-    if unit is not None and unit.search(text):
+    if unit is not None and unit.search(text[:span]):
         return "unit"
     return None
 

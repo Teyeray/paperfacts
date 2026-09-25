@@ -28,7 +28,8 @@ from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError
 from paperfacts.models import BACKENDS, Backend, ParsedArtifact
-from paperfacts.profile import DomainProfile, load_profile
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import load_profile
 from paperfacts.records import LaneExtraction
 from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
