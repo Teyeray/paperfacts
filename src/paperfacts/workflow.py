@@ -487,7 +487,8 @@ class PipelineResult:
     report: ComparisonReport
     dataset: DocumentDataset
     excel_path: Path
-    dataset_json_path: Path
+    # None when sample matching failed: such a dataset is not stored (see run_document).
+    dataset_json_path: Path | None
     # The chart readings shown with this paper, when there are any (see shown_figures).
     figures: FiguresView | None = None
 
@@ -589,8 +590,15 @@ def run_document(
     layout = DataLayout(settings.data_root)
     excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path, figure_rows=figures.rows if figures is not None else ())
-    dataset_json_path = _store_dataset(layout, dataset)
-    on_stage("export", "done", str(excel_path))
+    dataset_json_path: Path | None = None
+    if report.matching.failed:
+        # The stored dataset is what marks a paper finished (is_finished). Built on a matching the model
+        # botched, it would keep "run all" and `deploy.sh --rerun` from ever asking again, the very retry
+        # that not storing the comparison is for. The workbook of this run is still written.
+        on_stage("export", "done", f"{excel_path}; not kept as finished: sample matching failed")
+    else:
+        dataset_json_path = _store_dataset(layout, dataset)
+        on_stage("export", "done", str(excel_path))
     return PipelineResult(
         parse_reports=parse_reports,
         lanes=lanes,
@@ -683,11 +691,14 @@ def _extract_and_compare(
         on_stage("compare", "running", "")
         report = compare_document(document, settings, client, force=force, lanes=lanes)
     counts = report.counts
-    on_stage(
-        "compare",
-        "done",
-        f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
+    detail = (
+        f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"
     )
+    if report.matching.failed:
+        # Not a failure of the paper: the report was not stored and the next run asks again.
+        on_stage("compare", "failed", f"{detail}; sample matching failed, not stored")
+    else:
+        on_stage("compare", "done", detail)
     return lanes, report
 
 
@@ -935,7 +946,8 @@ def stored_stages(
 
 def is_finished(layout: DataLayout, document_id: str, *, extractor_key: str, comparison_key: str) -> bool:
     """Whether a run under these keys went all the way. The export is the last stage (see
-    :func:`stored_stages`), so a document whose comparison exists but whose export failed is still unfinished."""
+    :func:`stored_stages`), so a document whose comparison exists but whose export failed is still unfinished,
+    and so is one whose sample matching failed: :func:`run_document` stores no dataset for it."""
     return layout.dataset_json_path(document_id, extractor_key, comparison_key).is_file()
 
 

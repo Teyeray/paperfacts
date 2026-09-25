@@ -25,7 +25,8 @@ from paperfacts.errors import Cancelled, ParserError
 from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.records import LaneExtraction
-from paperfacts.workflow import ParseReport, run_document, stage_names
+from paperfacts.storage import DataLayout
+from paperfacts.workflow import ParseReport, is_finished, run_document, stage_names
 from support.extraction import make_lane, make_sample
 from support.llm import FakeLlmClient
 
@@ -56,6 +57,7 @@ def install_fake_pipeline(
     cache_hit: bool = False,
     sample_count: int = 2,
     counts: ComparisonCounts | None = None,
+    matching: SampleMatching | None = None,
 ) -> PipelineSpy:
     spy = PipelineSpy()
     counts = counts or ComparisonCounts(agree=3, conflict=1, ambiguous=2, missing=4, total=10)
@@ -110,7 +112,7 @@ def install_fake_pipeline(
             comparison_key="ba9876543210",
             backend_a="mineru",
             backend_b="paddleocr_vl",
-            matching=SampleMatching(),
+            matching=matching or SampleMatching(),
             counts=counts,
         )
 
@@ -199,6 +201,23 @@ def test_the_result_carries_every_intermediate_product(monkeypatch, document: Do
     assert result.dataset_json_path.is_file()
     assert result.dataset_json_path.name == f"{result.dataset.extractor_key}.{result.dataset.comparison_key}.json"
     assert result.dataset.document_id == document.document_id
+
+
+def test_a_run_whose_matching_failed_is_not_finished(monkeypatch, document: DocumentInput, settings: Settings):
+    # compare_document does not store a failed matching so the next run asks again. A stored dataset would
+    # count the paper as finished, and "run all" / `deploy.sh --rerun` would then never ask again.
+    install_fake_pipeline(monkeypatch, matching=SampleMatching(failed=True, failure="invalid JSON twice"))
+
+    marks, result = run(document, settings)
+
+    layout = DataLayout(settings.data_root)
+    keys = {"extractor_key": result.dataset.extractor_key, "comparison_key": result.dataset.comparison_key}
+    assert result.excel_path.is_file()  # the CLI run still gets its workbook
+    assert result.dataset_json_path is None
+    assert not layout.dataset_json_path(document.document_id, **keys).is_file()
+    assert is_finished(layout, document.document_id, **keys) is False
+    final = {stage: (status, detail) for stage, status, detail in marks}
+    assert final["compare"][0] == "failed" and "sample matching failed" in final["compare"][1]
 
 
 def test_force_reaches_every_step(monkeypatch, document: DocumentInput, settings: Settings):

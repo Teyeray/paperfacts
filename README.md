@@ -648,7 +648,9 @@ recorded have none and are read as before.
 Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
 costs one repair request and is never written, and an invalid answer already in the cache is asked again
 rather than replayed. A sample matching that failed (the model answered badly twice) is shown for that run
-but not stored, so the next run asks again instead of serving the failure until `--force`.
+but not stored, so the next run asks again instead of serving the failure until `--force`. Neither is that
+run's consolidated table (`datasets/…json`, only `dataset.xlsx` is written): the stored table is what marks
+a paper finished, so 「处理全部未完成」 and `deploy.sh --rerun` pick the paper up again.
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
 serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own
