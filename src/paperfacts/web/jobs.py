@@ -1,27 +1,30 @@
-"""Background jobs: a single worker thread runs "parse -> extract -> compare" serially, and the
+"""Background jobs: a few worker threads run "parse -> extract -> compare", one document each, and the
 web frontend polls for status and logs.
 
-Serial execution is deliberate: running both parser models at once blows out memory on a dev
-machine; on the server the parsers are HTTP services, so serial is fast enough there too. Job
-status lives only in memory — it describes "what this process is doing right now", while the
-artifacts written to disk are the persistent truth.
+``web.max_parallel_documents`` workers, never two on the same document. Parsing still runs one paper per
+parser at a time (the parse locks in :mod:`paperfacts.parsers`) and every model request takes a slot of
+the process-wide in-flight limit (:mod:`paperfacts.llm`), so extra workers overlap the long model waits
+rather than multiplying load on the GPU or the endpoint. Job status lives only in memory -- it describes
+"what this process is doing right now", while the artifacts written to disk are the persistent truth.
 
 Shared state has exactly one shape: a frozen :class:`Job`, kept in a dict guarded by a lock. Every
 state change swaps in a whole new value inside the lock (``model_copy``). A request thread always
-gets a complete, self-consistent snapshot from one instant — never a half-written one where
-``status`` is already "done" but ``finished_at`` is still empty.
+gets a complete, self-consistent snapshot from one instant -- never a half-written one where
+``status`` is already "done" but ``finished_at`` is still empty. The queue and the busy documents are not
+kept anywhere else: they are the jobs whose status says so, and taking a job off the queue is replacing it
+with its running value, in the same locked step.
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import traceback
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -66,18 +69,35 @@ JobRunner = Callable[[Job, Callable[[str, StageStatus, str], None]], None]
 
 
 class JobManager:
-    def __init__(self, runner: JobRunner, stage_names: tuple[str, ...]) -> None:
+    """``workers`` long-lived threads, each looping: wait on one condition over the jobs, take the oldest
+    queued job whose document has no running job, run it, repeat.
+
+    Which jobs are queued and which documents are busy is read off the jobs themselves, never kept beside
+    them, so the two can never disagree. A submission and every finish notify the condition; a forced rerun
+    of a running document is passed over until that run ends, while later documents go ahead.
+    """
+
+    def __init__(self, runner: JobRunner, stage_names: tuple[str, ...], *, workers: int = 1) -> None:
+        if workers < 1:
+            raise ValueError(f"a job manager needs at least one worker, got {workers}")
         self._runner = runner
         self._stage_names = stage_names
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="paperfacts-job")
+        self._worker_count = workers
+        self._workers: list[threading.Thread] = []
+        # Insertion-ordered: a job keeps its place when its value is replaced, so iteration is submission order.
         self._jobs: dict[str, Job] = {}
+        self._closed = False
         self._lock = threading.Lock()
+        self._changed = threading.Condition(self._lock)
 
     def submit(self, document_id: str, *, force: bool = False) -> Job:
         """Idempotent: if the same document is already queued or running, reuse that job (double-
         clicking "reprocess" shouldn't pay for the LLM call twice); a new job only starts when
-        upgrading from "use cache" to "force rerun"."""
-        with self._lock:
+        upgrading from "use cache" to "force rerun", and then only after the running one has finished."""
+        with self._changed:
+            if self._closed:
+                # Refused before anything is recorded: a job nobody will ever run would show "queued" forever.
+                raise RuntimeError("the job manager has shut down")
             for job in self._jobs.values():
                 if job.document_id == document_id and job.status in ACTIVE and job.force >= force:
                     return job
@@ -89,7 +109,16 @@ class JobManager:
                 stages=tuple(Stage(name=name) for name in self._stage_names),
             )
             self._jobs[job.job_id] = job
-        self._executor.submit(self._run, job.job_id)
+            if not self._workers:
+                # Started on first use, so a manager that is built and never used (every app in the tests)
+                # costs no threads.
+                self._workers = [
+                    threading.Thread(target=self._work, name=f"paperfacts-job_{index}", daemon=True)
+                    for index in range(self._worker_count)
+                ]
+                for worker in self._workers:
+                    worker.start()
+            self._changed.notify()
         return job
 
     def get(self, job_id: str) -> Job | None:
@@ -107,18 +136,18 @@ class JobManager:
         with self._lock:
             return sorted((j for j in self._jobs.values() if j.document_id == document_id), key=lambda j: j.created_at)
 
-    def shutdown(self) -> None:
-        """Stop accepting new jobs; queued ones are dropped, a running one ends with the process
-        (not awaited — a single paper's pipeline can take minutes)."""
-        self._executor.shutdown(wait=False, cancel_futures=True)
+    def shutdown(self, *, wait: bool = False) -> None:
+        """Stop accepting new jobs; queued ones are dropped, running ones finish. ``wait`` blocks until
+        they have: the workers are daemon threads, so a process that exits without waiting ends them."""
+        with self._changed:
+            self._closed = True
+            self._changed.notify_all()
+            workers = list(self._workers)
+        if wait:
+            for worker in workers:
+                worker.join()
 
     # ---- state changes: swap in a whole new value inside the lock, every time ----
-
-    def _update(self, job_id: str, **changes: Any) -> Job:
-        with self._lock:
-            job = self._jobs[job_id].model_copy(update=changes)
-            self._jobs[job_id] = job
-            return job
 
     def _mark(self, job_id: str, stage: str, status: StageStatus, detail: str) -> None:
         with self._lock:
@@ -136,7 +165,7 @@ class JobManager:
     def _finish(self, job_id: str, status: JobStatus, error: str | None, *, extra_log: str | None = None) -> None:
         """Write the terminal state all at once: status, error, the stage that was running, log,
         and finish time, all inside the same lock."""
-        with self._lock:
+        with self._changed:
             job = self._jobs[job_id]
             stages = job.stages
             if status == "failed":  # whichever stage was running is the one that failed
@@ -148,19 +177,45 @@ class JobManager:
             self._jobs[job_id] = job.model_copy(
                 update={"status": status, "error": error, "stages": stages, "log": log, "finished_at": _now()}
             )
+            # The document is free again: a rerun queued behind this job may now be taken.
+            self._changed.notify_all()
 
-    # ---- worker thread -----------------------------------------------------------------------
+    # ---- worker threads ----------------------------------------------------------------------
 
-    def _run(self, job_id: str) -> None:
+    def _work(self) -> None:
+        while True:
+            with self._changed:
+                job = self._take()
+                while job is None and not self._closed:
+                    self._changed.wait()
+                    job = self._take()
+                if job is None:
+                    return
+            self._run(job)
+
+    def _take(self) -> Job | None:
+        """Under the lock: the oldest queued job whose document has no running job, now marked running, or
+        None once the manager is closed.
+
+        Skipping a busy document rather than waiting on it keeps the other workers busy; running it would
+        let two workers write the same document directory at once.
+        """
+        if self._closed:
+            return None
+        busy = {job.document_id for job in self._jobs.values() if job.status == "running"}
+        for job in self._jobs.values():
+            if job.status == "queued" and job.document_id not in busy:
+                running = job.model_copy(update={"status": "running", "started_at": _now()})
+                self._jobs[job.job_id] = running
+                return running
+        return None
+
+    def _run(self, job: Job) -> None:
+        job_id = job.job_id
         handler = _JobLogHandler(self, job_id)
-        # the process may default to WARNING (when serve runs without -v); raise it to INFO for
-        # the duration of the job so progress logs reach the panel, then restore it afterwards
-        package_logger = logging.getLogger("paperfacts")
-        previous_level = package_logger.level
-        if not package_logger.isEnabledFor(logging.INFO):
-            package_logger.setLevel(logging.INFO)
-        package_logger.addHandler(handler)
-        job = self._update(job_id, status="running", started_at=_now())
+        token = _CURRENT_JOB.set(job_id)
+        _raise_package_level()
+        logging.getLogger(PACKAGE_LOGGER).addHandler(handler)
 
         def mark(stage: str, status: StageStatus, detail: str = "") -> None:
             self._mark(job_id, stage, status, detail)
@@ -171,34 +226,70 @@ class JobManager:
             error = f"{type(exc).__name__}: {exc}"
             self._finish(job_id, "failed", error, extra_log=traceback.format_exc()[-MAX_TRACEBACK_CHARS:])
             logger.error("job %s failed: %s", job_id, error)
-        except BaseException:  # KeyboardInterrupt / SystemExit: record it and re-raise, never leave the job "running"
+        except BaseException:  # KeyboardInterrupt / SystemExit: record it, never leave the job "running"
+            # Not re-raised: on a worker thread that would only end this worker, leaving fewer to run the
+            # queue, and a SystemExit there never reached the process anyway.
             self._finish(job_id, "failed", "interrupted")
-            raise
+            logger.error("job %s was interrupted", job_id)
         else:
             self._finish(job_id, "done", None)
         finally:
-            package_logger.removeHandler(handler)
-            package_logger.setLevel(previous_level)
+            logging.getLogger(PACKAGE_LOGGER).removeHandler(handler)
+            _restore_package_level()
+            _CURRENT_JOB.reset(token)
 
 
-# The pipeline fans out onto pools named with this prefix (workflow.run_document, extract._extract_passages).
-# One job runs at a time, so a record from such a thread can only belong to the current job.
-PIPELINE_THREAD_PREFIX = "paperfacts-"
+PACKAGE_LOGGER = "paperfacts"
+# The job whose work the current thread is doing. The worker sets it; the pipeline's pools copy their
+# caller's context into every task they run (workflow, extract, figures), so a record from a lane or a
+# field question carries the job it belongs to even with several jobs running at once. A request thread
+# has none.
+_CURRENT_JOB: contextvars.ContextVar[str | None] = contextvars.ContextVar("paperfacts_job", default=None)
+
+# The process may default to WARNING (serve without -v); while any job runs, the package logger is raised to
+# INFO so progress reaches the panel, and it is restored when the last running job ends. Counted, because
+# with several workers the first job to finish must not lower it under the others.
+_level_lock = threading.Lock()
+_level_holders = 0
+# The level to put back, or None when the level was already INFO or lower and nothing was changed.
+_saved_level: int | None = None
+
+
+def _raise_package_level() -> None:
+    global _level_holders, _saved_level
+    package = logging.getLogger(PACKAGE_LOGGER)
+    with _level_lock:
+        if _level_holders == 0:
+            _saved_level = None
+            if not package.isEnabledFor(logging.INFO):
+                _saved_level = package.level
+                package.setLevel(logging.INFO)
+        _level_holders += 1
+
+
+def _restore_package_level() -> None:
+    global _level_holders
+    package = logging.getLogger(PACKAGE_LOGGER)
+    with _level_lock:
+        _level_holders -= 1
+        # Only undo what was done here: a level somebody else set while the jobs ran is theirs to keep.
+        if _level_holders == 0 and _saved_level is not None and package.level == logging.INFO:
+            package.setLevel(_saved_level)
 
 
 class _JobLogHandler(logging.Handler):
-    """Collect this job's paperfacts.* log records into job.log: those from the worker thread itself and
-    those from the pipeline's own pools, so HTTP request-thread logs never leak in."""
+    """Collect this job's paperfacts.* log records into job.log: those emitted while doing this job's work,
+    on its worker or on the pipeline's pools, so HTTP request threads and other jobs never leak in."""
 
     def __init__(self, manager: JobManager, job_id: str) -> None:
         super().__init__(level=logging.INFO)
         self._manager = manager
         self._job_id = job_id
-        self._thread = threading.get_ident()
         self.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S"))
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.thread == self._thread or (record.threadName or "").startswith(PIPELINE_THREAD_PREFIX):
+        # A handler runs on the thread that logged, so the context read here is the emitter's.
+        if _CURRENT_JOB.get() == self._job_id:
             self._manager._append_log(self._job_id, self.format(record))
 
 

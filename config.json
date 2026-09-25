@@ -12,7 +12,8 @@
     }
   },
   "web": {
-    "username": "paperfacts"
+    "username": "paperfacts",
+    "max_parallel_documents": 3
   },
   "llm": {
     "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
@@ -22,6 +23,7 @@
     "temperature": 0.0,
     "max_tokens": 65536,
     "concurrency": 4,
+    "max_in_flight": 8,
     "reasoning_effort": null,
     "inventory_reasoning_effort": null,
     "retry_attempts": 4,

@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 
 import paperfacts.workflow as workflow
 from paperfacts.config import Settings
-from paperfacts.errors import ConfigError, LlmError
+from paperfacts.errors import Cancelled, ConfigError, LlmError
 from paperfacts.figures import FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
@@ -360,3 +360,61 @@ def test_a_page_is_rendered_once_for_all_its_panels(monkeypatch, document: Docum
     readings = read_document_figures(document, settings, FakeVisionClient(chart_answer()))
 
     assert len(readings.panels) == 3 and renders == [0]
+
+
+# ---- stopping the stage when the rest of the paper fails ------------------------------------------------
+
+
+def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returning(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    """The web queue frees a document when run_document returns; a figures thread still asking the vision
+    model then would pay twice for a reprocess and race it for the readings file."""
+    install_fake_pipeline(monkeypatch)
+    figures_started = threading.Event()
+    finished: list[str] = []
+
+    def stoppable_figures(document, settings, *, force, artifact, stop):
+        figures_started.set()
+        assert stop.wait(timeout=5.0), "the failed paper never told the figures stage to stop"
+        finished.append("figures stopped")
+        return "failed", "stopped"
+
+    def failing_extraction(document, settings, *, force, on_stage):
+        assert figures_started.wait(timeout=5.0)
+        raise LlmError("the endpoint is down")
+
+    monkeypatch.setattr("paperfacts.workflow._read_figures_stage", stoppable_figures)
+    monkeypatch.setattr("paperfacts.workflow._extract_and_compare", failing_extraction)
+
+    with pytest.raises(LlmError):
+        run_document(document, settings)
+
+    assert finished == ["figures stopped"]  # joined, not left running
+    assert not [t for t in threading.enumerate() if t.name.startswith("paperfacts-figures")]
+
+
+def test_a_stopped_figures_stage_asks_no_further_panel_and_stores_nothing(document: DocumentInput, settings: Settings):
+    store_artifact(document, settings)
+    stop = threading.Event()
+
+    def stop_after_the_first(user: str, image: bytes):
+        stop.set()
+        return chart_answer()
+
+    client = FakeVisionClient(stop_after_the_first)
+    artifact = workflow._figure_artifact(document, settings)
+    # Three panels of one figure, asked one at a time.
+    panels = tuple(
+        make_block(page=0, order=i, type="figure", content=f"{i}.jpg", bbox=BOX, document_id=document.document_id)
+        for i in range(3)
+    )
+    artifact = artifact.model_copy(update={"blocks": (*panels, artifact.blocks[1].model_copy(update={"order": 3}))})
+
+    with pytest.raises(Cancelled):
+        read_document_figures(
+            document, dataclasses.replace(settings, llm_concurrency=1), client, artifact=artifact, stop=stop
+        )
+
+    assert len(client.calls) == 1
+    assert not figures_file(document, settings).exists()

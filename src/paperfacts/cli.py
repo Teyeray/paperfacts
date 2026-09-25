@@ -24,6 +24,7 @@ import typer
 from paperfacts.config import EXTRACTION_MODES, Settings
 from paperfacts.errors import PaperFactsError, ParserError
 from paperfacts.fields import FIELD_SPECS
+from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
@@ -118,6 +119,16 @@ ForceFiguresOpt = Annotated[
         "--force alone does not re-read them",
     ),
 ]
+JobsOpt = Annotated[
+    int | None,
+    typer.Option(
+        "--jobs",
+        "-j",
+        min=1,
+        help="papers processed at once; parsing stays one paper per parser, model requests share "
+        "llm.max_in_flight (default: web.max_parallel_documents in config.json)",
+    ),
+]
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="ignore caches and redo this step (extraction re-calls the LLM, which costs)")
 ]
@@ -142,7 +153,10 @@ def _settings(
         changes["extraction_passes"] = passes
     if mode is not None:
         changes["extraction_mode"] = mode.value
-    return dataclasses.replace(settings, **changes) if changes else settings
+    settings = dataclasses.replace(settings, **changes) if changes else settings
+    # Every command reads its settings here, once: the one place this process sizes the in-flight limit.
+    set_max_in_flight(settings.llm_max_in_flight)
+    return settings
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -303,6 +317,7 @@ def _batch_summary(
     force: bool,
     export_only: bool,
     force_figures: bool = False,
+    jobs: int | None = None,
 ) -> None:
     def on_stage(stage: str, status: StageStatus, detail: str) -> None:
         typer.echo(f"[{stage}] {status} {detail}".rstrip())
@@ -315,6 +330,7 @@ def _batch_summary(
             force=force,
             force_figures=force_figures,
             export_only=export_only,
+            jobs=jobs or settings.max_parallel_documents,
             on_stage=on_stage,
         )
     except (*REPORTABLE_ERRORS, OSError) as exc:
@@ -337,13 +353,14 @@ def batch(
     mode: ModeOpt = None,
     figures: FiguresOpt = None,
     force_figures: ForceFiguresOpt = False,
+    jobs: JobsOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
     settings = _settings(data_root, passes, mode, figures)
-    _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures)
+    _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures, jobs=jobs)
 
 
 @app.command()
@@ -357,7 +374,8 @@ def export(
 ) -> None:
     """Re-export current cached results to Excel, without parser or LLM calls."""
     _configure_logging(verbose)
-    _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True)
+    # One paper at a time: an export only reads the caches, so parallel papers would buy nothing.
+    _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True, jobs=1)
 
 
 @app.command()

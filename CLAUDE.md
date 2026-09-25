@@ -120,9 +120,15 @@ this file is the part that is easy to get wrong.
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
   offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `table`, `fieldpicker`, `tsv`,
   `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
-- Background jobs are a single worker. A `Job` is a frozen value in a lock-guarded dict, replaced whole on
-  every transition, so a poller never sees a half-applied state. Submitting the same document twice while
-  it is active returns the same job.
+- Background jobs run on `web.max_parallel_documents` workers, never two on the same document; a worker
+  takes the oldest queued job whose document is free. A `Job` is a frozen value in a lock-guarded dict,
+  replaced whole on every transition, so a poller never sees a half-applied state. Submitting the same
+  document twice while it is active returns the same job. A job's log is attributed by a context variable:
+  every pool in the pipeline is `threads.ContextThreadPoolExecutor`, which runs each task in a copy of the
+  caller's context; a plain `ThreadPoolExecutor` would drop its records from the log.
+- Parallel documents are bounded twice: `parsers.py` holds one lock per parser around the actual parse
+  (not around a cache hit), and every model request takes a slot of `llm.IN_FLIGHT` around the HTTP call
+  only -- never while waiting on a future or a backoff, which is what keeps the nested pools deadlock-free.
 - Lane colours are fixed: blue for MinerU, orange for PaddleOCR-VL. Chart readings belong to neither lane
   and use the neutral colour. Status colours always accompany text,
   never carry meaning alone.

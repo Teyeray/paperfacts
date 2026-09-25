@@ -28,7 +28,6 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from paperfacts.adapters import render_markdown
@@ -72,6 +71,7 @@ from paperfacts.records import (
     TargetRecord,
     response_to_records,
 )
+from paperfacts.threads import ContextThreadPoolExecutor
 from paperfacts.voting import deduplicate, merge_passes
 
 logger = logging.getLogger(__name__)
@@ -424,7 +424,7 @@ def _extract_passages(
     if concurrency == 1 or len(questions) <= 1:
         answers = [ask(question) for question in questions]
     else:
-        with ThreadPoolExecutor(
+        with ContextThreadPoolExecutor(
             max_workers=min(concurrency, len(questions)), thread_name_prefix="paperfacts-field"
         ) as pool:
             answers = list(pool.map(ask, questions))

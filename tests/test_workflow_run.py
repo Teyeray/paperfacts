@@ -18,8 +18,10 @@ from pathlib import Path
 
 import pytest
 
+import paperfacts.workflow as workflow_module
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
+from paperfacts.errors import ParserError
 from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.records import LaneExtraction
@@ -371,3 +373,93 @@ def test_a_surviving_lane_is_not_reported_as_a_failure(
             run_document(document, settings)
 
     assert [record for record in caplog.records if "also failed" in record.getMessage()] == []
+
+
+# ---- the two parses of one paper ---------------------------------------------------------------------
+
+
+def _parses_recorded(monkeypatch, barrier: threading.Barrier | None = None):
+    """Replace the fake parse with one that records overlap, optionally meeting the other lane at a barrier."""
+    fake_parse = workflow_module.parse_document
+    state = {"inside": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def parse(document, backend, settings, *, force=False):
+        with lock:
+            state["inside"] += 1
+            state["peak"] = max(state["peak"], state["inside"])
+        try:
+            if barrier is not None:
+                barrier.wait(timeout=5.0)  # BrokenBarrierError unless the other lane is parsing too
+            return fake_parse(document, backend, settings, force=force)
+        finally:
+            with lock:
+                state["inside"] -= 1
+
+    monkeypatch.setattr("paperfacts.workflow.parse_document", parse)
+    return state
+
+
+def test_with_a_parser_service_the_two_lanes_parse_side_by_side(monkeypatch, two_page_pdf: Path, tmp_path: Path):
+    install_fake_pipeline(monkeypatch)
+    barrier = threading.Barrier(2)
+    _parses_recorded(monkeypatch, barrier)
+    settings = Settings(data_root=tmp_path / "data", mineru_url="http://gpu:8002", paddle_url="http://gpu:8080")
+    marks: list[tuple[str, str]] = []
+
+    run_document(DocumentInput.from_path(two_page_pdf), settings, on_stage=lambda s, st, d: marks.append((s, st)))
+
+    assert not barrier.broken
+    parse_marks = [mark for mark in marks if mark[0].startswith("parse:")]
+    assert parse_marks == [
+        ("parse:mineru", "running"),
+        ("parse:paddleocr_vl", "running"),
+        ("parse:mineru", "done"),
+        ("parse:paddleocr_vl", "done"),
+    ]
+
+
+def test_with_two_runner_subprocesses_the_lanes_parse_one_after_the_other(
+    monkeypatch, two_page_pdf: Path, tmp_path: Path
+):
+    install_fake_pipeline(monkeypatch)
+    state = _parses_recorded(monkeypatch)
+    marks: list[tuple[str, str]] = []
+
+    run_document(
+        DocumentInput.from_path(two_page_pdf),
+        Settings(data_root=tmp_path / "data"),
+        on_stage=lambda s, st, d: marks.append((s, st)),
+    )
+
+    assert state["peak"] == 1
+    assert [mark for mark in marks if mark[0].startswith("parse:")] == [
+        ("parse:mineru", "running"),
+        ("parse:mineru", "done"),
+        ("parse:paddleocr_vl", "running"),
+        ("parse:paddleocr_vl", "done"),
+    ]
+
+
+def test_a_failed_parse_in_one_lane_fails_the_paper_after_both_have_ended(
+    monkeypatch, two_page_pdf: Path, tmp_path: Path
+):
+    install_fake_pipeline(monkeypatch)
+    fake_parse = workflow_module.parse_document
+    ended: list[str] = []
+
+    def parse(document, backend, settings, *, force=False):
+        try:
+            if backend == "mineru":
+                raise ParserError("mineru", "http", "service down")
+            return fake_parse(document, backend, settings, force=force)
+        finally:
+            ended.append(backend)
+
+    monkeypatch.setattr("paperfacts.workflow.parse_document", parse)
+    settings = Settings(data_root=tmp_path / "data", mineru_url="http://gpu:8002", paddle_url="http://gpu:8080")
+
+    with pytest.raises(ParserError, match="service down"):
+        run_document(DocumentInput.from_path(two_page_pdf), settings)
+
+    assert sorted(ended) == ["mineru", "paddleocr_vl"]
