@@ -58,10 +58,10 @@ DENSE_TYPES: frozenset[str] = frozenset({"table", "caption"})
 # not symmetric. "%" and "nm" appear in every paper, so treating them as proof would drown the prompt;
 # refusing them outright loses the paper that writes "films of 2108 nm" without the word "thickness". As a
 # weaker class they only fill places no named block wanted.
-# Lowercase omega, not the ohm sign: _searchable() lowercases, and "Ω".lower() is "ω". normalize_key has to
+# Lowercase omega, not the ohm sign: searchable() lowercases, and "Ω".lower() is "ω". normalize_key has to
 # undo the same fold for the same reason. Spelling it uppercase here would silently match only "ohm".
 _OHM = r"(?:ohms?|ω)"
-# Every pattern runs on _searchable() text, which is lower case: an upper-case letter in one never matches.
+# Every pattern runs on searchable() text, which is lower case: an upper-case letter in one never matches.
 # "W" was written that way once, and sputtering_power went unasked in 22 of 54 lanes that said "60 W".
 UNIT_PATTERNS: dict[str, re.Pattern[str]] = {
     "Ω/sq": re.compile(rf"{_OHM}\s*(?:/|per)?\s*(?:sq|square|□)"),
@@ -118,14 +118,14 @@ def _pattern(keyword: str) -> re.Pattern[str]:
     return cached
 
 
-def _searchable(block: SourceBlock) -> str:
+def searchable(block: SourceBlock) -> str:
     """The block as units are searched for: folded, LaTeX undone (``delatex`` restores "°" and "%"), lower
     case."""
     return _LATEX_COMMAND.sub(" ", delatex(normalize_text(block.content))).lower()
 
 
-def _names(keywords: Sequence[str], text: str) -> int:
-    """How many of ``keywords`` occur in ``text`` (a :func:`_searchable` string) as whole tokens."""
+def keyword_hits(keywords: Sequence[str], text: str) -> int:
+    """How many of ``keywords`` occur in ``text`` (a :func:`searchable` string) as whole tokens."""
     squeezed = _DOUBLED_LETTER.sub(r"\1", text)
     return sum(1 for keyword in keywords if _pattern(keyword).search(squeezed))
 
@@ -146,14 +146,14 @@ def inventory_blocks(blocks: Sequence[SourceBlock]) -> list[SourceBlock]:
 def _is_inventory_block(block: SourceBlock) -> bool:
     if block.type in DENSE_TYPES or block.type == "title":
         return True
-    text = _searchable(block)
+    text = searchable(block)
     if CONDITION_UNIT.search(text):
         return True
     # A condition word alone is not enough: "the deposition process" appears in every discussion paragraph.
     # Paired with a number it is almost always the sentence that states how a sample was made.
     if not any(character.isdigit() for character in text):
         return False
-    return _names(CONDITION_KEYWORDS, text) > 0
+    return keyword_hits(CONDITION_KEYWORDS, text) > 0
 
 
 def candidate_blocks(
@@ -217,10 +217,10 @@ def _has_digit(block: SourceBlock) -> bool:
 
 def _classify(spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None) -> Literal["named", "unit"] | None:
     """Whether ``block`` names ``spec`` by a keyword, only carries its unit, or does not qualify at all."""
-    text = _searchable(block)
+    text = searchable(block)
     if spec.kind == "numeric" and not any(character.isdigit() for character in text):
         return None  # a number cannot be quoted from a block that has none
-    if _names(spec.keywords, text):
+    if keyword_hits(spec.keywords, text):
         return "named"
     if unit is not None and unit.search(text):
         return "unit"

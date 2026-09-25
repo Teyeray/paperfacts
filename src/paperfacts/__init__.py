@@ -16,14 +16,15 @@ Flat modules, in pipeline order:
 - ``records``     the model's response schema, the stored records, and the cleaning between them
 - ``extract``     the document the model reads and the extraction itself
 - ``figures``     a vision model reads property-vs-condition charts; paper-level, never compared
-- ``readings``    the figures stage on disk: stored readings, the ones shown, reading a document anew
+- ``readings``    the figures stage on disk: stored readings, the ones shown (and their rows), reading anew
 - ``voting``      repeats collapsed within a pass, majority vote across passes
 - ``grounding``   the quoted text must occur in the block it cites
 - ``normalize``   text folding, number parsing, unit conversion
 - ``matching``    which sample in lane A is which sample in lane B
 - ``compare``     field-by-field comparison of the two lanes
 - ``decide``      one dataset cell's verdict: which candidate the cell states, or why it states none
-- ``dataset``     merge source evidence into unique values and export machine-learning tables to Excel
+- ``dataset``     merge source evidence into unique values: the machine-learning rows
+- ``workbook``    the Excel export of those rows; presentation only, in no cache key
 - ``keys``        the cache keys that name stored extractions and comparisons
 - ``workflow``    orchestration; ``cli``, ``report`` and ``web`` are thin layers over it
 - ``stored``      what is stored for a document and whether it is still current (keys and parse)

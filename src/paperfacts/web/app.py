@@ -53,12 +53,11 @@ from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload
 from paperfacts.errors import ConfigError
-from paperfacts.figures import FiguresView
 from paperfacts.keys import figure_key_for
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.readings import shown_figures
+from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library

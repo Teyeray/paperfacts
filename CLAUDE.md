@@ -107,6 +107,9 @@ this file is the part that is easy to get wrong.
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
   re-derives records for free as long as the rendered document and prompts stay byte-identical.
+- Presentation stays out of hashed modules: the Excel layout is `workbook.py`, not `dataset.py` (which only
+  assembles the rows, a set of verdicts). `workbook.py` and `readings.py` are in no key list, and
+  `tests/test_keys_unhashed.py` holds that.
 
 ## Figures
 
@@ -115,13 +118,13 @@ this file is the part that is easy to get wrong.
   whole-figure caption names a film field by its keywords; panels go to captions by geometry). It is
   paper-level, not a lane: its readings are approximate (±10 % / ±20 %), never create or identify a sample
   (chart x snaps to ticks), never fill a dataset cell and never join the two-lane comparison. They live in
-  their own file, the 图中读数 sheet (`write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
+  their own file, the 图中读数 sheet (`workbook.write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
   and their own web section; `dataset.py` and `decide.py` must not import `figures.py`. A failure in it marks only its own
   stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
   tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
-- Where readings are stored and which are shown (`shown_figures`, `read_document_figures`) is `readings.py`,
-  not `figures.py`: `figures.py`'s source is hashed into `figure_key`, and moving storage code there would
-  rename every stored reading.
+- Where readings are stored and which are shown (`shown_figures`, `read_document_figures`, `FiguresView`,
+  `figure_rows`) is `readings.py`, not `figures.py`: `figures.py`'s source is hashed into `figure_key`, and
+  moving storage or display code there would rename every stored reading.
 - Vision requests go through `llm.complete_vision` on a `VisionClient`, never the extraction client;
   crops come from `pdf.render_region`.
 

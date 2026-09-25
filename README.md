@@ -694,6 +694,9 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
+The workbook layout (`workbook.py`) and where chart readings are stored and which are shown (`readings.py`)
+are in no key: editing them renames no stored file.
+
 Extractions, comparisons and consolidated tables also record the parse they came from (a hash of the
 artifact's blocks). After a re-parse, a stored lane, comparison or table of the old parse is a miss (not
 served, and the paper is not finished) and is derived again: source ids

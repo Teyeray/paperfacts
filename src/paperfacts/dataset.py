@@ -1,24 +1,19 @@
-"""Conservative, one-value-per-field datasets and an atomic Excel export.
+"""Conservative, one-value-per-field datasets.
 
 The paper table selects a complete sample row. It must never manufacture a sample by combining the best
 measurement of each field from different experimental conditions. Which value a cell holds -- and whether it
-holds one at all -- is decided per cell by :mod:`paperfacts.decide`; this module gathers each cell's evidence,
-assembles the rows and writes the workbook.
+holds one at all -- is decided per cell by :mod:`paperfacts.decide`; this module gathers each cell's evidence
+and assembles the rows. Writing them to Excel is :mod:`paperfacts.workbook`'s, which is not hashed into any
+cache key: how a sheet looks is no verdict.
 """
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
-from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, ConfigDict
 
 from paperfacts.compare import ComparisonReport, FieldComparison
@@ -36,52 +31,6 @@ from paperfacts.records import LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
 Row = Mapping[str, CellValue]
-
-_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-_DATA_COLUMNS = (
-    ("document_id", "文档ID"),
-    ("filename", "文件名"),
-    ("sample_id", "样品ID"),
-    ("sample_label", "样品标签"),
-    ("conditions", "样品及测量条件"),
-    ("available_fields", "可用字段数"),
-    ("agree_fields", "双路一致字段数"),
-    *((spec.name, spec.name) for spec in FIELD_SPECS),
-)
-_QUALITY_COLUMNS = (
-    ("document_id", "文档ID"),
-    ("filename", "文件名"),
-    ("sample_id", "样品ID"),
-    ("field", "字段"),
-    ("decision", "最终决策"),
-    ("value", "输出值"),
-    ("unit", "标准单位"),
-    ("conditions", "条件"),
-    ("source_ids", "合并证据来源"),
-    ("lanes", "证据来源通道"),
-    ("series", "系列级"),
-    ("detail", "说明"),
-)
-# Values a vision model read off charts. The rows come from paperfacts.figures (which this module does not
-# import: the readings are no part of any verdict here); this is only the sheet's layout.
-_FIGURE_COLUMNS = (
-    ("document_id", "文档ID"),
-    ("filename", "文件名"),
-    ("figure", "图"),
-    ("page", "页码"),
-    ("source_id", "图块来源"),
-    ("panel", "子图"),
-    ("field", "字段"),
-    ("series", "系列"),
-    ("x", "横轴（仅供参考，不用于对应样品）"),
-    ("value", "读数（近似值）"),
-    ("unit", "标准单位"),
-    ("precision", "精度"),
-    ("value_raw", "图中原始读数"),
-    ("scale", "纵轴刻度"),
-    ("caption", "图注"),
-    ("detail", "说明"),
-)
 
 
 class FieldColumn(BaseModel):
@@ -430,138 +379,3 @@ def consolidate_document(
         },
         incomplete,
     )
-
-
-def _worksheet(
-    workbook: Workbook, title: str, columns: Sequence[tuple[str, str]], rows: Sequence[Row], table_id: str
-) -> Worksheet:
-    sheet = workbook.create_sheet(title)
-    sheet.append([label for _, label in columns])
-    for row in rows:
-        sheet.append([row.get(key) for key, _ in columns])
-    sheet.freeze_panes = "D2" if title in {"论文数据", "样品数据", "数据质量"} else "A2"
-    sheet.auto_filter.ref = sheet.dimensions
-    sheet.sheet_view.showGridLines = False
-    sheet.row_dimensions[1].height = 30
-    for cell in sheet[1]:
-        cell.font = Font(name="Calibri", bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="17365D")
-        cell.alignment = Alignment(vertical="center", wrap_text=True)
-    for column, (key, _) in enumerate(columns, start=1):
-        width = {
-            "document_id": 20,
-            "filename": 48,
-            "conditions": 48,
-            "source_ids": 48,
-            "detail": 80,
-            "sample_id": 28,
-            "sample_label": 35,
-            "caption": 60,
-            "x": 36,
-            "description": 68,
-            "rule": 70,
-        }.get(key, 23)
-        sheet.column_dimensions[get_column_letter(column)].width = width
-        for cells in sheet.iter_rows(min_row=2, min_col=column, max_col=column):
-            cell = cells[0]
-            if isinstance(cell.value, bool):
-                # openpyxl writes a bool as Excel TRUE/FALSE; a number format would be misleading.
-                pass
-            elif isinstance(cell.value, str):
-                cell.value = _CONTROL.sub("", cell.value)
-                # PDF-derived strings are data even when their first character is '='.
-                cell.data_type = "s"
-            elif isinstance(cell.value, (int, float)):
-                cell.number_format = "0.0000E+00" if key in {"resistance", "resistivity"} else "0.############"
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-    if rows:
-        table = Table(displayName=table_id, ref=sheet.dimensions)
-        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
-        sheet.add_table(table)
-    return sheet
-
-
-def write_dataset(
-    documents: Sequence[DocumentDataset],
-    output: Path,
-    *,
-    failures: Sequence[dict[str, str]] = (),
-    figure_rows: Sequence[Row] = (),
-) -> None:
-    """Replace a workbook atomically; repeated PDF hashes produce exactly one paper row.
-
-    ``figure_rows`` (from :func:`paperfacts.figures.figure_rows`) only fill the 图中读数 sheet: chart readings
-    are approximate and never compared, so they never reach a sample or paper row.
-    """
-    unique = sorted(
-        {document.document_id: document for document in documents}.values(), key=lambda document: document.document_id
-    )
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    _worksheet(workbook, "论文数据", _DATA_COLUMNS, [doc.paper_row for doc in unique], "Papers")
-    _worksheet(workbook, "样品数据", _DATA_COLUMNS, [row for doc in unique for row in doc.sample_rows], "Samples")
-    descriptions: list[Row] = [
-        column.model_dump()
-        | {
-            # The sheet says the same things in Chinese, for a reader who opens the workbook alone.
-            "scope": "样品级" if column.scope == "sample" else "靶材（论文级）",
-            "unit": column.unit or "文本",
-            "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
-        }
-        for column in field_columns()
-    ]
-    _worksheet(
-        workbook,
-        "字段说明",
-        (
-            ("name", "字段"),
-            ("label", "中文名"),
-            ("scope", "层级"),
-            ("unit", "标准单位"),
-            ("description", "中文说明"),
-            ("rule", "单值与缺失规则"),
-        ),
-        descriptions,
-        "Fields",
-    )
-    _worksheet(workbook, "数据质量", _QUALITY_COLUMNS, [row for doc in unique for row in doc.quality_rows], "Quality")
-    _worksheet(workbook, "图中读数", _FIGURE_COLUMNS, figure_rows, "Figures")
-    runs: list[Row] = [
-        {
-            "document_id": doc.document_id,
-            "filename": doc.filename,
-            "status": "incomplete" if doc.incomplete else "success",
-            "samples": len(doc.sample_rows),
-            "extractor_key": doc.extractor_key,
-            "comparison_key": doc.comparison_key,
-            "detail": f"未完成，下次运行重问：{doc.incomplete}"
-            if doc.incomplete
-            else "论文行采用一个完整样品；空白为缺失或未通过唯一值质量规则。",
-        }
-        for doc in unique
-    ]
-    runs.extend(
-        {
-            "document_id": failure.get("document_id", ""),
-            "filename": failure.get("filename") or failure.get("pdf") or failure.get("path", ""),
-            "status": "failed",
-            "detail": failure.get("error") or failure.get("detail", str(failure)),
-        }
-        for failure in failures
-    )
-    _worksheet(
-        workbook,
-        "运行记录",
-        (
-            ("document_id", "文档ID"),
-            ("filename", "文件名"),
-            ("status", "状态"),
-            ("samples", "合并后样品数"),
-            ("extractor_key", "抽取版本"),
-            ("comparison_key", "比较版本"),
-            ("detail", "说明"),
-        ),
-        runs,
-        "Runs",
-    )
-    write_atomic(output, workbook.save)

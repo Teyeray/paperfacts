@@ -58,7 +58,7 @@ def test_a_failed_paper_is_recorded_and_remaining_papers_are_exported(monkeypatc
     install_fake_pipeline(monkeypatch)
     output = tmp_path / "output.xlsx"
     snapshots = []
-    from paperfacts.dataset import write_dataset
+    from paperfacts.workbook import write_dataset
 
     def capture_write(documents, path, *, failures=(), figure_rows=()):
         write_dataset(documents, path, failures=failures)

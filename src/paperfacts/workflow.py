@@ -27,7 +27,6 @@ from paperfacts.dataset import (
     DocumentDataset,
     consolidate_document,
     incomplete_reason,
-    write_dataset,
     write_dataset_json,
 )
 from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, PaperFactsError, ParserError
@@ -35,7 +34,7 @@ from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
 from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
-from paperfacts.figures import FigureReadings, FiguresView
+from paperfacts.figures import FigureReadings
 from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
 from paperfacts.llm import LlmClient, OpenAICompatibleClient
@@ -44,10 +43,11 @@ from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
+from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
 from paperfacts.threads import ContextThreadPoolExecutor
+from paperfacts.workbook import write_dataset
 
 logger = logging.getLogger(__name__)
 
