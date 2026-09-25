@@ -42,6 +42,7 @@ from paperfacts.normalize import (
     normalize_key,
     normalize_text,
     parse_number,
+    set_aside,
     text_key,
 )
 from paperfacts.records import FieldValue, spell_number_word
@@ -400,10 +401,14 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
         notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {spelled}")
     if approx:
         notes.append("原文为近似值，保留中心值")
-    compound = compound_value(spec, text)
+    # The comparison's reading (normalize_field): the same step sets aside what surrounds the value, so the cell
+    # and the report agree on "3 h 30 min at 400 °C".
+    bare, _, condition = set_aside(text)
+    compound = compound_value(spec, bare)
     if compound is not None:
-        # The comparison's reading (normalize_field), so the cell and the report agree on "3 h 30 min".
-        return compound, joined([*notes, f"原文为复合时长 {text!r}，合计 {compound:g} {spec.canonical_unit}"])
+        if condition:
+            notes.append(f"条件 {condition!r} 不计入数值")
+        return compound, joined([*notes, f"原文为复合时长 {bare!r}，合计 {compound:g} {spec.canonical_unit}"])
     parenthesised = _PARENTHESISED_UNCERTAINTY.fullmatch(text)
     if parenthesised:
         center, unit, uncertainty, again = parenthesised.group("center", "unit", "uncertainty", "again")

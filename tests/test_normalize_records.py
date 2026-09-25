@@ -78,7 +78,20 @@ def test_a_compound_duration_is_one_value(raw, unit_raw, expected):
     assert "compound" in normalized.normalization_note
 
 
-@pytest.mark.parametrize("raw", ["30 min 3 h", "30 min 20 min", "3 h 30 nm", "1 h 90 min", "2 h 60 min"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "30 min 3 h",
+        "30 min 20 min",
+        "3 h 30 nm",
+        "1 h 90 min",
+        "2 h 60 min",
+        # Nobody writes a sum with a fractional larger part: "0.5 h 30 min" restates 30 min.
+        "0.5 h 30 min",
+        "0.5 min 30 s",
+        "1.5 h 30 min",
+    ],
+)
 def test_only_a_descending_pair_of_one_quantity_is_a_compound(raw):
     normalized = normalize_field(make_field("annealing_time", raw, unit_raw="min"), FIELD_BY_NAME["annealing_time"])
 

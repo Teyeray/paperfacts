@@ -688,9 +688,10 @@ def test_a_field_one_lane_never_answered_is_refused_in_both_lanes():
     assert "no valid answer to mineru:thickness" in result.incomplete
 
 
-def test_a_compound_duration_reaches_the_cell():
-    # The comparison read "3 h 30 min" as 210 min; the cell must read it the same way, not refuse it.
-    result = paired(*both([value("annealing_time", "3 h 30 min", "h")]))
+@pytest.mark.parametrize("raw", ["3 h 30 min", "~3 h 30 min", "3 h 30 min at 400 °C"])
+def test_a_compound_duration_reaches_the_cell(raw):
+    # The comparison read these as 210 min; the cell must read them the same way, not refuse them.
+    result = paired(*both([value("annealing_time", raw, "h")]))
 
     assert (result.paper_row["annealing_time"], decision(result, "annealing_time")["decision"]) == (210.0, "agree")
 

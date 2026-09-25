@@ -716,9 +716,10 @@ _SUMMED_UNITS = {"min"}
 
 def compound_value(spec: FieldSpec, text: str) -> float | None:
     """The canonical value of a duration spelled in two of its units, larger first ("3 h 30 min" -> 210), or
-    None for anything else. The smaller part must be less than one of the larger unit: "1 h 90 min" is no
-    way anyone writes 150 minutes. Both units carry their own factor, so the model's ``unit_raw`` -- which can
-    name only one of them -- plays no part. ``text`` is the value alone: callers set aside what surrounds it.
+    None for anything else. The larger part must be whole and the smaller one less than one of the larger unit:
+    "1 h 90 min" is no way anyone writes 150 minutes, and "0.5 h 30 min" restates 30 minutes. Both units carry
+    their own factor, so the model's ``unit_raw`` -- which can name only one of them -- plays no part. ``text``
+    is the value alone: callers set aside what surrounds it (:func:`set_aside`).
 
     The one reader of compound durations, for the comparison (:func:`normalize_field`) and for the dataset
     cell (``decide``) alike, so the two never read one string differently."""
@@ -729,7 +730,8 @@ def compound_value(spec: FieldSpec, text: str) -> float | None:
         return None
     convert = CONVERTERS[spec.canonical_unit]
     big, small = convert(match.group("ua")), convert(match.group("ub"))
-    if big is None or small is None or big <= small:
+    if big is None or small is None or big <= small or not match.group("a").isdigit():
+        # A fractional larger part ("0.5 h 30 min") is a restatement, not a sum: nobody writes 30 min that way.
         return None
     part = float(_plain(match.group("b"))) * small
     if part >= big:
