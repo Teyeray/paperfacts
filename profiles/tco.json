@@ -47,13 +47,18 @@
     "multi_condition_example": "transmittance at 550 nm and averaged",
     "matching_condition_examples": "(flow rate, power, temperature, time...)",
     "matching_value_examples": "(sheet resistance, thickness...)",
-    "matching_justification_example": "both are the 100 sccm O2 sample"
+    "matching_justification_example": "both are the 100 sccm O2 sample",
+    "scaled_header_examples": "\"ρ × 10^4 (Ω cm)\" or \"ρ (×10^-4 Ω·cm)\"",
+    "plain_header_example": "a column \"Thickness (nm)\" gives just \"nm\"",
+    "implausible_origin": "a different layer, process step or quantity"
   },
   "figures": {
     "subject": "thin films (e.g. sputtered transparent conductive oxides)",
     "property_noun": "film properties",
     "chart_definition": "a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name)",
-    "axis_example": "axis \"Sheet resistance [10^2 ohm/sq]\" with a marker at the \"25\" gridline => y = 25, unit \"10^2 ohm/sq\""
+    "axis_example": "axis \"Sheet resistance [10^2 ohm/sq]\" with a marker at the \"25\" gridline => y = 25, unit \"10^2 ohm/sq\"",
+    "symbol_axis_example": "axis \"ρ × 10^4 (Ω cm)\" => unit \"ρ × 10^4 (Ω cm)\"",
+    "x_label_examples": "400, 1.5, \"As-deposited\", \"ITO-RT\""
   },
   "retrieval": {
     "condition_keywords": [
@@ -75,6 +80,7 @@
     "condition_unit_pattern": "\\d\\s*(?:sccm|W\\b|°C|℃|K\\b|Pa\\b|mtorr|torr|mbar|kv\\b|ma\\b|rpm|min\\b|h\\b|s\\b|(?:vol|at)\\.?\\s*%)"
   },
   "units": {},
+  "ignored_unit_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"],
   "ui": {
     "paper_level_label_zh": "靶材（论文级）",
     "paper_level_short_zh": "靶材",

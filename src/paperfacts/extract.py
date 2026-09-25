@@ -439,7 +439,9 @@ def _extract_passages(
             # so that "the model missed it" and "we never asked" stay distinguishable.
             dropped.append(f"{spec.name}: no block in this lane mentions it, so it was not asked about")
             continue
-        field_user = field_user_prompt(spec, sample_list, render_markdown(candidates))
+        field_user = field_user_prompt(
+            spec, sample_list, render_markdown(candidates), profile.prompt.implausible_origin
+        )
         _check_context_budget(field_system, field_user, options)
         questions.append((spec, tuple(candidates), field_user))
 

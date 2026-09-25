@@ -360,6 +360,17 @@ def test_prompts_for_one_field_prints_its_system_prompt_its_line_and_the_questio
     assert "<excerpts>" in question and question.endswith("Return the JSON object now.")
 
 
+def test_prompts_for_one_field_use_that_profiles_own_wording():
+    # The range sentence names where an implausible number comes from; a battery field must not be told "layer".
+    battery = SHIPPED_PROFILE_PATH.with_name("battery_cathode.json")
+    result = runner.invoke(app, ["prompts", "--profile", str(battery), "--field", "calcination_temperature"])
+
+    assert result.exit_code == 0
+    line = prompt_sections(result.output)["field line (calcination_temperature)"]
+    assert "a different electrode component, test condition or quantity" in line
+    assert "layer" not in line
+
+
 def test_prompts_for_an_unknown_field_names_the_fields_there_are():
     result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH), "--field", "colour"])
 

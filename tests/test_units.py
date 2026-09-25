@@ -250,12 +250,31 @@ def test_an_offset_is_never_applied_to_a_bare_number():
 
 
 def test_a_gas_name_after_a_declared_unit_is_set_aside():
-    registry = load_units({"mAh/g": BATTERY_CAPACITY}, WHERE)
+    registry = load_units({"mAh/g": BATTERY_CAPACITY}, WHERE, ["Ar"])
 
     value, unit, note = convert_to_canonical(probe("mAh/g"), 0.15, "Ah/g (Ar)", registry)
 
     assert (value, unit) == (pytest.approx(150.0), "mAh/g")
     assert note == "gas name in the unit (Ar) set aside"
+
+
+@pytest.mark.parametrize("unit", ["Pa Ar", "Pa (O2)", "mAh/g Ar"])
+def test_a_profile_that_declares_no_suffix_sets_none_aside(unit):
+    registry = load_units({"mAh/g": BATTERY_CAPACITY}, WHERE)
+    canonical = "Pa" if unit.startswith("Pa") else "mAh/g"
+
+    value, converted, note = convert_to_canonical(probe(canonical), 1.1, unit, registry)
+
+    assert (value, converted) == (None, None)
+    assert "unknown unit" in note
+
+
+@pytest.mark.parametrize(
+    "suffixes", [["Ar", "Ar"], ["N 2"], [""], "Ar", [1]], ids=["duplicate", "space", "empty", "not-a-list", "number"]
+)
+def test_a_malformed_suffix_list_is_refused(suffixes):
+    with pytest.raises(ConfigError, match="ignored_unit_suffixes"):
+        load_units({}, WHERE, suffixes)
 
 
 def test_normalize_field_converts_with_the_registry_it_is_given():

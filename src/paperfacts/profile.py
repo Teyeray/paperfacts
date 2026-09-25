@@ -104,6 +104,11 @@ class PromptSlots:
     matching_condition_examples: str = "(temperature, time, composition...)"
     matching_value_examples: str = "(measured values...)"
     matching_justification_example: str = "both are the sample annealed at 500 °C"
+    # Rule 2's examples of a table header that carries a power of ten, and of one that carries only a unit.
+    scaled_header_examples: str = '"X × 10^3 (unit)" or "X (×10^-3 unit)"'
+    plain_header_example: str = 'a column "Temperature (°C)" gives just "°C"'
+    # Where a number outside a field's plausible range usually comes from, in every field line that has one.
+    implausible_origin: str = "a different sample, state or quantity"
 
 
 @dataclass(frozen=True)
@@ -114,6 +119,10 @@ class FigureSlots:
     property_noun: str
     chart_definition: str
     axis_example: str
+    # An axis whose multiplier sits on the quantity symbol, quoted as the axis and as the unit reported for it.
+    symbol_axis_example: str = 'axis "X × 10^3 (unit)" => unit "X × 10^3 (unit)"'
+    # Tick labels as they are to be reported for x: numbers and category names.
+    x_label_examples: str = '400, 1.5, "As-prepared", "Sample A"'
 
 
 @dataclass(frozen=True)
@@ -228,6 +237,7 @@ _TOP_KEYS = (
     "figures",
     "retrieval",
     "units",
+    "ignored_unit_suffixes",
     "ui",
     "fields",
 )
@@ -265,7 +275,7 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
         errors.append(f"{where}: maturity must be one of {', '.join(get_args(Maturity))}, got {maturity!r}")
 
     groups = checked(lambda: _groups(data["groups"], where)) if "groups" in data else None
-    units = checked(lambda: load_units(data.get("units", {}), where))
+    units = checked(lambda: load_units(data.get("units", {}), where, data.get("ignored_unit_suffixes", [])))
     fields = None
     if groups is not None and "fields" in data:
         levels = {group.name: group.level for group in groups}

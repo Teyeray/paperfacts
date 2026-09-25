@@ -566,9 +566,11 @@ def prompts(
             raise typer.Exit(code=1)
         sections = {
             "field system prompt (passage mode)": field_system_prompt(domain),
-            f"field line ({field})": render_field_table((spec,)),
+            f"field line ({field})": render_field_table((spec,), domain.prompt.implausible_origin),
             # The question's framing; the two placeholders are what a run fills from the paper.
-            f"field user prompt ({field}, passage mode)": field_user_prompt(spec, "<sample list>", "<excerpts>"),
+            f"field user prompt ({field}, passage mode)": field_user_prompt(
+                spec, "<sample list>", "<excerpts>", domain.prompt.implausible_origin
+            ),
         }
     else:
         # Passage mode (the default) sends the inventory and field prompts and never the extraction prompt;

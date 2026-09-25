@@ -33,7 +33,10 @@
     "multi_condition_example": "discharge capacity at 0.1 C and at 1 C",
     "matching_condition_examples": "(composition, dopant level, calcination temperature, coating...)",
     "matching_value_examples": "(discharge capacity, capacity retention...)",
-    "matching_justification_example": "both are the 1 mol% Al-doped sample"
+    "matching_justification_example": "both are the 1 mol% Al-doped sample",
+    "scaled_header_examples": "\"D_Li+ × 10^11 (cm2 s-1)\" or \"D_Li+ (×10^-11 cm2 s-1)\"",
+    "plain_header_example": "a column \"Discharge capacity (mAh g-1)\" gives just \"mAh g-1\"",
+    "implausible_origin": "a different electrode component, test condition or quantity"
   },
   "retrieval": {
     "condition_keywords": [
@@ -218,7 +221,8 @@
       "kind": "numeric",
       "description": "Number of charge-discharge cycles of the long-term cycling test the capacity retention is reported after.",
       "description_zh": "长循环测试的圈数（报告容量保持率时的循环次数）。",
-      "keywords": ["cycles", "cycle number", "cycling", "long-term cycling", "cycle life"]
+      "keywords": ["cycles", "cycle number", "cycling", "long-term cycling", "cycle life"],
+      "valid_range": {"min": 1, "max": 100000}
     },
     {
       "name": "capacity_retention",
@@ -235,7 +239,8 @@
       "condition_rule": "the number of cycles and the C-rate",
       "missing_condition_note_zh": "原文提取结果未注明容量保持率对应的循环圈数和倍率",
       "bare_number": "percent_or_fraction",
-      "valid_range": {"min": 0, "max": 100}
+      "valid_range": {"min": 0, "max": 100},
+      "after_clause": "condition"
     }
   ]
 }

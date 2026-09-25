@@ -46,15 +46,12 @@ FORBIDDEN = (
 #   rewording them would re-key every stored extraction; they change together with the rename.
 # - config.py ``DEFAULT_PROFILE = "tco"``, readings.py ``LEGACY_PROFILE = "tco"``: the shipped profile's name
 #   (``profiles/tco.json``), the only literal spelling of it in the package. It is a file name, not copy.
-# - figures.py ``"ITO-RT"``: a tick-label example inside the chart-reading prompt. Rewording it changes the
-#   vision request and figure_key; the step that moves those examples into the profile removes this entry.
 # - app.css ``transparent``: the CSS colour keyword.
 ALLOWED: dict[str, dict[str, int]] = {
     "records.py": {"no_tco_film": 1, "no TCO film": 2},
     "config.py": {'"tco"': 1},
     "readings.py": {'"tco"': 1},
     "web/static/state.js": {"no_tco_film": 1},
-    "figures.py": {'"ITO-RT"': 1},
     "web/static/app.css": {"transparent": 12},
 }
 

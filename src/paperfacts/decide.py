@@ -43,6 +43,7 @@ from paperfacts.normalize import (
     normalize_text,
     parse_number,
     set_aside,
+    split_after_clause,
     text_key,
 )
 from paperfacts.records import FieldValue, spell_number_word
@@ -413,6 +414,11 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
         notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {spelled}")
     if approx:
         notes.append("原文为近似值，保留中心值")
+    if spec.after_clause == "condition":
+        # The comparison's reading (normalize_field) moved the clause into the value's condition.
+        text, clause = split_after_clause(text)
+        if clause:
+            notes.append(f"{clause!r} 已计入测量条件")
     # The comparison's reading (normalize_field): the same step sets aside what surrounds the value, so the cell
     # and the report agree on "3 h 30 min at 400 °C".
     bare, _, condition = set_aside(text)
@@ -433,7 +439,8 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
     allowed_units = {clean_unit(unit) for unit in (value.unit_raw, spec.canonical_unit) if unit}
     if tail and clean_unit(tail) not in allowed_units:
         return None, "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
-    # No range_policy: "center" is one number, so a dataset cell refuses a range under every policy (_SCALAR above).
+    # No range_policy: "center" is one number, so a dataset cell refuses a range under every policy (_SCALAR above):
+    # range_policy governs the lanes' values and the comparison; a dataset cell always needs a single scalar.
     number, _ = parse_number(match.group("center"))
     if number is None or not math.isfinite(number):
         return None, "数值不可解析或非有限数"

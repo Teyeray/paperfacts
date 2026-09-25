@@ -46,6 +46,7 @@ ROLES = {
     "figure_readable": {F},
     "display_format": {D},
     "range_policy": {C, V},
+    "after_clause": {C, V},
 }
 # A value off each attribute's default, set on one field of the demo profile to see which fingerprints move.
 EDITS = {
@@ -70,6 +71,7 @@ EDITS = {
     "figure_readable": True,
     "display_format": "scientific",
     "range_policy": "reject",
+    "after_clause": "condition",
 }
 
 

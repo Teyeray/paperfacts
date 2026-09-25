@@ -6,6 +6,8 @@ a lambda returning fixed bytes, so every test is about this module's own decisio
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from paperfacts import figures
@@ -22,6 +24,7 @@ from paperfacts.figures import (
 )
 from paperfacts.keys import figure_key, figure_key_for
 from paperfacts.models import NormalizedBBox, PageGeometry, ParsedArtifact
+from paperfacts.profile import FigureSlots
 from support.factories import DOC_ID, make_block
 from support.profiles import make_profile, shipped_profile
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
@@ -215,8 +218,23 @@ def test_an_axis_whose_title_multiplies_the_quantity_divides_the_reading():
 
 
 def test_the_prompt_keeps_the_quantity_symbol_with_an_axis_multiplier():
-    assert '"ρ × 10^4 (Ω cm)"' in USER_PROMPT
+    rendered = figures.user_prompt("caption", TCO.figure_fields, TCO.figures)
+
+    assert 'axis "ρ × 10^4 (Ω cm)" => unit "ρ × 10^4 (Ω cm)"' in rendered
     assert "quantity symbol" in USER_PROMPT
+
+
+def test_a_profile_without_its_own_chart_examples_gets_generic_ones():
+    slots = dataclasses.replace(
+        TCO.figures,
+        symbol_axis_example=FigureSlots.symbol_axis_example,
+        x_label_examples=FigureSlots.x_label_examples,
+    )
+
+    rendered = figures.user_prompt("caption", TCO.figure_fields, slots)
+
+    assert "ρ" not in rendered and "ITO-RT" not in rendered
+    assert 'axis "X × 10^3 (unit)" => unit "X × 10^3 (unit)"' in rendered
 
 
 def test_a_unit_that_will_not_convert_keeps_the_raw_reading_with_a_note():

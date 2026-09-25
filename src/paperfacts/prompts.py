@@ -85,7 +85,7 @@ FIELD = {"field": "<field name from the table below>", "value_raw": "<exactly as
 Rules:
 1. `value_raw` must be copied verbatim from the paper (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
 2. Put the unit in `unit_raw` exactly as written (e.g. {unit_examples}). If the number and unit are fused, split them.
-   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. "ρ × 10^4 (Ω cm)" or "ρ (×10^-4 Ω·cm)"), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone (a column "Thickness (nm)" gives just "nm").
+   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. {scaled_header_examples}), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone ({plain_header_example}).
 3. `source_ids` must be copied from the `<!-- source: ... -->` markers that precede the text or table where the value appears. Never invent ids. Prefer the most specific block (a table over the surrounding paragraph).
 4. Samples: create one sample per distinct {sample_unit} that the paper reports results for {sample_examples}. Use the paper's own sample names when it has them; otherwise build `sample_id` from the distinguishing condition (e.g. "{sample_id_example}"). `conditions` holds the {condition_noun} that distinguish samples {condition_examples}, values as written.
    {sample_definition} If {no_samples_clause}, return an empty "samples" list.
@@ -151,7 +151,7 @@ VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exact
 Rules:
 1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
 2. Put the unit in `unit_raw` exactly as written (e.g. {unit_examples}). If the number and unit are fused, split them.
-   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. "ρ × 10^4 (Ω cm)" or "ρ (×10^-4 Ω·cm)"), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone (a column "Thickness (nm)" gives just "nm").
+   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. {scaled_header_examples}), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone ({plain_header_example}).
 3. `source_ids` must be copied from the `<!-- source: ... -->` markers shown here. Never invent ids and never cite an excerpt you were not shown. Prefer the most specific excerpt (a table over the surrounding paragraph).
 4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
 5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, {whole_series_examples}. Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ({partial_collective_example}) is false: give the individual sample ids the excerpt names.
@@ -169,9 +169,13 @@ Return the JSON object only."""
 _FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{condition}{plausible}"
 # Told to the model so it checks what it is quoting before it answers; the code drops what still falls outside.
 _PLAUSIBLE = (
-    " Plausible values are {range}; a number outside that range almost always belongs to a different layer,"
-    " process step or quantity, so check before reporting it."
+    " Plausible values are {range}; a number outside that range almost always belongs to {origin}, so check"
+    " before reporting it."
 )
+# The origin a caller that hands no profile gets -- only the pinned prompt snapshot's generator -- is the wording
+# every stored TCO extraction was asked with. Extraction always passes its profile's own
+# (PromptSlots.implausible_origin).
+_UNPROFILED_ORIGIN = "a different layer, process step or quantity"
 
 
 def render(template: str, values: Mapping[str, str]) -> str:
@@ -215,13 +219,14 @@ def _values(profile: DomainProfile) -> dict[str, str]:
     return values
 
 
-def render_field_table(specs: Sequence[FieldSpec]) -> str:
+def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str = _UNPROFILED_ORIGIN) -> str:
+    """One line per field. ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`."""
     lines = []
     for spec in specs:
         unit = f", canonical unit: {spec.canonical_unit}" if spec.canonical_unit else ""
         condition = f" Condition: {spec.condition_hint}." if spec.condition_hint else ""
         described = spec.describe_range()
-        plausible = _PLAUSIBLE.format(range=described) if described else ""
+        plausible = _PLAUSIBLE.format(range=described, origin=implausible_origin) if described else ""
         lines.append(
             _FIELD_LINE.format(
                 name=spec.name,
@@ -237,7 +242,8 @@ def render_field_table(specs: Sequence[FieldSpec]) -> str:
 
 
 def extraction_system_prompt(profile: DomainProfile) -> str:
-    return render(_EXTRACTION_SYSTEM, {**_values(profile), "fields": render_field_table(profile.fields)})
+    fields = render_field_table(profile.fields, profile.prompt.implausible_origin)
+    return render(_EXTRACTION_SYSTEM, {**_values(profile), "fields": fields})
 
 
 def extraction_user_prompt(markdown: str) -> str:
@@ -257,10 +263,12 @@ def field_system_prompt(profile: DomainProfile) -> str:
     return render(_FIELD_SYSTEM, _values(profile))
 
 
-def field_user_prompt(spec: FieldSpec, sample_list: str, markdown: str) -> str:
+def field_user_prompt(
+    spec: FieldSpec, sample_list: str, markdown: str, implausible_origin: str = _UNPROFILED_ORIGIN
+) -> str:
     """``sample_list`` is rendered by the caller, which owns the record types; this module stays free of them."""
     return (
-        f"Field to extract:\n{render_field_table((spec,))}\n\n"
+        f"Field to extract:\n{render_field_table((spec,), implausible_origin)}\n\n"
         f"Samples this paper reports:\n{sample_list}\n\n"
         f"Excerpts (Markdown with provenance markers):\n\n{markdown}\n\n"
         "Return the JSON object now."

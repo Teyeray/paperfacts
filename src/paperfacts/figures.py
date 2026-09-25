@@ -96,9 +96,9 @@ Step 2 - otherwise read the chart carefully:
 - For each y axis, determine the scale from the tick labels: linear or logarithmic (ticks like 10^1, 10^2, 10^3 evenly spaced => log; interpolate logarithmically between them). Note axis breaks.
 - For each y axis, set "field" to the name of the listed property it plots, or null if it plots none of them. Report points only for series on an axis whose field is not null.
 - If there are several y axes (left/right, or several right axes), decide which axis each series belongs to (colour of axis and labels, arrows, legend) and read each series against ITS OWN axis.
-- Report y in the units printed on that axis INCLUDING any multiplier written in the axis title, exactly as the title writes it (e.g. {axis_example}). When the multiplier is attached to the quantity symbol rather than to the unit, keep the quantity symbol and the brackets too (axis "ρ × 10^4 (Ω cm)" => unit "ρ × 10^4 (Ω cm)"): the two mean opposite things. Do not convert.
+- Report y in the units printed on that axis INCLUDING any multiplier written in the axis title, exactly as the title writes it (e.g. {axis_example}). When the multiplier is attached to the quantity symbol rather than to the unit, keep the quantity symbol and the brackets too ({symbol_axis_example}): the two mean opposite things. Do not convert.
 - If the chart prints the numeric value next to a point, use the printed value.
-- Report x exactly as the tick label/category of that marker (e.g. 400, 1.5, "As-deposited", "ITO-RT"); if markers of one series are shifted slightly sideways to avoid overlap, still report the nominal x of the group.
+- Report x exactly as the tick label/category of that marker (e.g. {x_label_examples}); if markers of one series are shifted slightly sideways to avoid overlap, still report the nominal x of the group.
   If a marker lies between labelled ticks, interpolate its x position instead of rounding to the nearest tick, and set "x_on_tick": false.
 - Markers hidden behind other markers: include them if you can infer their position, with low confidence.
 - Include error-bar half-width if error bars are visible, else null.
