@@ -647,6 +647,22 @@ def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell():
     assert decide(spec, evidence, comparisons).status == "conflict"
 
 
+def test_a_troubled_comparison_with_no_values_still_refuses_the_cell():
+    # Nothing ties it to a condition narrowing set aside, so it is not known to be about another measurement.
+    spec = FIELD_BY_NAME["transmittance"]
+    evidence = [
+        (backend, value("transmittance", raw, "%", condition=condition, backend=backend, grounded=True))
+        for backend in ("mineru", "paddleocr_vl")
+        for raw, condition in (("90.1", "at 550 nm"), ("87.4", "average 400-1100 nm"))
+    ]
+    comparisons = [
+        FieldComparison(scope="sample:A|A", field="transmittance", status="agree", a=evidence[0][1], b=evidence[2][1]),
+        FieldComparison(scope="sample:A|A", field="transmittance", status="ambiguous"),
+    ]
+
+    assert decide(spec, evidence, comparisons).status == "ambiguous"
+
+
 def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
     def lane(backend, at_550):
         return [

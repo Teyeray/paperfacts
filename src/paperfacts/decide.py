@@ -133,7 +133,7 @@ def decide(
         # Fail closed: a comparison is ignored only when every side it has is a candidate narrowing set aside.
         # One whose values match no candidate (a stale report, say) still refuses the cell.
         aside = {_identity(c.value) for c in candidates} - {_identity(c.value) for c in narrowed[0]}
-        troubled = [c for c in troubled if not all(_identity(v) in aside for v in (c.a, c.b) if v is not None)]
+        troubled = [c for c in troubled if not _only_about(c, aside)]
     if troubled:
         status = "conflict" if any(c.status == "conflict" for c in troubled) else "ambiguous"
         return reject(status, "双路比较存在冲突或歧义，需人工复核")
@@ -197,6 +197,13 @@ def _commit(
         series=all(c.value.series for c in final),
         lanes=tuple(dict.fromkeys(c.backend for c in final)),
     )
+
+
+def _only_about(comparison: FieldComparison, aside: set[tuple[object, ...]]) -> bool:
+    """Whether a comparison is wholly about candidates narrowing set aside. One with no values at all is about
+    nothing known, so it is not."""
+    sides = [value for value in (comparison.a, comparison.b) if value is not None]
+    return bool(sides) and all(_identity(value) in aside for value in sides)
 
 
 def _identity(value: FieldValue) -> tuple[object, ...]:
