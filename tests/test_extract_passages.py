@@ -23,11 +23,11 @@ from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.keys import ExtractionOptions, extractor_key
-from paperfacts.profile import default_profile
 from paperfacts.prompts import extraction_system_prompt, field_system_prompt, inventory_system_prompt
 from support.extraction import lane_options, make_artifact
 from support.factories import make_block
 from support.llm import FakeLlmClient
+from support.profiles import shipped_profile
 
 # One block naming a sample and its deposition condition, one stating a measurement. Retrieval gives
 # `sheet_resistance` exactly one keyword candidate (the second block); the "100 sccm" in the first block
@@ -78,7 +78,7 @@ def responder(inventory: str = "", **by_field: str):
     inventory = inventory or inventory_json()
 
     def respond(system: str, user: str) -> str:
-        if system == inventory_system_prompt(default_profile()):
+        if system == inventory_system_prompt(shipped_profile()):
             return inventory
         return by_field.get(field_of(user), values_json())
 
@@ -95,7 +95,7 @@ def passage_responder(inventory: str, per_pass: list[dict[str, str]]):
     state: dict = {"pass_index": 0, "asked": set()}
 
     def respond(system: str, user: str) -> str:
-        if system == inventory_system_prompt(default_profile()):
+        if system == inventory_system_prompt(shipped_profile()):
             return inventory
         field = field_of(user)
         if field in state["asked"]:
@@ -134,7 +134,7 @@ def test_the_inventory_is_asked_once_and_then_only_about_fields_a_block_mentions
     extract(client)
 
     assert client.call_count == 5
-    assert client.systems == [inventory_system_prompt(default_profile())] + [field_system_prompt(default_profile())] * 4
+    assert client.systems == [inventory_system_prompt(shipped_profile())] + [field_system_prompt(shipped_profile())] * 4
     assert {field_of(user) for user in client.users[1:]} == ASKED_FIELDS
 
 
@@ -170,7 +170,7 @@ def test_both_lanes_get_a_byte_identical_field_question_system_prompt():
     extract(mineru, backend="mineru")
     extract(paddle, backend="paddleocr_vl")
 
-    assert mineru.systems[1] == paddle.systems[1] == field_system_prompt(default_profile())
+    assert mineru.systems[1] == paddle.systems[1] == field_system_prompt(shipped_profile())
 
 
 def test_the_field_question_carries_that_fields_own_description():
@@ -439,7 +439,7 @@ def test_three_passes_repeat_the_field_questions_but_ask_the_inventory_once():
     lane = extract(client, passes=3)
 
     assert client.call_count == 13  # 1 inventory + 4 fields x 3
-    assert sum(call.system == inventory_system_prompt(default_profile()) for call in client.calls) == 1
+    assert sum(call.system == inventory_system_prompt(shipped_profile()) for call in client.calls) == 1
     assert lane.passes == 3
 
 
@@ -498,8 +498,8 @@ def test_the_inventory_effort_reaches_the_inventory_question_and_nothing_else():
 
     extract(client, inventory_reasoning_effort="none")
 
-    inventory = [call for call in client.calls if call.system == inventory_system_prompt(default_profile())]
-    fields = [call for call in client.calls if call.system != inventory_system_prompt(default_profile())]
+    inventory = [call for call in client.calls if call.system == inventory_system_prompt(shipped_profile())]
+    fields = [call for call in client.calls if call.system != inventory_system_prompt(shipped_profile())]
     assert [call.reasoning_effort for call in inventory] == ["none"]
     assert fields and all(call.reasoning_effort is INHERIT for call in fields)
 
@@ -511,8 +511,8 @@ def test_the_inventory_question_can_omit_the_parameter_the_client_still_sends():
 
     extract(client, inventory_reasoning_effort=None)
 
-    inventory = [call for call in client.calls if call.system == inventory_system_prompt(default_profile())]
-    fields = [call for call in client.calls if call.system != inventory_system_prompt(default_profile())]
+    inventory = [call for call in client.calls if call.system == inventory_system_prompt(shipped_profile())]
+    fields = [call for call in client.calls if call.system != inventory_system_prompt(shipped_profile())]
     assert [call.reasoning_effort for call in inventory] == [None]
     assert fields and all(call.reasoning_effort is INHERIT for call in fields)
 
@@ -714,7 +714,7 @@ class SlowResponder:
         self.peak = 0
 
     def __call__(self, system: str, user: str) -> str:
-        if system == inventory_system_prompt(default_profile()):
+        if system == inventory_system_prompt(shipped_profile()):
             return inventory_json()
         with self._lock:
             self._in_flight += 1
@@ -766,7 +766,7 @@ def test_the_raw_response_keeps_the_field_order_whatever_the_concurrency():
 
 def test_a_field_question_that_fails_propagates_instead_of_being_swallowed():
     def explode(system: str, user: str) -> str:
-        if system == inventory_system_prompt(default_profile()):
+        if system == inventory_system_prompt(shipped_profile()):
             return inventory_json()
         raise RuntimeError("the endpoint refused the field question")
 
@@ -812,7 +812,7 @@ THREE_SAMPLES = [
 
 
 @pytest.mark.parametrize(
-    "system", [field_system_prompt(default_profile()), extraction_system_prompt(default_profile())]
+    "system", [field_system_prompt(shipped_profile()), extraction_system_prompt(shipped_profile())]
 )
 def test_both_modes_tell_the_model_to_copy_a_header_power_of_ten_into_the_unit(system):
     # Guillén 2006 heads a column "ρ × 10^4 (Ω cm)"; both lanes stored its 6.8 as 6.8 Ω·cm. The code applies
@@ -826,7 +826,7 @@ def test_both_modes_tell_the_model_to_copy_a_header_power_of_ten_into_the_unit(s
 
 
 def test_the_field_question_asks_for_the_series_flag_and_says_when_it_is_true():
-    system = field_system_prompt(default_profile())
+    system = field_system_prompt(shipped_profile())
 
     assert '"applies_to_all_samples"' in system
     assert "applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample" in system
@@ -987,7 +987,7 @@ def test_every_pass_field_questions_carry_the_same_sample_list():
 
     extract(client, passes=3)
 
-    field_questions = [call.user for call in client.calls if call.system != inventory_system_prompt(default_profile())]
+    field_questions = [call.user for call in client.calls if call.system != inventory_system_prompt(shipped_profile())]
     by_field: dict[str, list[str]] = {}
     for question in field_questions:
         by_field.setdefault(field_of(question), []).append(question)

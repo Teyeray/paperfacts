@@ -124,6 +124,9 @@ DEFAULT_PAGE_DPI = 110
 DEFAULT_OVERLAY_DPI = 150
 # The domain profile: a bare name is profiles/<name>.json under the repository root (paperfacts.profile).
 DEFAULT_PROFILE = "tco"
+# Sample-pairing confidence below this counts as low confidence: the fact is still compared, but the report
+# counts it separately so a reviewer can look at it. File-only (comparison.ambiguous_match_confidence).
+DEFAULT_AMBIGUOUS_MATCH_CONFIDENCE = 0.6
 
 # How the model is asked for the facts: the whole paper in one question, or one question per field over the
 # blocks retrieved for it (see :mod:`paperfacts.extract`). Passage mode is the default because on the three
@@ -321,6 +324,7 @@ class Settings:
     figures_dpi: int = DEFAULT_FIGURES_DPI
     figures_max_pixels: int = DEFAULT_FIGURES_MAX_PIXELS
     figures_timeout_s: float = DEFAULT_FIGURES_TIMEOUT_S
+    ambiguous_match_confidence: float = DEFAULT_AMBIGUOUS_MATCH_CONFIDENCE
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -424,6 +428,8 @@ class Settings:
             figures_timeout_s=_positive_seconds(
                 number("FIGURES_TIMEOUT_S", file.get("figures.timeout_s", float), float), "figures.timeout_s", file.path
             ),
+            # File-only, like the field table: a verdict threshold is not something to flip per invocation.
+            ambiguous_match_confidence=file.get("comparison.ambiguous_match_confidence", float),
         )
         _check_ranges(settings, file.path)
         return settings

@@ -13,6 +13,7 @@ import pytest
 from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.normalize import drop_implausible, normalize_field, normalize_lane
 from paperfacts.records import ExtractedRecords, FieldValue, TargetRecord
+from paperfacts.units import BUILTIN_UNITS
 from support.extraction import make_field, make_lane, make_sample
 
 # ---- normalize_field ----------------------------------------------------------------
@@ -21,7 +22,7 @@ from support.extraction import make_field, make_lane, make_sample
 def test_a_numeric_field_gets_value_and_unit_filled_in():
     field = make_field("thickness", "1.2", unit_raw="μm")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["thickness"])
+    normalized = normalize_field(field, FIELD_BY_NAME["thickness"], BUILTIN_UNITS)
 
     assert normalized.value == 1200.0
     assert normalized.unit == "nm"
@@ -33,7 +34,7 @@ def test_a_numeric_field_keeps_the_original_text_untouched():
     # change value_raw / unit_raw.
     field = make_field("sheet_resistance", "1.2 × 10⁻⁴", unit_raw="kΩ/sq")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["sheet_resistance"])
+    normalized = normalize_field(field, FIELD_BY_NAME["sheet_resistance"], BUILTIN_UNITS)
 
     assert normalized.value_raw == "1.2 × 10⁻⁴"
     assert normalized.unit_raw == "kΩ/sq"
@@ -43,7 +44,7 @@ def test_a_numeric_field_keeps_the_original_text_untouched():
 def test_the_parse_note_and_the_unit_note_are_joined():
     field = make_field("transmittance", "> 80")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["transmittance"])
+    normalized = normalize_field(field, FIELD_BY_NAME["transmittance"], BUILTIN_UNITS)
 
     assert normalized.normalization_note == "qualifier '>' dropped; no unit; read as percent"
 
@@ -51,7 +52,7 @@ def test_the_parse_note_and_the_unit_note_are_joined():
 def test_an_unparseable_number_clears_value_and_unit_and_explains_why():
     field = make_field("thickness", "n.a.", unit_raw="nm")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["thickness"])
+    normalized = normalize_field(field, FIELD_BY_NAME["thickness"], BUILTIN_UNITS)
 
     assert (normalized.value, normalized.unit) == (None, None)
     assert normalized.normalization_note == "no number found"
@@ -71,7 +72,9 @@ def test_an_unparseable_number_clears_value_and_unit_and_explains_why():
 )
 def test_a_compound_duration_is_one_value(raw, unit_raw, expected):
     # Read as its first number, "3 h 30 min" became 180 min: a common annealing-time spelling, silently wrong.
-    normalized = normalize_field(make_field("annealing_time", raw, unit_raw=unit_raw), FIELD_BY_NAME["annealing_time"])
+    normalized = normalize_field(
+        make_field("annealing_time", raw, unit_raw=unit_raw), FIELD_BY_NAME["annealing_time"], BUILTIN_UNITS
+    )
 
     assert normalized.value == pytest.approx(expected)
     assert normalized.unit == "min"
@@ -93,7 +96,9 @@ def test_a_compound_duration_is_one_value(raw, unit_raw, expected):
     ],
 )
 def test_only_a_descending_pair_of_one_quantity_is_a_compound(raw):
-    normalized = normalize_field(make_field("annealing_time", raw, unit_raw="min"), FIELD_BY_NAME["annealing_time"])
+    normalized = normalize_field(
+        make_field("annealing_time", raw, unit_raw="min"), FIELD_BY_NAME["annealing_time"], BUILTIN_UNITS
+    )
 
     assert normalized.value is None
 
@@ -111,7 +116,7 @@ def test_only_a_descending_pair_of_one_quantity_is_a_compound(raw):
 def test_a_value_restated_in_a_second_unit_is_never_added_up(field, raw, unit_raw):
     # Only a duration is written as a sum of units; anywhere else a second unit restates the same value, and
     # adding the two doubled it (0.5 Pa 3.75 mTorr read as 1.0 Pa).
-    assert normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value is None
+    assert normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field], BUILTIN_UNITS).value is None
 
 
 @pytest.mark.parametrize(
@@ -128,7 +133,7 @@ def test_a_value_restated_in_a_second_unit_is_never_added_up(field, raw, unit_ra
 )
 def test_a_condition_tail_is_set_aside_only_when_it_is_not_the_value(field, raw, unit_raw, expected):
     # "400 °C for 2 h" on annealing_time read 400 h (24000 min) once "for" opened a condition.
-    value = normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value
+    value = normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field], BUILTIN_UNITS).value
 
     assert value == (pytest.approx(expected) if expected is not None else None)
 
@@ -138,7 +143,7 @@ def test_a_text_field_is_returned_untouched():
     # than caching a canonical text copy on the record (to avoid the two rule sets drifting apart).
     field = make_field("component", "SnO₂:Ta (2 wt% Ta₂O₅)")
 
-    normalized = normalize_field(field, FIELD_BY_NAME["component"])
+    normalized = normalize_field(field, FIELD_BY_NAME["component"], BUILTIN_UNITS)
 
     assert normalized is field
     assert normalized.value is None and normalized.unit is None

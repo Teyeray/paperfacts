@@ -27,8 +27,13 @@ from paperfacts.storage import DataLayout
 from support.extraction import make_artifact, make_lane
 from support.factories import RawOutputFactory, make_block, paddle_page_entry
 from support.llm import FakeLlmClient
+from support.profiles import SHIPPED_PROFILE_PATH
 
 runner = CliRunner()
+
+
+# The empty-repository tests name the shipped profile by path, since their repo_root has none.
+SHIPPED = str(SHIPPED_PROFILE_PATH)
 
 
 def extraction_json(sample_id: str = "A", value: str = "12.5") -> str:
@@ -147,7 +152,7 @@ def test_the_passes_option_reaches_the_settings_used_for_extraction(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, client, *, force: bool = False
+        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
     ):
         captured.append(settings)
         return make_lane(backend=backend)
@@ -170,7 +175,7 @@ def test_the_passes_option_defaults_to_the_settings_default_when_omitted(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, client, *, force: bool = False
+        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
     ):
         captured.append(settings)
         return make_lane(backend=backend)
@@ -192,7 +197,7 @@ def test_the_mode_option_reaches_the_settings_used_for_extraction(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, client, *, force: bool = False
+        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
     ):
         captured.append(settings)
         return make_lane(backend=backend)
@@ -215,7 +220,7 @@ def test_the_mode_option_defaults_to_the_settings_default_when_omitted(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, client, *, force: bool = False
+        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
     ):
         captured.append(settings)
         return make_lane(backend=backend)
@@ -232,7 +237,7 @@ def test_the_mode_option_reaches_compare(monkeypatch, two_page_pdf: Path, data_r
     monkeypatch.delenv("PAPERFACTS_EXTRACTION_MODE", raising=False)
     captured: list[Settings] = []
 
-    def fake_compare_document(document: DocumentInput, settings: Settings, client, *, force: bool = False):
+    def fake_compare_document(document: DocumentInput, settings: Settings, profile, client, *, force: bool = False):
         captured.append(settings)
         # Stop here rather than build a whole report: the flag has already been observed, and an expected
         # error is the cheapest way back out of the command.
@@ -252,7 +257,7 @@ def test_the_mode_option_reaches_run(monkeypatch, two_page_pdf: Path, data_root:
     monkeypatch.delenv("PAPERFACTS_EXTRACTION_MODE", raising=False)
     captured: list[Settings] = []
 
-    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
+    def fake_run_document(document: DocumentInput, settings: Settings, profile, **kwargs):
         captured.append(settings)
         raise ParserError("mineru", "run", "stop here, the flag has already been observed")
 
@@ -272,7 +277,7 @@ def test_run_offline_turns_replay_on_and_ends_with_the_misses(
     monkeypatch.setenv("PAPERFACTS_LLM_OFFLINE_REPORT", str(report))
     monkeypatch.delenv("PAPERFACTS_LLM_OFFLINE", raising=False)
 
-    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
+    def fake_run_document(document: DocumentInput, settings: Settings, profile, **kwargs):
         captured.append(settings)
         OFFLINE_MISSES.record(OfflineMiss(key="0123456789abcdef", kind="json", user="which samples"))
         raise LlmOfflineMiss("offline: no cached answer for request 0123456789abcdef")
@@ -295,7 +300,7 @@ def test_batch_offline_prints_zero_misses_after_a_clean_replay(
     captured: list[Settings] = []
     monkeypatch.delenv("PAPERFACTS_LLM_OFFLINE_REPORT", raising=False)
 
-    def fake_run_batch(source: Path, settings: Settings, **kwargs):
+    def fake_run_batch(source: Path, settings: Settings, profile, **kwargs):
         captured.append(settings)
         return BatchResult(documents=(), failures=(), duplicate_count=0, excel_path=tmp_path / "out.xlsx")
 
@@ -315,7 +320,7 @@ def test_each_invocation_counts_only_its_own_misses(
     monkeypatch.delenv("PAPERFACTS_LLM_OFFLINE_REPORT", raising=False)
     monkeypatch.setattr(
         "paperfacts.cli.run_batch",
-        lambda source, settings, **kwargs: BatchResult((), (), 0, tmp_path / "out.xlsx"),
+        lambda source, settings, profile, **kwargs: BatchResult((), (), 0, tmp_path / "out.xlsx"),
     )
 
     result = runner.invoke(app, ["batch", str(two_page_pdf), "--data-root", str(data_root), "--offline"])
@@ -359,7 +364,7 @@ def test_an_online_run_prints_no_miss_summary(monkeypatch, two_page_pdf: Path, d
     monkeypatch.delenv("PAPERFACTS_LLM_OFFLINE", raising=False)
     monkeypatch.setattr(
         "paperfacts.cli.run_batch",
-        lambda source, settings, **kwargs: BatchResult((), (), 0, tmp_path / "out.xlsx"),
+        lambda source, settings, profile, **kwargs: BatchResult((), (), 0, tmp_path / "out.xlsx"),
     )
 
     result = runner.invoke(app, ["batch", str(two_page_pdf), "--data-root", str(data_root)])
@@ -376,7 +381,11 @@ def test_extract_without_a_key_exits_one_and_points_at_the_key_file(
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv("PAPERFACTS_REPO_ROOT", str(tmp_path / "empty-repo"))
 
-    result = runner.invoke(app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root)])
+    # The profile is named explicitly: the empty repository has none either.
+    result = runner.invoke(
+        app,
+        ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root), "--profile", SHIPPED],
+    )
 
     assert result.exit_code == 1
     assert "failed" in result.output
@@ -525,7 +534,7 @@ def test_run_without_a_key_fails_after_parsing_rather_than_silently(
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv("PAPERFACTS_REPO_ROOT", str(tmp_path / "empty-repo"))
 
-    result = runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root)])
+    result = runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), "--profile", SHIPPED])
 
     assert result.exit_code == 1
     assert "deepseek_api_key" in result.output
@@ -555,7 +564,7 @@ def test_the_figures_flag_reaches_run(monkeypatch, two_page_pdf: Path, data_root
     monkeypatch.delenv("PAPERFACTS_FIGURES_ENABLED", raising=False)
     captured: list[Settings] = []
 
-    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
+    def fake_run_document(document: DocumentInput, settings: Settings, profile, **kwargs):
         captured.append(settings)
         raise ParserError("mineru", "run", "stop here, the flag has already been observed")
 
@@ -570,7 +579,7 @@ def test_the_figures_flag_reaches_run(monkeypatch, two_page_pdf: Path, data_root
 def test_the_figures_flag_reaches_batch(monkeypatch, two_page_pdf: Path, data_root: Path, flag, expected):
     captured: list[Settings] = []
 
-    def fake_run_batch(source: Path, settings: Settings, **kwargs):
+    def fake_run_batch(source: Path, settings: Settings, profile, **kwargs):
         captured.append(settings)
         raise ParserError("mineru", "run", "stop here")
 
@@ -589,7 +598,7 @@ def test_force_and_force_figures_are_separate(
 ):
     captured: list[dict] = []
 
-    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
+    def fake_run_document(document: DocumentInput, settings: Settings, profile, **kwargs):
         captured.append(kwargs)
         raise ParserError("mineru", "run", "stop here")
 

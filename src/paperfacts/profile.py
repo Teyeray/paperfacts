@@ -187,13 +187,6 @@ def load_profile(path: Path) -> DomainProfile:
     return _load_resolved(path.resolve())
 
 
-def default_profile() -> DomainProfile:
-    """The profile the built-in settings select, for code the profile is not passed to yet. The field table
-    those callers read still comes from ``config.json``'s built-in location too, so the two agree; this goes
-    once every caller receives the profile it runs under."""
-    return load_profile(profile_path(Settings()))
-
-
 @cache
 def _load_resolved(path: Path) -> DomainProfile:
     if not path.is_file():

@@ -56,6 +56,7 @@ from paperfacts.errors import ConfigError
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
+from paperfacts.profile import DomainProfile, load_profile, profile_path
 from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
@@ -131,9 +132,11 @@ def same_origin(request: Request) -> bool:
     return urlsplit(source).netloc in hosts - {None, ""}
 
 
-def pipeline_runner(settings: Settings, library: Library) -> JobRunner:
+def pipeline_runner(settings: Settings, profile: DomainProfile, library: Library) -> JobRunner:
     """Job body: hand the document to workflow.run_document; the stage callback is just mark."""
-    return lambda job, mark: run_document(library.document(job.document_id), settings, force=job.force, on_stage=mark)
+    return lambda job, mark: run_document(
+        library.document(job.document_id), settings, profile, force=job.force, on_stage=mark
+    )
 
 
 def login_accepted(header: str | None, settings: Settings) -> bool:
@@ -160,16 +163,21 @@ def login_accepted(header: str | None, settings: Settings) -> bool:
     return user_ok and password_ok
 
 
-def create_app(settings: Settings | None = None, *, jobs: JobManager | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, profile: DomainProfile | None = None, jobs: JobManager | None = None
+) -> FastAPI:
+    """The app over one data root under one profile. Without ``profile``, the one ``settings`` selects is loaded
+    here, once: the library's keys and every job run under that same value."""
     settings = settings or Settings.from_env()
     if settings.llm_offline:
         # Replay is a proof run over a batch; a server under it would fail every upload, and its misses
         # would pile up in one process-wide record that no job reports.
         raise ConfigError("offline replay is for `run` and `batch`; unset PAPERFACTS_LLM_OFFLINE / llm.offline")
     set_max_in_flight(settings.llm_max_in_flight)
-    library = Library(settings)
+    profile = profile or load_profile(profile_path(settings))
+    library = Library(settings, profile)
     manager = jobs or JobManager(
-        pipeline_runner(settings, library), stage_names(), workers=settings.max_parallel_documents
+        pipeline_runner(settings, profile, library), stage_names(), workers=settings.max_parallel_documents
     )
 
     @asynccontextmanager
@@ -251,7 +259,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         if not datasets:
             raise HTTPException(status_code=404, detail="No consolidated dataset yet")
         return Response(
-            content=corpus_workbook(datasets, settings),
+            content=corpus_workbook(datasets, settings, library.profile),
             media_type=EXCEL_MEDIA_TYPE,
             headers={"content-disposition": 'attachment; filename="paperfacts-corpus.xlsx"'},
         )
@@ -390,7 +398,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         """
         require_document(document_id)
         identity = library.identity(document_id)
-        figures = shown_figures(document_id, identity.name if identity else document_id, settings)
+        figures = shown_figures(document_id, identity.name if identity else document_id, settings, library.profile)
         return figures or FiguresView(document_id=document_id, figure_key=library.figure_key, model="")
 
     @app.get("/api/documents/{document_id}/dataset.xlsx")

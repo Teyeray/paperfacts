@@ -10,11 +10,12 @@ from pathlib import Path
 
 from paperfacts.compare import compare_lanes
 from paperfacts.config import Settings
-from paperfacts.dataset import consolidate_document, data_columns, field_columns
+from paperfacts.dataset import consolidate_document, field_columns
 from paperfacts.keys import ComparisonOptions, comparison_key, profile_extraction_fingerprint
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.normalize import normalize_lane
+from paperfacts.workbook import data_columns
 from support.extraction import make_lane, make_sample
 from support.factories import DOC_ID
 from support.profiles import make_profile

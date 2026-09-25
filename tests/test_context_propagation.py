@@ -20,11 +20,11 @@ from paperfacts.config import Settings
 from paperfacts.extract import extract_lane
 from paperfacts.figures import read_figures
 from paperfacts.models import DocumentInput
-from paperfacts.profile import default_profile
 from paperfacts.prompts import inventory_system_prompt
 from paperfacts.threads import ContextThreadPoolExecutor
 from support.extraction import lane_options, make_artifact
 from support.llm import FakeLlmClient
+from support.profiles import shipped_profile
 from support.vision import FakeVisionClient, chart_answer
 from test_extract_passages import make_blocks, responder
 from test_figures import artifact, cap, fig
@@ -68,7 +68,7 @@ def test_the_field_questions_run_in_the_callers_context():
     answer = responder()
 
     def recording(system: str, user: str) -> str:
-        if system != inventory_system_prompt(default_profile()):
+        if system != inventory_system_prompt(shipped_profile()):
             seen.append(CALLER.get())
         return answer(system, user)
 
@@ -109,11 +109,11 @@ def test_the_lanes_and_the_figures_stage_run_in_the_callers_context(monkeypatch,
     seen: list[tuple[str, str | None]] = []
     fake_extract = workflow.extract_document  # the fake pipeline's, installed above
 
-    def recording_extract(document, backend, settings, client, *, force=False, options=None):
+    def recording_extract(document, backend, settings, profile, client, *, force=False, options=None):
         seen.append((backend, CALLER.get()))
-        return fake_extract(document, backend, settings, client, force=force, options=options)
+        return fake_extract(document, backend, settings, profile, client, force=force, options=options)
 
-    def recording_figures(document, settings, *, force, artifact, stop):
+    def recording_figures(document, settings, profile, *, force, artifact, stop):
         seen.append(("figures", CALLER.get()))
         return "done", ""
 

@@ -20,7 +20,7 @@ from paperfacts.dataset import DocumentDataset, consolidate_document, incomplete
 from paperfacts.errors import Cancelled, ConfigError, PaperFactsError
 from paperfacts.keys import ComparisonOptions, comparison_key, extractor_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput
-from paperfacts.profile import default_profile
+from paperfacts.profile import DomainProfile
 from paperfacts.readings import shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout
@@ -62,10 +62,9 @@ def discover_pdfs(source: Path) -> tuple[Path, ...]:
     return paths
 
 
-def export_document(document: DocumentInput, settings: Settings) -> DocumentDataset:
+def export_document(document: DocumentInput, settings: Settings, profile: DomainProfile) -> DocumentDataset:
     """Rebuild a workbook row from current cached extractions without starting a parser or an LLM."""
     layout = DataLayout(settings.data_root)
-    profile = default_profile()
     key = extractor_key_for(settings, profile)
     options = ComparisonOptions.from_settings(settings, profile)
     report_path = layout.comparison_path(document.document_id, key, comparison_key(options))
@@ -96,6 +95,7 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
 def run_batch(
     source: Path,
     settings: Settings,
+    profile: DomainProfile,
     *,
     output: Path | None = None,
     force: bool = False,
@@ -122,7 +122,7 @@ def run_batch(
     rows nor failures: the next run picks them up from the caches.
     """
     paths = discover_pdfs(source)
-    output = output or DataLayout(settings.data_root).batch_dataset_path()
+    output = output or DataLayout(settings.data_root).batch_dataset_path(profile.name)
     if output.suffix.lower() != ".xlsx":
         raise ConfigError("Excel output must have the .xlsx extension")
     if force and export_only:
@@ -130,7 +130,6 @@ def run_batch(
     if jobs < 1:
         raise ConfigError(f"--jobs must be at least 1, got {jobs}")
 
-    profile = default_profile()
     # Two locks, so a paper reporting progress never waits for another paper's workbook checkpoint.
     progress_lock = threading.Lock()
     results_lock = threading.Lock()
@@ -205,12 +204,13 @@ def run_batch(
         report(prefix, "running", "")
         try:
             if export_only:
-                dataset = export_document(document, settings)
-                figures = shown_figures(document.document_id, document.display_filename, settings)
+                dataset = export_document(document, settings, profile)
+                figures = shown_figures(document.document_id, document.display_filename, settings, profile)
             else:
                 result = run_document(
                     document,
                     settings,
+                    profile,
                     force=force,
                     force_figures=force_figures,
                     on_stage=report_stage(prefix),

@@ -31,6 +31,7 @@ from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
+from paperfacts.profile import DomainProfile, load_profile, profile_path
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout, write_text_atomic
 from paperfacts.workflow import (
@@ -97,6 +98,15 @@ DataRootOpt = Annotated[
     Path | None, typer.Option("--data-root", help="data directory; defaults to $PAPERFACTS_DATA_ROOT or ./data")
 ]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="print INFO logs")]
+ProfileOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--profile",
+        metavar="NAME_OR_PATH",
+        help="domain profile: a name under profiles/, or a path to a profile file; "
+        "default: profile in config.json or $PAPERFACTS_PROFILE",
+    ),
+]
 PassesOpt = Annotated[
     int | None,
     typer.Option("--passes", min=1, help="extract each lane this many times and keep the majority (costs N calls)"),
@@ -157,9 +167,12 @@ def _settings(
     figures: bool | None = None,
     offline: bool = False,
     force: bool = False,
+    profile: str | None = None,
 ) -> Settings:
     settings = Settings.from_env()
     changes: dict[str, object] = {}
+    if profile is not None:
+        changes["profile"] = profile
     if offline:
         changes["llm_offline"] = True
     if figures is not None:
@@ -180,6 +193,14 @@ def _settings(
     # And the one place it starts its miss record: a command's summary counts its own misses only.
     OFFLINE_MISSES.clear()
     return settings
+
+
+def _profile(settings: Settings) -> DomainProfile:
+    """The profile this command runs under, loaded once here and passed to everything it calls."""
+    try:
+        return load_profile(profile_path(settings))
+    except ConfigError as exc:
+        _fail("profile", exc)
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -274,17 +295,19 @@ def extract(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    profile: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Extract sample-level records from parsed Markdown with the LLM. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, force=force)
+    settings = _settings(data_root, passes, mode, force=force, profile=profile)
+    domain = _profile(settings)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
             for name in backend.backends():
-                _echo_lines(render_lane(extract_document(document, name, settings, client, force=force)))
+                _echo_lines(render_lane(extract_document(document, name, settings, domain, client, force=force)))
     except REPORTABLE_ERRORS as exc:
         _fail("extract", exc)
 
@@ -295,16 +318,18 @@ def compare(
     force: ForceOpt = False,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    profile: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Match samples across the two lanes and compare their fields. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, force=force)
+    settings = _settings(data_root, passes, mode, force=force, profile=profile)
+    domain = _profile(settings)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
-            report = compare_document(document, settings, client, force=force)
+            report = compare_document(document, settings, domain, client, force=force)
     except REPORTABLE_ERRORS as exc:
         _fail("compare", exc)
     _echo_lines(render_report(report))
@@ -319,12 +344,14 @@ def run(
     figures: FiguresOpt = None,
     force_figures: ForceFiguresOpt = False,
     offline: OfflineOpt = False,
+    profile: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Parse, extract, compare and automatically save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures)
+    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures, profile)
+    domain = _profile(settings)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -333,7 +360,7 @@ def run(
             typer.echo(f"[{stage}] {status} {detail}".rstrip())
 
     try:
-        result = run_document(document, settings, force=force, force_figures=force_figures, on_stage=on_stage)
+        result = run_document(document, settings, domain, force=force, force_figures=force_figures, on_stage=on_stage)
     except REPORTABLE_ERRORS as exc:
         _offline_summary(settings)
         _fail("run", exc)
@@ -370,10 +397,12 @@ def _batch_summary(
     def on_stage(stage: str, status: StageStatus, detail: str) -> None:
         typer.echo(f"[{stage}] {status} {detail}".rstrip())
 
+    domain = _profile(settings)
     try:
         result = run_batch(
             source,
             settings,
+            domain,
             output=output,
             force=force,
             force_figures=force_figures,
@@ -407,12 +436,13 @@ def batch(
     force_figures: ForceFiguresOpt = False,
     jobs: JobsOpt = None,
     offline: OfflineOpt = False,
+    profile: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures)
+    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures, profile)
     _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures, jobs=jobs)
 
 
@@ -422,13 +452,15 @@ def export(
     output: OutputOpt = None,
     passes: PassesOpt = None,
     mode: ModeOpt = None,
+    profile: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Re-export current cached results to Excel, without parser or LLM calls."""
     _configure_logging(verbose)
+    settings = _settings(data_root, passes, mode, profile=profile)
     # One paper at a time: an export only reads the caches, so parallel papers would buy nothing.
-    _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True, jobs=1)
+    _batch_summary(source, settings, output, force=False, export_only=True, jobs=1)
 
 
 @app.command()
@@ -448,6 +480,7 @@ def fields() -> None:
 def serve(
     host: Annotated[str | None, typer.Option(help="bind address; defaults to server.host")] = None,
     port: Annotated[int | None, typer.Option(help="port to listen on; defaults to server.port")] = None,
+    profile: ProfileOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -457,12 +490,16 @@ def serve(
     from paperfacts.web.app import create_app
 
     _configure_logging(verbose)
-    settings = _settings(data_root)
+    settings = _settings(data_root, profile=profile)
+    domain = _profile(settings)
     host = host or settings.server_host
     port = port or settings.server_port
-    typer.echo(f"PaperFacts UI -> http://{host}:{port}   (data_root={settings.data_root}, model={settings.llm_model})")
+    typer.echo(
+        f"PaperFacts UI -> http://{host}:{port}   "
+        f"(data_root={settings.data_root}, model={settings.llm_model}, profile={domain.name})"
+    )
     try:
-        web_app = create_app(settings)
+        web_app = create_app(settings, profile=domain)
     except ConfigError as exc:
         _fail("serve", exc)
     uvicorn.run(web_app, host=host, port=port, log_level="info" if verbose else "warning")

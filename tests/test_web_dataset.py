@@ -7,6 +7,7 @@ is left out -- not how a dataset is built (``test_dataset.py``).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,15 +16,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from paperfacts.config import Settings
+from paperfacts.dataset import field_columns
 from paperfacts.figures import FigureReading, FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import NormalizedBBox
+from paperfacts.profile import DomainProfile
 from paperfacts.web.app import create_app
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import JobManager
 from paperfacts.workflow import stage_names
 from support.factories import make_blank_pdf
-from support.profiles import shipped_profile
+from support.profiles import SHIPPED_PROFILE_PATH, shipped_profile
 from support.web import (
     DOC_KEY,
     DOC_SHA,
@@ -41,12 +44,18 @@ UNKNOWN_ID = "0123456789abcdef"
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", llm_model="fake-model")
+    return Settings(
+        data_root=tmp_path / "data",
+        repo_root=tmp_path,
+        profile=str(SHIPPED_PROFILE_PATH),
+        llm_api_key="sk-test",
+        llm_model="fake-model",
+    )
 
 
 @pytest.fixture
-def library(settings: Settings) -> Library:
-    return Library(settings)
+def library(settings: Settings, tco_profile: DomainProfile) -> Library:
+    return Library(settings, tco_profile)
 
 
 @pytest.fixture
@@ -104,7 +113,9 @@ def test_the_dataset_of_an_unknown_document_is_not_found(client: TestClient):
     assert client.get(f"/api/documents/{UNKNOWN_ID}/dataset").status_code == 404
 
 
-def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library: Library, parsed_only: str):
+def test_the_dataset_is_returned_once_it_is_on_disk(
+    client: TestClient, library: Library, parsed_only: str, tco_profile: DomainProfile
+):
     payload = {"document_id": parsed_only, "sample_rows": [{"sample_id": "A", "thickness": 300}]}
     seed_dataset(library, parsed_only, payload)
 
@@ -115,7 +126,27 @@ def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library:
     assert body["sample_rows"] == payload["sample_rows"]
     assert body["paper_row"] == {}
     assert body["quality_rows"] == []
-    assert body["fields"] == []
+    # The columns come from the profile, whatever the file stored with the table.
+    assert body["fields"] == [column.model_dump() for column in field_columns(tco_profile)]
+
+
+def test_a_label_edit_shows_without_a_rerun(settings: Settings, library: Library, parsed_only: str):
+    # A label is display text: it re-keys nothing, so the stored table is still the current one and must be
+    # shown under the edited header rather than the one it was written with.
+    seed_dataset(library, parsed_only, {"document_id": parsed_only, "fields": [{"name": "x", "scope": "sample"}]})
+    profile = library.profile
+    first = profile.fields[0]
+    edited = dataclasses.replace(
+        profile, fields=(dataclasses.replace(first, label=first.label + "（新）"), *profile.fields[1:])
+    )
+    relabelled = Library(settings, edited)
+
+    dataset = relabelled.dataset(parsed_only)
+
+    assert (relabelled.extractor_key, relabelled.comparison_key) == (library.extractor_key, library.comparison_key)
+    assert dataset is not None
+    assert dataset.fields == field_columns(edited)
+    assert dataset.fields[0].label == first.label + "（新）"
 
 
 def seed_figures(library: Library, settings: Settings) -> None:
@@ -182,7 +213,7 @@ def test_the_excel_export_is_not_found_before_it_is_written(client: TestClient, 
 
 
 def test_the_excel_export_is_served_as_a_download(client: TestClient, library: Library, parsed_only: str):
-    path = library.layout.dataset_path(parsed_only)
+    path = library.layout.dataset_path(parsed_only, library.profile.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"PK\x03\x04 workbook")
 
@@ -205,7 +236,7 @@ def test_the_corpus_is_empty_until_a_document_has_a_dataset(client: TestClient, 
 
 
 def test_the_corpus_carries_one_row_per_document_with_a_dataset(
-    client: TestClient, library: Library, parsed_only: str, uploaded: str
+    client: TestClient, library: Library, parsed_only: str, uploaded: str, tco_profile: DomainProfile
 ):
     # `uploaded` is a second document, deliberately left without a dataset: it must simply be absent.
     seed_dataset(library, parsed_only, corpus_payload(parsed_only))
@@ -213,9 +244,8 @@ def test_the_corpus_carries_one_row_per_document_with_a_dataset(
     body = client.get("/api/dataset").json()
 
     assert [row["document_id"] for row in body["rows"]] == [parsed_only]
-    assert body["fields"] == [
-        {"name": "thickness", "label": "厚度", "unit": "nm", "scope": "sample", "description": "膜厚"}
-    ]
+    # The profile's columns, not the one column the stored payload carried.
+    assert body["fields"] == [column.model_dump() for column in field_columns(tco_profile)]
     row = body["rows"][0]
     assert row["paper_row"]["thickness"] == 300
     assert row["sample_count"] == 2

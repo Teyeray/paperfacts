@@ -413,7 +413,7 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
     # The comparison's reading (normalize_field): the same step sets aside what surrounds the value, so the cell
     # and the report agree on "3 h 30 min at 400 °C".
     bare, _, condition = set_aside(text)
-    compound = compound_value(spec, bare)
+    compound = compound_value(spec, bare, units)
     if compound is not None:
         if condition:
             notes.append(f"条件 {condition!r} 不计入数值")

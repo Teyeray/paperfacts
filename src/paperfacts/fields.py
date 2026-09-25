@@ -85,7 +85,7 @@ class FieldSpec:
     keywords: tuple[str, ...] = field(metadata=_roles(FieldRole.RETRIEVAL, FieldRole.FIGURE))
     canonical_unit: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.FIGURE))
     # A short Chinese name for the column header. Display only: it reaches no prompt and no verdict, so it
-    # stays out of the cache keys (see keys._SCHEMA_EXCLUDED). Empty means the UI falls back to ``name``.
+    # stays out of the cache keys (FieldRole.DISPLAY). Empty means the UI falls back to ``name``.
     label: str = field(default="", metadata=_roles(FieldRole.DISPLAY))
     # The Chinese explanation of the field, for the web header tooltip and the Excel field sheet. Display
     # only, like ``label``: no prompt and no verdict reads it, so it stays out of the cache keys.

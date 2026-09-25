@@ -11,7 +11,8 @@ from __future__ import annotations
 import pytest
 
 from paperfacts.fields import FIELD_BY_NAME, FieldSpec
-from paperfacts.normalize import CONVERTERS, clean_unit, convert_to_canonical, parse_number, split_scale_factor
+from paperfacts.normalize import clean_unit, convert_to_canonical, parse_number, split_scale_factor
+from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS
 
 
 def convert(field: str, value: float, unit_raw: str | None):

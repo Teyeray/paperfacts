@@ -18,9 +18,25 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
-from paperfacts.dataset import DocumentDataset, Row, data_columns, field_columns
+from paperfacts.dataset import DocumentDataset, Row, field_columns
 from paperfacts.profile import DomainProfile
 from paperfacts.storage import write_atomic
+
+
+def data_columns(profile: DomainProfile) -> tuple[tuple[str, str], ...]:
+    """``(key, header)`` of a paper or sample row, in order: who the row is, then one column per field.
+    Here rather than in :mod:`paperfacts.dataset`: a header is display text, and that module is hashed."""
+    return (
+        ("document_id", "文档ID"),
+        ("filename", "文件名"),
+        ("sample_id", "样品ID"),
+        ("sample_label", "样品标签"),
+        ("conditions", "样品及测量条件"),
+        ("available_fields", "可用字段数"),
+        ("agree_fields", "双路一致字段数"),
+        *((spec.name, spec.name) for spec in profile.fields),
+    )
+
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _QUALITY_COLUMNS = (

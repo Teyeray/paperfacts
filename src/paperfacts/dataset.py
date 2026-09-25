@@ -85,20 +85,6 @@ def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
     )
 
 
-def data_columns(profile: DomainProfile) -> tuple[tuple[str, str], ...]:
-    """``(key, header)`` of a paper or sample row, in order: who the row is, then one column per field."""
-    return (
-        ("document_id", "文档ID"),
-        ("filename", "文件名"),
-        ("sample_id", "样品ID"),
-        ("sample_label", "样品标签"),
-        ("conditions", "样品及测量条件"),
-        ("available_fields", "可用字段数"),
-        ("agree_fields", "双路一致字段数"),
-        *((spec.name, spec.name) for spec in profile.fields),
-    )
-
-
 @dataclass(frozen=True)
 class DocumentDataset:
     document_id: str

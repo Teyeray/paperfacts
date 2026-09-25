@@ -107,16 +107,18 @@ class DataLayout:
     def llm_cache_dir(self) -> Path:
         return self.root / "llm_cache"
 
-    def dataset_path(self, document_id: str) -> Path:
-        return self.doc_dir(document_id) / "dataset.xlsx"
+    def dataset_path(self, document_id: str, profile_name: str) -> Path:
+        # Named after the profile, so one document run under two profiles keeps both workbooks. A workbook is
+        # not key-stamped: it is whatever the profile's last run wrote.
+        return self.doc_dir(document_id) / "exports" / f"{profile_name}.xlsx"
 
     def dataset_json_path(self, document_id: str, extractor_key: str, comparison_key: str) -> Path:
         # Keyed like comparison_path: a dataset built with another model or field table is a different
         # file, so the browser can never be served a consolidated table the current settings disown.
         return self.doc_dir(document_id) / "datasets" / f"{extractor_key}.{comparison_key}.json"
 
-    def batch_dataset_path(self) -> Path:
-        return self.root / "exports" / "paperfacts.xlsx"
+    def batch_dataset_path(self, profile_name: str) -> Path:
+        return self.root / "exports" / f"{profile_name}.xlsx"
 
 
 # ---- Atomic writes -----------------------------------------------------------------------------------

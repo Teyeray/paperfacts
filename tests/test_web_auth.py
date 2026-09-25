@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from paperfacts.config import Settings
 from paperfacts.web.app import create_app, login_accepted
+from support.profiles import SHIPPED_PROFILE_PATH
 
 USERNAME = "paperfacts"
 PASSWORD = "s3cret-pw"
@@ -26,6 +27,7 @@ def settings_for(tmp_path: Path, *, password: str | None = PASSWORD) -> Settings
     return Settings(
         data_root=tmp_path / "data",
         repo_root=tmp_path,
+        profile=str(SHIPPED_PROFILE_PATH),
         llm_api_key="sk-test",
         llm_model="fake-model",
         web_username=USERNAME,

@@ -21,11 +21,12 @@ from paperfacts.errors import Cancelled, ConfigError, LlmError, LlmOfflineMiss
 from paperfacts.figures import FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
+from paperfacts.profile import DomainProfile
 from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import run_document
 from support.factories import make_block
-from support.profiles import shipped_profile
+from support.profiles import SHIPPED_PROFILE_PATH, shipped_profile
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
 from test_workflow_run import install_fake_pipeline
 
@@ -34,7 +35,13 @@ BOX = NormalizedBBox(x1=0.1, y1=0.1, x2=0.6, y2=0.5)
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", figures_enabled=True)
+    return Settings(
+        data_root=tmp_path / "data",
+        repo_root=tmp_path,
+        profile=str(SHIPPED_PROFILE_PATH),
+        llm_api_key="sk-test",
+        figures_enabled=True,
+    )
 
 
 def store_artifact(document: DocumentInput, settings: Settings, backend: Backend = "mineru") -> None:
@@ -71,68 +78,80 @@ def figures_file(document: DocumentInput, settings: Settings) -> Path:
 # ---- read_document_figures ---------------------------------------------------------------------------
 
 
-def test_the_charts_are_cropped_from_the_pdf_read_and_stored(document: DocumentInput, settings: Settings):
+def test_the_charts_are_cropped_from_the_pdf_read_and_stored(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
     client = FakeVisionClient(chart_answer())
 
-    readings = read_document_figures(document, settings, client)
+    readings = read_document_figures(document, settings, tco_profile, client)
 
     assert [call.image_png[:8] for call in client.calls] == [b"\x89PNG\r\n\x1a\n"]
     assert {r.source_id for r in readings.readings} == {"mineru_p0_b0"}
     assert FigureReadings.read(figures_file(document, settings)) == readings
 
 
-def test_stored_readings_are_served_without_asking_again(document: DocumentInput, settings: Settings):
+def test_stored_readings_are_served_without_asking_again(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
-    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     again = FakeVisionClient(chart_answer())
 
-    read_document_figures(document, settings, again)
+    read_document_figures(document, settings, tco_profile, again)
 
     assert again.calls == []
 
 
-def test_a_stored_file_with_a_failed_request_is_read_again(document: DocumentInput, settings: Settings):
+def test_a_stored_file_with_a_failed_request_is_read_again(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
-    first = read_document_figures(document, settings, FakeVisionClient(LlmError("HTTP 504")))
+    first = read_document_figures(document, settings, tco_profile, FakeVisionClient(LlmError("HTTP 504")))
     retry = FakeVisionClient(chart_answer())
 
-    second = read_document_figures(document, settings, retry)
+    second = read_document_figures(document, settings, tco_profile, retry)
 
     assert not first.complete
     assert len(retry.calls) == 1 and second.complete and second.readings
 
 
-def test_force_re_asks_the_model(document: DocumentInput, settings: Settings):
+def test_force_re_asks_the_model(document: DocumentInput, settings: Settings, tco_profile: DomainProfile):
     store_artifact(document, settings)
-    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     forced = FakeVisionClient(chart_answer())
 
-    read_document_figures(document, settings, forced, force=True)
+    read_document_figures(document, settings, tco_profile, forced, force=True)
 
     assert [call.refresh for call in forced.calls] == [True]
 
 
-def test_paddle_figure_blocks_stand_in_when_there_is_no_mineru_artifact(document: DocumentInput, settings: Settings):
+def test_paddle_figure_blocks_stand_in_when_there_is_no_mineru_artifact(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings, backend="paddleocr_vl")
 
-    readings = read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    readings = read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
 
     assert readings.backend == "paddleocr_vl"
     assert {r.source_id for r in readings.readings} == {"paddleocr_vl_p0_b0"}
 
 
-def test_without_the_pdf_nothing_can_be_cropped(document: DocumentInput, settings: Settings, tmp_path: Path):
+def test_without_the_pdf_nothing_can_be_cropped(
+    document: DocumentInput, settings: Settings, tmp_path: Path, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
     moved = document.model_copy(update={"pdf_path": tmp_path / "gone.pdf"})
 
     with pytest.raises(FileNotFoundError, match="PDF not available"):
-        read_document_figures(moved, settings, FakeVisionClient(chart_answer()))
+        read_document_figures(moved, settings, tco_profile, FakeVisionClient(chart_answer()))
 
 
-def test_without_a_parse_nothing_can_be_selected(document: DocumentInput, settings: Settings):
+def test_without_a_parse_nothing_can_be_selected(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     with pytest.raises(FileNotFoundError, match="no parse artifact"):
-        read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+        read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
 
 
 # ---- The stage inside run_document ----------------------------------------------------------------------
@@ -243,7 +262,7 @@ def test_an_offline_miss_fails_the_paper_and_stores_neither_readings_nor_a_datas
 
     layout = DataLayout(settings.data_root)
     assert not figures_file(document, settings).exists()
-    assert not layout.dataset_path(document.document_id).exists()
+    assert not layout.dataset_path(document.document_id, "tco").exists()
     assert ("export", "running", "") not in marks
     assert ("figures", "failed") not in [m[:2] for m in marks]  # not an outcome of the stage
 
@@ -258,10 +277,10 @@ def test_a_refused_chart_is_a_done_stage_with_nothing_read(monkeypatch, document
 
 
 def test_switched_off_the_stage_asks_nothing_but_stored_readings_are_still_shown(
-    monkeypatch, document: DocumentInput, settings: Settings
+    monkeypatch, document: DocumentInput, settings: Settings, tco_profile: DomainProfile
 ):
     store_artifact(document, settings)
-    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     off = dataclasses.replace(settings, figures_enabled=False)
     client = FakeVisionClient(chart_answer())
 
@@ -273,10 +292,10 @@ def test_switched_off_the_stage_asks_nothing_but_stored_readings_are_still_shown
 
 
 def test_force_does_not_reread_the_charts_but_force_figures_does(
-    monkeypatch, document: DocumentInput, settings: Settings
+    monkeypatch, document: DocumentInput, settings: Settings, tco_profile: DomainProfile
 ):
     store_artifact(document, settings)
-    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     plain = FakeVisionClient(chart_answer())
     forced = FakeVisionClient(chart_answer())
 
@@ -290,77 +309,87 @@ def test_force_does_not_reread_the_charts_but_force_figures_does(
 # ---- What is shown: stale and orphaned readings -----------------------------------------------------------
 
 
-def test_readings_under_an_older_key_are_shown_marked_stale(monkeypatch, document: DocumentInput, settings: Settings):
+def test_readings_under_an_older_key_are_shown_marked_stale(
+    monkeypatch, document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
-    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     moved = dataclasses.replace(settings, figures_enabled=False, figures_dpi=150)
 
     figures, result, _ = run(monkeypatch, document, moved, FakeVisionClient(chart_answer()))
 
-    view = shown_figures(document.document_id, "paper.pdf", moved)
+    view = shown_figures(document.document_id, "paper.pdf", moved, tco_profile)
     assert view is not None and view.stale
     assert all("旧版本读数" in (row["detail"] or "") for row in view.rows)
     assert figures == [("figures", "skipped", "figures.enabled is false; 2 stored readings kept; stale (older key)")]
     assert result.figures is not None and result.figures.stale
 
 
-def test_readings_citing_blocks_the_parse_no_longer_has_are_noted(document: DocumentInput, settings: Settings):
+def test_readings_citing_blocks_the_parse_no_longer_has_are_noted(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
-    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     ParsedArtifact.read(DataLayout(settings.data_root).artifact_path(document.document_id, "mineru")).model_copy(
         update={"blocks": ()}
     ).write(DataLayout(settings.data_root).artifact_path(document.document_id, "mineru"))
 
-    view = shown_figures(document.document_id, "paper.pdf", settings)
+    view = shown_figures(document.document_id, "paper.pdf", settings, tco_profile)
 
     assert view is not None and view.orphaned == ("mineru_p0_b0",)
     assert "1 cite figure blocks missing from the current parse" in view.warning()
     assert all("当前解析里已没有这个图块" in (row["detail"] or "") for row in view.rows)
 
 
-def test_nothing_stored_means_nothing_shown(document: DocumentInput, settings: Settings):
-    assert shown_figures(document.document_id, "paper.pdf", settings) is None
+def test_nothing_stored_means_nothing_shown(document: DocumentInput, settings: Settings, tco_profile: DomainProfile):
+    assert shown_figures(document.document_id, "paper.pdf", settings, tco_profile) is None
 
 
-def test_a_corrupt_stored_file_is_read_again(document: DocumentInput, settings: Settings):
+def test_a_corrupt_stored_file_is_read_again(document: DocumentInput, settings: Settings, tco_profile: DomainProfile):
     store_artifact(document, settings)
     path = figures_file(document, settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{ torn", encoding="utf-8")
     client = FakeVisionClient(chart_answer())
 
-    readings = read_document_figures(document, settings, client)
+    readings = read_document_figures(document, settings, tco_profile, client)
 
     assert len(client.calls) == 1 and readings.readings
 
 
-def test_readings_of_another_parse_are_read_again(document: DocumentInput, settings: Settings):
+def test_readings_of_another_parse_are_read_again(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     # Read from PaddleOCR-VL's boxes first; once a MinerU parse exists, those citations belong to no block
     # of the artifact the readings would be shown with.
     store_artifact(document, settings, backend="paddleocr_vl")
-    read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     store_artifact(document, settings, backend="mineru")
     client = FakeVisionClient(chart_answer())
 
-    readings = read_document_figures(document, settings, client)
+    readings = read_document_figures(document, settings, tco_profile, client)
 
     assert len(client.calls) == 1
     assert readings.backend == "mineru" and {r.source_id for r in readings.readings} == {"mineru_p0_b0"}
 
 
-def test_an_unreadable_panel_is_asked_again_next_run_past_the_cache(document: DocumentInput, settings: Settings):
+def test_an_unreadable_panel_is_asked_again_next_run_past_the_cache(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
-    first = read_document_figures(document, settings, FakeVisionClient("no idea"))
+    first = read_document_figures(document, settings, tco_profile, FakeVisionClient("no idea"))
     retry = FakeVisionClient(chart_answer())
 
-    second = read_document_figures(document, settings, retry)
+    second = read_document_figures(document, settings, tco_profile, retry)
 
     assert first.panels[0].status == "unreadable"
     assert [call.refresh for call in retry.calls] == [True]
     assert second.complete and second.readings
 
 
-def test_a_page_is_rendered_once_for_all_its_panels(monkeypatch, document: DocumentInput, settings: Settings):
+def test_a_page_is_rendered_once_for_all_its_panels(
+    monkeypatch, document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     blocks = [
         make_block(page=0, order=i, type="figure", content="x.jpg", bbox=BOX, document_id=document.document_id)
         for i in range(3)
@@ -383,7 +412,7 @@ def test_a_page_is_rendered_once_for_all_its_panels(monkeypatch, document: Docum
 
     monkeypatch.setattr("paperfacts.readings.render_page", counting)
 
-    readings = read_document_figures(document, settings, FakeVisionClient(chart_answer()))
+    readings = read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
 
     assert len(readings.panels) == 3 and renders == [0]
 
@@ -400,13 +429,13 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
     figures_started = threading.Event()
     finished: list[str] = []
 
-    def stoppable_figures(document, settings, *, force, artifact, stop):
+    def stoppable_figures(document, settings, profile, *, force, artifact, stop):
         figures_started.set()
         assert stop.wait(timeout=5.0), "the failed paper never told the figures stage to stop"
         finished.append("figures stopped")
         return "skipped", "stopped: the rest of the paper failed"
 
-    def failing_extraction(document, settings, *, force, on_stage):
+    def failing_extraction(document, settings, profile, comparison, *, force, on_stage):
         assert figures_started.wait(timeout=5.0)
         raise LlmError("the endpoint is down")
 
@@ -424,7 +453,9 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
     assert not [t for t in threading.enumerate() if t.name.startswith("paperfacts-figures")]
 
 
-def test_a_stopped_figures_stage_asks_no_further_panel_and_stores_nothing(document: DocumentInput, settings: Settings):
+def test_a_stopped_figures_stage_asks_no_further_panel_and_stores_nothing(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
     store_artifact(document, settings)
     stop = threading.Event()
 
@@ -443,7 +474,12 @@ def test_a_stopped_figures_stage_asks_no_further_panel_and_stores_nothing(docume
 
     with pytest.raises(Cancelled):
         read_document_figures(
-            document, dataclasses.replace(settings, llm_concurrency=1), client, artifact=artifact, stop=stop
+            document,
+            dataclasses.replace(settings, llm_concurrency=1),
+            tco_profile,
+            client,
+            artifact=artifact,
+            stop=stop,
         )
 
     assert len(client.calls) == 1

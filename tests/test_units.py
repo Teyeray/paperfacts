@@ -258,7 +258,7 @@ def test_normalize_field_converts_with_the_registry_it_is_given():
     field = make_field("annealing_temperature", "573", unit_raw="K")
 
     assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], registry).value == pytest.approx(299.85)
-    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"]).value is None
+    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], BUILTIN_UNITS).value is None
 
 
 @pytest.mark.parametrize(("spelling", "factor"), list(BATTERY_CAPACITY["aliases"].items()))

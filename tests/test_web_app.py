@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.models import BACKENDS, Backend, ParsedArtifact
+from paperfacts.profile import DomainProfile
 from paperfacts.records import LaneExtraction
 from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
@@ -33,6 +34,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_sample
 from support.factories import make_blank_pdf
+from support.profiles import SHIPPED_PROFILE_PATH
 from support.web import (
     DOC_KEY,
     RecordingRunner,
@@ -54,12 +56,18 @@ MALFORMED_ID = "not-a-document"
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", llm_model="fake-model")
+    return Settings(
+        data_root=tmp_path / "data",
+        repo_root=tmp_path,
+        profile=str(SHIPPED_PROFILE_PATH),
+        llm_api_key="sk-test",
+        llm_model="fake-model",
+    )
 
 
 @pytest.fixture
-def library(settings: Settings) -> Library:
-    return Library(settings)
+def library(settings: Settings, tco_profile: DomainProfile) -> Library:
+    return Library(settings, tco_profile)
 
 
 @pytest.fixture
@@ -641,8 +649,8 @@ def test_the_pipeline_runner_hands_the_job_to_run_document(
     the job's force flag, and the mark callback straight through to workflow, unchanged."""
     received: dict = {}
 
-    def fake_run_document(document, settings_seen, *, force, on_stage):
-        received.update(document=document, settings=settings_seen, force=force, on_stage=on_stage)
+    def fake_run_document(document, settings_seen, profile, *, force, on_stage):
+        received.update(document=document, settings=settings_seen, profile=profile, force=force, on_stage=on_stage)
 
     monkeypatch.setattr("paperfacts.web.app.run_document", fake_run_document)
     job = Job(job_id="job-1", document_id=registered, force=True, created_at="2026-01-01T00:00:00+00:00")
@@ -650,11 +658,12 @@ def test_the_pipeline_runner_hands_the_job_to_run_document(
     def mark(stage: str, status: str, detail: str = "") -> None:
         pass
 
-    pipeline_runner(settings, library)(job, mark)
+    pipeline_runner(settings, library.profile, library)(job, mark)
 
     assert received == {
         "document": library.document(registered),
         "settings": settings,
+        "profile": library.profile,
         "force": True,
         "on_stage": mark,
     }
@@ -667,5 +676,5 @@ def test_the_pipeline_fails_loudly_when_the_pdf_is_gone(monkeypatch, settings: S
     job = Job(job_id="job-1", document_id=DOC_KEY, force=False, created_at="2026-01-01T00:00:00+00:00")
 
     with pytest.raises(FileNotFoundError):
-        pipeline_runner(settings, library)(job, lambda stage, status, detail="": None)
+        pipeline_runner(settings, library.profile, library)(job, lambda stage, status, detail="": None)
     assert calls == []

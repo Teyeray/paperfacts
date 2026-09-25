@@ -40,7 +40,7 @@ from paperfacts.config import (
     ReasoningEffort,
     Settings,
 )
-from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FieldRole, FieldSpec
+from paperfacts.fields import FieldRole, FieldSpec
 from paperfacts.profile import DomainProfile
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -53,6 +53,8 @@ from paperfacts.prompts import (
 FINGERPRINT_LENGTH = 12
 _PACKAGE_DIR = Path(__file__).parent
 _NO_DEFAULT = object()
+# Built once: the material of every field of every key compares against it.
+_FIELD_DEFAULTS = {item.name: item.default for item in dataclasses.fields(FieldSpec)}
 
 
 def content_fingerprint(material: str) -> str:
@@ -79,11 +81,10 @@ def attributes_with(*roles: FieldRole) -> tuple[str, ...]:
 def _field_material(spec: FieldSpec, *roles: FieldRole) -> dict[str, object]:
     """The attributes of ``spec`` with any of ``roles``, each left out while at its dataclass default: a field
     that does not use an attribute keeps the fingerprint it had before the attribute existed."""
-    defaults = {item.name: item.default for item in dataclasses.fields(FieldSpec)}
     return {
         name: getattr(spec, name)
         for name in attributes_with(*roles)
-        if getattr(spec, name) != defaults.get(name, _NO_DEFAULT)
+        if getattr(spec, name) != _FIELD_DEFAULTS.get(name, _NO_DEFAULT)
     }
 
 
@@ -286,9 +287,7 @@ class ComparisonOptions:
 
     @classmethod
     def from_settings(cls, settings: Settings, profile: DomainProfile) -> ComparisonOptions:
-        # The threshold is file-only (config.json, no PAPERFACTS_* override), so ``settings`` holds no copy of
-        # it yet; it is taken so that comparison options are built the way extraction options are.
-        return cls(profile=profile, ambiguous_match_confidence=AMBIGUOUS_MATCH_CONFIDENCE)
+        return cls(profile=profile, ambiguous_match_confidence=settings.ambiguous_match_confidence)
 
 
 def comparison_key(options: ComparisonOptions) -> str:

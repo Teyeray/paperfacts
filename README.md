@@ -276,7 +276,7 @@ uv run paperfacts fields                   # list the field table the package ac
 
 | Command | Purpose |
 |---|---|
-| `run <pdf>` | Parse, extract, compare and save `dataset.xlsx` for one paper |
+| `run <pdf>` | Parse, extract, compare and save `exports/<profile>.xlsx` for one paper |
 | `batch <pdf or dir>` | Recursively process every PDF and write one workbook for all of them |
 | `export <pdf or dir>` | Rebuild that workbook from cached results, with no parser and no LLM calls |
 | `parse <pdf>` | Parse into Markdown with provenance markers, a block list and the full artifact |
@@ -297,6 +297,8 @@ The flags worth knowing:
   over `figures.enabled`; `--force-figures` re-reads the charts without redoing anything else.
 - `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
+- `--profile NAME_OR_PATH` on `run`, `batch`, `export`, `extract`, `compare` and `serve` runs the command
+  under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`).
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
   `--jobs 1` is the old one-after-another run.
 - `--offline` on `run` and `batch` answers every model request from the LLM cache and fails on a miss; see
@@ -465,7 +467,7 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
 | `condition_keywords` | The words that mark a measurement condition worth recording |
 | `data_root` | Where everything is written. Default `data` |
-| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields and domain wording; for now the run still reads `config.json`'s own `fields` and `condition_keywords` ([The field table](#the-field-table)), which `profiles/tco.json` mirrors. Default `tco` |
+| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). `config.json`'s own `fields` and `condition_keywords` ([The field table](#the-field-table)), which `profiles/tco.json` mirrors, are still what `paperfacts fields` prints. Default `tco` |
 
 ### Environment overrides
 
@@ -712,7 +714,7 @@ costs one repair request and is never written as the answer (it is kept apart on
 [offline replay](#offline-replay)), and an invalid answer already in the cache is asked again rather than
 replayed. A sample matching that failed (the model answered badly twice) is shown for that run
 but not stored, so the next run asks again instead of serving the failure until `--force`. Neither is that
-run's consolidated table (`datasets/…json`, only `dataset.xlsx` is written): the stored table is what marks
+run's consolidated table (`datasets/…json`, only `exports/<profile>.xlsx` is written): the stored table is what marks
 a paper finished, so 「处理全部未完成」 and `deploy.sh --rerun` pick the paper up again.
 
 The same holds for one field question in passage mode that gets no valid answer (invalid twice, or cut off):
@@ -736,7 +738,7 @@ the filenames it has. There is no hand-maintained version number anywhere, and t
 ```text
 data/
 ├── llm_cache/                          model answers, keyed by request payload
-├── exports/paperfacts.xlsx             the default batch workbook
+├── exports/<profile>.xlsx              the default batch workbook
 └── docs/<first 16 hex of sha256>/
     ├── identity.json                   full sha256, display name, origin
     ├── source.pdf                      the uploaded PDF (web uploads only)
@@ -748,7 +750,7 @@ data/
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated table the web UI reads
     ├── figures/<figure_key>.json       values read off charts by the opt-in figures stage
-    ├── dataset.xlsx                    this paper's workbook, written automatically by `run`
+    ├── exports/<profile>.xlsx          this paper's workbook, written automatically by `run`
     ├── overlays/<backend>/page_*.png   bbox overlays from `overlay`
     └── pages/<dpi>dpi/                 page renders for the web viewer
 ```
@@ -759,7 +761,9 @@ different settings lands beside the old one instead of overwriting it.
 
 ## The Excel workbook
 
-`run` writes `data/docs/<sha>/dataset.xlsx` for one paper; `batch` and `export` write one workbook for a
+`run` writes `data/docs/<sha>/exports/<profile>.xlsx` for one paper (`<profile>` is the domain profile's
+name, `tco` by default; workbooks from before profiles, `dataset.xlsx` and `exports/paperfacts.xlsx`, are left
+where they are); `batch` and `export` write one workbook for a
 whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」. Six
 sheets:
 

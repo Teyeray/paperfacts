@@ -26,12 +26,13 @@ from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key_for
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import normalize_field
 from paperfacts.records import FieldValue, TargetRecord
+from paperfacts.units import BUILTIN_UNITS
 from support.extraction import comparison_options, make_field, make_lane, make_sample
 
 
 def normalized(field: FieldValue) -> FieldValue:
     """The comparison layer always receives normalized values; unit tests for compare_values add this step by hand."""
-    return normalize_field(field, FIELD_BY_NAME[field.field])
+    return normalize_field(field, FIELD_BY_NAME[field.field], BUILTIN_UNITS)
 
 
 def exact_match(a_id: str = "A", b_id: str = "A") -> SampleMatching:

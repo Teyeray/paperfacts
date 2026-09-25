@@ -17,11 +17,13 @@ from fastapi.testclient import TestClient
 
 from paperfacts.config import Settings
 from paperfacts.models import BACKENDS
+from paperfacts.profile import DomainProfile
 from paperfacts.web.app import create_app
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import JobManager
 from paperfacts.workflow import stage_names
 from support.factories import make_blank_pdf
+from support.profiles import SHIPPED_PROFILE_PATH
 from support.web import DOC_KEY, RecordingRunner, seed_artifact, seed_report, wait_for_status
 
 FRAME_HEADERS = {
@@ -33,12 +35,18 @@ FRAME_HEADERS = {
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", llm_model="fake-model")
+    return Settings(
+        data_root=tmp_path / "data",
+        repo_root=tmp_path,
+        profile=str(SHIPPED_PROFILE_PATH),
+        llm_api_key="sk-test",
+        llm_model="fake-model",
+    )
 
 
 @pytest.fixture
-def library(settings: Settings) -> Library:
-    return Library(settings)
+def library(settings: Settings, tco_profile: DomainProfile) -> Library:
+    return Library(settings, tco_profile)
 
 
 @pytest.fixture
@@ -205,7 +213,9 @@ def test_a_chunked_upload_without_a_declared_length_is_accepted(client: TestClie
     assert [summary.name for summary in library.list()] == ["paper.pdf"]
 
 
-def test_a_chunked_upload_is_refused_once_its_bytes_pass_the_limit(settings: Settings, pdf_bytes: bytes):
+def test_a_chunked_upload_is_refused_once_its_bytes_pass_the_limit(
+    settings: Settings, pdf_bytes: bytes, tco_profile: DomainProfile
+):
     small = dataclasses.replace(settings, max_upload_bytes=1024)
     with TestClient(create_app(small)) as client:
         response = client.post(
@@ -215,7 +225,7 @@ def test_a_chunked_upload_is_refused_once_its_bytes_pass_the_limit(settings: Set
         )
 
     assert response.status_code == 413
-    assert Library(small).list() == []
+    assert Library(small, tco_profile).list() == []
 
 
 def test_it_is_the_bytes_that_are_counted_not_the_file(settings: Settings, pdf_bytes: bytes):
@@ -267,9 +277,9 @@ def test_a_malformed_id_is_simply_not_found(client: TestClient, path: str):
     assert response.json()["detail"] == "No document zz"
 
 
-def test_submitting_after_shutdown_is_unavailable_not_a_crash(settings: Settings, jobs: JobManager):
-    seed_artifact(Library(settings), "mineru")
-    seed_artifact(Library(settings), "paddleocr_vl")
+def test_submitting_after_shutdown_is_unavailable_not_a_crash(library: Library, settings: Settings, jobs: JobManager):
+    seed_artifact(library, "mineru")
+    seed_artifact(library, "paddleocr_vl")
     with TestClient(create_app(settings, jobs=jobs)) as client:
         jobs.shutdown()
 
@@ -313,7 +323,7 @@ def test_the_summary_lists_every_stage_in_pipeline_order(client: TestClient, lib
 def test_figures_switched_on_but_not_read_is_pending(settings: Settings, library: Library):
     seed_artifact(library, "mineru")
 
-    summary = Library(dataclasses.replace(settings, figures_enabled=True)).summary(DOC_KEY)
+    summary = Library(dataclasses.replace(settings, figures_enabled=True), library.profile).summary(DOC_KEY)
 
     assert {stage.name: stage.status for stage in summary.stages}["figures"] == "pending"
 

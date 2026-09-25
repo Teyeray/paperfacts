@@ -78,11 +78,16 @@ def profile_data(changes: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return data
 
 
+# The shipped TCO profile's file. A test Settings with its own repo_root names it here, so an app or a CLI
+# command that loads the profile from its settings finds the real one.
+SHIPPED_PROFILE_PATH = profile_path(Settings())
+
+
 def shipped_profile() -> DomainProfile:
     """The shipped TCO profile, from the built-in settings rather than the environment, so a developer's
     PAPERFACTS_PROFILE cannot change what a test runs against. Tests take it from the ``tco_profile`` fixture;
     this is for the builders in :mod:`support` that have no fixture to take it from."""
-    return load_profile(profile_path(Settings()))
+    return load_profile(SHIPPED_PROFILE_PATH)
 
 
 def make_profile(changes: Mapping[str, Any] | None = None, *, source: Path | None = None) -> DomainProfile:

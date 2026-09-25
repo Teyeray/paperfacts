@@ -233,7 +233,7 @@ def check_profile(found: str | None, expected: str, what: str) -> None:
     through an explicitly old key; it is refused too rather than trusted.
     """
     if found is None:
-        raise ProfileMismatchError(f"{what} was extracted before profiles; re-run it")
+        raise ProfileMismatchError(f"{what} was written before profiles; re-run it")
     if found != expected:
         raise ProfileMismatchError(f"{what} comes from profile {found}, not {expected}; re-run it under one profile")
 

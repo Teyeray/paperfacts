@@ -46,6 +46,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_blank_pdf, make_block
+from support.profiles import shipped_profile
 
 STAGE_SECONDS = 0.3  # the stub job takes len(stage_names()) * this
 # As long as the model's condition prose gets on real papers: the text that pushed the second lane off screen.
@@ -173,7 +174,8 @@ def free_port() -> int:
 @contextlib.contextmanager
 def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     settings = Settings(data_root=root / "data", repo_root=root, llm_api_key="sk-test", llm_model="fake-model")
-    library = Library(settings)
+    profile = shipped_profile()
+    library = Library(settings, profile)
     docs = {
         "A": seed_document(
             library,
@@ -188,7 +190,7 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     }
     for index in range(3, 28):  # a long library, as on the real server
         seed_document(library, root, index, f"filler paper {index}.pdf", samples=1, comparisons=1)
-    app = create_app(settings, jobs=JobManager(stub_runner, stage_names(), workers=2))
+    app = create_app(settings, profile=profile, jobs=JobManager(stub_runner, stage_names(), workers=2))
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)

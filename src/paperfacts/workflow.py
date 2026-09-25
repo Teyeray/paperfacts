@@ -43,7 +43,7 @@ from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.profile import DomainProfile, default_profile
+from paperfacts.profile import DomainProfile, load_profile, profile_path
 from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
@@ -285,6 +285,7 @@ def extract_document(
     document: DocumentInput,
     backend: Backend,
     settings: Settings,
+    profile: DomainProfile,
     client: LlmClient,
     *,
     force: bool = False,
@@ -298,7 +299,13 @@ def extract_document(
     """
     layout = DataLayout(settings.data_root)
     if options is None:
-        options = ExtractionOptions.from_settings(settings, default_profile(), client.model)
+        options = ExtractionOptions.from_settings(settings, profile, client.model)
+    elif options.model != client.model or options.profile != profile:
+        # The file would be named after one model or profile while another answered or was asked.
+        raise ValueError(
+            f"extraction options for model {options.model!r} and profile {options.profile.name!r} "
+            f"do not match the client's model {client.model!r} and the profile {profile.name!r}"
+        )
     key = extractor_key(options)
     artifact = load_artifact(document, backend, settings)
     if not force:
@@ -325,10 +332,12 @@ def extract_document(
 def compare_document(
     document: DocumentInput,
     settings: Settings,
+    profile: DomainProfile,
     client: LlmClient,
     *,
     force: bool = False,
     lanes: Mapping[Backend, LaneExtraction] | None = None,
+    comparison: ComparisonOptions | None = None,
 ) -> ComparisonReport:
     """Match samples with the model, compare fields by rule, store the report.
 
@@ -338,16 +347,21 @@ def compare_document(
 
     ``lanes`` lets a caller that already holds both extractions hand them over instead of having them
     loaded again; without it the lanes are read through :func:`extract_document`, whose cached path
-    rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader.
+    rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader. A caller that
+    also consolidates passes the one ``comparison`` it built for the document, so the verdicts and the table
+    cannot be decided under two options.
     """
     layout = DataLayout(settings.data_root)
-    profile = default_profile()
     options = ExtractionOptions.from_settings(settings, profile, client.model)
-    comparison = ComparisonOptions.from_settings(settings, profile)
+    if comparison is None:
+        comparison = ComparisonOptions.from_settings(settings, profile)
+    elif comparison.profile != profile:
+        raise ValueError(f"comparison options for profile {comparison.profile.name!r}, not {profile.name!r}")
     path = layout.comparison_path(document.document_id, extractor_key(options), comparison_key(comparison))
     if lanes is None:
         lanes = {
-            backend: extract_document(document, backend, settings, client, options=options) for backend in BACKENDS
+            backend: extract_document(document, backend, settings, profile, client, options=options)
+            for backend in BACKENDS
         }
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
     # A stored report is never of an incomplete lane (see below), so with one it would be of other lanes.
@@ -426,6 +440,7 @@ def _figures_detail(readings: FigureReadings) -> str:
 def _read_figures_stage(
     document: DocumentInput,
     settings: Settings,
+    profile: DomainProfile,
     *,
     force: bool,
     artifact: ParsedArtifact | None,
@@ -438,7 +453,9 @@ def _read_figures_stage(
     try:
         artifact = artifact or figure_artifact(document, settings)
         with build_vision_client(settings) as client:
-            readings = read_document_figures(document, settings, client, force=force, artifact=artifact, stop=stop)
+            readings = read_document_figures(
+                document, settings, profile, client, force=force, artifact=artifact, stop=stop
+            )
     except Cancelled:
         # Not this stage's failure: it was told to stop because another stage failed. The panels it had
         # read are cached, so the next run picks them up.
@@ -522,6 +539,7 @@ def ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
 def run_document(
     document: DocumentInput,
     settings: Settings,
+    profile: DomainProfile | None = None,
     *,
     force: bool = False,
     force_figures: bool = False,
@@ -531,7 +549,13 @@ def run_document(
 
     ``force`` redoes parsing, extraction and comparison; ``force_figures`` re-reads the charts. They are
     separate because each costs minutes of a different model, and wanting one redone rarely means the other.
+
+    Every entry point (the CLI, the web app, a batch) loads its profile once and passes it. ``None`` means the
+    profile ``settings`` selects, for a one-off script: the recorded payload generator predates the parameter
+    and must keep running unchanged.
     """
+    profile = profile or load_profile(profile_path(settings))
+    comparison = ComparisonOptions.from_settings(settings, profile)
     parse_reports: dict[Backend, ParseReport] = {}
     parsed: dict[Backend, ParsedArtifact | None] = {}
     outcomes: dict[Backend, tuple[ParsedArtifact, ParseReport]] = {}
@@ -572,16 +596,16 @@ def run_document(
         on_stage("figures", "running", "")
         artifact = next((parsed[backend] for backend in BACKENDS if parsed[backend] is not None), None)
         figures_future = figures_pool.submit(
-            _read_figures_stage, document, settings, force=force_figures, artifact=artifact, stop=stop_figures
+            _read_figures_stage, document, settings, profile, force=force_figures, artifact=artifact, stop=stop_figures
         )
     else:
-        figures = shown_figures(document.document_id, document.display_filename, settings)
+        figures = shown_figures(document.document_id, document.display_filename, settings, profile)
         on_stage("figures", "skipped", _figures_mark("skipped", "", figures))
     try:
-        lanes, report = _extract_and_compare(document, settings, force=force, on_stage=on_stage)
+        lanes, report = _extract_and_compare(document, settings, profile, comparison, force=force, on_stage=on_stage)
         if figures_future is not None:
             figures_status, figures_detail = figures_future.result()
-            figures = shown_figures(document.document_id, document.display_filename, settings)
+            figures = shown_figures(document.document_id, document.display_filename, settings, profile)
             on_stage("figures", figures_status, _figures_mark(figures_status, figures_detail, figures))
     except BaseException:
         # The paper has failed: its charts would be read for nothing. The panels already out finish, and the
@@ -597,10 +621,9 @@ def run_document(
         figures_pool.shutdown(wait=True)
 
     on_stage("export", "running", "")
-    profile = default_profile()
-    dataset = consolidate_document(document, lanes, report, ComparisonOptions.from_settings(settings, profile))
+    dataset = consolidate_document(document, lanes, report, comparison)
     layout = DataLayout(settings.data_root)
-    excel_path = layout.dataset_path(document.document_id)
+    excel_path = layout.dataset_path(document.document_id, profile.name)
     write_dataset([dataset], excel_path, profile, figure_rows=figures.rows if figures is not None else ())
     dataset_json_path: Path | None = None
     if dataset.incomplete:
@@ -679,13 +702,19 @@ def _every_lane[T](
 
 
 def _extract_and_compare(
-    document: DocumentInput, settings: Settings, *, force: bool, on_stage: StageCallback
+    document: DocumentInput,
+    settings: Settings,
+    profile: DomainProfile,
+    comparison: ComparisonOptions,
+    *,
+    force: bool,
+    on_stage: StageCallback,
 ) -> tuple[dict[Backend, LaneExtraction], ComparisonReport]:
     """Both extraction lanes, then the comparison: the part of :func:`run_document` that uses the LLM."""
     lanes: dict[Backend, LaneExtraction] = {}
     with build_llm_client(settings) as client:
         # One value for both lanes: whatever decides what a lane is asked cannot differ between them.
-        options = ExtractionOptions.from_settings(settings, default_profile(), client.model)
+        options = ExtractionOptions.from_settings(settings, profile, client.model)
         # The two lanes are independent and both spend their time waiting on the model, so they overlap.
         # Nothing here touches pdf.py: extraction reads the stored artifact JSON and never opens the PDF,
         # so PDFium's process-wide lock is not involved. Both lanes are handed the same `settings` and the
@@ -699,7 +728,7 @@ def _extract_and_compare(
         with ContextThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
             futures: dict[Backend, Future[LaneExtraction]] = {
                 backend: pool.submit(
-                    extract_document, document, backend, settings, client, force=force, options=options
+                    extract_document, document, backend, settings, profile, client, force=force, options=options
                 )
                 for backend in BACKENDS
             }
@@ -708,7 +737,7 @@ def _extract_and_compare(
                 lanes[backend] = lane
                 on_stage(f"extract:{backend}", "done", _lane_detail(lane))
         on_stage("compare", "running", "")
-        report = compare_document(document, settings, client, force=force, lanes=lanes)
+        report = compare_document(document, settings, profile, client, force=force, lanes=lanes, comparison=comparison)
     counts = report.counts
     detail = (
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"
@@ -732,11 +761,11 @@ def _lane_detail(lane: LaneExtraction) -> str:
     )
 
 
-def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings) -> bytes:
+def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings, profile: DomainProfile) -> bytes:
     """One workbook for several stored documents, each document's chart readings beside its data."""
-    figure_views = (shown_figures(d.document_id, d.filename, settings) for d in datasets)
+    figure_views = (shown_figures(d.document_id, d.filename, settings, profile) for d in datasets)
     rows = [row for view in figure_views if view for row in view.rows]
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "paperfacts.xlsx"
-        write_dataset(datasets, path, default_profile(), figure_rows=rows)
+        path = Path(directory) / f"{profile.name}.xlsx"
+        write_dataset(datasets, path, profile, figure_rows=rows)
         return path.read_bytes()

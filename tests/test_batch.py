@@ -15,6 +15,7 @@ from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, ParserError
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
+from paperfacts.profile import DomainProfile
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import run_document
 from support.factories import make_blank_pdf
@@ -29,20 +30,20 @@ def test_discovery_is_recursive_case_insensitive_and_ignores_non_pdfs(tmp_path):
     assert discover_pdfs(upper) == (upper,)
 
 
-def test_empty_input_fails_without_creating_a_success_workbook(tmp_path):
+def test_empty_input_fails_without_creating_a_success_workbook(tmp_path, tco_profile: DomainProfile):
     settings = Settings(data_root=tmp_path / "data")
     with pytest.raises(ConfigError, match="no PDF"):
-        run_batch(tmp_path, settings)
-    assert not DataLayout(settings.data_root).batch_dataset_path().exists()
+        run_batch(tmp_path, settings, tco_profile)
+    assert not DataLayout(settings.data_root).batch_dataset_path(tco_profile.name).exists()
 
 
-def test_duplicate_pdf_content_gets_one_pipeline_run_and_one_row(monkeypatch, tmp_path):
+def test_duplicate_pdf_content_gets_one_pipeline_run_and_one_row(monkeypatch, tmp_path, tco_profile: DomainProfile):
     source = tmp_path / "papers"
     original = make_blank_pdf(source / "original.pdf")
     shutil.copyfile(original, source / "copy.PDF")
     spy = install_fake_pipeline(monkeypatch)
 
-    result = run_batch(source, Settings(data_root=tmp_path / "data"))
+    result = run_batch(source, Settings(data_root=tmp_path / "data"), tco_profile)
 
     assert len(result.documents) == 1
     assert result.duplicate_count == 1
@@ -52,7 +53,9 @@ def test_duplicate_pdf_content_gets_one_pipeline_run_and_one_row(monkeypatch, tm
     workbook.close()
 
 
-def test_a_failed_paper_is_recorded_and_remaining_papers_are_exported(monkeypatch, tmp_path):
+def test_a_failed_paper_is_recorded_and_remaining_papers_are_exported(
+    monkeypatch, tmp_path, tco_profile: DomainProfile
+):
     source = tmp_path / "papers"
     make_blank_pdf(source / "a_bad.pdf", sizes=[(200, 200)])
     make_blank_pdf(source / "b_good.pdf", sizes=[(300, 300)])
@@ -66,14 +69,14 @@ def test_a_failed_paper_is_recorded_and_remaining_papers_are_exported(monkeypatc
         if path == output:
             snapshots.append((len(documents), len(failures), path.is_file()))
 
-    def fake_run(document, settings, **kwargs):
+    def fake_run(document, settings, profile, **kwargs):
         if document.pdf_path.name.startswith("a_bad"):
             raise ParserError("mineru", "run", "bad PDF")
-        return run_document(document, settings, **kwargs)
+        return run_document(document, settings, profile, **kwargs)
 
     monkeypatch.setattr("paperfacts.batch.run_document", fake_run)
     monkeypatch.setattr("paperfacts.batch.write_dataset", capture_write)
-    result = run_batch(source, Settings(data_root=tmp_path / "data"), output=output)
+    result = run_batch(source, Settings(data_root=tmp_path / "data"), tco_profile, output=output)
 
     assert len(result.documents) == len(result.failures) == 1
     assert result.failures[0]["filename"] == "a_bad.pdf"
@@ -117,43 +120,43 @@ def test_cli_run_says_when_its_result_is_not_kept(monkeypatch, tmp_path):
     assert re.search(r"[1-9]\d* cells unanswered \(thickness\)", cli.output), cli.output
 
 
-def test_offline_export_never_runs_parser_or_llm(monkeypatch, tmp_path):
+def test_offline_export_never_runs_parser_or_llm(monkeypatch, tmp_path, tco_profile: DomainProfile):
     source = make_blank_pdf(tmp_path / "paper.pdf")
     settings = Settings(data_root=tmp_path / "data")
     install_fake_pipeline(monkeypatch)
     document = DocumentInput.from_path(source)
     dataset = run_document(document, settings).dataset
-    monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg: dataset)
+    monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg, profile: dataset)
 
     def unexpected(*args, **kwargs):
         pytest.fail("offline export tried to call the pipeline")
 
     monkeypatch.setattr("paperfacts.batch.run_document", unexpected)
-    result = run_batch(source, settings, export_only=True)
+    result = run_batch(source, settings, tco_profile, export_only=True)
     assert result.documents == (dataset,)
     assert result.excel_path.is_file()
 
 
-def test_write_failure_propagates_instead_of_claiming_batch_success(monkeypatch, tmp_path):
+def test_write_failure_propagates_instead_of_claiming_batch_success(monkeypatch, tmp_path, tco_profile: DomainProfile):
     source = make_blank_pdf(tmp_path / "paper.pdf")
     install_fake_pipeline(monkeypatch)
     settings = Settings(data_root=tmp_path / "data")
     dataset = run_document(DocumentInput.from_path(source), settings).dataset
-    monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg: dataset)
+    monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg, profile: dataset)
 
     def fail_write(*args, **kwargs):
         raise PermissionError("workbook is locked")
 
     monkeypatch.setattr("paperfacts.batch.write_dataset", fail_write)
     with pytest.raises(PermissionError, match="locked"):
-        run_batch(source, settings, export_only=True)
+        run_batch(source, settings, tco_profile, export_only=True)
 
 
-def test_bad_output_suffix_fails_before_parser_runs(monkeypatch, tmp_path):
+def test_bad_output_suffix_fails_before_parser_runs(monkeypatch, tmp_path, tco_profile: DomainProfile):
     source = make_blank_pdf(tmp_path / "paper.pdf")
     spy = install_fake_pipeline(monkeypatch)
     with pytest.raises(ConfigError, match="xlsx"):
-        run_batch(source, Settings(), output=tmp_path / "output.csv")
+        run_batch(source, Settings(), tco_profile, output=tmp_path / "output.csv")
     assert spy.parse == []
 
 

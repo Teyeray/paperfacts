@@ -22,8 +22,11 @@ from paperfacts.fields import FieldSpec
 from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
-from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS
+from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS  # noqa: F401 -- see below
 from paperfacts.units import BUILTIN_UNITS, UnitRegistry
+
+# CONVERTERS is not used here any more: tests/fixtures/units/generate.py imports it from this module, and that
+# generator is frozen together with the recording it made.
 
 # ---- Closed category sets --------------------------------------------------------------------------------
 # A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
@@ -514,7 +517,7 @@ _COMPOUND = re.compile(
 _SUMMED_UNITS = {"min"}
 
 
-def compound_value(spec: FieldSpec, text: str) -> float | None:
+def compound_value(spec: FieldSpec, text: str, units: UnitRegistry) -> float | None:
     """The canonical value of a duration spelled in two of its units, larger first ("3 h 30 min" -> 210), or
     None for anything else. The larger part must be whole and the smaller one less than one of the larger unit:
     "1 h 90 min" is no way anyone writes 150 minutes, and "0.5 h 30 min" restates 30 minutes. Both units carry
@@ -528,9 +531,13 @@ def compound_value(spec: FieldSpec, text: str) -> float | None:
     match = _COMPOUND.match(normalize_text(text).strip())
     if match is None:
         return None
-    convert = CONVERTERS[spec.canonical_unit]
-    big, small = convert(match.group("ua")), convert(match.group("ub"))
-    if big is None or small is None or big <= small or not match.group("a").isdigit():
+    canonical = spec.canonical_unit
+    big, small = units.convert(canonical, match.group("ua")), units.convert(canonical, match.group("ub"))
+    # A unit with an offset is no part of a sum: only a duration is summed, and none of its units has one.
+    if big is None or small is None or big[1] or small[1]:
+        return None
+    big, small = big[0], small[0]
+    if big <= small or not match.group("a").isdigit():
         # A fractional larger part ("0.5 h 30 min") is a restatement, not a sum: nobody writes 30 min that way.
         return None
     part = float(_plain(match.group("b"))) * small
@@ -547,7 +554,7 @@ def _names_unit_of(spec: FieldSpec, text: str, units: UnitRegistry) -> bool:
     return any(units.convert(canonical, word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
 
 
-def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry = BUILTIN_UNITS) -> FieldValue:
+def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
         return field
@@ -559,7 +566,7 @@ def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry = BU
         # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
         note = f"the condition {condition!r} holds this field's quantity and the value does not; ambiguous"
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
-    compound = compound_value(spec, bare)
+    compound = compound_value(spec, bare, units)
     if compound is not None:
         compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"
         note = "; ".join(n for n in (word_note, *context_notes, compound_note) if n)
