@@ -18,7 +18,13 @@ from paperfacts.adapters import render_markdown
 from paperfacts.config import INHERIT
 from paperfacts.errors import ContextBudgetError, LlmResponseError
 from paperfacts.extract import extract_lane
-from paperfacts.keys import FINGERPRINT_LENGTH, ExtractionOptions, extractor_key, schema_fingerprint
+from paperfacts.keys import (
+    FINGERPRINT_LENGTH,
+    ExtractionOptions,
+    extraction_schema_fingerprint,
+    extractor_key,
+    schema_fingerprint,
+)
 from paperfacts.llm import LlmResult
 from support.extraction import make_artifact
 from support.factories import make_block
@@ -206,7 +212,7 @@ def test_the_lane_records_the_extractor_key_and_the_schema_fingerprint():
     lane = extract_lane(make_artifact(), client, mode="document")
 
     assert lane.extractor_key == extractor_key(ExtractionOptions("some-model", mode="document"))
-    assert lane.schema_version == schema_fingerprint()
+    assert lane.schema_version == extraction_schema_fingerprint()
 
 
 def test_the_markdown_of_the_artifact_is_what_reaches_the_model():

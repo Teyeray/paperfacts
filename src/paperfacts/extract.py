@@ -43,7 +43,7 @@ from paperfacts.config import (
 from paperfacts.errors import ContextBudgetError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import ExtractionOptions, extractor_key, schema_fingerprint
+from paperfacts.keys import ExtractionOptions, extraction_schema_fingerprint, extractor_key
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
 from paperfacts.normalize import drop_implausible, sample_key
@@ -265,7 +265,7 @@ def extract_lane(
         backend=artifact.backend,
         extractor_key=extractor_key(options),
         model=client.model,
-        schema_version=schema_fingerprint(),
+        schema_version=extraction_schema_fingerprint(),
         target=records.target,
         samples=records.samples,
         invalid_source_ids=records.invalid_source_ids,

@@ -464,14 +464,24 @@ def test_a_label_changes_neither_cache_key(monkeypatch):
 
     def keys_for(specs):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+        for cached in (
+            keys.schema_fingerprint,
+            keys.extraction_schema_fingerprint,
+            keys.category_fingerprint,
+            keys.retrieval_fingerprint,
+        ):
             cached.cache_clear()
         return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
 
     try:
         assert keys_for(plain) == keys_for(labelled)
     finally:
-        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+        for cached in (
+            keys.schema_fingerprint,
+            keys.extraction_schema_fingerprint,
+            keys.category_fingerprint,
+            keys.retrieval_fingerprint,
+        ):
             cached.cache_clear()
 
 
@@ -500,14 +510,24 @@ def test_a_chinese_description_changes_neither_cache_key(monkeypatch):
 
     def keys_for(specs):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+        for cached in (
+            keys.schema_fingerprint,
+            keys.extraction_schema_fingerprint,
+            keys.category_fingerprint,
+            keys.retrieval_fingerprint,
+        ):
             cached.cache_clear()
         return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
 
     try:
         assert keys_for(plain) == keys_for(described)
     finally:
-        for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
+        for cached in (
+            keys.schema_fingerprint,
+            keys.extraction_schema_fingerprint,
+            keys.category_fingerprint,
+            keys.retrieval_fingerprint,
+        ):
             cached.cache_clear()
 
 
@@ -782,6 +802,7 @@ def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(monkeypatch
     def keys_for(specs):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
         keys.schema_fingerprint.cache_clear()
+        keys.extraction_schema_fingerprint.cache_clear()
         return (
             keys.schema_fingerprint(),
             keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")),
@@ -800,6 +821,60 @@ def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(monkeypatch
         assert ranged_extraction != extraction and ranged_comparison != comparison
     finally:
         keys.schema_fingerprint.cache_clear()
+        keys.extraction_schema_fingerprint.cache_clear()
+
+
+def test_a_tolerance_moves_only_the_comparison_key(monkeypatch):
+    # A tolerance decides whether two quoted values agree; the model is never told it and no cleaning rule
+    # reads it, so editing one must leave every stored extraction where it is.
+    plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
+    tolerant = load_field_specs(document({"fields": [RANGED_FIELD | {"rel_tol": 0.1, "abs_tol": 2}]}))
+
+    def keys_for(specs):
+        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
+        keys.schema_fingerprint.cache_clear()
+        keys.extraction_schema_fingerprint.cache_clear()
+        return (
+            keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")),
+            keys.extractor_key(keys.ExtractionOptions("a-model", mode="passage")),
+            keys.comparison_key(),
+        )
+
+    try:
+        document_key, passage_key, comparison = keys_for(plain)
+        document_after, passage_after, comparison_after = keys_for(tolerant)
+        assert (document_key, passage_key) == (document_after, passage_after)
+        assert comparison != comparison_after
+    finally:
+        keys.schema_fingerprint.cache_clear()
+        keys.extraction_schema_fingerprint.cache_clear()
+
+
+@pytest.mark.parametrize("mode", ["document", "passage"])
+def test_the_range_sentence_the_model_reads_is_part_of_the_extractor_key(monkeypatch, mode):
+    # The "Plausible values are ..." line is written by FieldSpec.describe_range and reaches every question,
+    # in passage mode through the field question's user half, which is not hashed by value there. The
+    # rendered field table is in the key by value (the document prompt carries it), so a change in how
+    # the range is worded re-keys both modes, not just a change of the range itself.
+    from paperfacts.fields import FieldSpec
+
+    before = keys.extractor_key(keys.ExtractionOptions("a-model", mode=mode))
+    monkeypatch.setattr(FieldSpec, "describe_range", lambda self: "no more than a little")
+
+    assert keys.extractor_key(keys.ExtractionOptions("a-model", mode=mode)) != before
+
+
+def test_fields_py_is_part_of_the_extraction_code_fingerprint(monkeypatch):
+    # It also decides which fields are sample-level, which gates which questions are asked at all.
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(keys, "source_fingerprint", lambda *files: seen.append(files) or "x")
+    keys.extraction_code_fingerprint.cache_clear()
+    try:
+        keys.extraction_code_fingerprint()
+    finally:
+        keys.extraction_code_fingerprint.cache_clear()
+
+    assert "fields.py" in seen[0]
 
 
 # ---- condition_preference -----------------------------------------------------------------
@@ -824,7 +899,7 @@ def test_a_condition_preference_moves_only_the_comparison_key(monkeypatch):
 
     def keys_for(specs):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        for cached in (keys.schema_fingerprint, keys.preference_fingerprint):
+        for cached in (keys.schema_fingerprint, keys.extraction_schema_fingerprint, keys.preference_fingerprint):
             cached.cache_clear()
         return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
 
@@ -833,7 +908,7 @@ def test_a_condition_preference_moves_only_the_comparison_key(monkeypatch):
         assert extraction == extraction_after
         assert comparison != comparison_after
     finally:
-        for cached in (keys.schema_fingerprint, keys.preference_fingerprint):
+        for cached in (keys.schema_fingerprint, keys.extraction_schema_fingerprint, keys.preference_fingerprint):
             cached.cache_clear()
 
 

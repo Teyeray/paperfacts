@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from paperfacts.keys import schema_fingerprint
+from paperfacts.keys import extraction_schema_fingerprint
 from paperfacts.models import Backend, PageGeometry, ParsedArtifact, SourceBlock
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, TargetRecord
 from support.factories import DOC_ID, make_block
@@ -109,7 +109,7 @@ def make_lane(
         backend=backend,
         extractor_key=extractor_key,
         model=model,
-        schema_version=schema_fingerprint(),
+        schema_version=extraction_schema_fingerprint(),
         target=target,
         samples=tuple(samples),
         invalid_source_ids=tuple(invalid_source_ids),

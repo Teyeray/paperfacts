@@ -76,7 +76,10 @@ this file is the part that is easy to get wrong.
   deterministic code, never a model call. Passage is the default; `.omc/research/extraction-modes.md` has
   the measurement that decided it.
 - A sample-level value the model cannot place on a sample goes to `LaneExtraction.unattributed`: kept,
-  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour. The two
+  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour. Sample ids are
+  keyed by `normalize.sample_key` everywhere samples meet (attribution, the pass vote, exact cross-lane
+  pairing, both modes' `records.clean_samples`); never by `normalize_key`, which deletes Greek letters and
+  folds a case-distinguished suffix. The two
   exceptions are explicit, never inferred: a paper with exactly one sample owns every unplaced value, and a
   value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
   every sample with `series=True`.
@@ -87,10 +90,16 @@ this file is the part that is easy to get wrong.
   (`valid_range`, judged on the converted value by `normalize.drop_implausible`), plus grounding
   (`grounding.py`), where the quoted text must occur in the block it cites. The first four drop the value
   with an audited reason; grounding only flags, never drops.
-- Cache keys live in `keys.py`. `extractor_key` hashes the model, the field schema, the prompts, the
-  sampling settings and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its
-  two prompts plus `retrieval_fingerprint` (the keywords, `passages.py` and `continuation.py`). `comparison_key` hashes
-  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt. Anything that is at its built-in
+- Cache keys live in `keys.py`. `extractor_key(options)` is the only extraction key: it hashes one frozen
+  `ExtractionOptions` (model, mode and every sampling/retrieval setting), which `extract_lane` and
+  `extractor_key_for(settings)` both build, so writer and reader cannot disagree -- never spell the settings
+  out a second time. It also hashes the field schema *minus* the verdict-only cells (tolerances, categories,
+  condition preferences, display text), the prompts, and the source of the extraction modules (`extract.py`,
+  `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`,
+  `continuation.py`); passage mode adds its two prompts plus `retrieval_fingerprint` (the keywords,
+  `passages.py` and `continuation.py`). `comparison_key` hashes the whole field schema including
+  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt.
+  A tolerance edit therefore re-keys comparisons only. Anything that is at its built-in
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
   re-derives records for free as long as the rendered document and prompts stay byte-identical.

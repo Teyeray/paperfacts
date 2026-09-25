@@ -2,12 +2,14 @@
 
 Two keys name the files under a document directory:
 
-- :func:`extractor_key` covers the model, the field schema, the extraction prompt, how the document is
+- :func:`extractor_key` covers the model, the part of the field table extraction reads (everything but
+  the tolerances, categories, preferences and display text), the extraction prompts, how the document is
   rendered for the model, and the code that decides which of the model's claims survive. Changing any of
   them invalidates the stored extraction. The model's own answer is cached separately by request payload,
   so a code-only change re-derives records for free.
-- :func:`comparison_key` covers the tolerances, the normalisation rules and the sample-matching prompt.
-  Changing a tolerance recomputes the comparison without paying for extraction again.
+- :func:`comparison_key` covers the whole field table including the tolerances, the normalisation rules
+  and the sample-matching prompt. Changing a tolerance recomputes the comparison and leaves every stored
+  extraction where it is.
 
 A third, :func:`figure_key`, names the figure readings, which belong to neither lane.
 
@@ -51,6 +53,9 @@ _PACKAGE_DIR = Path(__file__).parent
 # ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
 # verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
 _SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh", "condition_preference"}
+# Cells only a verdict reads: the numeric tolerance of a comparison. Nothing in extraction -- no prompt, no
+# cleaning rule, not drop_implausible -- looks at them, so they stay out of extractor_key.
+_VERDICT_ONLY = {"rel_tol", "abs_tol"}
 # Cells added after stored results existed: left out of the material while at their default, so a field that
 # does not use one keeps the fingerprint it had before the cell was introduced.
 _SCHEMA_OMITTED_AT_DEFAULT = {"valid_range": (None, None)}
@@ -66,9 +71,30 @@ def source_fingerprint(*module_files: str) -> str:
     return content_fingerprint("\n".join((_PACKAGE_DIR / name).read_text(encoding="utf-8") for name in module_files))
 
 
+def _table_fingerprint(excluded: set[str]) -> str:
+    table = [
+        {
+            name: value
+            for name, value in dataclasses.asdict(spec).items()
+            if name not in excluded and _SCHEMA_OMITTED_AT_DEFAULT.get(name, _NO_DEFAULT) != value
+        }
+        for spec in FIELD_SPECS
+    ]
+    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+
+
+@cache
+def extraction_schema_fingerprint() -> str:
+    """The field table as extraction reads it: what the model is told (name, group, kind, description,
+    canonical unit, condition hint, plausible range) and what the cleaning of its answer reads (the bare
+    number policy, through ``drop_implausible``). The tolerances are left out: they only decide verdicts,
+    so editing one must never rename a stored extraction."""
+    return _table_fingerprint(_SCHEMA_EXCLUDED | _VERDICT_ONLY)
+
+
 @cache
 def schema_fingerprint() -> str:
-    """The field table as the model and the comparison see it: descriptions, units, tolerances, policies.
+    """The field table as the comparison sees it: descriptions, units, tolerances, policies.
 
     ``keywords`` is deliberately left out. It steers passage-mode retrieval and nothing else -- never a
     prompt, never a tolerance -- so folding it in here would invalidate document-mode extractions and every
@@ -81,15 +107,7 @@ def schema_fingerprint() -> str:
     asked and only decides whether two quoted spellings count as the same answer, which is a verdict.
     :func:`category_fingerprint` folds it into ``comparison_key`` alone.
     """
-    table = [
-        {
-            name: value
-            for name, value in dataclasses.asdict(spec).items()
-            if name not in _SCHEMA_EXCLUDED and _SCHEMA_OMITTED_AT_DEFAULT.get(name, _NO_DEFAULT) != value
-        }
-        for spec in FIELD_SPECS
-    ]
-    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+    return _table_fingerprint(_SCHEMA_EXCLUDED)
 
 
 @cache
@@ -123,15 +141,21 @@ def extraction_code_fingerprint() -> str:
     """Every module that decides what the model is asked and which of its claims are stored.
 
     ``adapters.py`` renders the bytes the model reads; ``prompts.py`` wraps them (only the system prompts are
-    hashed by value, so the user half would otherwise be invisible); ``normalize.py`` and ``grounding.py``
-    fold the text that decides which values are duplicates of each other and which sample a value lands on
-    (``continuation.py`` decides which blocks grounding joins across a page break);
-    ``voting.py`` decides which of the model's repeated claims survive the majority vote.
+    hashed by value, so the user half would otherwise be invisible); ``fields.py`` writes the field lines
+    of every question (the plausible-range sentence) and decides which fields are sample-level, which
+    gates the questions asked; ``normalize.py`` and ``grounding.py`` fold the text that decides which values
+    are duplicates of each other and which sample a value lands on, and ``normalize.py`` converts the value
+    ``drop_implausible`` judges (``continuation.py`` decides which blocks grounding joins across a page
+    break); ``voting.py`` decides which of the model's repeated claims survive the majority vote.
     Over-invalidation is cheap here: an unchanged request replays from the LLM cache, so re-deriving the
     records costs nothing but a second of CPU.
+
+    ``llm.py`` is left out on purpose: it transports a request and validates the reply's shape, and the
+    repair question it sends on a malformed reply is written in ``prompts.py``, which is hashed.
     """
     return source_fingerprint(
         "extract.py",
+        "fields.py",
         "voting.py",
         "records.py",
         "adapters.py",
@@ -206,7 +230,7 @@ def extractor_key(options: ExtractionOptions) -> str:
     """
     material: dict[str, object] = {
         "model": options.model,
-        "schema": schema_fingerprint(),
+        "schema": extraction_schema_fingerprint(),
         "extraction_system": extraction_system_prompt(),
         "code": extraction_code_fingerprint(),
     }

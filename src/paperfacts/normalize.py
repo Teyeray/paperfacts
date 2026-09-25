@@ -4,8 +4,10 @@ conversion, and applying all three to a lane.
 Pure functions, millisecond-fast, the one layer that offers a determinism guarantee. The model only
 transcribes (``value_raw`` / ``unit_raw``); every conversion happens here, because a model's unit conversion
 is wrong *silently*, and the two lanes fail differently, which would flood CONFLICT with noise unrelated to
-the parsers. This module's source is hashed into ``comparison_key``, so changing a rule invalidates stored
-comparisons but never the stored extractions.
+the parsers. This module's source is hashed into both keys: into ``comparison_key`` because it decides
+verdicts, and into ``extractor_key`` because extraction keys sample ids with :func:`sample_key` and drops
+implausible values it converts here. The LLM cache is keyed by request payload, so a rule change re-derives
+stored extractions from cached answers without asking the model again.
 """
 
 from __future__ import annotations

@@ -520,8 +520,11 @@ cannot be converted is kept, since there is no number to judge. A range changes 
 survive, so it moves both cache keys; a field without one keeps the keys it had.
 
 A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
-`W`, `sccm`, `rpm`, `Pa`) or startup fails rather than guessing. Adding a field is one table entry; the prompt,
-normalisation and tolerances follow from it. `uv run paperfacts fields` prints what was actually loaded.
+`W`, `sccm`, `rpm`, `Pa`) or startup fails, naming the field and the file, rather than guessing. Adding a field is one table entry; the prompt,
+normalisation and tolerances follow from it. `rel_tol` and `abs_tol` only decide verdicts, so editing one
+re-compares the stored facts instead of re-extracting them. Tolerances may not be negative, and
+`percent_or_fraction` is only accepted on a `%` field. `uv run paperfacts fields` prints what was actually
+loaded.
 
 A sample often has one field measured several ways -- transmittance averaged over 400-800 nm, at 550 nm,
 over 400-1800 nm -- and the dataset has one cell for it. The cell takes the measurement stated in the same
@@ -612,8 +615,8 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Cache | Keyed on | Invalidated by |
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
-| Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
-| Comparison (`comparison_key`) | the field tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
+| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader), the field schema minus the tolerances, categories, condition preferences and display text, the prompts, the document rendering, and the source of `extract.py`, `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py` and `continuation.py`; passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
+| Comparison (`comparison_key`) | the whole field schema including the tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
