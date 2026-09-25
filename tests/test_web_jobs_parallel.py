@@ -230,26 +230,47 @@ def test_a_submission_after_shutdown_is_refused_and_leaves_no_job_behind():
     assert manager.all_jobs() == []
 
 
-def test_a_worker_leaving_on_an_interrupt_still_hands_on_the_rerun_queued_behind_it():
-    """The forced rerun was passed over while the first run held its document; the worker that held it
-    leaves on KeyboardInterrupt instead of looking at the queue again, so it must hand the job a turn."""
+def test_an_interrupted_job_does_not_cost_the_queue_its_worker():
+    """KeyboardInterrupt from a job body is recorded on the job; the worker carries on, so a rerun queued
+    behind it still runs even with a single worker."""
     release = threading.Event()
 
     def body(job: Job, mark) -> None:
-        if job.document_id == "doc-1" and not job.force:
+        if not job.force:
             assert release.wait(timeout=WAIT_TIMEOUT_S)
             raise KeyboardInterrupt
 
-    manager = JobManager(RecordingRunner(body=body), STAGES, workers=2)
+    manager = JobManager(RecordingRunner(body=body), STAGES, workers=1)
     first = manager.submit("doc-1")
     wait_until(lambda: manager.get(first.job_id).status == "running", what="the first run to start")
     forced = manager.submit("doc-1", force=True)
-    # Another document through the second worker: its turn has looked at the rerun and passed it over.
-    other = manager.submit("doc-2")
-    wait_for_status(manager, other.job_id, "done")
-    assert manager.get(forced.job_id).status == "queued"
 
     release.set()
 
     assert wait_for_status(manager, first.job_id, "failed").error == "interrupted"
     assert wait_for_status(manager, forced.job_id, "done", "failed").status == "done"
+
+
+def test_the_workers_are_started_on_first_use_and_leave_on_shutdown():
+    before = {t for t in threading.enumerate() if t.name.startswith("paperfacts-job")}
+    manager = JobManager(RecordingRunner(), STAGES, workers=3)
+    assert {t for t in threading.enumerate() if t.name.startswith("paperfacts-job")} == before
+
+    job = manager.submit("doc-1")
+    wait_for_status(manager, job.job_id, "done")
+    manager.shutdown(wait=True)
+
+    assert {t for t in threading.enumerate() if t.name.startswith("paperfacts-job")} == before
+
+
+def test_shutdown_with_wait_returns_only_after_the_running_jobs_finish():
+    body = Overlap()
+    manager = JobManager(body, STAGES, workers=2)
+    running = [manager.submit(f"doc-{i}") for i in range(2)]
+    wait_until(lambda: body.total() == 2, what="both workers to be busy")
+
+    releaser = threading.Timer(0, body.release.set)  # released from another thread, after shutdown began
+    releaser.start()
+    manager.shutdown(wait=True)
+
+    assert [manager.get(job.job_id).status for job in running] == ["done", "done"]
