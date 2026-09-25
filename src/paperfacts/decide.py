@@ -17,9 +17,9 @@ candidate list, each narrowing it or refusing:
    the comparison report's statuses, which may be about a candidate an earlier step set aside.
 
 The report's statuses serve one purpose, as a review gate: a ``conflict`` or ``ambiguous`` comparison refuses
-the cell. Once narrowing has chosen conditions, only the comparisons involving a candidate it kept count: a
-conflict at a condition it set aside (the lanes' 400-1100 nm averages differ, their preferred 550 nm values
-agree) is about a measurement the cell does not state.
+the cell. Once narrowing has chosen conditions, a comparison wholly about candidates it set aside no longer
+counts: a conflict between the lanes' 400-1100 nm averages is about a measurement the cell does not state when
+their preferred 550 nm values agree. Any other troubled comparison still refuses.
 
 Conditions and source ids of a committed cell are derived from the final candidates, in one place.
 """
@@ -123,8 +123,10 @@ def decide(
     narrowed = _narrow(spec, candidates, row_sources) if candidates else None
     troubled = [c for c in comparisons if c.status in {"conflict", "ambiguous"}]
     if narrowed is not None and len(narrowed[0]) < len(candidates):
-        kept_values = {_identity(c.value) for c in narrowed[0]}
-        troubled = [c for c in troubled if any(v is not None and _identity(v) in kept_values for v in (c.a, c.b))]
+        # Fail closed: a comparison is ignored only when every side it has is a candidate narrowing set aside.
+        # One whose values match no candidate (a stale report, say) still refuses the cell.
+        aside = {_identity(c.value) for c in candidates} - {_identity(c.value) for c in narrowed[0]}
+        troubled = [c for c in troubled if not all(_identity(v) in aside for v in (c.a, c.b) if v is not None)]
     if troubled:
         status = "conflict" if any(c.status == "conflict" for c in troubled) else "ambiguous"
         return reject(status, "双路比较存在冲突或歧义，需人工复核")

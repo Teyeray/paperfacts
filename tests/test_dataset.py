@@ -7,7 +7,7 @@ import pytest
 from openpyxl import load_workbook
 from pydantic import ValidationError
 
-from paperfacts.compare import compare_lanes
+from paperfacts.compare import FieldComparison, compare_lanes
 from paperfacts.dataset import (
     DatasetPayload,
     DocumentDataset,
@@ -15,7 +15,8 @@ from paperfacts.dataset import (
     write_dataset,
     write_dataset_json,
 )
-from paperfacts.fields import FIELD_SPECS
+from paperfacts.decide import decide
+from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.records import FieldValue, TargetRecord
@@ -626,6 +627,24 @@ def test_a_conflict_at_a_condition_narrowing_set_aside_does_not_refuse_the_chose
     result = paired(lane("mineru", "87.4"), lane("paddleocr_vl", "89.0"))
 
     assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
+
+
+def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell():
+    # Fail closed: only a conflict wholly about candidates narrowing set aside is ignored. One whose values
+    # match no candidate at all (a stale report, a changed normalisation) says nothing is known to be settled.
+    spec = FIELD_BY_NAME["transmittance"]
+    evidence = [
+        (backend, value("transmittance", raw, "%", condition=condition, backend=backend, grounded=True))
+        for backend in ("mineru", "paddleocr_vl")
+        for raw, condition in (("90.1", "at 550 nm"), ("87.4", "average 400-1100 nm"))
+    ]
+    stranger = value("transmittance", "70", "%", condition="at 550 nm", grounded=True)
+    comparisons = [
+        FieldComparison(scope="sample:A|A", field="transmittance", status="agree", a=evidence[0][1], b=evidence[2][1]),
+        FieldComparison(scope="sample:A|A", field="transmittance", status="conflict", a=stranger, b=None),
+    ]
+
+    assert decide(spec, evidence, comparisons).status == "conflict"
 
 
 def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
