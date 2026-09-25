@@ -280,8 +280,8 @@ class Settings:
     # INHERIT reuses llm_reasoning_effort, None omits the parameter, a value overrides it -- for passage
     # mode's inventory question only.
     llm_inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT
-    # Per-field questions in flight per lane. The two lanes themselves always run as a pair, so the peak
-    # number of open requests is twice this. It changes nothing about what is asked, only when.
+    # Per-field questions in flight per lane. The two lanes themselves always run as a pair, so one paper's
+    # peak is twice this; llm_max_in_flight caps the total. It changes nothing about what is asked, only when.
     llm_concurrency: int = DEFAULT_LLM_CONCURRENCY
     # The process-wide ceiling on requests in flight, over every lane, stage and document together.
     llm_max_in_flight: int = DEFAULT_LLM_MAX_IN_FLIGHT

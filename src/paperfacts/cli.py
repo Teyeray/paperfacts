@@ -118,6 +118,16 @@ ForceFiguresOpt = Annotated[
         "--force alone does not re-read them",
     ),
 ]
+JobsOpt = Annotated[
+    int | None,
+    typer.Option(
+        "--jobs",
+        "-j",
+        min=1,
+        help="papers processed at once; parsing stays one paper per parser, model requests share "
+        "llm.max_in_flight (default: web.max_parallel_documents in config.json)",
+    ),
+]
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="ignore caches and redo this step (extraction re-calls the LLM, which costs)")
 ]
@@ -303,6 +313,7 @@ def _batch_summary(
     force: bool,
     export_only: bool,
     force_figures: bool = False,
+    jobs: int | None = None,
 ) -> None:
     def on_stage(stage: str, status: StageStatus, detail: str) -> None:
         typer.echo(f"[{stage}] {status} {detail}".rstrip())
@@ -315,6 +326,7 @@ def _batch_summary(
             force=force,
             force_figures=force_figures,
             export_only=export_only,
+            jobs=jobs or settings.max_parallel_documents,
             on_stage=on_stage,
         )
     except (*REPORTABLE_ERRORS, OSError) as exc:
@@ -337,13 +349,14 @@ def batch(
     mode: ModeOpt = None,
     figures: FiguresOpt = None,
     force_figures: ForceFiguresOpt = False,
+    jobs: JobsOpt = None,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
     settings = _settings(data_root, passes, mode, figures)
-    _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures)
+    _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures, jobs=jobs)
 
 
 @app.command()

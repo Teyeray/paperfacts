@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import threading
 import time
-from collections.abc import Callable, Mapping
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -747,12 +748,20 @@ def run_batch(
     force: bool = False,
     force_figures: bool = False,
     export_only: bool = False,
+    jobs: int = 1,
     on_stage: StageCallback = _ignore_stage,
 ) -> BatchResult:
-    """Process unique PDFs serially and checkpoint the workbook after every attempted document.
+    """Process unique PDFs, ``jobs`` at a time, and checkpoint the workbook after every attempted document.
 
-    Local parser models cannot safely share the laptop's memory. Completed parse/extraction caches
-    make interruption resumable, while expected per-paper errors remain visible in the workbook.
+    Completed parse/extraction caches make interruption resumable, while expected per-paper errors remain
+    visible in the workbook and never stop the other papers. Whatever order the papers finish in, the
+    workbook, the failures and the returned datasets are in input order, so a parallel run writes the table
+    a serial one would. ``on_stage`` is called under a lock, one call at a time, with each paper's stages
+    prefixed by that paper's ``i/n name`` so interleaved progress stays readable.
+
+    Parsing stays one paper per parser (the parse locks in :mod:`paperfacts.parsers`) and model requests
+    share one in-flight limit (:mod:`paperfacts.llm`), so ``jobs`` overlaps the model waits of several
+    papers without multiplying the load on the GPU or the endpoint.
     """
     paths = discover_pdfs(source)
     output = output or DataLayout(settings.data_root).batch_dataset_path()
@@ -760,37 +769,101 @@ def run_batch(
         raise ConfigError("Excel output must have the .xlsx extension")
     if force and export_only:
         raise ConfigError("--force cannot be used with offline export")
-    datasets: list[DocumentDataset] = []
-    figure_rows: list[Mapping[str, object]] = []
-    failures: list[dict[str, str]] = []
+    if jobs < 1:
+        raise ConfigError(f"--jobs must be at least 1, got {jobs}")
+
+    lock = threading.Lock()
+    # Keyed by input position, and read back sorted, so completion order never reaches the output.
+    datasets: dict[int, DocumentDataset] = {}
+    figure_rows: dict[int, tuple[Mapping[str, object], ...]] = {}
+    failures: dict[int, dict[str, str]] = {}
+
+    def report(stage: str, status: StageStatus, detail: str) -> None:
+        with lock:
+            on_stage(stage, status, detail)
+
+    def settle(
+        index: int, prefix: str, outcome: DocumentDataset | dict[str, str], rows: Sequence[Mapping[str, object]] = ()
+    ) -> None:
+        if isinstance(outcome, DocumentDataset):
+            report(prefix, "done", "")
+        else:
+            report(prefix, "failed", outcome["error"])
+        with lock:
+            if isinstance(outcome, DocumentDataset):
+                datasets[index], figure_rows[index] = outcome, tuple(rows)
+            else:
+                failures[index] = outcome
+            # Export failures are fatal: claiming progress without a writable output would be misleading.
+            # Written under the lock, so a checkpoint never overwrites a later one.
+            write_dataset(
+                [datasets[i] for i in sorted(datasets)],
+                output,
+                failures=[failures[i] for i in sorted(failures)],
+                figure_rows=[row for i in sorted(figure_rows) for row in figure_rows[i]],
+            )
+
+    def failure(document_id: str, path: Path, exc: Exception) -> dict[str, str]:
+        logger.exception("batch failed for %s", path.name)
+        return {"document_id": document_id, "filename": path.name, "error": str(exc)}
+
+    # Hashing comes first and runs serially, so which copy of a duplicated PDF is processed is decided by
+    # input order rather than by whichever thread hashed first.
+    queue: list[tuple[int, str, DocumentInput]] = []
     seen: set[str] = set()
     duplicates = 0
     for index, path in enumerate(paths, 1):
         prefix = f"{index}/{len(paths)} {path.name}"
-        on_stage(prefix, "running", "")
-        document_id = ""
         try:
             document = DocumentInput.from_path(path)
-            document_id = document.document_id
-            if document_id in seen:
-                duplicates += 1
-                on_stage(prefix, "skipped", "duplicate PDF content")
-                continue
-            seen.add(document_id)
+        except (PaperFactsError, OSError, ValueError) as exc:
+            settle(index, prefix, failure("", path, exc))
+            continue
+        if document.document_id in seen:
+            duplicates += 1
+            report(prefix, "skipped", "duplicate PDF content")
+            continue
+        seen.add(document.document_id)
+        queue.append((index, prefix, document))
+
+    def process(index: int, prefix: str, document: DocumentInput) -> None:
+        report(prefix, "running", "")
+        try:
             if export_only:
                 dataset = export_document(document, settings)
-                figures = shown_figures(document_id, document.display_filename, settings)
+                figures = shown_figures(document.document_id, document.display_filename, settings)
             else:
-                result = run_document(document, settings, force=force, force_figures=force_figures, on_stage=on_stage)
+                result = run_document(
+                    document,
+                    settings,
+                    force=force,
+                    force_figures=force_figures,
+                    on_stage=lambda stage, status, detail: report(f"{prefix} {stage}", status, detail),
+                )
                 dataset, figures = result.dataset, result.figures
-            datasets.append(dataset)
-            figure_rows.extend(figures.rows if figures is not None else ())
         except (PaperFactsError, OSError, ValueError) as exc:
-            logger.exception("batch failed for %s", path.name)
-            failures.append({"document_id": document_id, "filename": path.name, "error": str(exc)})
-            on_stage(prefix, "failed", str(exc))
+            settle(index, prefix, failure(document.document_id, document.pdf_path, exc))
         else:
-            on_stage(prefix, "done", "")
-        # Export failures are fatal: claiming progress without a writable output would be misleading.
-        write_dataset(datasets, output, failures=failures, figure_rows=figure_rows)
-    return BatchResult(tuple(datasets), tuple(failures), duplicates, output)
+            settle(index, prefix, dataset, figures.rows if figures is not None else ())
+
+    if jobs == 1 or len(queue) <= 1:
+        # On the calling thread, exactly as the serial loop always ran: Ctrl-C interrupts the paper at once.
+        for item in queue:
+            process(*item)
+    else:
+        pool = ThreadPoolExecutor(max_workers=min(jobs, len(queue)), thread_name_prefix="paperfacts-document")
+        try:
+            futures = [pool.submit(contextvars.copy_context().run, process, *item) for item in queue]
+            # Completion order, so an unexpected error (a workbook that cannot be written) surfaces at once
+            # instead of after every paper queued ahead of it.
+            for future in as_completed(futures):
+                future.result()
+        finally:
+            # After an error nothing new starts; papers already running finish on their own.
+            pool.shutdown(wait=False, cancel_futures=True)
+    return BatchResult(
+        tuple(datasets[i] for i in sorted(datasets)),
+        tuple(failures[i] for i in sorted(failures)),
+        duplicates,
+        output,
+    )
