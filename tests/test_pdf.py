@@ -219,3 +219,39 @@ def test_crop_region_matches_render_region(two_page_pdf: Path):
     page = render_page(two_page_pdf, 1, dpi=72)
 
     assert crop_region(page, bbox).size == render_region(two_page_pdf, 1, bbox, dpi=72).size
+
+
+def test_every_page_and_bitmap_is_closed_before_the_lock_is_released(two_page_pdf: Path, monkeypatch):
+    # Freed by the garbage collector instead, a page or bitmap is released by whichever thread collects it,
+    # outside the lock -- with several documents processed at once that crashed the process.
+    import pypdfium2 as pdfium
+
+    from paperfacts import pdf
+
+    opened: list[object] = []
+    closed: list[object] = []
+    for cls in (pdfium.PdfPage, pdfium.PdfBitmap):
+        original_close = cls.close
+
+        def tracking_close(self, *args, original_close=original_close, **kwargs):
+            assert pdf._PDFIUM_LOCK.locked(), f"{type(self).__name__} closed outside the pdfium lock"
+            closed.append(self)
+            return original_close(self, *args, **kwargs)
+
+        monkeypatch.setattr(cls, "close", tracking_close)
+    original_get = pdfium.PdfDocument.__getitem__
+
+    def tracking_get(self, index):
+        page = original_get(self, index)
+        opened.append(page)
+        return page
+
+    monkeypatch.setattr(pdfium.PdfDocument, "__getitem__", tracking_get)
+
+    read_geometry(two_page_pdf)
+    image = render_page(two_page_pdf, 1, dpi=36)
+
+    assert opened and all(page in closed for page in opened)
+    assert any(isinstance(item, pdfium.PdfBitmap) for item in closed)
+    # The returned image owns its pixels: it is still usable after the bitmap behind it was closed.
+    assert image.getpixel((0, 0)) is not None
