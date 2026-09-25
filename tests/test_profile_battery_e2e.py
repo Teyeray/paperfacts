@@ -21,7 +21,8 @@ from openpyxl import load_workbook
 from paperfacts.config import Settings
 from paperfacts.keys import comparison_key_for, extractor_key_for, figure_key_for
 from paperfacts.models import BACKENDS, DocumentGeometry, DocumentInput
-from paperfacts.profile import DomainProfile, load_profile
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import load_profile
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import PipelineResult, load_run_profile, run_document
 from support.factories import RawOutputFactory, paddle_page_entry
@@ -210,7 +211,7 @@ def test_a_battery_run_has_the_battery_columns_converts_its_units_and_refuses_a_
     assert all("lithium-ion battery cathode" in system or "cathode samples" in system for system in client.systems)
     dataset = result.dataset
     assert not dataset.incomplete
-    assert [column.name for column in dataset.fields] == [spec.name for spec in profile.fields]
+    assert set(profile.by_name) <= set(dataset.paper_row)
     # A matched pair's row is named after both lanes' ids, A's first.
     rows = {row["sample_id"].split(" | ")[0]: row for row in dataset.sample_rows}
     assert set(rows) == {"NCM-800", "NCM-900"}
@@ -280,7 +281,8 @@ def test_battery_and_tco_runs_of_one_document_coexist(paper, monkeypatch):
     assert battery.excel_path.read_bytes() == battery_workbook
     assert battery.dataset_json_path.read_bytes() == battery_dataset
     assert tco.dataset_json_path is not None and tco.dataset_json_path != battery.dataset_json_path
-    assert [column.name for column in tco.dataset.fields] == [spec.name for spec in tco_profile.fields]
+    assert set(tco_profile.by_name) <= set(tco.dataset.paper_row)
+    assert not set(tco_profile.by_name) & set(battery.dataset.paper_row)
 
     # The battery run is still whole under its own keys: running it again asks the model nothing.
     again, _, _, client = run_under(BATTERY_PROFILE_PATH, document, settings, ANSWERS, monkeypatch)

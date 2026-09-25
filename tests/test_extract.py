@@ -208,13 +208,15 @@ def test_the_usage_and_the_raw_response_are_kept_as_evidence():
     assert lane.raw_response == text
 
 
-def test_the_lane_records_the_extractor_key_and_the_schema_fingerprint(tco_profile):
+def test_the_lane_records_the_extractor_key_and_the_profile_fingerprint(tco_profile):
     client = FakeLlmClient([response_json()], model="some-model")
 
     lane = extract_lane(make_artifact(), client, lane_options(client, mode="document"))
 
     assert lane.extractor_key == extractor_key(ExtractionOptions(tco_profile, "some-model", mode="document"))
-    assert lane.schema_version == profile_extraction_fingerprint(tco_profile)
+    assert lane.profile_fingerprint == profile_extraction_fingerprint(tco_profile)
+    # The fingerprint used to be written twice; the second copy is gone from new files.
+    assert "schema_version" not in json.loads(lane.model_dump_json())
 
 
 def test_the_markdown_of_the_artifact_is_what_reaches_the_model():
@@ -573,7 +575,7 @@ def test_a_lane_is_extracted_under_the_profile_its_options_carry():
     assert any("sheet_resistance: not in schema" in entry for entry in lane.dropped)
     assert any("coating_thickness" in entry and "plausible range" in entry for entry in lane.dropped)
     assert lane.extractor_key == extractor_key(options)
-    assert lane.profile_fingerprint == lane.schema_version == profile_extraction_fingerprint(profile)
+    assert lane.profile_fingerprint == profile_extraction_fingerprint(profile)
 
 
 def test_the_inventory_verdict_is_read_under_the_profile_s_own_key():

@@ -18,14 +18,15 @@ from paperfacts import figures
 from paperfacts.config import DEFAULT_REPO_ROOT, Settings
 from paperfacts.errors import ConfigError
 from paperfacts.fields import FieldSpec
-from paperfacts.profile import FigureSlots, PromptSlots, load_profile, profile_path
+from paperfacts.profile import FigureSlots, PromptSlots
+from paperfacts.profile_loader import load_profile, profile_path
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
     inventory_system_prompt,
     matching_system_prompt,
 )
-from paperfacts.units import BUILTIN_UNITS
+from paperfacts.units import UnitRegistry
 from support.profiles import make_profile
 
 # The attributes that restate a special case the code made by field name; everything else must equal the
@@ -113,7 +114,7 @@ def test_every_tco_slot_reaches_the_prompts(tco_profile):
 def test_the_tco_profile_declares_no_units_of_its_own_only_the_gas_suffixes(tco_profile):
     assert tco_profile.units.declared == ()
     # Exactly the gas names the code set aside for every domain before a profile declared them.
-    assert tco_profile.units == BUILTIN_UNITS
+    assert tco_profile.units == UnitRegistry(ignored_suffixes=("Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"))
     assert tco_profile.units.material() == [{"ignored_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"]}]
 
 

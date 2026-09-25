@@ -272,7 +272,6 @@ def extract_lane(
         backend=artifact.backend,
         extractor_key=extractor_key(options),
         model=client.model,
-        schema_version=profile_extraction_fingerprint(profile),
         profile_fingerprint=profile_extraction_fingerprint(profile),
         target=records.target,
         samples=records.samples,

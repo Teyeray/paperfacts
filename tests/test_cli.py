@@ -22,7 +22,7 @@ from paperfacts.errors import ConfigError, ParserError
 from paperfacts.figures import user_prompt as figure_user_prompt
 from paperfacts.models import Backend, DocumentInput, RawParseOutput
 from paperfacts.parsers import Parser
-from paperfacts.profile import load_profile
+from paperfacts.profile_loader import load_profile
 from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
 from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data

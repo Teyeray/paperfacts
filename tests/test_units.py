@@ -12,15 +12,8 @@ from paperfacts.models import SourceBlock
 from paperfacts.normalize import convert_to_canonical, normalize_field
 from paperfacts.passages import candidate_blocks, inventory_blocks, searchable
 from paperfacts.profile import RetrievalSpec
-from paperfacts.units import (
-    BUILTIN_CONVERTERS,
-    BUILTIN_RETRIEVAL,
-    BUILTIN_UNITS,
-    MAX_ALIASES,
-    DeclaredUnit,
-    UnitRegistry,
-    load_units,
-)
+from paperfacts.profile_loader import MAX_ALIASES, load_profile, load_units
+from paperfacts.units import BUILTIN_CONVERTERS, BUILTIN_RETRIEVAL, DeclaredUnit, UnitRegistry
 from support.extraction import make_field
 from support.factories import make_block
 from support.profiles import shipped_profile
@@ -28,6 +21,8 @@ from support.profiles import shipped_profile
 # The shipped profile's field table, at module level because constants and parametrize lists need it before
 # any fixture runs.
 FIELD_BY_NAME = shipped_profile().by_name
+# The shipped TCO profile's units: the built-ins with no declaration of its own.
+TCO_UNITS = shipped_profile().units
 
 WHERE = "profiles/battery.json"
 CAPACITY: dict[str, Any] = {"aliases": {"mAh/g": 1, "mAh g-1": 1, "Ah/kg": 1, "Ah/g": 1000}, "case_sensitive": True}
@@ -202,9 +197,9 @@ def test_a_case_insensitive_unit_reads_any_case():
 
 def test_the_built_in_registry_converts_as_the_built_in_converters_do():
     # The registry is asked with a cleaned unit, in which "·" is already ".".
-    assert BUILTIN_UNITS.convert("Ω·cm", "mΩ.cm") == (1e-3, 0.0)
-    assert BUILTIN_UNITS.convert("nm", "furlong") is None
-    assert BUILTIN_UNITS.convert("mAh/g", "mAh/g") is None
+    assert TCO_UNITS.convert("Ω·cm", "mΩ.cm") == (1e-3, 0.0)
+    assert TCO_UNITS.convert("nm", "furlong") is None
+    assert TCO_UNITS.convert("mAh/g", "mAh/g") is None
 
 
 def test_kelvin_reaches_celsius_through_the_declared_offset():
@@ -218,8 +213,8 @@ def test_kelvin_reaches_celsius_through_the_declared_offset():
 def test_kelvin_stays_ambiguous_without_the_extension():
     spec = FIELD_BY_NAME["annealing_temperature"]
 
-    assert convert_to_canonical(spec, 573.0, "K") == (None, None, "unknown unit 'K' for ℃")
-    assert convert_to_canonical(spec, 573.0, "K", BUILTIN_UNITS) == (None, None, "unknown unit 'K' for ℃")
+    assert convert_to_canonical(spec, 573.0, "K", UnitRegistry()) == (None, None, "unknown unit 'K' for ℃")
+    assert convert_to_canonical(spec, 573.0, "K", TCO_UNITS) == (None, None, "unknown unit 'K' for ℃")
 
 
 def test_an_extension_never_changes_a_spelling_the_built_in_reads():
@@ -282,7 +277,7 @@ def test_normalize_field_converts_with_the_registry_it_is_given():
     field = make_field("annealing_temperature", "573", unit_raw="K")
 
     assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], registry).value == pytest.approx(299.85)
-    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], BUILTIN_UNITS).value is None
+    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], TCO_UNITS).value is None
 
 
 @pytest.mark.parametrize(("spelling", "factor"), list(BATTERY_CAPACITY["aliases"].items()))
@@ -300,7 +295,7 @@ def test_every_alias_converts_by_its_factor_and_is_found_after_a_number(spelling
 
 
 def test_the_built_in_registry_keeps_the_built_in_pattern_objects():
-    assert all(BUILTIN_UNITS.retrieval(unit) is pattern for unit, pattern in BUILTIN_RETRIEVAL.items())
+    assert all(TCO_UNITS.retrieval(unit) is pattern for unit, pattern in BUILTIN_RETRIEVAL.items())
 
 
 def test_a_derived_pattern_needs_a_digit_and_a_word_boundary():
@@ -361,7 +356,7 @@ def test_candidate_blocks_find_a_declared_unit_through_the_registry():
     spec = probe("mAh/g", keywords=("specific capacity",))
     unit_only = block("the cell delivered 152 mAh g-1 at 0.1 C")
 
-    assert candidate_blocks(spec, [unit_only], units=BUILTIN_UNITS) == []
+    assert candidate_blocks(spec, [unit_only], units=TCO_UNITS) == []
     assert candidate_blocks(spec, [unit_only], units=registry) == [unit_only]
 
 
@@ -372,3 +367,83 @@ def test_inventory_blocks_use_the_condition_pattern_they_are_given(tco_profile):
     assert inventory_blocks([cycled], tco_profile.retrieval) == []
     # Compiled case-insensitively: the pattern is matched on lower-cased searchable() text.
     assert inventory_blocks([cycled], retrieval) == [cycled]
+
+
+# ---- Excluding built-in spellings ----------------------------------------------------------------------------
+# "C" after a number is degrees to the built-in ℃ table and a C-rate to a battery group.
+NO_BARE_C = {"℃": {"extends_builtin": True, "exclude": ["C"]}}
+
+
+def test_an_excluded_spelling_is_no_longer_converted_by_the_built_in():
+    registry = load_units(NO_BARE_C, WHERE)
+
+    assert registry.convert("℃", "C") is None
+    assert registry.convert("℃", "c") is None  # matched case-insensitively
+    assert registry.convert("℃", "°C") == (1.0, 0.0)
+    assert TCO_UNITS.convert("℃", "C") == (1.0, 0.0)
+
+
+def test_an_excluded_spelling_is_no_longer_found_after_a_number():
+    pattern = load_units(NO_BARE_C, WHERE).retrieval("℃")
+
+    assert pattern is not None
+    for text in ("cycled at 1 c between", "at 0.5c.", "10c-rate"):
+        assert not pattern.search(text), text
+        assert TCO_UNITS.retrieval("℃").search(text), text  # type: ignore[union-attr]
+    for text in ("calcined at 800 °c for", "at 25 ℃", "heated to 1073 k"):
+        assert pattern.search(text), text
+
+
+def test_an_exclusion_keeps_the_extension_its_own_spellings():
+    registry = load_units({"℃": KELVIN["℃"] | {"exclude": ["C", "K"]}}, WHERE)
+
+    # The built-in no longer finds "K"; the extension's own spelling finds and converts it.
+    assert registry.convert("℃", "K") == (1.0, -273.15)
+    assert registry.retrieval("℃").search("at 1073 k")  # type: ignore[union-attr]
+
+
+def test_a_unit_that_excludes_nothing_keeps_its_fingerprint_material():
+    (unit,) = load_units(KELVIN, WHERE).declared
+
+    assert "exclude" not in unit.material()
+    assert load_units(NO_BARE_C, WHERE).material() == [
+        {
+            "canonical": "℃",
+            "aliases": (),
+            "case_sensitive": False,
+            "retrieval": None,
+            "extends_builtin": True,
+            "exclude": ("C",),
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        pytest.param({"mAh/g": CAPACITY | {"exclude": ["C"]}}, "needs extends_builtin", id="not-an-extension"),
+        pytest.param({"℃": {"extends_builtin": True, "exclude": []}}, "exclude must be a list", id="empty"),
+        pytest.param({"℃": {"extends_builtin": True, "exclude": "C"}}, "exclude must be a list", id="not-a-list"),
+        pytest.param({"℃": {"extends_builtin": True, "exclude": ["F"]}}, "no spelling the built-in", id="unknown"),
+        # The ohm patterns start at the unit, not the number, so an exclusion could not take effect there.
+        pytest.param(
+            {"Ω/sq": {"extends_builtin": True, "exclude": ["ohm/sq"]}}, "still found", id="pattern-not-at-number"
+        ),
+        pytest.param({"℃": {"extends_builtin": True}}, "aliases must be an object of 1", id="nothing-declared"),
+    ],
+)
+def test_a_bad_exclusion_is_refused(declared, expected):
+    assert expected in refused(declared)
+
+
+def test_the_battery_profile_reads_one_c_as_a_rate_and_never_as_a_temperature(tco_profile):
+    battery = load_profile(tco_profile.source.with_name("battery_cathode.json"))
+    temperature = battery.by_name["calcination_temperature"]
+    rate_sentence = block("the cathode delivered 150 mAh g-1 at 1 C and 120 mAh g-1 at 5 C")
+
+    assert convert_to_canonical(temperature, 1.0, "C", battery.units)[0] is None
+    assert battery.units.convert("C", "C") == (1.0, 0.0)
+    assert candidate_blocks(temperature, [rate_sentence], units=battery.units) == []
+    # Under TCO the same sentence still reads as a temperature, exactly as the built-in table always did.
+    assert candidate_blocks(temperature, [rate_sentence], units=TCO_UNITS) == [rate_sentence]
+    assert convert_to_canonical(temperature, 1.0, "C", TCO_UNITS)[0] == 1.0

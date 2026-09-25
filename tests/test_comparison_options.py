@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from paperfacts.columns import field_columns
 from paperfacts.compare import compare_lanes
 from paperfacts.config import Settings
-from paperfacts.dataset import consolidate_document, field_columns
+from paperfacts.dataset import consolidate_document
 from paperfacts.keys import ComparisonOptions, comparison_key, profile_extraction_fingerprint
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput

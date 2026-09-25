@@ -26,7 +26,7 @@ from pathlib import Path
 
 from paperfacts.config import Settings
 from paperfacts.normalize import parse_number
-from paperfacts.profile import load_profile, profile_path
+from paperfacts.profile_loader import load_profile, profile_path
 from paperfacts.records import sample_key
 
 HERE = Path(__file__).parent

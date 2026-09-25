@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from paperfacts.columns import field_columns
 from paperfacts.compare import FieldComparison, compare_lanes
 from paperfacts.dataset import (
     DatasetPayload,
@@ -875,7 +876,8 @@ def test_the_json_view_survives_a_round_trip(tmp_path):
     assert loaded["filename"] == "paper.pdf"
     assert loaded["extractor_key"] == result.extractor_key
     assert loaded["comparison_key"] == result.comparison_key
-    assert [field["name"] for field in loaded["fields"]] == [spec.name for spec in FIELD_SPECS]
+    # The field list is display text, built from the profile by whoever serves the table: never stored.
+    assert "fields" not in loaded
     assert loaded["paper_row"] == dict(result.paper_row)
     assert loaded["sample_rows"] == [dict(row) for row in result.sample_rows]
     assert loaded["quality_rows"] == [dict(row) for row in result.quality_rows]
@@ -883,9 +885,22 @@ def test_the_json_view_survives_a_round_trip(tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_a_stored_file_with_a_field_list_still_reads(tmp_path):
+    # Files written before the list was dropped carry one; it is read, and the library replaces it.
+    result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm")])
+    path = tmp_path / "dataset.json"
+    write_dataset_json(result, path)
+    old = json.loads(path.read_text(encoding="utf-8")) | {
+        "fields": [column.model_dump() for column in field_columns(shipped_profile())]
+    }
+
+    parsed = DatasetPayload.model_validate(old)
+
+    assert DocumentDataset.from_payload(parsed) == result
+
+
 def test_the_field_list_carries_the_chinese_description_for_the_header_tooltip():
-    result = paired([value("transmittance", "85", "%")], [value("transmittance", "85", "%", backend="paddleocr_vl")])
-    by_name = {field.name: field for field in result.to_payload().fields}
+    by_name = {field.name: field for field in field_columns(shipped_profile())}
     assert "透光率" in by_name["transmittance"].description
     assert by_name["transmittance"].scope == "sample"
 
@@ -898,7 +913,7 @@ def test_every_configured_field_has_a_chinese_description():
 
 def test_the_field_list_carries_the_chinese_label_for_the_column_header():
     # The browser prints this above the column; a field without one falls back to its id, never to blank.
-    by_name = {field.name: field for field in dataset(make_lane()).to_payload().fields}
+    by_name = {field.name: field for field in field_columns(shipped_profile())}
 
     assert by_name["transmittance"].label == "透光率"
     assert by_name["thickness"].label == "厚度"
@@ -934,7 +949,7 @@ def test_a_dataset_file_in_the_wrong_shape_fails_at_the_boundary():
 
 
 def test_the_json_field_list_carries_the_unit_and_the_scope():
-    fields = {field.name: field for field in dataset(make_lane()).to_payload().fields}
+    fields = {field.name: field for field in field_columns(shipped_profile())}
 
     assert fields["thickness"].scope == "sample"
     assert fields["component"].scope == "target"

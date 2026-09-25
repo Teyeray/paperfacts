@@ -22,11 +22,7 @@ from paperfacts.fields import FieldSpec, RangePolicy
 from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
-from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS  # noqa: F401 -- see below
-from paperfacts.units import BUILTIN_UNITS, UnitRegistry
-
-# CONVERTERS is not used here any more: tests/fixtures/units/generate.py imports it from this module, and that
-# generator is frozen together with the recording it made.
+from paperfacts.units import UnitRegistry
 
 # ---- Closed category sets --------------------------------------------------------------------------------
 # A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
@@ -462,11 +458,12 @@ def convert_to_canonical(
     spec: FieldSpec,
     value: float,
     unit_raw: str | None,
-    units: UnitRegistry = BUILTIN_UNITS,
+    units: UnitRegistry,
     *,
     value_text: str | None = None,
 ) -> tuple[float | None, str | None, str | None]:
-    """``(canonical value, canonical unit, note)``; the value is None when conversion fails.
+    """``(canonical value, canonical unit, note)`` in ``units`` (a profile's); the value is None when conversion
+    fails.
 
     The value is multiplied by any scale factor in the header first, then converted as ``value * factor +
     offset``: the header's power of ten counts in the unit it was written in, before a temperature is shifted.

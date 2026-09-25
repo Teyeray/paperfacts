@@ -18,7 +18,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
-from paperfacts.dataset import DocumentDataset, Row, field_columns
+from paperfacts.columns import field_columns
+from paperfacts.dataset import DocumentDataset, Row
 from paperfacts.profile import DomainProfile
 from paperfacts.storage import write_atomic
 

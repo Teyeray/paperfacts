@@ -48,4 +48,6 @@ def test_a_b0_dataset_loads_and_exports_again():
 
     assert payload.profile_fingerprint is None
     assert dataset.paper_row["thickness"] == 100
-    assert dataset.to_payload() == payload
+    # Everything but the field list, which is display text built from the profile and no longer carried.
+    assert payload.fields
+    assert dataset.to_payload() == payload.model_copy(update={"fields": ()})

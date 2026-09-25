@@ -16,6 +16,7 @@ import pytest
 from paperfacts.fields import FieldSpec
 from paperfacts.normalize import convert_to_canonical
 from paperfacts.units import BUILTIN_CONVERTERS, BUILTIN_RETRIEVAL
+from support.profiles import shipped_profile
 
 RECORDED = json.loads((Path(__file__).parent / "fixtures" / "units" / "identity.json").read_text(encoding="utf-8"))
 
@@ -39,7 +40,10 @@ def test_conversion_to_a_built_in_unit_is_the_recorded_one(canonical):
         name="probe", group="film", kind="numeric", description="probe", keywords=(), canonical_unit=canonical
     )
 
-    converted = {unit: list(convert_to_canonical(spec, 2.0, unit)) for unit in RECORDED["spellings"]}
+    # The TCO profile's units: the built-ins and the gas names the recording set aside.
+    units = shipped_profile().units
+
+    converted = {unit: list(convert_to_canonical(spec, 2.0, unit, units)) for unit in RECORDED["spellings"]}
 
     assert converted == RECORDED["conversions"][canonical]
 

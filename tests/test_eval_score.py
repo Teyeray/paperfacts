@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.profile import load_profile
+from paperfacts.profile_loader import load_profile
 from support.profiles import SHIPPED_PROFILE_PATH
 
 SCRIPT = Path(__file__).resolve().parent.parent / "eval" / "score.py"

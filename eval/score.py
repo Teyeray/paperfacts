@@ -35,7 +35,8 @@ from pathlib import Path
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import profile_comparison_fingerprint
 from paperfacts.normalize import canonical_category
-from paperfacts.profile import DomainProfile, parse_profile
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import parse_profile
 
 REPO = Path(__file__).resolve().parent.parent
 # The gold files' id for the paper-level record, and the sample id the report prints for it.

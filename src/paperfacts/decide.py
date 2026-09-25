@@ -188,11 +188,11 @@ def _commit(
     """Nothing refused the evidence: record the value, the conditions and blocks it rests on, and how."""
     conditions = joined([c.value.condition or "" for c in final])
     sources = joined(sorted({source for c in final for source in c.value.source_ids}))
-    if spec.condition_rule and not conditions:
-        # A field whose prompt demands a condition: a value without one is kept, but the reader is told.
-        # The note is the profile's (validation requires it with the rule), so the text stored here is covered by
-        # comparison_key; a label is display text, which no key covers.
-        details.append(spec.missing_condition_note_zh or f"原文提取结果未注明{spec.name}的测量条件")
+    if spec.condition_rule and spec.missing_condition_note_zh and not conditions:
+        # A field whose prompt demands a condition: a value without one is kept, but the reader is told. The note
+        # is the profile's (the loader refuses a rule without one), so the text stored here is covered by
+        # comparison_key.
+        details.append(spec.missing_condition_note_zh)
     details.append(f"采用 {chosen.backend}；抽取重复一致率 {chosen.value.agreement:g}；合并重复证据")
     return Decision(
         chosen.scalar,

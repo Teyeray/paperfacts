@@ -73,6 +73,13 @@ def normalize_key(text: str | None) -> str:
     return _NON_KEY.sub("", normalize_text(text).lower().replace("ω", "Ω"))
 
 
+def is_word_edge(character: str) -> bool:
+    """Whether a pattern ending (or starting) on ``character`` may be closed by ``\\b``: a letter or digit of a
+    script that separates its words with spaces. Chinese and Japanese run their words together, so ``\\b``
+    next to one of their characters demands a break that is never written and the pattern never matches."""
+    return character.isalnum() and unicodedata.east_asian_width(character) not in ("W", "F")
+
+
 _LATEX_MARKERS = ("$", "\\")
 # \Omega and \mu are unit symbols rather than spacing: a cell reading "\times 10^{-4} \Omega cm" is a
 # resistivity, and without them the unit is unrecognised.

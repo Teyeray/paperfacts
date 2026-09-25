@@ -22,7 +22,8 @@ from paperfacts.errors import Cancelled, ConfigError, LlmError, LlmOfflineMiss
 from paperfacts.figures import FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
-from paperfacts.profile import DomainProfile, load_profile
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import load_profile
 from paperfacts.readings import figure_artifact, migrate_legacy_figures, read_document_figures, shown_figures
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import load_run_profile, run_document

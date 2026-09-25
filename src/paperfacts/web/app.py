@@ -59,7 +59,8 @@ from paperfacts.errors import ConfigError
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.profile import IDENTIFIER, DomainProfile, loaded_file_sha256, profile_path
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import IDENTIFIER, loaded_file_sha256, profile_path
 from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key

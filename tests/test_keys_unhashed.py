@@ -12,7 +12,18 @@ import shutil
 from paperfacts import keys
 from paperfacts.workbook import data_columns
 
-UNHASHED = {"workbook.py", "readings.py", "llm.py", "config.py", "cli.py", "workflow.py", "batch.py", "ui_copy.py"}
+UNHASHED = {
+    "workbook.py",
+    "columns.py",
+    "readings.py",
+    "llm.py",
+    "config.py",
+    "cli.py",
+    "workflow.py",
+    "batch.py",
+    "ui_copy.py",
+    "profile_loader.py",
+}
 
 
 def _hashed_modules(monkeypatch, profile) -> set[str]:

@@ -124,7 +124,7 @@ def reads_config_key(tree: ast.Module) -> list[int]:
 @pytest.mark.parametrize("path", FILES, ids=lambda path: str(path.relative_to(SOURCE)))
 def test_no_module_reads_the_config_json_field_table(path):
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    if path.name == "profile.py":
+    if path.name == "profile_loader.py":
         # The profile's own file has keys of the same name; reading them is the point.
         return
 

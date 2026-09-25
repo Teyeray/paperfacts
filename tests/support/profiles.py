@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from paperfacts.config import Settings
-from paperfacts.profile import DomainProfile, load_profile, parse_profile, profile_path
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import load_profile, parse_profile, profile_path
 
 # One paper-level group and one sample-level group, a numeric field in each, and a text field: the least a
 # profile needs to exercise both scopes.

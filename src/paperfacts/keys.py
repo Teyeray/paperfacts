@@ -41,7 +41,7 @@ from paperfacts.config import (
     Settings,
 )
 from paperfacts.fields import FieldRole, FieldSpec
-from paperfacts.profile import DomainProfile
+from paperfacts.profile import DomainProfile, FigureSlots
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
@@ -55,6 +55,7 @@ _PACKAGE_DIR = Path(__file__).parent
 _NO_DEFAULT = object()
 # Built once: the material of every field of every key compares against it.
 _FIELD_DEFAULTS = {item.name: item.default for item in dataclasses.fields(FieldSpec)}
+_FIGURE_SLOT_DEFAULTS = {item.name: item.default for item in dataclasses.fields(FigureSlots)}
 
 
 def content_fingerprint(material: str) -> str:
@@ -130,7 +131,13 @@ def retrieval_fingerprint(profile: DomainProfile) -> str:
         "retrieval": dataclasses.asdict(profile.retrieval),
         "code": source_fingerprint("passages.py", "continuation.py", "units.py", "text.py"),
     }
-    unit_patterns = [[unit.canonical, unit.retrieval] for unit in profile.units.declared if unit.retrieval]
+    # A unit's excluded spellings change what its built-in pattern finds; listed only when there are some, so a
+    # unit that excludes nothing keeps the material it had before exclusions existed.
+    unit_patterns = [
+        [unit.canonical, unit.retrieval, *([list(unit.exclude)] if unit.exclude else [])]
+        for unit in profile.units.declared
+        if unit.retrieval or unit.exclude
+    ]
     if unit_patterns:
         material["units"] = unit_patterns
     return content_fingerprint(_dumps(material))
@@ -148,7 +155,9 @@ def extraction_code_fingerprint() -> str:
     ``drop_implausible`` judges (``continuation.py`` decides which blocks grounding joins across a page
     break); ``voting.py`` decides which of the model's repeated claims survive the majority vote.
     ``text.py`` and ``units.py`` hold the folding and the unit tables ``normalize.py`` applies, and
-    ``profile.py`` the prompt-slot defaults a profile falls back on.
+    ``profile.py`` the prompt-slot defaults a profile falls back on. ``profile_loader.py`` is left out: what it
+    reads from a file reaches this key as values (the schema fingerprint and the rendered prompts), and a
+    default it leaves in place is declared in ``fields.py``, ``profile.py`` or ``units.py``, all hashed.
     Over-invalidation is cheap here: an unchanged request replays from the LLM cache, so re-deriving the
     records costs nothing but a second of CPU.
 
@@ -312,11 +321,19 @@ def figure_profile_fingerprint(profile: DomainProfile) -> str:
     """The part of the profile figure reading uses: every FIGURE attribute of the fields a chart may be read
     for (which fields a caption can name, what the model is told about them, how a reading is converted), the
     chart prompt's slots, and the units the profile declares. A field no chart is read for is left out whole,
-    so editing it never renames a stored reading; an attribute at its dataclass default is left out as in
-    the other keys (``fields.py``, which declares the defaults, is hashed with the figure code)."""
+    so editing it never renames a stored reading; an attribute or a slot at its dataclass default is left out
+    as in the other keys (``fields.py`` and ``profile.py``, which declare the defaults, are hashed with the
+    figure code)."""
+    slots = None
+    if profile.figures is not None:
+        slots = {
+            name: value
+            for name, value in dataclasses.asdict(profile.figures).items()
+            if value != _FIGURE_SLOT_DEFAULTS.get(name, _NO_DEFAULT)
+        }
     material: dict[str, object] = {
         "fields": [_field_material(spec, FieldRole.FIGURE) for spec in profile.figure_fields],
-        "slots": None if profile.figures is None else dataclasses.asdict(profile.figures),
+        "slots": slots,
     }
     if profile.units.material():
         material["units"] = profile.units.material()
