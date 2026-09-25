@@ -19,8 +19,10 @@ from typer.testing import CliRunner
 
 from paperfacts.cli import BackendOption, app
 from paperfacts.errors import ConfigError, ParserError
+from paperfacts.figures import user_prompt as figure_user_prompt
 from paperfacts.models import Backend, DocumentInput, RawParseOutput
 from paperfacts.parsers import Parser
+from paperfacts.profile import load_profile
 from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
 from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data
@@ -334,7 +336,11 @@ def test_profiles_check_prints_the_error_and_exits_one(tmp_path: Path):
     assert "ok" not in result.output.splitlines()
 
 
+FIGURE_SECTION = "figure user prompt (figures stage, only when figures.enabled; one per chart panel)"
+
+
 def test_prompts_prints_the_system_prompts_exactly_as_recorded():
+    tco = load_profile(SHIPPED_PROFILE_PATH)
     result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH)])
 
     assert result.exit_code == 0
@@ -343,7 +349,43 @@ def test_prompts_prints_the_system_prompts_exactly_as_recorded():
         "field system prompt (passage mode)": RECORDED_PROMPTS["field_system"],
         "extraction system prompt (document mode)": RECORDED_PROMPTS["extraction_system"],
         "matching system prompt (compare, both modes)": RECORDED_PROMPTS["matching_system"],
+        FIGURE_SECTION: figure_user_prompt("<caption>", tco.figure_fields, tco.figures),
     }
+
+
+def test_prompts_print_no_figure_prompt_for_a_profile_without_figure_fields(tmp_path: Path):
+    result = runner.invoke(app, ["prompts", "--profile", str(write_demo(tmp_path / "demo.json"))])
+
+    assert result.exit_code == 0
+    assert FIGURE_SECTION not in prompt_sections(result.output)
+
+
+def test_profiles_check_refuses_the_reserved_name_as_a_run_would(tmp_path: Path):
+    path = write_demo(tmp_path / "paperfacts.json", profile_data({"name": "paperfacts"}))
+
+    result = runner.invoke(app, ["profiles", "--check", str(path)])
+
+    assert result.exit_code == 1
+    assert "error:" in result.output and "reserved" in result.output
+
+
+def test_profiles_check_refuses_a_file_that_shadows_a_repository_profile(tmp_path: Path):
+    # A run refuses a profile named like a shipped one but different, since their workbooks would collide.
+    path = write_demo(tmp_path / "tco.json", profile_data({"name": "tco"}))
+
+    result = runner.invoke(app, ["profiles", "--check", str(path)])
+
+    assert result.exit_code == 1
+    assert "both named 'tco'" in result.output
+
+
+def test_profiles_check_accepts_a_byte_identical_copy_of_a_repository_profile(tmp_path: Path):
+    copy = tmp_path / "tco.json"
+    shutil.copyfile(SHIPPED_PROFILE_PATH, copy)
+
+    result = runner.invoke(app, ["profiles", "--check", str(copy)])
+
+    assert result.exit_code == 0 and result.output.splitlines()[-1] == "ok"
 
 
 def test_prompts_for_one_field_prints_its_system_prompt_its_line_and_the_question():
@@ -446,7 +488,8 @@ def test_profiles_check_prints_warnings_from_the_whole_package(monkeypatch, tmp_
         logging.getLogger("paperfacts.units").warning("a unit warning")
         return make_profile()
 
-    monkeypatch.setattr("paperfacts.cli.load_profile", load_and_warn)
+    # --check loads the way a run does, through load_run_profile.
+    monkeypatch.setattr("paperfacts.workflow.load_profile", load_and_warn)
 
     result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json"))])
 

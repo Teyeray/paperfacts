@@ -160,6 +160,15 @@ def test_the_profile_gives_the_page_tcos_own_copy(client: TestClient, tco_profil
     assert thickness == {"name": "thickness", "label": "厚度", "group": "film", "level": "sample", "unit": "nm"}
 
 
+def test_a_profile_name_that_could_break_the_download_header_is_refused(settings: Settings, jobs: JobManager):
+    # The loader enforces the name, but a profile built in memory has not been through it, and the name goes
+    # unquoted into the corpus download's Content-Disposition.
+    profile = dataclasses.replace(make_profile(), name='demo"; filename="evil.exe')
+
+    with pytest.raises(ConfigError, match="must match"):
+        create_app(settings, profile=profile, jobs=jobs)
+
+
 def test_another_profile_serves_its_own_copy_over_the_defaults(settings: Settings, jobs: JobManager):
     """The copy a profile sets replaces the default; what it leaves out is the domain-free default."""
     profile = make_profile({"ui": {"paper_level_label_zh": "前驱体（论文级）", "entity_label_zh": "涂层"}})
@@ -822,6 +831,8 @@ def test_a_profile_file_that_cannot_be_read_refuses_the_job_with_its_own_message
         run(_job(registered), _no_mark)
     assert "无法读取领域配置文件" in str(refused.value)
     assert "changed on disk" not in str(refused.value)
+    # The message reaches the browser: the file's name, never where the server keeps it.
+    assert "demo.json" in str(refused.value) and str(tmp_path) not in str(refused.value)
     assert calls == []
 
 

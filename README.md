@@ -659,7 +659,9 @@ shows 示例配置 beside the title of an `example` profile, and `paperfacts pro
 `production` once its output has been checked against hand-read papers (`eval/` has the scorer and the format).
 
 **Selecting one.** `profile` in `config.json` (default `tco`), `PAPERFACTS_PROFILE`, or `--profile NAME_OR_PATH`
-on one command. A bare name is `profiles/<name>.json`; a value containing `/` or ending in `.json` is a path.
+on one command. A bare name is `profiles/<name>.json` in the repository; a value containing `/` or ending in
+`.json` is a path, and a relative one is resolved against the directory the command runs in, not the repository
+(`--profile profiles/tco.json` works from the checkout's root only; the bare `tco` works from anywhere).
 The file is read and validated once per process, so a running server sees an edit only after a restart
 (`scripts/deploy.sh` restarts when anything under `profiles/` is newer than the running process).
 
@@ -680,6 +682,34 @@ list of valid ones, and every error names the file and the key.
 | `ignored_unit_suffixes` | Words a paper writes after a unit to say whose quantity it is (TCO: the chamber gases, so "1.1 Pa Ar" reads as a pressure). At most 50; none by default |
 | `ui` | Chinese copy: `paper_level_label_zh` (the paper-level record in a column header or a fact's scope), `paper_level_short_zh` (the same where only a word fits), `entity_label_zh` (what one sample is called), `no_samples_message_zh` (shown in place of the sample table when the inventory found no in-scope sample). Each defaults to a neutral wording |
 
+### What a profile can and cannot express
+
+A profile changes the words, never the shape of the answer. The shape is fixed in code:
+
+- **One paper, one kind of sample.** Every paper yields at most one list of samples, all of the same kind (a
+  film, a cathode material), each one row. A paper whose facts belong to two kinds of entity at once -- devices
+  built from films, both with their own measurements -- fits only one of them per profile.
+- **Two levels.** A field is paper-level (one record per paper) or sample-level (one value per sample). There
+  is no third level: nothing per layer within a sample, per measurement within a sample, or per figure.
+- **Three kinds of field.** `numeric` (a number converted to one canonical unit), `composition` (a ratio or
+  formula, compared as normalised text) and `text` (optionally a closed set of `categories`). No list, table or curve is a
+  value.
+- **Paper-level fields are single-valued.** A paper-level field holds one value for the whole paper; a quantity
+  that differs between samples must be sample-level.
+- **A range is a midpoint or nothing.** A value quoted as a range ("10-20") becomes its midpoint or, under
+  `range_policy: reject`, no value; a bound (">80 %") fills no dataset cell.
+- **Charts are property-vs-condition only.** The opt-in figure reading reads a y value per marker off a chart
+  whose caption names a `figure_readable` field; spectra, micrographs, maps and schematics are not read.
+- **The prompts are English.** The templates around the slots are English, so slots are written in English;
+  only the display copy (`title_zh`, `label`, `ui`, ...) is Chinese.
+
+When a domain does not fit, narrow it until it does rather than stretch a slot: pick the one entity the gold
+data is about and make it the sample, move a per-layer quantity into one field per layer that matters
+(`etl_thickness`, `absorber_thickness`), and leave curves and spectra to the charts or out of scope. Two entity
+kinds are two profiles over the same papers, each with its own server and data root (see
+[A second profile beside the first](#a-second-profile-beside-the-first)). What still does not fit needs a code
+change, not a profile.
+
 ### Writing a profile for a new domain
 
 1. **Copy the example.** `cp profiles/battery_cathode.json profiles/perovskite.json`, then set `name` to
@@ -699,17 +729,23 @@ list of valid ones, and every error names the file and the key.
 5. **Units.** If a `canonical_unit` is not one of the twelve built-in ones, declare it under `units`.
 6. **Check it.** `uv run paperfacts profiles --check profiles/perovskite.json` validates without a model or a
    configuration file: it prints the profile's line (name, maturity, paper/sample field counts, content hash,
-   title) and any warnings then `ok`, or every error it found, one `error:` line each, and exits 1.
+   title) and any warnings then `ok`, or every error it found, one `error:` line each, and exits 1. It makes the
+   checks a run makes too: the name `paperfacts` is reserved, and a file named like a repository profile but
+   differing from it is refused, since their workbooks would overwrite each other.
 7. **Read what the model will be asked.** `uv run paperfacts prompts --profile perovskite` prints the inventory,
    field, extraction and matching system prompts exactly as sent; `--field NAME` prints the per-field system
    prompt, that field's line, and the question around it with `<sample list>` and `<excerpts>` standing for what
-   a run fills in. No model is called. Read rule 4, 5, 6 and 10 of each prompt with the slots in place.
+   a run fills in. A profile with `figure_readable` fields also gets the chart-reading question the figures stage
+   sends per chart panel (only when `figures.enabled`), with `<caption>` for the figure's caption and every
+   figure-readable field listed where a run lists only those the caption names. No model is called. Read rule 4,
+   5, 6 and 10 of each prompt with the slots in place.
 8. **Run a few papers.** `uv run paperfacts run paper.pdf --profile perovskite`, or a second server (below).
    Iterate on display text and tolerances freely -- they re-key nothing or only the comparison, which is
    recomputed from stored extractions at no model cost -- and batch prompt or field edits, which re-extract.
 9. **Measure before promoting.** Hand-check a few papers into a gold directory of their own (`eval/README.md`
    has the format), score them with `eval/score.py --profile profiles/perovskite.json --gold <dir>`, and only
-   then set `maturity` to `production`.
+   then set `maturity` to `production`. The scorer reads the profile through the package, and without `--keys`
+   it scores each paper's newest dataset built under that profile (by the fingerprint the dataset records).
 
 ### Prompt slots
 
@@ -876,7 +912,7 @@ scorer's cells against the gold set must not move. Never run this against produc
 |---|---|
 | `raw/`, `parsed/`, `pages/`, `overlays/`, `identity.json`, `llm_cache/` | Shared by every profile |
 | `facts/`, `comparisons/`, `datasets/` | Named by keys, which differ between profiles |
-| `figures/<profile>/<figure_key>.json` | Per profile (TCO also reads the older flat `figures/<figure_key>.json`) |
+| `figures/<profile>/<figure_key>.json` | Per profile (TCO also reads the older flat `figures/<figure_key>.json`; `scripts/migrate_figures.py` moves them) |
 | `docs/<id>/exports/<profile>.xlsx`, `exports/<profile>.xlsx` | Per profile; the pre-profile `dataset.xlsx` and `exports/paperfacts.xlsx` are left where they are, and the name `paperfacts` is reserved |
 
 Lanes, comparison reports and datasets record the profile's fingerprint; comparing two lanes extracted under
@@ -918,7 +954,10 @@ re-reads only them, since each costs minutes of a different model.
   on the next run -- the last with the cache bypassed -- while the answered panels replay from the LLM cache.
 - **Stored.** `figures/<profile>/<figure_key>.json` per document: two profiles with the same chart slots and
   figure fields share a `figure_key`, and each keeps its own file. The TCO profile also reads the flat
-  `figures/<figure_key>.json` files stored before readings were kept per profile. `figure_key` hashes the vision model and its
+  `figures/<figure_key>.json` files stored before readings were kept per profile, until a data root is migrated
+  once with `uv run python scripts/migrate_figures.py --data-root data --apply` (without `--apply` it prints the
+  plan): each flat file moves into the directory of the profile it records, `tco` when it records none, and is
+  stamped with it; a file whose destination already exists is left for you to look at. `figure_key` hashes the vision model and its
   sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the profile's `figures` slots, the
   `figure_readable` fields' names, descriptions, keywords, units and bare-number policies, the declared units,
   and the source of `figures.py`, `normalize.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and

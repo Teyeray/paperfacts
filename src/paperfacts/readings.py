@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from paperfacts.config import Settings
 from paperfacts.figures import FigureReading, FigureReadings, read_figures
-from paperfacts.keys import figure_key_for, figure_profile_fingerprint
+from paperfacts.keys import figure_key_for
 from paperfacts.llm import VisionClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
 from paperfacts.pdf import crop_region, png_bytes, render_page
@@ -123,10 +123,14 @@ LEGACY_PROFILE = "tco"
 class StoredReadings(FigureReadings):
     """Readings as stored: with the profile they were read under, so the stale fallback of another profile
     over the same data root never shows them. Declared here, not in ``figures.py``, whose source is hashed
-    into figure_key; None on files stored before the field existed."""
+    into figure_key; None on files stored before the field existed.
+
+    The name is all that is recorded. The profile's figure material is already in ``figure_key``, so a file
+    under the current key cannot be of another version of it; and the stale fallback exists for exactly the
+    files whose material differs (a field table edited since), so a fingerprint check there would hide every
+    reading it is meant to show. Files that still carry a ``profile_fingerprint`` load as before."""
 
     profile: str | None = None
-    profile_fingerprint: str | None = None
 
 
 def stored_figures_path(layout: DataLayout, document_id: str, figure_key: str, profile: str) -> Path | None:
@@ -146,6 +150,35 @@ def _older_files(layout: DataLayout, document_id: str, profile: str, current: fr
         directories.append(layout.legacy_figures_dir(document_id))
     paths = [path for directory in directories if directory.is_dir() for path in directory.glob("*.json")]
     return sorted((path for path in paths if path not in current), key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def migrate_legacy_figures(layout: DataLayout, *, apply: bool) -> list[tuple[Path, Path, str]]:
+    """Move every flat ``figures/<figure_key>.json`` into its profile's directory, as (source, destination,
+    outcome) per file: the profile the file records, else the TCO profile every flat file was read under, which
+    is then stamped on it. A destination that already exists wins (the directory is where every newer reading
+    went) and the flat file is left for a person to look at. Without ``apply`` nothing is written.
+
+    Until every data root has been migrated, the TCO profile still reads the flat files as a fallback."""
+    moves: list[tuple[Path, Path, str]] = []
+    docs = layout.docs_root()
+    for doc_dir in sorted(docs.iterdir() if docs.is_dir() else ()):
+        flat = layout.legacy_figures_dir(doc_dir.name)
+        # Dotfiles are skipped: macOS copies leave "._<name>.json" AppleDouble files beside the real ones.
+        for source in sorted(path for path in flat.glob("*.json") if not path.name.startswith(".")):
+            readings = _stored_file(source)
+            if readings is None:
+                moves.append((source, source, "unreadable, left in place"))
+                continue
+            profile = readings.profile or LEGACY_PROFILE
+            destination = layout.figures_path(doc_dir.name, source.stem, profile)
+            if destination.exists():
+                moves.append((source, destination, "destination exists, left in place"))
+                continue
+            if apply:
+                readings.model_copy(update={"profile": profile}).write(destination)
+                source.unlink()
+            moves.append((source, destination, "moved" if apply else "would move"))
+    return moves
 
 
 def _belongs(readings: StoredReadings, profile: DomainProfile) -> bool:
@@ -282,7 +315,5 @@ def read_document_figures(
         refresh_panels=previous.unreadable() if previous is not None else frozenset(),
         stop=stop,
     )
-    StoredReadings(
-        **dict(readings), profile=profile.name, profile_fingerprint=figure_profile_fingerprint(profile)
-    ).write(path)
+    StoredReadings(**dict(readings), profile=profile.name).write(path)
     return readings

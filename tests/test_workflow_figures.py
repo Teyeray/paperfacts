@@ -20,12 +20,12 @@ import paperfacts.workflow as workflow
 from paperfacts.config import Settings
 from paperfacts.errors import Cancelled, ConfigError, LlmError, LlmOfflineMiss
 from paperfacts.figures import FigureReadings
-from paperfacts.keys import figure_key_for, figure_profile_fingerprint
+from paperfacts.keys import figure_key_for
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
 from paperfacts.profile import DomainProfile, load_profile
-from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
+from paperfacts.readings import figure_artifact, migrate_legacy_figures, read_document_figures, shown_figures
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import run_document
+from paperfacts.workflow import load_run_profile, run_document
 from support.factories import make_block
 from support.profiles import SHIPPED_PROFILE_PATH, make_profile, shipped_profile
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
@@ -162,7 +162,9 @@ def run(monkeypatch, document: DocumentInput, settings: Settings, client: object
     install_fake_pipeline(monkeypatch)
     monkeypatch.setattr("paperfacts.workflow.build_vision_client", lambda settings: client)
     marks: list[tuple[str, str, str]] = []
-    result = run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)), **kwargs)
+    result = run_document(
+        document, settings, load_run_profile(settings), on_stage=lambda s, st, d: marks.append((s, st, d)), **kwargs
+    )
     return [mark for mark in marks if mark[0] == "figures"], result, marks
 
 
@@ -206,7 +208,7 @@ def test_the_stage_overlaps_the_extraction_lanes(monkeypatch, document: Document
     monkeypatch.setattr(workflow, "extract_document", extract)
     monkeypatch.setattr(workflow, "build_vision_client", lambda settings: FakeVisionClient(responder))
 
-    run_document(document, settings)
+    run_document(document, settings, load_run_profile(settings))
 
     assert overlapped == [True]
 
@@ -232,7 +234,7 @@ def test_a_client_that_cannot_be_built_fails_only_the_stage(monkeypatch, documen
 
     monkeypatch.setattr("paperfacts.workflow.build_vision_client", no_key)
     marks: list[tuple[str, str, str]] = []
-    run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
+    run_document(document, settings, load_run_profile(settings), on_stage=lambda s, st, d: marks.append((s, st, d)))
 
     assert ("figures", "failed", "ConfigError: no LLM API key") in marks
     assert marks[-1][:2] == ("export", "done")
@@ -259,7 +261,7 @@ def test_an_offline_miss_fails_the_paper_and_stores_neither_readings_nor_a_datas
     marks: list[tuple[str, str, str]] = []
 
     with pytest.raises(LlmOfflineMiss):
-        run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
+        run_document(document, settings, load_run_profile(settings), on_stage=lambda s, st, d: marks.append((s, st, d)))
 
     layout = DataLayout(settings.data_root)
     assert not figures_file(document, settings).exists()
@@ -430,7 +432,8 @@ def test_stored_readings_record_the_profile_they_were_read_under(
     stored = json.loads(figures_file(document, settings).read_text(encoding="utf-8"))
 
     assert stored["profile"] == "tco"
-    assert stored["profile_fingerprint"] == figure_profile_fingerprint(tco_profile)
+    # The figure material is in the file's key already; the name alone is what the fallback checks.
+    assert "profile_fingerprint" not in stored
 
 
 def test_another_profiles_readings_are_never_its_stale_fallback(
@@ -453,7 +456,7 @@ def test_a_file_from_before_profiles_is_the_tco_profiles_fallback_only(
     read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
     current = figures_file(document, settings)
     legacy = json.loads(current.read_text(encoding="utf-8"))
-    del legacy["profile"], legacy["profile_fingerprint"]
+    del legacy["profile"]
     flat = DataLayout(settings.data_root).legacy_figures_dir(document.document_id)
     (flat / "older0000000.json").write_text(json.dumps(legacy), encoding="utf-8")
     current.unlink()
@@ -478,6 +481,52 @@ def test_a_flat_file_under_the_current_key_is_tcos_current_readings_and_is_not_r
     assert view is not None and not view.stale and len(view.rows) == 2
     assert read_document_figures(document, settings, tco_profile, client).readings == readings.readings
     assert client.calls == []
+
+
+def test_the_migration_moves_flat_files_into_their_profiles_directory_and_stamps_them(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    store_artifact(document, settings)
+    readings = read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+    layout = DataLayout(settings.data_root)
+    current = figures_file(document, settings)
+    unstamped = json.loads(current.read_text(encoding="utf-8"))
+    del unstamped["profile"]
+    flat = layout.legacy_figures_path(document.document_id, current.stem)
+    flat.write_text(json.dumps(unstamped), encoding="utf-8")
+    twin = layout.legacy_figures_path(document.document_id, "twin00000000")
+    twin.write_text(json.dumps(unstamped | {"profile": "twin"}), encoding="utf-8")
+    current.unlink()
+
+    planned = migrate_legacy_figures(layout, apply=False)
+    assert [outcome for *_, outcome in planned] == ["would move", "would move"] and flat.is_file()
+
+    moved = migrate_legacy_figures(layout, apply=True)
+
+    assert {(source, destination) for source, destination, _ in moved} == {
+        (flat, current),
+        (twin, layout.figures_path(document.document_id, "twin00000000", "twin")),
+    }
+    assert not flat.exists() and not twin.exists()
+    assert json.loads(current.read_text(encoding="utf-8"))["profile"] == "tco"
+    client = FakeVisionClient(chart_answer())
+    assert read_document_figures(document, settings, tco_profile, client).readings == readings.readings
+    assert client.calls == []
+    assert migrate_legacy_figures(layout, apply=True) == []
+
+
+def test_the_migration_leaves_a_flat_file_whose_destination_exists(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    store_artifact(document, settings)
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+    layout = DataLayout(settings.data_root)
+    current = figures_file(document, settings)
+    flat = layout.legacy_figures_path(document.document_id, current.stem)
+    flat.write_text(current.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert migrate_legacy_figures(layout, apply=True) == [(flat, current, "destination exists, left in place")]
+    assert flat.is_file()
 
 
 def test_a_flat_file_another_profile_wrote_is_not_tcos(
@@ -554,7 +603,7 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
         finished.append("figures stopped")
         return "skipped", "stopped: the rest of the paper failed"
 
-    def failing_extraction(document, settings, profile, comparison, *, force, on_stage):
+    def failing_extraction(document, settings, comparison, *, force, on_stage):
         assert figures_started.wait(timeout=5.0)
         raise LlmError("the endpoint is down")
 
@@ -563,7 +612,7 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
     marks: list[tuple[str, str, str]] = []
 
     with pytest.raises(LlmError):
-        run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
+        run_document(document, settings, load_run_profile(settings), on_stage=lambda s, st, d: marks.append((s, st, d)))
 
     assert finished == ["figures stopped"]  # joined, not left running
     # Its own terminal mark, so the job layer does not stamp it with the extraction's error.

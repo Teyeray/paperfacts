@@ -59,7 +59,7 @@ from paperfacts.errors import ConfigError
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.profile import DomainProfile, loaded_file_sha256, profile_path
+from paperfacts.profile import IDENTIFIER, DomainProfile, loaded_file_sha256, profile_path
 from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
@@ -189,9 +189,12 @@ def pipeline_runner(settings: Settings, profile: DomainProfile, library: Library
             changed = profile_file_changed(profile, origin)
         except OSError as exc:
             # Deleted, locked, or caught mid-save: not known to have changed, and not safe to run under either.
+            # The job's error reaches the browser, so it names the file only; the log has the path and the error
+            # (an OSError's message carries the absolute path too).
             logger.error("cannot read the profile file %s (%s)", origin, exc)
             raise ConfigError(
-                f"无法读取领域配置文件 {origin}，请检查后重启服务器 (cannot read the profile file {origin}: {exc})"
+                f"无法读取领域配置文件 {origin.name}，请检查后重启服务器 "
+                f"(cannot read the profile file {origin.name}: {type(exc).__name__})"
             ) from exc
         if changed:
             logger.error("profile %s changed on disk (%s); restart the server", profile.name, origin)
@@ -237,6 +240,10 @@ def create_app(
         raise ConfigError("offline replay is for `run` and `batch`; unset PAPERFACTS_LLM_OFFLINE / llm.offline")
     set_max_in_flight(settings.llm_max_in_flight)
     profile = profile or load_run_profile(settings)
+    if not IDENTIFIER.fullmatch(profile.name):
+        # The name goes unquoted into a Content-Disposition header; the loader enforces this, a profile built in
+        # memory need not have been through it.
+        raise ConfigError(f"profile name {profile.name!r} must match {IDENTIFIER.pattern}")
     logger.info("serving profile %s (%s)", profile.name, profile.content_hash[:12])
     library = Library(settings, profile)
     manager = jobs or JobManager(
@@ -340,7 +347,7 @@ def create_app(
         return Response(
             content=corpus_workbook(datasets, settings, library.profile),
             media_type=EXCEL_MEDIA_TYPE,
-            # A profile name is ^[a-z][a-z0-9_]*$, so it needs no quoting in the header.
+            # create_app refused a name outside IDENTIFIER, so it needs no quoting in the header.
             headers={"content-disposition": f'attachment; filename="{profile.name}-corpus.xlsx"'},
         )
 

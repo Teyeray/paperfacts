@@ -109,9 +109,9 @@ def test_the_lanes_and_the_figures_stage_run_in_the_callers_context(monkeypatch,
     seen: list[tuple[str, str | None]] = []
     fake_extract = workflow.extract_document  # the fake pipeline's, installed above
 
-    def recording_extract(document, backend, settings, profile, client, *, force=False, options=None):
+    def recording_extract(document, backend, settings, options, client, *, force=False):
         seen.append((backend, CALLER.get()))
-        return fake_extract(document, backend, settings, profile, client, force=force, options=options)
+        return fake_extract(document, backend, settings, options, client, force=force)
 
     def recording_figures(document, settings, profile, *, force, artifact, stop):
         seen.append(("figures", CALLER.get()))
@@ -122,6 +122,6 @@ def test_the_lanes_and_the_figures_stage_run_in_the_callers_context(monkeypatch,
     settings = dataclasses.replace(Settings(data_root=tmp_path / "data"), figures_enabled=True)
 
     CALLER.set("job-3")
-    workflow.run_document(DocumentInput.from_path(two_page_pdf), settings)
+    workflow.run_document(DocumentInput.from_path(two_page_pdf), settings, workflow.load_run_profile(settings))
 
     assert sorted(seen) == [("figures", "job-3"), ("mineru", "job-3"), ("paddleocr_vl", "job-3")]

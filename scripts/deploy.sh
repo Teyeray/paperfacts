@@ -88,6 +88,31 @@ unit_started() {  # epoch of the running process, 0 when the unit is down
     echo $(( $(date +%s) - uptime_s + usec / 1000000 ))
 }
 
+preflight_profile() {  # prints "<name> <hash>" of the profile the service would serve; fails when it would not start
+    # What create_app loads: Settings.from_env() and then load_run_profile, which also refuses a reserved or
+    # shadowing profile name. Under the unit's own Environment= lines (PAPERFACTS_PROFILE usually lives there),
+    # not this shell's PAPERFACTS_* variables, which the service never sees; .env is read by from_env either way.
+    local unit_env
+    unit_env="$(systemctl --user show paperfacts.service -p Environment --value 2>/dev/null || true)"
+    PF_UNIT_ENV="$unit_env" "$ROOT/.venv/bin/python" -c '
+import os
+import shlex
+
+for key in [key for key in os.environ if key.startswith("PAPERFACTS_")]:
+    del os.environ[key]
+for item in shlex.split(os.environ.pop("PF_UNIT_ENV")):
+    key, sep, value = item.partition("=")
+    if sep:
+        os.environ[key] = value
+
+from paperfacts.config import Settings
+from paperfacts.workflow import load_run_profile
+
+profile = load_run_profile(Settings.from_env())
+print(profile.name, profile.content_hash[:12])
+'
+}
+
 env_value() {  # $1 = key: its value in .env, parsed the way the service parses it
     # The service reads .env with python-dotenv, so the same parser reads it here when the venv has it:
     # quotes are the value's delimiters, not part of it, and spaces or quotes inside a quoted value are kept.
@@ -383,10 +408,10 @@ fi
 # ---------------------------------------------------------------- configuration preflight
 # Run even with --skip-tests: a config.json the service cannot read would take it down at the restart, and
 # the suite never reads this checkout's own config.json and .env the way the service does.
-info "preflight: the service's settings load"
-.venv/bin/python -c "from paperfacts.config import Settings; Settings.from_env()" \
-    || die "config.json or .env does not load (error above); the service was not restarted"
-ok "settings load"
+info "preflight: the service's settings and profile load"
+PROFILE_LOADED="$(preflight_profile)" \
+    || die "config.json, .env or the profile does not load (error above); the service was not restarted"
+ok "settings and profile load (profile $PROFILE_LOADED)"
 
 # ---------------------------------------------------------------- in-flight work
 # Jobs live only in the service's memory: a restart cancels everything queued and kills the

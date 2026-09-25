@@ -20,7 +20,7 @@ from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, LlmOfflineMiss
 from paperfacts.extract import extract_lane
-from paperfacts.keys import ExtractionOptions, comparison_key_for, extractor_key, extractor_key_for
+from paperfacts.keys import ComparisonOptions, ExtractionOptions, comparison_key_for, extractor_key, extractor_key_for
 from paperfacts.llm import OpenAICompatibleClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.parsers import SubprocessParser
@@ -39,7 +39,18 @@ from paperfacts.workflow import (
 from support.extraction import make_artifact
 from support.factories import make_block
 from support.llm import FakeLlmClient
-from support.profiles import make_profile, shipped_profile
+from support.profiles import shipped_profile
+
+
+def extract(document: DocumentInput, backend: Backend, settings: Settings, profile: DomainProfile, client, **kwargs):
+    """extract_document under the options a run builds from these settings for this client."""
+    options = ExtractionOptions.from_settings(settings, profile, client.model)
+    return extract_document(document, backend, settings, options, client, **kwargs)
+
+
+def compare(document: DocumentInput, settings: Settings, profile: DomainProfile, client, **kwargs):
+    return compare_document(document, settings, ComparisonOptions.from_settings(settings, profile), client, **kwargs)
+
 
 # ---- build_parser: PaddleOCR-VL's external VLM service parameters ---------------------
 
@@ -167,7 +178,7 @@ def test_extract_document_calls_the_model_once_and_writes_the_result(
 ):
     client = FakeLlmClient([extraction_json()])
 
-    lane = extract_document(document, "mineru", settings, tco_profile, client)
+    lane = extract(document, "mineru", settings, tco_profile, client)
 
     assert client.call_count == 1
     path = DataLayout(settings.data_root).extraction_path(
@@ -189,7 +200,7 @@ def test_the_returned_lane_is_normalized_but_the_file_on_disk_is_not(
 
     client = FakeLlmClient([extraction_json(value="1.25", source_id=None)])
 
-    lane = extract_document(document, "mineru", settings, tco_profile, client)
+    lane = extract(document, "mineru", settings, tco_profile, client)
     path = DataLayout(settings.data_root).extraction_path(
         document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
@@ -205,8 +216,8 @@ def test_a_second_call_hits_the_cache_and_does_not_call_the_model(
 ):
     client = FakeLlmClient([extraction_json()])
 
-    first = extract_document(document, "mineru", settings, tco_profile, client)
-    second = extract_document(document, "mineru", settings, tco_profile, client)
+    first = extract(document, "mineru", settings, tco_profile, client)
+    second = extract(document, "mineru", settings, tco_profile, client)
 
     assert client.call_count == 1
     assert second == first
@@ -217,8 +228,8 @@ def test_force_re_asks_the_model_and_bypasses_the_llm_cache_too(
 ):
     client = FakeLlmClient([extraction_json(value="12.5"), extraction_json(value="99")])
 
-    extract_document(document, "mineru", settings, tco_profile, client)
-    refreshed = extract_document(document, "mineru", settings, tco_profile, client, force=True)
+    extract(document, "mineru", settings, tco_profile, client)
+    refreshed = extract(document, "mineru", settings, tco_profile, client, force=True)
 
     assert client.call_count == 2
     # Both the on-disk cache and the LLM cache must be skipped, or --force would just replay the old answer.
@@ -231,8 +242,8 @@ def test_each_backend_has_its_own_cache_entry(
 ):
     client = FakeLlmClient([extraction_json(), extraction_json()])
 
-    extract_document(document, "mineru", settings, tco_profile, client)
-    extract_document(document, "paddleocr_vl", settings, tco_profile, client)
+    extract(document, "mineru", settings, tco_profile, client)
+    extract(document, "paddleocr_vl", settings, tco_profile, client)
 
     layout = DataLayout(settings.data_root)
     key = extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
@@ -244,10 +255,10 @@ def test_each_backend_has_its_own_cache_entry(
 def test_changing_the_model_invalidates_the_extraction_cache(
     settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile: DomainProfile
 ):
-    extract_document(document, "mineru", settings, tco_profile, FakeLlmClient([extraction_json()], model="model-a"))
+    extract(document, "mineru", settings, tco_profile, FakeLlmClient([extraction_json()], model="model-a"))
     other = FakeLlmClient([extraction_json()], model="model-b")
 
-    extract_document(document, "mineru", settings, tco_profile, other)
+    extract(document, "mineru", settings, tco_profile, other)
 
     assert other.call_count == 1
 
@@ -270,7 +281,7 @@ def test_the_lane_records_the_parse_it_came_from(
     from paperfacts.workflow import load_artifact
 
     client = FakeLlmClient([extraction_json()])
-    extract_document(document, "mineru", settings, tco_profile, client)
+    extract(document, "mineru", settings, tco_profile, client)
     path = DataLayout(settings.data_root).extraction_path(
         document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
@@ -284,10 +295,10 @@ def test_a_lane_from_another_parse_is_re_derived_not_served(
     # The review's scenario: `parse --force` gave new blocks under the same positional ids; the old lane's
     # citations would now point at whatever block has that ordinal.
     client = FakeLlmClient([extraction_json(value="12.5"), extraction_json(value="99")])
-    extract_document(document, "mineru", settings, tco_profile, client)
+    extract(document, "mineru", settings, tco_profile, client)
     _reparse(settings, document, "mineru")
 
-    lane = extract_document(document, "mineru", settings, tco_profile, client)
+    lane = extract(document, "mineru", settings, tco_profile, client)
 
     assert client.call_count == 2
     assert lane.sample("A").get("sheet_resistance").value_raw == "99"
@@ -299,14 +310,14 @@ def test_a_lane_file_without_a_recorded_parse_still_reads(
     from paperfacts.records import LaneExtraction
 
     client = FakeLlmClient([extraction_json()])
-    extract_document(document, "mineru", settings, tco_profile, client)
+    extract(document, "mineru", settings, tco_profile, client)
     path = DataLayout(settings.data_root).extraction_path(
         document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
     legacy = LaneExtraction.read(path).model_copy(update={"artifact_sha256": None})
     legacy.write(path)
 
-    extract_document(document, "mineru", settings, tco_profile, client)
+    extract(document, "mineru", settings, tco_profile, client)
 
     assert client.call_count == 1  # unknown is not a mismatch
 
@@ -315,10 +326,10 @@ def test_a_comparison_of_other_parses_is_compared_again(
     settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile: DomainProfile
 ):
     client = FakeLlmClient([extraction_json(), extraction_json(), extraction_json(value="99")])
-    first = compare_document(document, settings, tco_profile, client)
+    first = compare(document, settings, tco_profile, client)
     _reparse(settings, document, BACKEND_B)
 
-    second = compare_document(document, settings, tco_profile, client)
+    second = compare(document, settings, tco_profile, client)
 
     assert client.call_count == 3  # lane B re-derived; lane A and the matching (exact ids) cost nothing
     assert second.artifact_sha256_a == first.artifact_sha256_a
@@ -332,7 +343,7 @@ def test_extracting_before_parsing_says_to_run_parse_first(
     client = FakeLlmClient([])
 
     with pytest.raises(FileNotFoundError, match="paperfacts parse"):
-        extract_document(document, "mineru", settings, tco_profile, client)
+        extract(document, "mineru", settings, tco_profile, client)
 
     assert client.call_count == 0
 
@@ -342,7 +353,7 @@ def test_the_source_ids_are_validated_against_the_artifact_on_disk(
 ):
     client = FakeLlmClient([extraction_json(source_id="mineru_p9_b9")])
 
-    lane = extract_document(document, "mineru", settings, tco_profile, client)
+    lane = extract(document, "mineru", settings, tco_profile, client)
 
     assert lane.invalid_source_ids == ("mineru_p9_b9",)
 
@@ -356,7 +367,7 @@ def test_compare_document_extracts_both_lanes_then_matches_and_writes_the_report
     # Both lanes use the same sample_id -> exact match, no need for a third model call.
     client = FakeLlmClient([extraction_json(), extraction_json()])
 
-    report = compare_document(document, settings, tco_profile, client)
+    report = compare(document, settings, tco_profile, client)
 
     assert client.call_count == 2
     path = DataLayout(settings.data_root).comparison_path(
@@ -380,7 +391,7 @@ def test_the_matching_model_is_called_when_the_sample_ids_differ(
         ]
     )
 
-    report = compare_document(document, settings, tco_profile, client)
+    report = compare(document, settings, tco_profile, client)
 
     assert client.call_count == 3
     assert report.counts.samples_matched == 1
@@ -398,7 +409,7 @@ def test_an_offline_miss_in_matching_stores_no_comparison(
         return answer
 
     with pytest.raises(LlmOfflineMiss):
-        compare_document(document, settings, tco_profile, FakeLlmClient(replay))
+        compare(document, settings, tco_profile, FakeLlmClient(replay))
 
     comparisons = DataLayout(settings.data_root).comparison_path(
         document.document_id,
@@ -413,8 +424,8 @@ def test_a_second_comparison_hits_the_cache_and_calls_nothing(
 ):
     client = FakeLlmClient([extraction_json(), extraction_json()])
 
-    first = compare_document(document, settings, tco_profile, client)
-    second = compare_document(document, settings, tco_profile, client)
+    first = compare(document, settings, tco_profile, client)
+    second = compare(document, settings, tco_profile, client)
 
     assert client.call_count == 2
     assert second == first
@@ -431,10 +442,10 @@ def test_force_redoes_the_comparison_without_re_extracting(
     """
     client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), *[json.dumps({})] * 2])
 
-    compare_document(document, settings, tco_profile, client)
+    compare(document, settings, tco_profile, client)
     calls_after_first = client.call_count
 
-    compare_document(document, settings, tco_profile, client, force=True)
+    compare(document, settings, tco_profile, client, force=True)
 
     # Only one extra matching call; both extractions went through their on-disk cache.
     assert client.call_count == calls_after_first + 1
@@ -447,7 +458,7 @@ def test_a_stored_lane_with_an_unanswered_question_is_extracted_again(
     # Its invalid answers were never cached, so extracting again re-asks only that question; every other
     # request replays from the LLM cache (this fake has none, so it simply answers twice).
     client = FakeLlmClient([extraction_json(), extraction_json()])
-    extract_document(document, "mineru", settings, tco_profile, client)
+    extract(document, "mineru", settings, tco_profile, client)
     path = DataLayout(settings.data_root).extraction_path(
         document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
@@ -456,7 +467,7 @@ def test_a_stored_lane_with_an_unanswered_question_is_extracted_again(
     )
     incomplete.write(path)
 
-    lane = extract_document(document, "mineru", settings, tco_profile, client)
+    lane = extract(document, "mineru", settings, tco_profile, client)
 
     assert client.call_count == 2
     assert lane.failed_questions == ()
@@ -468,12 +479,12 @@ def test_a_comparison_of_a_lane_with_an_unanswered_question_is_not_stored(
 ):
     good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
     client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good])
-    lanes = {backend: extract_document(document, backend, settings, tco_profile, client) for backend in BACKENDS}
+    lanes = {backend: extract(document, backend, settings, tco_profile, client) for backend in BACKENDS}
     lanes[BACKEND_A] = lanes[BACKEND_A].model_copy(
         update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
     )
 
-    report = compare_document(document, settings, tco_profile, client, lanes=lanes)
+    report = compare(document, settings, tco_profile, client, lanes=lanes)
 
     path = DataLayout(settings.data_root).comparison_path(
         document.document_id, report.extractor_key, report.comparison_key
@@ -488,8 +499,8 @@ def test_an_incomplete_lane_replaces_the_stored_comparison_instead_of_reusing_it
     # missing a field; removed, the paper reads as unfinished until a complete run stores one again.
     good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
     client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good, good])
-    lanes = {backend: extract_document(document, backend, settings, tco_profile, client) for backend in BACKENDS}
-    stored = compare_document(document, settings, tco_profile, client, lanes=lanes)
+    lanes = {backend: extract(document, backend, settings, tco_profile, client) for backend in BACKENDS}
+    stored = compare(document, settings, tco_profile, client, lanes=lanes)
     path = DataLayout(settings.data_root).comparison_path(
         document.document_id, stored.extractor_key, stored.comparison_key
     )
@@ -498,7 +509,7 @@ def test_an_incomplete_lane_replaces_the_stored_comparison_instead_of_reusing_it
         update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
     )
 
-    compare_document(document, settings, tco_profile, client, lanes=lanes)
+    compare(document, settings, tco_profile, client, lanes=lanes)
 
     assert client.call_count == 4  # matched again rather than served from the stored report
     assert not path.exists()
@@ -511,7 +522,7 @@ def test_an_offline_export_stores_the_comparison_it_rebuilt(
     # a table built from the new ones.
     good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
     client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good])
-    report = compare_document(document, settings, tco_profile, client)
+    report = compare(document, settings, tco_profile, client)
     path = DataLayout(settings.data_root).comparison_path(
         document.document_id, report.extractor_key, report.comparison_key
     )
@@ -529,7 +540,7 @@ def test_an_offline_export_of_a_lane_with_an_unanswered_question_is_refused(
     # from it would mark the paper finished with that question never asked again.
     good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
     client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good])
-    compare_document(document, settings, tco_profile, client)
+    compare(document, settings, tco_profile, client)
     path = DataLayout(settings.data_root).extraction_path(
         document.document_id, BACKEND_A, extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
@@ -550,7 +561,7 @@ def test_a_failed_matching_is_reported_but_not_stored_so_the_next_run_asks_again
         [extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), '{"pairs": 1}', '{"pairs": 2}', good]
     )
 
-    failed = compare_document(document, settings, tco_profile, client)
+    failed = compare(document, settings, tco_profile, client)
     path = DataLayout(settings.data_root).comparison_path(
         document.document_id, failed.extractor_key, failed.comparison_key
     )
@@ -558,7 +569,7 @@ def test_a_failed_matching_is_reported_but_not_stored_so_the_next_run_asks_again
     assert failed.matching.failed
     assert not path.is_file()
 
-    retried = compare_document(document, settings, tco_profile, client)
+    retried = compare(document, settings, tco_profile, client)
 
     assert client.call_count == 5  # the lanes came from their cache; only matching was asked again
     assert not retried.matching.failed
@@ -572,7 +583,7 @@ def test_the_report_path_carries_both_the_extractor_and_the_comparison_key(
     # changes extractor_key.
     client = FakeLlmClient([extraction_json(), extraction_json()])
 
-    report = compare_document(document, settings, tco_profile, client)
+    report = compare(document, settings, tco_profile, client)
     path = DataLayout(settings.data_root).comparison_path(
         document.document_id, report.extractor_key, report.comparison_key
     )
@@ -585,7 +596,7 @@ def test_comparing_before_parsing_says_to_run_parse_first(
     settings: Settings, document: DocumentInput, tco_profile: DomainProfile
 ):
     with pytest.raises(FileNotFoundError, match="paperfacts parse"):
-        compare_document(document, settings, tco_profile, FakeLlmClient([]))
+        compare(document, settings, tco_profile, FakeLlmClient([]))
 
 
 def test_the_two_lane_assumption_is_stated_explicitly():
@@ -643,7 +654,7 @@ def test_a_lane_extracted_with_edited_settings_carries_the_key_the_reader_looks_
         reasoning_effort=settings.llm_reasoning_effort,
     )
 
-    extract_document(document, "mineru", settings, tco_profile, client)
+    extract(document, "mineru", settings, tco_profile, client)
 
     key = extractor_key_for(settings, tco_profile)
     stored = LaneExtraction.read(layout.extraction_path(document.document_id, "mineru", key))
@@ -670,19 +681,12 @@ def test_extract_lane_refuses_options_that_do_not_describe_the_client(tco_profil
         extract_lane(make_artifact(), client, ExtractionOptions(tco_profile, client.model, mode="document"))
 
 
-@pytest.mark.parametrize("mismatch", ["model", "profile"])
-def test_options_for_another_model_or_profile_are_refused(
-    settings: Settings, document: DocumentInput, tco_profile: DomainProfile, mismatch: str
-):
-    # The file is named after the options' key: options of another model or profile would store one run's
-    # answers under another's name.
+def test_options_for_another_model_are_refused(settings: Settings, document: DocumentInput, tco_profile: DomainProfile):
+    # The file is named after the options' key: options of another model would store one model's answers under
+    # another's name. The profile has no second carrier to disagree with: it travels in the options only.
     client = FakeLlmClient([], model="fake-model")
-    options = ExtractionOptions.from_settings(
-        settings,
-        make_profile() if mismatch == "profile" else tco_profile,
-        "other-model" if mismatch == "model" else client.model,
-    )
+    options = ExtractionOptions.from_settings(settings, tco_profile, "other-model")
 
     with pytest.raises(ValueError, match="do not match"):
-        extract_document(document, "mineru", settings, tco_profile, client, options=options)
+        extract_document(document, "mineru", settings, options, client)
     assert client.calls == []

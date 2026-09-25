@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+from paperfacts.profile import load_profile
+from support.profiles import SHIPPED_PROFILE_PATH
 
 SCRIPT = Path(__file__).resolve().parent.parent / "eval" / "score.py"
 _spec = importlib.util.spec_from_file_location("paperfacts_eval_score", SCRIPT)
@@ -21,7 +25,8 @@ score = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = score
 _spec.loader.exec_module(score)
 
-MODE = score.Spec("mode", "process", "text", 0.0, 0.0, ("DC", "RF", "pulsed DC", "DC+RF", "HiPIMS"))
+MODE = score.load_specs(SHIPPED_PROFILE_PATH)["mode"]
+assert MODE.categories == ("DC", "RF", "pulsed DC", "DC+RF", "HiPIMS")
 
 
 @pytest.mark.parametrize(
@@ -44,22 +49,31 @@ def test_a_different_category_does_not_match(got, gold):
     assert not score.value_matches(MODE, got, {"value": gold})
 
 
-def test_the_specs_take_categories_and_default_the_tolerances_like_the_package(tmp_path: Path):
-    config = tmp_path / "profile.json"
-    config.write_text(
-        json.dumps(
-            {
-                "groups": [{"name": "process", "level": "sample"}, {"name": "film", "level": "sample"}],
-                "fields": [
-                    {"name": "mode", "group": "process", "kind": "text", "categories": ["DC", "RF"]},
-                    {"name": "thickness", "group": "film", "kind": "numeric", "rel_tol": 0.05},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+def test_the_specs_are_the_packages_own_field_table():
+    # Scoring reads the profile through the package, so its tolerances, categories and levels cannot drift from
+    # what the run compared with.
+    assert score.load_specs(SHIPPED_PROFILE_PATH) == load_profile(SHIPPED_PROFILE_PATH).by_name
 
-    specs = score.load_specs(config)
 
-    assert specs["mode"].categories == ("DC", "RF")
-    assert (specs["thickness"].rel_tol, specs["thickness"].abs_tol) == (0.05, 0.0)
+def _dataset(root: Path, name: str, fingerprint: str | None, mtime: int) -> Path:
+    path = root / "docs" / "0000000000000001" / "datasets" / f"{name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"profile_fingerprint": fingerprint, "paper_row": {}, "sample_rows": []}))
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_without_keys_the_newest_dataset_of_the_scored_profile_is_chosen(tmp_path: Path):
+    # Another profile's table is newer, but scoring it against this profile's gold set would be meaningless.
+    own = _dataset(tmp_path, "aaaa.bbbb", "tco-fingerprint", mtime=1_000)
+    _dataset(tmp_path, "cccc.dddd", "battery-fingerprint", mtime=2_000)
+
+    assert score.find_dataset(tmp_path, "0000000000000001", None, "tco-fingerprint") == own
+    with pytest.raises(FileNotFoundError, match="of profile fingerprint"):
+        score.find_dataset(tmp_path, "0000000000000001", None, "other-fingerprint")
+
+
+def test_a_dataset_from_before_profiles_is_still_a_candidate(tmp_path: Path):
+    old = _dataset(tmp_path, "aaaa.bbbb", None, mtime=1_000)
+
+    assert score.find_dataset(tmp_path, "0000000000000001", None, "tco-fingerprint") == old

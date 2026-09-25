@@ -17,7 +17,7 @@ from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.profile import DomainProfile
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import run_document
+from paperfacts.workflow import load_run_profile, run_document
 from support.factories import make_blank_pdf
 from test_workflow_run import install_fake_pipeline
 
@@ -125,7 +125,7 @@ def test_offline_export_never_runs_parser_or_llm(monkeypatch, tmp_path, tco_prof
     settings = Settings(data_root=tmp_path / "data")
     install_fake_pipeline(monkeypatch)
     document = DocumentInput.from_path(source)
-    dataset = run_document(document, settings).dataset
+    dataset = run_document(document, settings, load_run_profile(settings)).dataset
     monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg, profile: dataset)
 
     def unexpected(*args, **kwargs):
@@ -141,7 +141,7 @@ def test_write_failure_propagates_instead_of_claiming_batch_success(monkeypatch,
     source = make_blank_pdf(tmp_path / "paper.pdf")
     install_fake_pipeline(monkeypatch)
     settings = Settings(data_root=tmp_path / "data")
-    dataset = run_document(DocumentInput.from_path(source), settings).dataset
+    dataset = run_document(DocumentInput.from_path(source), settings, load_run_profile(settings)).dataset
     monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg, profile: dataset)
 
     def fail_write(*args, **kwargs):

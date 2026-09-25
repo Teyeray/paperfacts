@@ -311,27 +311,22 @@ def extract_document(
     document: DocumentInput,
     backend: Backend,
     settings: Settings,
-    profile: DomainProfile,
+    options: ExtractionOptions,
     client: LlmClient,
     *,
     force: bool = False,
-    options: ExtractionOptions | None = None,
 ) -> LaneExtraction:
     """Extract one lane. What is stored is the model's own wording; what is returned is normalised.
 
-    Changing the prompt, the model or the schema changes ``extractor_key`` and re-runs the extraction.
-    ``force`` bypasses both this cache and the LLM cache, and really re-asks. A caller extracting both lanes
-    passes the one ``options`` it built for the document, so the two lanes cannot be asked differently.
+    ``options`` is the one carrier of what the lane is asked, the profile included: a caller extracting both
+    lanes builds it once for the document, so the two lanes cannot be asked differently. Changing the prompt,
+    the model or the schema changes ``extractor_key`` and re-runs the extraction. ``force`` bypasses both this
+    cache and the LLM cache, and really re-asks.
     """
+    if options.model != client.model:
+        # The file would be named after one model while another answered.
+        raise ValueError(f"extraction options for model {options.model!r} do not match the client's {client.model!r}")
     layout = DataLayout(settings.data_root)
-    if options is None:
-        options = ExtractionOptions.from_settings(settings, profile, client.model)
-    elif options.model != client.model or options.profile != profile:
-        # The file would be named after one model or profile while another answered or was asked.
-        raise ValueError(
-            f"extraction options for model {options.model!r} and profile {options.profile.name!r} "
-            f"do not match the client's model {client.model!r} and the profile {profile.name!r}"
-        )
     key = extractor_key(options)
     artifact = load_artifact(document, backend, settings)
     if not force:
@@ -358,12 +353,11 @@ def extract_document(
 def compare_document(
     document: DocumentInput,
     settings: Settings,
-    profile: DomainProfile,
+    comparison: ComparisonOptions,
     client: LlmClient,
     *,
     force: bool = False,
     lanes: Mapping[Backend, LaneExtraction] | None = None,
-    comparison: ComparisonOptions | None = None,
 ) -> ComparisonReport:
     """Match samples with the model, compare fields by rule, store the report.
 
@@ -371,25 +365,24 @@ def compare_document(
     extraction again and cannot serve a stale verdict. ``force`` redoes matching and comparison only;
     extraction has its own cache and its own force.
 
-    ``lanes`` lets a caller that already holds both extractions hand them over instead of having them
-    loaded again; without it the lanes are read through :func:`extract_document`, whose cached path
-    rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader. A caller that
-    also consolidates passes the one ``comparison`` it built for the document, so the verdicts and the table
-    cannot be decided under two options.
+    ``comparison`` is the one carrier of the profile; a caller that also consolidates passes the same value to
+    :func:`paperfacts.dataset.consolidate_document`, so the verdicts and the table cannot be decided under two
+    options. ``lanes`` lets a caller that already holds both extractions hand them over; without it they are
+    read through :func:`extract_document` under the settings' options, whose cached path rechecks grounding on
+    read. The standalone ``compare`` CLI command relies on that loader. Either way the report is named after
+    the extractor key the lanes themselves record, never one rebuilt here.
     """
     layout = DataLayout(settings.data_root)
-    options = ExtractionOptions.from_settings(settings, profile, client.model)
-    if comparison is None:
-        comparison = ComparisonOptions.from_settings(settings, profile)
-    elif comparison.profile != profile:
-        raise ValueError(f"comparison options for profile {comparison.profile.name!r}, not {profile.name!r}")
-    path = layout.comparison_path(document.document_id, extractor_key(options), comparison_key(comparison))
     if lanes is None:
-        lanes = {
-            backend: extract_document(document, backend, settings, profile, client, options=options)
-            for backend in BACKENDS
-        }
+        options = ExtractionOptions.from_settings(settings, comparison.profile, client.model)
+        lanes = {backend: extract_document(document, backend, settings, options, client) for backend in BACKENDS}
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
+    if lane_a.extractor_key != lane_b.extractor_key:
+        # One report of lanes asked two different ways would be a comparison of the asking, not of the parses.
+        raise ValueError(
+            f"the lanes were extracted under different keys ({lane_a.extractor_key} and {lane_b.extractor_key})"
+        )
+    path = layout.comparison_path(document.document_id, lane_a.extractor_key, comparison_key(comparison))
     # A stored report is never of an incomplete lane (see below), so with one it would be of other lanes.
     incomplete_lanes = bool(lane_a.failed_questions or lane_b.failed_questions)
     if path.is_file() and not force and not incomplete_lanes:
@@ -399,7 +392,7 @@ def compare_document(
             return cached
         logger.info("stored comparison of doc=%s compared other parses; comparing again", document.document_id[:16])
 
-    matching = match_samples(lane_a, lane_b, client, profile, refresh=force)
+    matching = match_samples(lane_a, lane_b, client, comparison.profile, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching, comparison)
     reason = incomplete_reason(lanes, report)
     if reason:
@@ -565,7 +558,7 @@ def ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
 def run_document(
     document: DocumentInput,
     settings: Settings,
-    profile: DomainProfile | None = None,
+    profile: DomainProfile,
     *,
     force: bool = False,
     force_figures: bool = False,
@@ -576,13 +569,9 @@ def run_document(
     ``force`` redoes parsing, extraction and comparison; ``force_figures`` re-reads the charts. They are
     separate because each costs minutes of a different model, and wanting one redone rarely means the other.
 
-    Every entry point (the CLI, the web app, a batch) loads its profile once and passes it. ``None`` means the
-    profile ``settings`` selects, for a one-off script: the recorded payload generator predates the parameter
-    and must keep running unchanged. Anything else relying on it is logged as a warning.
+    Every entry point (the CLI, the web app, a batch, a script) loads its profile once, with
+    :func:`load_run_profile`, and passes it.
     """
-    if profile is None:
-        logger.warning("run_document without a profile: loading the one the settings select (%s)", settings.profile)
-        profile = load_run_profile(settings)
     comparison = ComparisonOptions.from_settings(settings, profile)
     parse_reports: dict[Backend, ParseReport] = {}
     parsed: dict[Backend, ParsedArtifact | None] = {}
@@ -630,7 +619,7 @@ def run_document(
         figures = shown_figures(document.document_id, document.display_filename, settings, profile)
         on_stage("figures", "skipped", _figures_mark("skipped", "", figures))
     try:
-        lanes, report = _extract_and_compare(document, settings, profile, comparison, force=force, on_stage=on_stage)
+        lanes, report = _extract_and_compare(document, settings, comparison, force=force, on_stage=on_stage)
         if figures_future is not None:
             figures_status, figures_detail = figures_future.result()
             figures = shown_figures(document.document_id, document.display_filename, settings, profile)
@@ -732,7 +721,6 @@ def _every_lane[T](
 def _extract_and_compare(
     document: DocumentInput,
     settings: Settings,
-    profile: DomainProfile,
     comparison: ComparisonOptions,
     *,
     force: bool,
@@ -742,7 +730,7 @@ def _extract_and_compare(
     lanes: dict[Backend, LaneExtraction] = {}
     with build_llm_client(settings) as client:
         # One value for both lanes: whatever decides what a lane is asked cannot differ between them.
-        options = ExtractionOptions.from_settings(settings, profile, client.model)
+        options = ExtractionOptions.from_settings(settings, comparison.profile, client.model)
         # The two lanes are independent and both spend their time waiting on the model, so they overlap.
         # Nothing here touches pdf.py: extraction reads the stored artifact JSON and never opens the PDF,
         # so PDFium's process-wide lock is not involved. Both lanes are handed the same `settings` and the
@@ -755,9 +743,7 @@ def _extract_and_compare(
             on_stage(f"extract:{backend}", "running", "")
         with ContextThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
             futures: dict[Backend, Future[LaneExtraction]] = {
-                backend: pool.submit(
-                    extract_document, document, backend, settings, profile, client, force=force, options=options
-                )
+                backend: pool.submit(extract_document, document, backend, settings, options, client, force=force)
                 for backend in BACKENDS
             }
             extracted = _every_lane(futures, "extract", on_stage=on_stage, describe=_lane_detail)
@@ -765,7 +751,7 @@ def _extract_and_compare(
                 lanes[backend] = lane
                 on_stage(f"extract:{backend}", "done", _lane_detail(lane))
         on_stage("compare", "running", "")
-        report = compare_document(document, settings, profile, client, force=force, lanes=lanes, comparison=comparison)
+        report = compare_document(document, settings, comparison, client, force=force, lanes=lanes)
     counts = report.counts
     detail = (
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"

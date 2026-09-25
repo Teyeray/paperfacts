@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
-import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -109,7 +110,9 @@ def test_serve_builds_the_library_under_the_profile_the_environment_names(
 
 def _stop(seen: list[DomainProfile]):
     def record(*args: Any, **kwargs: Any) -> None:
-        seen.extend(arg for arg in args if isinstance(arg, DomainProfile))
+        # extract and compare are handed the profile inside their options.
+        profiles = (getattr(arg, "profile", arg) for arg in args)
+        seen.extend(profile for profile in profiles if isinstance(profile, DomainProfile))
         raise ParserError("mineru", "run", "stop here, the profile has been observed")
 
     return record
@@ -123,7 +126,9 @@ def test_every_command_runs_under_the_profile_flag(
     monkeypatch.setattr("paperfacts.cli.run_batch", _stop(seen))
     monkeypatch.setattr("paperfacts.cli.extract_document", _stop(seen))
     monkeypatch.setattr("paperfacts.cli.compare_document", _stop(seen))
-    monkeypatch.setattr("paperfacts.cli.build_llm_client", lambda settings: contextlib.nullcontext())
+    monkeypatch.setattr(
+        "paperfacts.cli.build_llm_client", lambda settings: contextlib.nullcontext(SimpleNamespace(model="fake-model"))
+    )
     source = two_page_pdf.parent if command in {"batch", "export"} else two_page_pdf
 
     runner.invoke(app, [command, str(source), "--data-root", str(tmp_path / "data"), "--profile", str(demo_path)])
@@ -220,13 +225,7 @@ def test_the_legacy_export_name_is_reserved(tmp_path: Path):
         load_run_profile(Settings(repo_root=tmp_path, profile=str(path)))
 
 
-def test_run_document_without_a_profile_warns(monkeypatch, caplog, document, tmp_path: Path):
-    def stop(settings: Settings) -> DomainProfile:
-        raise RuntimeError("stop here, the fallback has been taken")
-
-    monkeypatch.setattr("paperfacts.workflow.load_run_profile", stop)
-
-    with caplog.at_level(logging.WARNING, logger="paperfacts.workflow"), pytest.raises(RuntimeError):
-        run_document(document, Settings(data_root=tmp_path / "data"))
-
-    assert any("without a profile" in record.getMessage() for record in caplog.records)
+def test_run_document_takes_no_default_profile():
+    # Every entry point loads its profile once with load_run_profile and passes it; a silent fallback here would
+    # skip the reserved-name and shadow checks that loader makes.
+    assert inspect.signature(run_document).parameters["profile"].default is inspect.Parameter.empty

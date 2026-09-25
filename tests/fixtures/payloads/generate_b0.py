@@ -159,7 +159,7 @@ def record(work_dir: Path) -> dict[str, Any]:
         reasoning_effort=real.reasoning_effort,
     )
     with mock.patch.object(workflow, "build_llm_client", lambda _settings: fake):
-        workflow.run_document(document, settings)
+        workflow.run_document(document, settings, workflow.load_run_profile(settings))
 
     systems: dict[str, str] = {}
     requests = []
