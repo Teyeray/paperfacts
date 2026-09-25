@@ -39,7 +39,13 @@ class LlmResponseError(LlmError):
 
 
 class LlmOfflineMiss(LlmError):
-    """``llm.offline`` is on and the request has no cached answer: nothing was sent."""
+    """Offline replay is on and the request has no cached answer: nothing was sent.
+
+    Deliberately *not* an :class:`LlmResponseError`. Sample matching (and per-question isolation such as
+    ``FailedQuestion``) catches that class and stores a "failed" outcome; a miss caught there would be written
+    down as the model's answer to a request that was never sent. A miss must reach the top of the run, so
+    every broad handler on a path to a model call re-raises it first.
+    """
 
 
 class ContextBudgetError(PaperFactsError):
