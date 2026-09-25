@@ -18,10 +18,12 @@ from typer.testing import CliRunner
 
 from paperfacts.cli import app
 from paperfacts.config import Settings
-from paperfacts.errors import ParserError
+from paperfacts.errors import LlmOfflineMiss, ParserError
+from paperfacts.llm import OFFLINE_MISSES, OfflineMiss
 from paperfacts.models import BACKENDS, Backend, DocumentInput, RawParseOutput
 from paperfacts.parsers import Parser
 from paperfacts.storage import DataLayout
+from paperfacts.workflow import BatchResult
 from support.extraction import make_artifact, make_lane
 from support.factories import RawOutputFactory, make_block, paddle_page_entry
 from support.llm import FakeLlmClient
@@ -260,6 +262,69 @@ def test_the_mode_option_reaches_run(monkeypatch, two_page_pdf: Path, data_root:
     runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), "--mode", "passage"])
 
     assert captured[0].extraction_mode == "passage"
+
+
+@pytest.fixture
+def no_misses_yet():
+    OFFLINE_MISSES.clear()
+    yield OFFLINE_MISSES
+    OFFLINE_MISSES.clear()
+
+
+def test_run_offline_turns_replay_on_and_ends_with_the_misses(
+    monkeypatch, two_page_pdf: Path, data_root: Path, api_key, no_misses_yet, tmp_path: Path
+):
+    captured: list[Settings] = []
+    report = tmp_path / "misses.json"
+    monkeypatch.setenv("PAPERFACTS_LLM_OFFLINE_REPORT", str(report))
+    monkeypatch.delenv("PAPERFACTS_LLM_OFFLINE", raising=False)
+
+    def fake_run_document(document: DocumentInput, settings: Settings, **kwargs):
+        captured.append(settings)
+        no_misses_yet.record(OfflineMiss(key="0123456789abcdef", kind="json", user="which samples"))
+        raise LlmOfflineMiss("offline: no cached answer for request 0123456789abcdef")
+
+    monkeypatch.setattr("paperfacts.cli.run_document", fake_run_document)
+
+    result = runner.invoke(app, ["run", str(two_page_pdf), "--data-root", str(data_root), "--offline"])
+
+    assert captured[0].llm_offline is True
+    assert result.exit_code == 1
+    assert "offline misses: 1" in result.output
+    assert json.loads(report.read_text(encoding="utf-8")) == [
+        {"key": "0123456789abcdef", "kind": "json", "user": "which samples"}
+    ]
+
+
+def test_batch_offline_prints_zero_misses_after_a_clean_replay(
+    monkeypatch, two_page_pdf: Path, data_root: Path, api_key, no_misses_yet, tmp_path: Path
+):
+    captured: list[Settings] = []
+    monkeypatch.delenv("PAPERFACTS_LLM_OFFLINE_REPORT", raising=False)
+
+    def fake_run_batch(source: Path, settings: Settings, **kwargs):
+        captured.append(settings)
+        return BatchResult(documents=(), failures=(), duplicate_count=0, excel_path=tmp_path / "out.xlsx")
+
+    monkeypatch.setattr("paperfacts.cli.run_batch", fake_run_batch)
+
+    result = runner.invoke(app, ["batch", str(two_page_pdf), "--data-root", str(data_root), "--offline"])
+
+    assert result.exit_code == 0, result.output
+    assert captured[0].llm_offline is True
+    assert result.output.rstrip().endswith("offline misses: 0")
+
+
+def test_an_online_run_prints_no_miss_summary(monkeypatch, two_page_pdf: Path, data_root: Path, api_key, tmp_path):
+    monkeypatch.delenv("PAPERFACTS_LLM_OFFLINE", raising=False)
+    monkeypatch.setattr(
+        "paperfacts.cli.run_batch",
+        lambda source, settings, **kwargs: BatchResult((), (), 0, tmp_path / "out.xlsx"),
+    )
+
+    result = runner.invoke(app, ["batch", str(two_page_pdf), "--data-root", str(data_root)])
+
+    assert "offline misses" not in result.output
 
 
 def test_extract_without_a_key_exits_one_and_points_at_the_key_file(

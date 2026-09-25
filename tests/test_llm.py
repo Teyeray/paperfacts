@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 
 import httpx
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 from paperfacts.config import DEFAULT_RETRY_ATTEMPTS as RETRY_ATTEMPTS
 from paperfacts.config import DEFAULT_RETRY_BACKOFF_S as RETRY_BACKOFF_S
 from paperfacts.errors import LlmError, LlmOfflineMiss, LlmResponseError
-from paperfacts.llm import MAX_RETRY_AFTER_S, OpenAICompatibleClient, complete_validated
+from paperfacts.llm import MAX_RETRY_AFTER_S, OfflineMiss, OfflineMisses, OpenAICompatibleClient, complete_validated
 from support.http import make_client, recording_client
 
 BASE_URL = "https://api.example.com/v1"
@@ -745,6 +746,7 @@ def test_a_vision_reply_cut_off_at_max_tokens_is_an_error_and_is_not_cached(tmp_
 
 def _offline(llm: OpenAICompatibleClient) -> OpenAICompatibleClient:
     llm.offline = True
+    llm.misses = OfflineMisses()  # not the process-wide record: a test's misses must not reach another's
     return llm
 
 
@@ -787,3 +789,43 @@ def test_offline_refuses_a_forced_refresh_too(tmp_path: Path):
 def test_offline_refuses_an_uncached_vision_request(tmp_path: Path):
     with pytest.raises(LlmOfflineMiss):
         _offline(make_llm(cache_dir=tmp_path)).complete_vision(system="s", user="u", image_png=b"\x89PNG")
+
+
+def test_every_miss_is_recorded_by_key_kind_and_question(tmp_path: Path):
+    replay = _offline(make_llm(cache_dir=tmp_path))
+    long_question = "q" * 500
+
+    with pytest.raises(LlmOfflineMiss) as text_miss:
+        replay.complete_json(system="s", user=long_question)
+    with pytest.raises(LlmOfflineMiss):
+        replay.complete_vision(system="s", user="read the chart", image_png=b"\x89PNG")
+
+    json_key = replay.cache_key(replay.payload(system="s", user=long_question))[:16]
+    assert replay.misses.snapshot()[0] == OfflineMiss(key=json_key, kind="json", user="q" * 120)
+    assert json_key in str(text_miss.value)
+    assert [miss.kind for miss in replay.misses.snapshot()] == ["json", "vision"]
+
+
+def test_misses_from_many_threads_are_all_recorded(tmp_path: Path):
+    replay = _offline(make_llm(cache_dir=tmp_path))
+
+    def ask(index: int) -> None:
+        with pytest.raises(LlmOfflineMiss):
+            replay.complete_json(system="s", user=f"question {index}")
+
+    threads = [threading.Thread(target=ask, args=(i,)) for i in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(miss.user for miss in replay.misses.snapshot()) == sorted(f"question {i}" for i in range(16))
+
+
+def test_online_nothing_is_recorded_as_a_miss(tmp_path: Path):
+    llm = make_llm(cache_dir=tmp_path)
+    llm.misses = OfflineMisses()
+
+    llm.complete_json(system="s", user="u")
+
+    assert llm.misses.snapshot() == ()

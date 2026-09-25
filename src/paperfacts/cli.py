@@ -13,7 +13,9 @@ Where the parsers run is decided by the environment (see :mod:`paperfacts.config
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
+import os
 from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path
@@ -24,12 +26,12 @@ import typer
 from paperfacts.config import EXTRACTION_MODES, Settings
 from paperfacts.errors import PaperFactsError, ParserError
 from paperfacts.fields import FIELD_SPECS
-from paperfacts.llm import set_max_in_flight
+from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.report import render_lane, render_report
-from paperfacts.storage import DataLayout
+from paperfacts.storage import DataLayout, write_text_atomic
 from paperfacts.workflow import (
     StageStatus,
     build_llm_client,
@@ -132,6 +134,17 @@ JobsOpt = Annotated[
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="ignore caches and redo this step (extraction re-calls the LLM, which costs)")
 ]
+OfflineOpt = Annotated[
+    bool,
+    typer.Option(
+        "--offline",
+        help="answer every model request from the LLM cache and fail on a miss instead of sending it; "
+        "ends with 'offline misses: N' (same as PAPERFACTS_LLM_OFFLINE=1)",
+    ),
+]
+# Where an offline run writes its misses as JSON. Read here rather than kept in Settings: it is an output of
+# one invocation, like --output, and changes nothing the pipeline does.
+OFFLINE_REPORT_ENV = "PAPERFACTS_LLM_OFFLINE_REPORT"
 # Expected failures (configuration, LLM, parser, missing files) become red text and exit 1; anything else
 # keeps its traceback.
 REPORTABLE_ERRORS = (PaperFactsError, FileNotFoundError)
@@ -142,9 +155,12 @@ def _settings(
     passes: int | None = None,
     mode: ModeOption | None = None,
     figures: bool | None = None,
+    offline: bool = False,
 ) -> Settings:
     settings = Settings.from_env()
     changes: dict[str, object] = {}
+    if offline:
+        changes["llm_offline"] = True
     if figures is not None:
         changes["figures_enabled"] = figures
     if data_root is not None:
@@ -169,6 +185,21 @@ def _configure_logging(verbose: bool) -> None:
 def _fail(name: str, exc: Exception) -> NoReturn:
     typer.secho(f"[{name}] failed: {exc}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code=1) from exc
+
+
+def _offline_summary(settings: Settings) -> None:
+    """The last line of an offline run, printed whether it finished or failed: a replay proves "zero model
+    calls" only by saying how many requests it could not answer, and which (by key, in the report file)."""
+    if not settings.llm_offline:
+        return
+    misses = OFFLINE_MISSES.snapshot()
+    typer.echo(f"offline misses: {len(misses)}")
+    report = os.environ.get(OFFLINE_REPORT_ENV, "").strip()
+    if report:
+        write_text_atomic(
+            Path(report), json.dumps([dataclasses.asdict(miss) for miss in misses], ensure_ascii=False, indent=2)
+        )
+        typer.echo(f"offline misses -> {report}")
 
 
 def _echo_lines(lines: Iterable[str]) -> None:
@@ -280,12 +311,13 @@ def run(
     mode: ModeOpt = None,
     figures: FiguresOpt = None,
     force_figures: ForceFiguresOpt = False,
+    offline: OfflineOpt = False,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Parse, extract, compare and automatically save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures)
+    settings = _settings(data_root, passes, mode, figures, offline)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -296,6 +328,7 @@ def run(
     try:
         result = run_document(document, settings, force=force, force_figures=force_figures, on_stage=on_stage)
     except REPORTABLE_ERRORS as exc:
+        _offline_summary(settings)
         _fail("run", exc)
     for lane in result.lanes.values():
         _echo_lines(render_lane(lane))
@@ -307,6 +340,7 @@ def run(
             + (f"; {warning}" if warning else "")
         )
     typer.echo(f"Excel -> {result.excel_path}")
+    _offline_summary(settings)
 
 
 def _batch_summary(
@@ -334,12 +368,14 @@ def _batch_summary(
             on_stage=on_stage,
         )
     except (*REPORTABLE_ERRORS, OSError) as exc:
+        _offline_summary(settings)
         _fail("export" if export_only else "batch", exc)
     typer.echo(
         f"Completed: {len(result.documents)} papers; failed: {len(result.failures)}; "
         f"duplicates skipped: {result.duplicate_count}"
     )
     typer.echo(f"Excel -> {result.excel_path}")
+    _offline_summary(settings)
     if result.failures:
         raise typer.Exit(code=1)
 
@@ -354,12 +390,13 @@ def batch(
     figures: FiguresOpt = None,
     force_figures: ForceFiguresOpt = False,
     jobs: JobsOpt = None,
+    offline: OfflineOpt = False,
     data_root: DataRootOpt = None,
     verbose: VerboseOpt = False,
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures)
+    settings = _settings(data_root, passes, mode, figures, offline)
     _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures, jobs=jobs)
 
 

@@ -34,7 +34,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Self
+from typing import Any, Literal, Protocol, Self
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -127,6 +127,46 @@ def set_max_in_flight(limit: int) -> None:
 
 
 @dataclass(frozen=True)
+class OfflineMiss:
+    """One request an offline replay could not answer. ``key`` is the cache key's first 16 hex digits (what
+    the log line names), so two replays' miss sets compare by request rather than by count."""
+
+    key: str
+    kind: Literal["json", "vision"]
+    user: str
+
+
+class OfflineMisses:
+    """Every offline miss of this process, in the order they happened.
+
+    Shared rather than per client: a batch builds a text client per paper and a vision client per figures
+    stage, and the summary a replay ends with has to cover all of them. Thread-safe because the lanes, the
+    field questions and the figure panels all miss from their own threads.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._misses: list[OfflineMiss] = []
+
+    def record(self, miss: OfflineMiss) -> None:
+        with self._lock:
+            self._misses.append(miss)
+
+    def snapshot(self) -> tuple[OfflineMiss, ...]:
+        with self._lock:
+            return tuple(self._misses)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._misses.clear()
+
+
+# The process-wide record, module-level for the same reason as IN_FLIGHT: every client this process builds
+# reports into it, whichever document, lane or stage built it.
+OFFLINE_MISSES = OfflineMisses()
+
+
+@dataclass(frozen=True)
 class LlmResult:
     text: str
     usage: dict[str, int]
@@ -192,6 +232,7 @@ class OpenAICompatibleClient:
         sleep: Callable[[float], None] = time.sleep,
         in_flight: InFlightLimit = IN_FLIGHT,
         offline: bool = False,
+        misses: OfflineMisses = OFFLINE_MISSES,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -209,6 +250,7 @@ class OpenAICompatibleClient:
         # Replay only: a request the cache cannot answer raises instead of reaching the endpoint. This is how
         # a refactor proves it re-derives the corpus for free -- any miss is a changed request, named in the log.
         self.offline = offline
+        self.misses = misses
 
     def close(self) -> None:
         self.client.close()
@@ -240,7 +282,7 @@ class OpenAICompatibleClient:
                     return cached
                 logger.warning("llm cache entry %s fails validation; asking again", key[:16])
 
-        self._refuse_offline(key, user)
+        self._refuse_offline(key, "json", user)
         data = self._post_with_retry(payload)
         text = _content(data, "the model")
         if data["choices"][0].get("finish_reason") == "length":
@@ -253,10 +295,12 @@ class OpenAICompatibleClient:
             self._write_cache(key, result)
         return result
 
-    def _refuse_offline(self, key: str, user: str) -> None:
+    def _refuse_offline(self, key: str, kind: Literal["json", "vision"], user: str) -> None:
         if self.offline:
-            # One grep-able line per miss, with the start of the question, so a changed prompt can be found.
+            # One grep-able line per miss, with the start of the question, so a changed prompt can be found;
+            # and one record, so the run can end with the whole set rather than whatever the log kept.
             logger.warning("llm offline miss key=%s user=%r", key[:16], user[:120])
+            self.misses.record(OfflineMiss(key=key[:16], kind=kind, user=user[:120]))
             raise LlmOfflineMiss(f"offline: no cached answer for request {key[:16]}")
 
     def payload(
@@ -296,7 +340,7 @@ class OpenAICompatibleClient:
             cached = self._read_cache(key)
             if cached is not None:
                 return cached
-        self._refuse_offline(key, user)
+        self._refuse_offline(key, "vision", user)
         data = self._post_with_retry(payload)
         text = _content(data, "the vision model")
         if data["choices"][0].get("finish_reason") == "length":
