@@ -300,11 +300,33 @@ class ExtractedRecords(BaseModel):
     )
 
 
+# English number words a value may be written in: "a four-inch target", "two targets". One to twelve only:
+# beyond that papers write digits, and "a dozen" is a round figure, not a count. Defined here rather than in
+# normalize.py because the cleaning below must let such a value through, and normalize imports this module.
+NUMBER_WORDS = {
+    word: index
+    for index, word in enumerate(
+        ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"), 1
+    )
+}
+_NUMBER_WORD = re.compile(rf"^(?P<word>{'|'.join(NUMBER_WORDS)})(?![a-z])-?\s*", re.IGNORECASE)
+
+
+def spell_number_word(text: str) -> str:
+    """``text`` with a leading English number word written in digits ("four-inch" -> "4 inch"). A text that
+    carries a digit of its own, or does not start with a number word, comes back unchanged."""
+    stripped = text.strip()
+    match = _NUMBER_WORD.match(stripped)
+    if match is None or any(character.isdigit() for character in stripped):
+        return text
+    return f"{NUMBER_WORDS[match.group('word').lower()]} {stripped[match.end() :]}".strip()
+
+
 class ResponseCleaning:
     """The audit kept while a model's answer is turned into records, shared by both extraction modes.
 
     Two things are recorded rather than silently discarded: ids the model cited that it was never shown, and
-    values dropped for being impossible (a numeric field whose value has no digit in it).
+    values dropped for being impossible (a numeric field whose value has no digit and no number word in it).
     """
 
     def __init__(self) -> None:
@@ -330,7 +352,7 @@ class ResponseCleaning:
     ) -> FieldValue | None:
         """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
         text = value_raw.strip()
-        if spec.kind == "numeric" and not any(character.isdigit() for character in text):
+        if spec.kind == "numeric" and not any(character.isdigit() for character in spell_number_word(text)):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
             return None
         return FieldValue(

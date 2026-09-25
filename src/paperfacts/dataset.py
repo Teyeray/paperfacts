@@ -46,7 +46,7 @@ from paperfacts.normalize import (
     parse_number,
     text_key,
 )
-from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
+from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, spell_number_word
 from paperfacts.storage import write_atomic
 
 CellValue = str | float | int | bool | None
@@ -248,7 +248,7 @@ def _joined(values: Sequence[str]) -> str:
 def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     if spec.kind != "numeric":
         return value.value_raw.strip(), None
-    text = delatex(normalize_text(value.value_raw)).strip()
+    text = spell_number_word(delatex(normalize_text(value.value_raw)).strip())
     approx = _APPROX.match(text)
     if approx:
         text = text[approx.end() :].strip()

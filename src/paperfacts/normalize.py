@@ -20,7 +20,7 @@ from pathlib import Path
 
 from paperfacts.errors import ConfigError
 from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FIELDS_SOURCE, FieldSpec
-from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord
+from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 
 # ---- Text ------------------------------------------------------------------------------------------------
 # Superscript digits are folded **before** NFKC, which would collapse "10⁻⁴" to "10-4" and lose the exponent.
@@ -267,6 +267,10 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     # digits after it ("\\sim82").
     text = _LATEX_COMMAND.sub(" ", text).strip()
     notes: list[str] = []
+    spelled = spell_number_word(text)
+    if spelled != text:
+        notes.append(f"number word {re.split(r'[-\s]', text, maxsplit=1)[0]!r} read as {spelled.split()[0]}")
+        text = spelled
     match = _QUALIFIERS.match(text)
     if match:
         notes.append(f"qualifier '{match.group('q')}' dropped")

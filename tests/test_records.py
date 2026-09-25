@@ -356,7 +356,7 @@ def test_a_correctly_scoped_field_of_every_group_survives():
     assert records.dropped == ()
 
 
-@pytest.mark.parametrize("value_raw", ["minimum", "n.a.", "high"])
+@pytest.mark.parametrize("value_raw", ["minimum", "n.a.", "high", "a dozen", "none"])
 def test_a_numeric_field_without_any_digit_is_dropped_and_logged(value_raw):
     # "minimum" is not a fact value; keeping it would only normalize to None and then show up as a line
     # of noise in the report.
@@ -458,6 +458,15 @@ def test_a_numeric_value_without_a_digit_is_dropped_with_the_reason():
 
     assert value is None
     assert cleaning.dropped == ["sheet_resistance: non-numeric value 'minimum'"]
+
+
+@pytest.mark.parametrize("value_raw", ["four", "four-inch", "Two", "twelve"])
+def test_a_numeric_value_written_as_a_number_word_survives(value_raw):
+    # metals: "a four-inch ITO target" was dropped as non-numeric in both lanes.
+    cleaning, value = clean_value("inch", value_raw, unit_raw="inch")
+
+    assert value is not None and value.value_raw == value_raw
+    assert cleaning.dropped == []
 
 
 def test_a_composition_value_without_a_digit_survives_the_numeric_rule():

@@ -448,6 +448,20 @@ def test_one_lane_quoting_two_different_modes_stays_refused():
     assert decision(result, "mode")["decision"] in {"conflict", "multiple_values"}
 
 
+def test_a_target_size_written_as_a_number_word_fills_the_cell():
+    # metals: "a four-inch ITO target", quoted as "four" with the unit "inch" by both lanes.
+    result = dataset(
+        make_lane(target=TargetRecord(fields=(value("inch", "four", "inch"),))),
+        make_lane(
+            backend="paddleocr_vl",
+            target=TargetRecord(fields=(value("inch", "four-inch", "inch", backend="paddleocr_vl"),)),
+        ),
+    )
+
+    assert result.paper_row["inch"] == 4
+    assert decision(result, "inch")["decision"] == "agree"
+
+
 def test_different_target_compositions_cannot_be_picked_or_joined():
     result = dataset(make_lane(target=TargetRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
     assert result.paper_row["component"] is None

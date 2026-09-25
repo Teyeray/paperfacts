@@ -344,3 +344,26 @@ def test_real_spellings_read_as_the_value_or_are_refused(raw, expected, fragment
         assert note is None
     else:
         assert fragment in note
+
+
+# ---- Number words ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("four", 4.0), ("four-inch", 4.0), ("Two", 2.0), ("one", 1.0), ("twelve", 12.0), ("eleven inch", 11.0)],
+)
+def test_a_small_english_number_word_reads_as_its_number_with_a_note(raw, expected):
+    value, note = parse_number(raw)
+
+    assert value == expected
+    assert note is not None and "number word" in note
+
+
+@pytest.mark.parametrize("raw", ["a dozen", "thirteen", "none", "tenth", "often"])
+def test_other_words_still_read_as_no_number(raw):
+    assert parse_number(raw) == (None, "no number found")
+
+
+def test_a_number_word_beside_digits_is_left_to_the_digits():
+    assert parse_number("two 4-inch targets") == (4.0, None)
