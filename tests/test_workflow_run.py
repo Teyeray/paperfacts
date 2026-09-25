@@ -26,7 +26,8 @@ from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.records import FailedQuestion, LaneExtraction
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import ParseReport, is_finished, run_document, stage_names
+from paperfacts.stored import is_finished
+from paperfacts.workflow import ParseReport, run_document, stage_names
 from support.extraction import make_lane, make_sample
 from support.llm import FakeLlmClient
 

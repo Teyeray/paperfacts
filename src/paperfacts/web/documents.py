@@ -38,7 +38,8 @@ from paperfacts.storage import (
     stored_pdf,
     write_bytes_atomic,
 )
-from paperfacts.workflow import Stage, is_finished, read_lane, stored_comparison, stored_dataset, stored_stages
+from paperfacts.stored import is_finished, stored_comparison, stored_dataset, stored_stages
+from paperfacts.workflow import Stage, read_lane
 
 logger = logging.getLogger(__name__)
 
