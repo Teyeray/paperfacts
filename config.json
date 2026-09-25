@@ -236,7 +236,7 @@
       "label": "Ar 流量",
       "group": "process",
       "kind": "numeric",
-      "description": "Argon flow rate introduced into the vacuum chamber (sccm).",
+      "description": "Argon flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
       "description_zh": "所选样品的氩气流量（sccm）。",
       "keywords": [
         "Ar flow rate",
@@ -260,7 +260,7 @@
       "label": "O2 流量",
       "group": "process",
       "kind": "numeric",
-      "description": "Oxygen flow rate introduced into the vacuum chamber (sccm).",
+      "description": "Oxygen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
       "description_zh": "所选样品的氧气流量（sccm）。",
       "keywords": [
         "O2 flow rate",
@@ -284,7 +284,7 @@
       "label": "H2 流量",
       "group": "process",
       "kind": "numeric",
-      "description": "Hydrogen flow rate introduced into the vacuum chamber (sccm).",
+      "description": "Hydrogen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
       "description_zh": "所选样品的氢气流量（sccm）。",
       "keywords": [
         "H2 flow rate",

@@ -38,8 +38,13 @@ def grounding_key(text: str) -> str:
     """Reduce text to the form used for the containment test: no LaTeX, no case, no decoration."""
     folded = LATEX_WRAPPERS.sub(" ", delatex(normalize_text(text)))
     folded = _MULTIPLICATION.sub("x", folded).lower().replace("ω", "Ω")
-    return _CARET.sub("^", _DECORATION.sub(" ", folded)).strip()
+    return _POWER_OF_TEN.sub(r"x 10^\1", _CARET.sub("^", _DECORATION.sub(" ", folded))).strip()
 
+
+# A power of ten after a multiplication sign is an exponent whether or not the caret survived: a table writes
+# "6.58 x 10<sup>-4</sup>" (a caret once folded) while the model quotes "6.58 x 10-4". Only after "x": a bare
+# "10-4" elsewhere may be a range and keeps its hyphen.
+_POWER_OF_TEN = re.compile(r"x\s*10\s*\^?\s*(-?\s*\d+)")
 
 _MIN_SQUEEZED_LENGTH = 4
 

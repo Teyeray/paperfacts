@@ -353,3 +353,19 @@ def test_ground_lane_with_adjacency_flips_a_straddled_value_to_grounded_end_to_e
 
     assert without.sample("A").get("component").grounded is False
     assert with_adjacency.sample("A").get("component").grounded is True
+
+
+def test_a_power_of_ten_quoted_without_its_superscript_grounds_against_the_superscript():
+    # GM1: the block has "6.58 × 10<sup>−4</sup> Ω cm"; the model quoted "6.58 × 10−4".
+    block = make_block(content="from 6.58 × 10<sup>−4</sup> Ω cm to 5.74 × 10<sup>−4</sup> Ω cm")
+    value = make_field("resistivity", "6.58 × 10−4", source_ids=(block.source_id,))
+
+    assert is_grounded(value, {block.source_id: block.content}) is True
+
+
+def test_a_bare_hyphenated_pair_is_not_read_as_a_power_of_ten():
+    # "10-4" without a multiplication sign may be a range; it must not ground against "10^-4".
+    block = make_block(content="the exponent 10^-4 appears here")
+    value = make_field("thickness", "10-4", source_ids=(block.source_id,))
+
+    assert is_grounded(value, {block.source_id: block.content}) is False
