@@ -5,12 +5,13 @@
 markdown used only to find where to look.
 
 ```bash
-python eval/score.py --data-root data                                # newest dataset of each gold paper
-python eval/score.py --data-root data --out report.md --json cells.json
-python eval/score.py --dataset 80c3b69d570c2b6d=/path/to/dataset.json --only 80c3b69d570c2b6d
+uv run python eval/score.py --data-root data                         # newest dataset of each gold paper
+uv run python eval/score.py --data-root data --out report.md --json cells.json
+uv run python eval/score.py --dataset 80c3b69d570c2b6d=/path/to/dataset.json --only 80c3b69d570c2b6d
 ```
 
-Standard library only; tolerances come from `config.json` (`--config` to point elsewhere).
+Runs in the package's environment: tolerances and categories come from `config.json` (`--config` to point
+elsewhere), and categories are matched by the package's own `normalize.canonical_category`.
 
 ## Gold file format
 
@@ -75,8 +76,8 @@ non-empty cells *extra*.
 | extra | has a value, gold has no cell for this sample/field (or the row is unaligned) | FP | – |
 | disputed | has a value, gold has only ambiguous/null cells, none match | not counted | not counted |
 
-Numbers match with `math.isclose(dataset, gold, rel_tol, abs_tol)` using the field's tolerances; `mode` compares
-its category set (DC / RF / pulsed DC); `component` matches on normalised equality or an `accept` regex.
+Numbers match with `math.isclose(dataset, gold, rel_tol, abs_tol)` using the field's tolerances; a field with `categories` (`mode`)
+compares the category each value names, by the pipeline's rule; `component` matches on normalised equality or an `accept` regex.
 
 Precision = (correct + soft) / (correct + soft + wrong + extra); recall = correct / (correct + wrong + missing).
 The report gives micro totals, a macro average over papers (a 36-sample series otherwise dominates), per field
