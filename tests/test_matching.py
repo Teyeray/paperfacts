@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from paperfacts.errors import LlmOfflineMiss
 from paperfacts.matching import SampleMatching, match_samples
 from support.extraction import make_field, make_lane, make_sample
 from support.llm import FakeLlmClient
@@ -237,6 +238,17 @@ def test_two_unparseable_answers_mark_the_matching_as_failed_without_raising():
     assert matching.failure and "_MatchingResponse" in matching.failure
     assert matching.pairs == ()
     assert matching.unmatched_a == ("A1",) and matching.unmatched_b == ("B1",)
+
+
+def test_an_offline_miss_is_not_a_failed_matching():
+    # A failed matching is an outcome; a replay miss is a request that was never sent, so it must propagate.
+    lane_a, lane_b = lanes(["A1"], ["B1"])
+
+    def miss(system: str, user: str) -> str:
+        raise LlmOfflineMiss("offline: no cached answer")
+
+    with pytest.raises(LlmOfflineMiss):
+        match_samples(lane_a, lane_b, FakeLlmClient(miss))
 
 
 def test_a_failed_matching_still_keeps_the_exact_pairs():

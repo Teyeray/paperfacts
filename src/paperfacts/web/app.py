@@ -52,6 +52,7 @@ from starlette.types import Message
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload
+from paperfacts.errors import ConfigError
 from paperfacts.figures import FiguresView
 from paperfacts.keys import figure_key_for
 from paperfacts.llm import set_max_in_flight
@@ -163,6 +164,10 @@ def login_accepted(header: str | None, settings: Settings) -> bool:
 
 def create_app(settings: Settings | None = None, *, jobs: JobManager | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    if settings.llm_offline:
+        # Replay is a proof run over a batch; a server under it would fail every upload, and its misses
+        # would pile up in one process-wide record that no job reports.
+        raise ConfigError("offline replay is for `run` and `batch`; unset PAPERFACTS_LLM_OFFLINE / llm.offline")
     set_max_in_flight(settings.llm_max_in_flight)
     library = Library(settings)
     manager = jobs or JobManager(

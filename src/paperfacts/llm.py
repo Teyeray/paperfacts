@@ -10,8 +10,13 @@ the model instead of replaying an answer.
 
 Only an answer the caller accepts is cached (``accept``; :func:`complete_validated` passes its schema check).
 A cached answer that fails the check is a miss and is asked again, and a fresh one that fails it is returned
-but never written: one bad reply must cost one repair, not become the answer of every later run. A reply cut
-off at ``max_tokens`` is never an answer and raises.
+but never written as the answer: one bad reply must cost one repair, not become the answer of every later run.
+A reply cut off at ``max_tokens`` is never an answer and raises.
+
+A fresh answer that fails the check is written to a separate entry, ``<key>.rejected``, which an online run
+never reads. Offline replay reads it only where the online run it replays would have asked again and been
+refused the same way, so replay takes the recorded path: the rejected answer, then the cached repair request.
+The policy is :meth:`OpenAICompatibleClient._cached_answer`.
 
 Vision requests (:meth:`OpenAICompatibleClient.complete_vision`) carry one PNG as an OpenAI-style
 ``image_url`` content part. Their cache key hashes the request with the image replaced by its sha256: the
@@ -34,7 +39,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Self
+from typing import Any, Literal, Protocol, Self
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -126,6 +131,51 @@ def set_max_in_flight(limit: int) -> None:
     IN_FLIGHT.set_limit(limit)
 
 
+# ``repair`` is the follow-up to an answer that failed validation; its prompt starts with the question itself,
+# so without the kind it would read like a miss of the question.
+MissKind = Literal["json", "repair", "vision"]
+
+
+@dataclass(frozen=True)
+class OfflineMiss:
+    """One request an offline replay could not answer. ``key`` is the cache key's first 16 hex digits (what
+    the log line names), so two replays' miss sets compare by request rather than by count."""
+
+    key: str
+    kind: MissKind
+    user: str
+
+
+class OfflineMisses:
+    """Every offline miss of this process, in the order they happened.
+
+    Shared rather than per client: a batch builds a text client per paper and a vision client per figures
+    stage, and the summary a replay ends with has to cover all of them. Thread-safe because the lanes, the
+    field questions and the figure panels all miss from their own threads.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._misses: list[OfflineMiss] = []
+
+    def record(self, miss: OfflineMiss) -> None:
+        with self._lock:
+            self._misses.append(miss)
+
+    def snapshot(self) -> tuple[OfflineMiss, ...]:
+        with self._lock:
+            return tuple(self._misses)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._misses.clear()
+
+
+# The process-wide record, module-level for the same reason as IN_FLIGHT: every client this process builds
+# reports into it, whichever document, lane or stage built it.
+OFFLINE_MISSES = OfflineMisses()
+
+
 @dataclass(frozen=True)
 class LlmResult:
     text: str
@@ -155,6 +205,7 @@ class LlmClient(Protocol):
         cache_salt: str = "",
         reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
         accept: Accept | None = None,
+        repair: bool = False,
     ) -> LlmResult: ...
 
 
@@ -192,6 +243,7 @@ class OpenAICompatibleClient:
         sleep: Callable[[float], None] = time.sleep,
         in_flight: InFlightLimit = IN_FLIGHT,
         offline: bool = False,
+        misses: OfflineMisses = OFFLINE_MISSES,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -209,6 +261,7 @@ class OpenAICompatibleClient:
         # Replay only: a request the cache cannot answer raises instead of reaching the endpoint. This is how
         # a refactor proves it re-derives the corpus for free -- any miss is a changed request, named in the log.
         self.offline = offline
+        self.misses = misses
 
     def close(self) -> None:
         self.client.close()
@@ -228,19 +281,19 @@ class OpenAICompatibleClient:
         cache_salt: str = "",
         reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
         accept: Accept | None = None,
+        repair: bool = False,
     ) -> LlmResult:
         """One JSON answer. ``accept`` gates the cache both ways: a cached answer it rejects is asked again,
-        a fresh one it rejects is returned to the caller (who repairs it) but not written."""
+        a fresh one it rejects is returned to the caller (who repairs it) and kept only for replay.
+        ``repair`` only labels an offline miss."""
         payload = self.payload(system=system, user=user, reasoning_effort=reasoning_effort)
         key = self.cache_key(payload, cache_salt=cache_salt)
         if not refresh:
-            cached = self._read_cache(key)
+            cached = self._cached_answer(key, accept)
             if cached is not None:
-                if accept is None or accept(cached.text):
-                    return cached
-                logger.warning("llm cache entry %s fails validation; asking again", key[:16])
+                return cached
 
-        self._refuse_offline(key, user)
+        self._refuse_offline(key, "repair" if repair else "json", user)
         data = self._post_with_retry(payload)
         text = _content(data, "the model")
         if data["choices"][0].get("finish_reason") == "length":
@@ -251,12 +304,38 @@ class OpenAICompatibleClient:
         result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
         if accept is None or accept(text):
             self._write_cache(key, result)
+        else:
+            self._write_cache(_rejected(key), result)
         return result
 
-    def _refuse_offline(self, key: str, user: str) -> None:
+    def _cached_answer(self, key: str, accept: Accept | None) -> LlmResult | None:
+        """What the cache answers for ``key``: the one rule for serving, online and offline alike.
+
+        Online, only an entry ``accept`` takes -- exactly what this client served before rejected answers
+        were kept. Offline serves the same, plus one thing: where online would ask again (no acceptable
+        entry), a rejected answer that *still* fails the check. The live run got that answer at this point
+        and repaired it, so serving it sends replay on to the repair request, which is cached too. A
+        rejected answer that now passes the check (a loosened schema) is a miss: online would ask again and
+        get another answer, so replaying the old one would report a result the recorded run never had.
+        """
+        cached = self._read_cache(key)
+        if cached is not None:
+            if accept is None or accept(cached.text):
+                return cached
+            logger.warning("llm cache entry %s fails validation; asking again", key[:16])
+        if not self.offline or accept is None:
+            return None
+        rejected = self._read_cache(_rejected(key))
+        if rejected is not None and not accept(rejected.text):
+            return rejected
+        return None
+
+    def _refuse_offline(self, key: str, kind: MissKind, user: str) -> None:
         if self.offline:
-            # One grep-able line per miss, with the start of the question, so a changed prompt can be found.
+            # One grep-able line per miss, with the start of the question, so a changed prompt can be found;
+            # and one record, so the run can end with the whole set rather than whatever the log kept.
             logger.warning("llm offline miss key=%s user=%r", key[:16], user[:120])
+            self.misses.record(OfflineMiss(key=key[:16], kind=kind, user=user[:120]))
             raise LlmOfflineMiss(f"offline: no cached answer for request {key[:16]}")
 
     def payload(
@@ -296,7 +375,7 @@ class OpenAICompatibleClient:
             cached = self._read_cache(key)
             if cached is not None:
                 return cached
-        self._refuse_offline(key, user)
+        self._refuse_offline(key, "vision", user)
         data = self._post_with_retry(payload)
         text = _content(data, "the vision model")
         if data["choices"][0].get("finish_reason") == "length":
@@ -416,6 +495,12 @@ class OpenAICompatibleClient:
         write_text_atomic(path, payload)
 
 
+def _rejected(key: str) -> str:
+    """Where a rejected answer to ``key`` is kept. A separate entry rather than a flag on the answer's own:
+    the online path never reads it, so it cannot shadow, replace or race an accepted answer."""
+    return f"{key}.rejected"
+
+
 def _content(data: dict[str, Any], who: str) -> str:
     """The reply text of a chat completion, or an :class:`LlmError` for anything that is not one."""
     try:
@@ -483,7 +568,9 @@ def complete_validated[M: BaseModel](
     model, the raw text, and the summed token usage of both calls.
 
     Both requests pass the schema as ``accept``, so only the answer that validated is cached, and an invalid
-    answer already in the cache (written before this rule) is asked again rather than replayed.
+    answer already in the cache (written before this rule) is asked again rather than replayed. An invalid
+    answer is kept apart for offline replay, which then rebuilds the same repair request from it: the same
+    text and pydantic's same error, as long as ``uv.lock`` pins the same pydantic.
     """
 
     def accept(text: str) -> bool:
@@ -516,6 +603,7 @@ def complete_validated[M: BaseModel](
         cache_salt=cache_salt,
         reasoning_effort=reasoning_effort,
         accept=accept,
+        repair=True,
     )
     for key, value in second.usage.items():
         usage[key] = usage.get(key, 0) + value

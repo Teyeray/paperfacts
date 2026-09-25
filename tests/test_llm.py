@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 
 import httpx
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 from paperfacts.config import DEFAULT_RETRY_ATTEMPTS as RETRY_ATTEMPTS
 from paperfacts.config import DEFAULT_RETRY_BACKOFF_S as RETRY_BACKOFF_S
 from paperfacts.errors import LlmError, LlmOfflineMiss, LlmResponseError
-from paperfacts.llm import MAX_RETRY_AFTER_S, OpenAICompatibleClient, complete_validated
+from paperfacts.llm import MAX_RETRY_AFTER_S, OfflineMiss, OfflineMisses, OpenAICompatibleClient, complete_validated
 from support.http import make_client, recording_client
 
 BASE_URL = "https://api.example.com/v1"
@@ -593,24 +594,42 @@ def test_content_that_is_not_text_is_an_llm_error():
         llm.complete_json(system="S", user="U")
 
 
-def test_an_answer_the_caller_rejects_is_returned_but_not_cached(tmp_path: Path):
+def _entry(cache_dir: Path, key: str) -> dict:
+    return json.loads((cache_dir / f"{key}.json").read_text(encoding="utf-8"))
+
+
+def _names(cache_dir: Path) -> set[str]:
+    return {path.name for path in cache_dir.iterdir()}
+
+
+def _answer_files(cache_dir: Path) -> list[Path]:
+    return [path for path in cache_dir.iterdir() if not path.name.endswith(".rejected.json")]
+
+
+def test_an_answer_the_caller_rejects_is_returned_and_kept_apart_from_the_answer(tmp_path: Path):
     cache_dir = tmp_path / "llm_cache"
-    llm = make_llm(cache_dir=cache_dir)
+    requests: list[httpx.Request] = []
+    llm = make_llm(
+        lambda request: requests.append(request) or httpx.Response(200, json=chat_response()), cache_dir=cache_dir
+    )
 
     result = llm.complete_json(system="S", user="U", accept=lambda text: False)
+    llm.complete_json(system="S", user="U", accept=lambda text: False)
 
+    key = cache_key_of(llm, "S", "U")
     assert result.text == '{"samples": []}'
-    assert not cache_dir.exists()
+    assert _names(cache_dir) == {f"{key}.rejected.json"}
+    assert len(requests) == 2  # online never reads a rejected answer
 
 
-def test_two_invalid_answers_leave_nothing_behind_so_the_next_run_can_succeed(tmp_path: Path):
+def test_two_invalid_answers_leave_no_answer_behind_so_the_next_run_can_succeed(tmp_path: Path):
     # The review's scenario: one question answered badly twice used to be cached both times, so every later
     # run replayed the failure until --force re-asked the whole paper.
     cache_dir = tmp_path / "llm_cache"
     bad = make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": "no"}')), cache_dir=cache_dir)
     with pytest.raises(LlmResponseError):
         _validated(bad)
-    assert not cache_dir.exists()
+    assert all(name.endswith(".rejected.json") for name in _names(cache_dir))
 
     good_requests: list[httpx.Request] = []
 
@@ -622,21 +641,139 @@ def test_two_invalid_answers_leave_nothing_behind_so_the_next_run_can_succeed(tm
 
     assert parsed.ok == 1
     assert len(good_requests) == 1
-    assert [path.name for path in cache_dir.iterdir()] == [f"{cache_key_of(bad, 'S', 'U')}.json"]
+    assert _entry(cache_dir, cache_key_of(bad, "S", "U"))["text"] == '{"ok": 1}'
+
+
+def _repaired_online(cache_dir: Path) -> tuple[list[dict], _Answer]:
+    """One question whose first answer fails validation and whose repair succeeds; the bodies sent."""
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        repair = body["messages"][1]["content"].startswith("fix")
+        return httpx.Response(200, json=_chat('{"ok": 2}' if repair else "{}"))
+
+    parsed, _, _ = _validated(make_llm(handler, cache_dir=cache_dir))
+    return bodies, parsed
 
 
 def test_the_repair_answer_that_validated_is_the_one_cached(tmp_path: Path):
     cache_dir = tmp_path / "llm_cache"
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        user = json.loads(request.content)["messages"][1]["content"]
-        return httpx.Response(200, json=_chat('{"ok": 2}' if user.startswith("fix") else "{}"))
+    bodies, parsed = _repaired_online(cache_dir)
 
-    parsed, _, _ = _validated(make_llm(handler, cache_dir=cache_dir))
+    assert parsed.ok == 2 and len(bodies) == 2
+    first = cache_key_of(make_llm(), "S", "U")
+    assert _entry(cache_dir, f"{first}.rejected")["text"] == "{}"
+    assert not (cache_dir / f"{first}.json").exists()
+    answers = [json.loads(path.read_text(encoding="utf-8"))["text"] for path in _answer_files(cache_dir)]
+    assert answers == ['{"ok": 2}']
 
-    assert parsed.ok == 2
-    entries = [json.loads(path.read_text(encoding="utf-8"))["text"] for path in cache_dir.iterdir()]
-    assert entries == ['{"ok": 2}']
+
+def test_offline_replay_takes_the_repair_path_with_zero_requests(tmp_path: Path):
+    """The critic's hole: without the rejected first answer, every question that needed a repair missed."""
+    cache_dir = tmp_path / "llm_cache"
+    online_bodies, online = _repaired_online(cache_dir)
+    sent: list[httpx.Request] = []
+    replay = _offline(make_llm(lambda request: sent.append(request) or httpx.Response(500), cache_dir=cache_dir))
+    replayed_payloads: list[dict] = []
+    key_of = replay.cache_key
+
+    def recording_key(payload: dict, **kwargs) -> str:
+        replayed_payloads.append(payload)
+        return key_of(payload, **kwargs)
+
+    replay.cache_key = recording_key  # type: ignore[method-assign]
+
+    parsed, text, _ = _validated(replay)
+
+    assert parsed == online and text == '{"ok": 2}'
+    assert sent == [] and replay.misses.snapshot() == ()
+    # The repair request is rebuilt from the replayed rejection and pydantic's error: the same bytes.
+    assert replayed_payloads == online_bodies
+
+
+def test_offline_replay_of_a_question_that_failed_twice_fails_the_same_way(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    with pytest.raises(LlmResponseError):
+        _validated(make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": "no"}')), cache_dir=cache_dir))
+    replay = _offline(make_llm(lambda request: httpx.Response(500), cache_dir=cache_dir))
+
+    with pytest.raises(LlmResponseError):
+        _validated(replay)
+
+    assert replay.misses.snapshot() == ()
+
+
+def test_a_missing_repair_is_recorded_as_a_repair_miss(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    _repaired_online(cache_dir)
+    for path in _answer_files(cache_dir):
+        path.unlink()  # keep the rejected first answer, lose the repair
+    replay = _offline(make_llm(cache_dir=cache_dir))
+
+    with pytest.raises(LlmOfflineMiss):
+        _validated(replay)
+
+    assert [miss.kind for miss in replay.misses.snapshot()] == ["repair"]
+    assert replay.misses.snapshot()[0].user.startswith("fix {}")
+
+
+def test_a_truncated_reply_is_still_a_miss_offline(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    truncated = make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": ', "length")), cache_dir=cache_dir)
+    with pytest.raises(LlmResponseError):
+        truncated.complete_json(system="S", user="U")
+
+    with pytest.raises(LlmOfflineMiss):
+        _offline(make_llm(cache_dir=cache_dir)).complete_json(system="S", user="U")
+
+
+def test_a_forced_answer_that_fails_leaves_the_accepted_one_to_both_online_and_offline(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": 1}')), cache_dir=cache_dir).complete_json(
+        system="S", user="U", accept=lambda text: True
+    )
+    forced = make_llm(lambda request: httpx.Response(200, json=_chat("{}")), cache_dir=cache_dir)
+    forced.complete_json(system="S", user="U", refresh=True, accept=lambda text: text != "{}")
+
+    replay = _offline(make_llm(lambda request: httpx.Response(500), cache_dir=cache_dir))
+
+    assert _entry(cache_dir, cache_key_of(forced, "S", "U"))["text"] == '{"ok": 1}'
+    assert replay.complete_json(system="S", user="U", accept=lambda text: text != "{}").text == '{"ok": 1}'
+
+
+def _rejected_now_valid(cache_dir: Path, llm: OpenAICompatibleClient) -> None:
+    """A rejected answer the schema now accepts (it was loosened), with no answer beside it."""
+    cache_dir.mkdir(parents=True)
+    entry = cache_dir / f"{cache_key_of(llm, 'S', 'U')}.rejected.json"
+    entry.write_text(json.dumps({"text": '{"ok": 1}', "usage": {}}), encoding="utf-8")
+
+
+def test_a_rejected_answer_that_now_validates_is_asked_again_online(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    requests: list[httpx.Request] = []
+    llm = make_llm(
+        lambda request: requests.append(request) or httpx.Response(200, json=_chat('{"ok": 4}')), cache_dir=cache_dir
+    )
+    _rejected_now_valid(cache_dir, llm)
+
+    parsed, _, _ = _validated(llm)
+
+    assert parsed.ok == 4 and len(requests) == 1
+
+
+def test_a_rejected_answer_that_now_validates_is_a_miss_offline(tmp_path: Path):
+    # Its offline twin: serving it would report a result the recorded run never had, with zero misses.
+    cache_dir = tmp_path / "llm_cache"
+    replay = _offline(make_llm(cache_dir=cache_dir))
+    _rejected_now_valid(cache_dir, replay)
+
+    with pytest.raises(LlmOfflineMiss):
+        _validated(replay)
+
+    assert [miss.kind for miss in replay.misses.snapshot()] == ["json"]
 
 
 def test_an_invalid_answer_already_in_the_cache_is_asked_again_not_replayed(tmp_path: Path):
@@ -745,6 +882,7 @@ def test_a_vision_reply_cut_off_at_max_tokens_is_an_error_and_is_not_cached(tmp_
 
 def _offline(llm: OpenAICompatibleClient) -> OpenAICompatibleClient:
     llm.offline = True
+    llm.misses = OfflineMisses()  # not the process-wide record: a test's misses must not reach another's
     return llm
 
 
@@ -787,3 +925,43 @@ def test_offline_refuses_a_forced_refresh_too(tmp_path: Path):
 def test_offline_refuses_an_uncached_vision_request(tmp_path: Path):
     with pytest.raises(LlmOfflineMiss):
         _offline(make_llm(cache_dir=tmp_path)).complete_vision(system="s", user="u", image_png=b"\x89PNG")
+
+
+def test_every_miss_is_recorded_by_key_kind_and_question(tmp_path: Path):
+    replay = _offline(make_llm(cache_dir=tmp_path))
+    long_question = "q" * 500
+
+    with pytest.raises(LlmOfflineMiss) as text_miss:
+        replay.complete_json(system="s", user=long_question)
+    with pytest.raises(LlmOfflineMiss):
+        replay.complete_vision(system="s", user="read the chart", image_png=b"\x89PNG")
+
+    json_key = replay.cache_key(replay.payload(system="s", user=long_question))[:16]
+    assert replay.misses.snapshot()[0] == OfflineMiss(key=json_key, kind="json", user="q" * 120)
+    assert json_key in str(text_miss.value)
+    assert [miss.kind for miss in replay.misses.snapshot()] == ["json", "vision"]
+
+
+def test_misses_from_many_threads_are_all_recorded(tmp_path: Path):
+    replay = _offline(make_llm(cache_dir=tmp_path))
+
+    def ask(index: int) -> None:
+        with pytest.raises(LlmOfflineMiss):
+            replay.complete_json(system="s", user=f"question {index}")
+
+    threads = [threading.Thread(target=ask, args=(i,)) for i in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(miss.user for miss in replay.misses.snapshot()) == sorted(f"question {i}" for i in range(16))
+
+
+def test_online_nothing_is_recorded_as_a_miss(tmp_path: Path):
+    llm = make_llm(cache_dir=tmp_path)
+    llm.misses = OfflineMisses()
+
+    llm.complete_json(system="s", user="u")
+
+    assert llm.misses.snapshot() == ()
