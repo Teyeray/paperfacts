@@ -116,3 +116,12 @@ def test_an_attribute_moves_exactly_the_fingerprints_its_roles_name(attribute):
 
 def test_the_figure_material_is_exactly_the_figure_attributes():
     assert set(keys.attributes_with(F)) == {name for name, roles in ROLES.items() if F in roles}
+
+
+def test_range_policy_enters_the_material_only_away_from_its_default():
+    profile = make_profile()
+    spec = profile.fields[1]
+    assert spec.range_policy == "midpoint"
+    assert "range_policy" not in keys._field_material(spec, C, V)
+    rejecting = dataclasses.replace(spec, range_policy="reject")
+    assert keys._field_material(rejecting, C, V)["range_policy"] == "reject"

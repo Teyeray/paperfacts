@@ -8,6 +8,8 @@ evidence trail.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from paperfacts.normalize import drop_implausible, normalize_field, normalize_lane
@@ -21,6 +23,18 @@ from support.profiles import shipped_profile
 FIELD_BY_NAME = shipped_profile().by_name
 
 # ---- normalize_field ----------------------------------------------------------------
+
+
+def test_a_range_follows_the_fields_range_policy():
+    field = make_field("thickness", "10–20", unit_raw="nm")
+    tco = FIELD_BY_NAME["thickness"]
+    assert tco.range_policy == "midpoint"
+
+    assert normalize_field(field, tco, BUILTIN_UNITS).value == 15.0
+    refused = normalize_field(field, dataclasses.replace(tco, range_policy="reject"), BUILTIN_UNITS)
+    assert (refused.value, refused.unit) == (None, None)
+    assert "refused (range_policy 'reject')" in refused.normalization_note
+    assert refused.value_raw == "10–20"
 
 
 def test_a_numeric_field_gets_value_and_unit_filled_in():

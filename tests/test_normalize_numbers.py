@@ -94,6 +94,28 @@ def test_a_range_collapses_to_its_midpoint_with_a_note():
     assert "range" in note
 
 
+@pytest.mark.parametrize("raw", ["2.8–4.3 V", "10-20", "3.2 x 10^-4 to 4.1 x 10^-4", "~15.6-16.3 nm"])
+def test_a_range_under_reject_gives_no_scalar_and_says_why(raw):
+    value, note = parse_number(raw, range_policy="reject")
+
+    assert value is None
+    assert "refused (range_policy 'reject')" in note
+    assert "midpoint" not in note
+
+
+def test_reject_leaves_everything_that_is_not_a_range_alone():
+    for raw in ("12", "3.5 ± 0.2", "~12 (60)", "1.2 × 10^-4 at 300 K", "10–20 nm, 30 nm", "1:4"):
+        assert parse_number(raw, range_policy="reject") == parse_number(raw)
+
+
+def test_midpoint_is_the_default_policy():
+    assert parse_number("2.8–4.3 V", range_policy="midpoint") == parse_number("2.8–4.3 V")
+    assert parse_number("2.8–4.3 V") == (
+        pytest.approx(3.55),
+        "trailing unit 'V' in value ignored; range 2.8-4.3 → midpoint",
+    )
+
+
 @pytest.mark.parametrize(
     ("raw", "expected", "token"),
     [

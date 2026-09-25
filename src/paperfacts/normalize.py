@@ -18,7 +18,7 @@ import re
 from collections.abc import Callable
 from functools import cache
 
-from paperfacts.fields import FieldSpec
+from paperfacts.fields import FieldSpec, RangePolicy
 from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
@@ -143,13 +143,17 @@ _QUALIFIERS = re.compile(
 )
 
 
-def parse_number(raw: str) -> tuple[float | None, str | None]:
+def parse_number(raw: str, *, range_policy: RangePolicy = "midpoint") -> tuple[float | None, str | None]:
     """``(value, note)``: the number ``raw`` spells, or None with the reason it was refused.
 
     A qualifier ("~", ">", "about") is dropped and recorded first; what is left must then match one of the
     spellings in :data:`_SPELLINGS`, tried in order. Each spelling either claims the text -- with a value, or
     with a refusal -- or passes it on. A refusal is always better than a guess: the comparison turns None
     into AMBIGUOUS, while a wrong number is indistinguishable from a real measurement.
+
+    ``range_policy`` is the field's (``FieldSpec.range_policy``): ``"midpoint"`` reads a range as its midpoint,
+    ``"reject"`` refuses it, for a quantity whose range is a window rather than a scatter around one value (a
+    cathode's "2.8–4.3 V" is the cycling window; its midpoint was never measured).
     """
     text, notes, _ = set_aside(raw)
     if _AFTER.search(text):
@@ -162,6 +166,13 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
         notes.append("digits of a formula or unit exponent ignored")
         text = unglued.strip()
     value, reading = _read(text)
+    if range_policy == "reject" and any(note.endswith(_MIDPOINT) for note in reading):
+        # Only the spellings that read a whole range take a midpoint, so their note is what marks one.
+        refused = [
+            f"{n.removesuffix(_MIDPOINT)} refused (range_policy 'reject')" if n.endswith(_MIDPOINT) else n
+            for n in reading
+        ]
+        return None, _join([*notes, *refused])
     return value, _join([*notes, *reading])
 
 
@@ -196,6 +207,7 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
 
 
 _Reading = tuple[float | None, list[str]]
+_MIDPOINT = " → midpoint"
 
 
 def _read(text: str) -> _Reading:
@@ -261,7 +273,7 @@ def _scientific(text: str) -> _Reading | None:
         if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
             low, high = values
             if low < high:
-                return (low + high) / 2, [f"range {low:g}-{high:g} → midpoint"]
+                return (low + high) / 2, [f"range {low:g}-{high:g}{_MIDPOINT}"]
             return _refuse("descending range in scientific notation; ambiguous")
     if len(matches) > 1 or NUMBER_RE.search(rest):
         return _refuse("numbers outside the scientific notation; ambiguous")
@@ -288,7 +300,7 @@ def _range(text: str) -> _Reading | None:
         return _refuse("descending range, or an exponent without its caret; ambiguous")
     unit = second or first
     notes = [f"trailing unit {unit!r} in value ignored"] if unit else []
-    return (low + high) / 2, [*notes, f"range {low:g}-{high:g} → midpoint"]
+    return (low + high) / 2, [*notes, f"range {low:g}-{high:g}{_MIDPOINT}"]
 
 
 def _first_number(text: str) -> _Reading:
@@ -571,7 +583,7 @@ def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> 
         compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"
         note = "; ".join(n for n in (word_note, *context_notes, compound_note) if n)
         return field.model_copy(update={"value": compound, "unit": spec.canonical_unit, "normalization_note": note})
-    number, parse_note = parse_number(spelled)
+    number, parse_note = parse_number(spelled, range_policy=spec.range_policy)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
     value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=spelled)

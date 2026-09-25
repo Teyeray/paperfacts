@@ -431,7 +431,7 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
     allowed_units = {clean_unit(unit) for unit in (value.unit_raw, spec.canonical_unit) if unit}
     if tail and clean_unit(tail) not in allowed_units:
         return None, "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
-    number, _ = parse_number(match.group("center"))
+    number, _ = parse_number(match.group("center"), range_policy=spec.range_policy)
     if number is None or not math.isfinite(number):
         return None, "数值不可解析或非有限数"
     canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, units, value_text=match.group("center"))
