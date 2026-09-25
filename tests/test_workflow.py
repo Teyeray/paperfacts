@@ -16,7 +16,7 @@ from paperfacts.adapters import render_markdown
 from paperfacts.config import Settings
 from paperfacts.errors import ParserError
 from paperfacts.models import BACKENDS, Backend, DocumentGeometry, DocumentInput, ParsedArtifact, RawParseOutput
-from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, SubprocessParser
+from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser
 from paperfacts.storage import DataLayout, read_identity
 from paperfacts.workflow import build_parser, load_artifact, parse_document
 from support.factories import RawOutputFactory, paddle_page_entry
@@ -106,7 +106,7 @@ def test_build_parser_keeps_the_url_verbatim_and_lets_the_parser_normalise_it():
 # ---- parse_document -----------------------------------------------------------------
 
 
-class FakeParser:
+class FakeParser(Parser):
     """Plant prepared native output into out_dir, standing in for an expensive real parser run."""
 
     def __init__(self, backend: Backend, source_dir: Path, *, cache_hit: bool = False) -> None:
@@ -220,8 +220,36 @@ def test_parse_document_geometry_comes_from_the_pdf_not_from_meta(
     assert artifact.pages == geometry.pages
 
 
+@pytest.mark.parametrize("fails", [False, True])
+def test_parse_document_closes_the_parser_it_built(
+    monkeypatch, document: DocumentInput, settings: Settings, fake_mineru_raw: RawParseOutput, fails: bool
+):
+    # One parser is built per parse; an HTTP parser owns a connection pool that a long-running server
+    # would otherwise leak once per paper.
+    class ClosingParser(FakeParser):
+        closed = False
+
+        def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
+            if fails:
+                raise ParserError("mineru", "run", "exit code 1")
+            return super().parse(document, out_dir, force=force)
+
+        def close(self) -> None:
+            ClosingParser.closed = True
+
+    install_fake_parser(monkeypatch, ClosingParser("mineru", fake_mineru_raw.out_dir))
+
+    if fails:
+        with pytest.raises(ParserError):
+            parse_document(document, "mineru", settings)
+    else:
+        parse_document(document, "mineru", settings)
+
+    assert ClosingParser.closed
+
+
 def test_parse_document_lets_parser_errors_surface(monkeypatch, document: DocumentInput, settings: Settings):
-    class ExplodingParser:
+    class ExplodingParser(Parser):
         backend: Backend = "mineru"
 
         def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:

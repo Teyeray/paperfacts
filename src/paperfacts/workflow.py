@@ -159,8 +159,14 @@ def parse_document(
     """Parse one lane: run the parser (or hit its cache), adapt it, write the Markdown and the artifact."""
     layout = DataLayout(settings.data_root)
     ensure_identity(layout, document)  # written the moment the directory exists; readers only read it
-    parser = build_parser(backend, settings)
+    with build_parser(backend, settings) as parser:
+        return _parse_with(parser, document, backend, layout, force=force)
 
+
+def _parse_with(
+    parser: Parser, document: DocumentInput, backend: Backend, layout: DataLayout, *, force: bool
+) -> tuple[ParsedArtifact, ParseReport]:
+    """:func:`parse_document` with the parser it built, which it closes afterwards whatever happens here."""
     markdown_path = layout.markdown_path(document.document_id, backend)
     artifact_path = layout.artifact_path(document.document_id, backend)
     raw_dir = layout.raw_dir(document.document_id, backend)

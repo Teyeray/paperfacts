@@ -29,11 +29,11 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Self
 
 import httpx
 
@@ -65,6 +65,12 @@ DEFAULT_TIMEOUT_S = 900.0
 # this only has to cover the signal round-trip.
 RUNNER_KILL_GRACE_S = 5.0
 DEFAULT_RENDER_DPI = 200
+# A GPU service that times out or answers 5xx is usually busy or restarting, not wrong: each HTTP request (one
+# page for PaddleOCR-VL, the whole paper for MinerU) gets this many attempts, with a doubling backoff, before
+# the parse fails. Not settings: nothing a user tunes, and never part of what the parser produces.
+HTTP_RETRY_ATTEMPTS = 3
+HTTP_RETRY_BACKOFF_S = 5.0
+HTTP_RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
 # ---- The runners' native layout, replicated here because the HTTP parsers must write the same files. A
 # runner cannot import this package, so these literals exist on both sides; changing one means changing
@@ -262,6 +268,17 @@ class Parser:
     def _produce(self, document: DocumentInput, out_dir: Path) -> ParserMeta | None:
         raise NotImplementedError
 
+    # A parser may own resources (the HTTP parsers own a connection pool). `parse_document` builds one per
+    # call and uses it as a context manager, so nothing outlives the parse in a long-running server.
+    def close(self) -> None:
+        """Release what this parser owns; nothing by default."""
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
 
 # ---- Subprocess ------------------------------------------------------------------------------------
 
@@ -453,6 +470,61 @@ def _tail(text: str | bytes | None, lines: int = STDERR_TAIL_LINES) -> str:
 
 
 # ---- HTTP services --------------------------------------------------------------------------------------
+
+
+class _HttpParser(Parser):
+    """What the two HTTP parsers share: an owned (or injected) client, closed with the parser, and a bounded
+    retry of transient failures around each request."""
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        client: httpx.Client | None,
+        timeout_s: float,
+        retry_attempts: int,
+        retry_backoff_s: float,
+        sleep: Callable[[float], None] | None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        # An injected client belongs to the caller, who closes it; only one made here is closed here.
+        self._owns_client = client is None
+        self.client = client or httpx.Client()
+        self.timeout_s = timeout_s
+        self.retry_attempts = max(1, retry_attempts)
+        self.retry_backoff_s = retry_backoff_s
+        # Injectable so tests do not wait; resolved per call, so patching time.sleep reaches it too.
+        self._sleep = sleep
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _post(self, path: str, what: str, **kwargs: Any) -> httpx.Response:
+        """A 200 response, after up to ``retry_attempts`` tries of a timeout, a connection error or a 5xx.
+
+        Any other status is the request's fault and fails at once: sending it again would get the same answer.
+        """
+        url = f"{self.base_url}{path}"
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                response = self.client.post(url, timeout=self.timeout_s, **kwargs)
+            except httpx.HTTPError as exc:
+                error = f"{what}: {type(exc).__name__}: {exc}"
+            else:
+                if response.status_code == 200:
+                    return response
+                error = f"{what} HTTP {response.status_code}: {response.text[:500]}"
+                if response.status_code not in HTTP_RETRY_STATUS:
+                    raise ParserError(self.backend, "http", error)
+            if attempt == self.retry_attempts:
+                raise ParserError(self.backend, "http", f"{error} (after {attempt} attempts)")
+            delay = self.retry_backoff_s * 2 ** (attempt - 1)
+            logger.warning("%s retry %d/%d in %.0fs: %s", self.backend, attempt, self.retry_attempts, delay, error)
+            (self._sleep or time.sleep)(delay)
+        raise AssertionError("unreachable")  # the loop always returns or raises
+
+
 #
 # MinerU ``mineru-api``: ``POST /file_parse`` (multipart) returns ``{"backend", "version", "results":
 # {<filename>: {"md_content", "middle_json", "content_list"}}}``, each value the file content as a string.
@@ -461,7 +533,7 @@ def _tail(text: str | bytes | None, lines: int = STDERR_TAIL_LINES) -> str:
 # as the runner does, because only our own rendering tells us the exact pixel size.
 
 
-class MinerUHttpParser(Parser):
+class MinerUHttpParser(_HttpParser):
     backend: Backend = "mineru"
 
     def __init__(
@@ -471,18 +543,26 @@ class MinerUHttpParser(Parser):
         client: httpx.Client | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         lang: str = "en",
+        retry_attempts: int = HTTP_RETRY_ATTEMPTS,
+        retry_backoff_s: float = HTTP_RETRY_BACKOFF_S,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.client = client or httpx.Client()
-        self.timeout_s = timeout_s
+        super().__init__(
+            base_url,
+            client=client,
+            timeout_s=timeout_s,
+            retry_attempts=retry_attempts,
+            retry_backoff_s=retry_backoff_s,
+            sleep=sleep,
+        )
         self.lang = lang
 
     def _produce(self, document: DocumentInput, out_dir: Path) -> ParserMeta:
         started_at = datetime.now(UTC).isoformat()
         clock = time.monotonic()
         payload = self._request(document)
-        results: dict[str, Any] = payload.get("results") or {}
-        if len(results) != 1:
+        results = payload.get("results") or {}
+        if not isinstance(results, dict) or len(results) != 1:
             raise ParserError(self.backend, "http", f"expected exactly 1 result, got {len(results)}")
         result = next(iter(results.values()))
 
@@ -515,13 +595,15 @@ class MinerUHttpParser(Parser):
             "return_images": "false",
             "response_format_zip": "false",
         }
+        # One request for the whole paper: MinerU's API has no per-page call, so a retry re-sends all of it.
+        response = self._post("/file_parse", "file_parse", files=files, data=data)
         try:
-            response = self.client.post(f"{self.base_url}/file_parse", files=files, data=data, timeout=self.timeout_s)
-        except httpx.HTTPError as exc:
-            raise ParserError(self.backend, "http", f"{type(exc).__name__}: {exc}") from exc
-        if response.status_code != 200:
-            raise ParserError(self.backend, "http", f"HTTP {response.status_code}: {response.text[:500]}")
-        return response.json()
+            payload = response.json()
+        except ValueError as exc:
+            raise ParserError(self.backend, "http", f"response is not JSON: {response.text[:300]}") from exc
+        if not isinstance(payload, dict):
+            raise ParserError(self.backend, "http", f"response is not a JSON object: {str(payload)[:300]}")
+        return payload
 
 
 def _write_mineru_native(native_dir: Path, out_dir: Path, result: dict[str, Any]) -> dict[str, str]:
@@ -543,7 +625,16 @@ def _write_mineru_native(native_dir: Path, out_dir: Path, result: dict[str, Any]
     return files
 
 
-class PaddleHttpParser(Parser):
+class PaddleHttpParser(_HttpParser):
+    """One request per page, each retried on its own, so a transient error at page 28 costs one page.
+
+    Pages that did finish are not kept across a *failed* parse: the template discards the staging directory
+    of any run that fails, which is what guarantees a previous good output is never mixed with a partial new
+    one. Resuming would need a staging directory that outlives failures and a rule for when its pages are
+    still valid (same PDF, same DPI, same service version), and the per-page retry already covers the
+    transient errors that made a resume worth wanting.
+    """
+
     backend: Backend = "paddleocr_vl"
 
     def __init__(
@@ -553,10 +644,18 @@ class PaddleHttpParser(Parser):
         client: httpx.Client | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         render_dpi: int = DEFAULT_RENDER_DPI,
+        retry_attempts: int = HTTP_RETRY_ATTEMPTS,
+        retry_backoff_s: float = HTTP_RETRY_BACKOFF_S,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.client = client or httpx.Client()
-        self.timeout_s = timeout_s
+        super().__init__(
+            base_url,
+            client=client,
+            timeout_s=timeout_s,
+            retry_attempts=retry_attempts,
+            retry_backoff_s=retry_backoff_s,
+            sleep=sleep,
+        )
         self.render_dpi = render_dpi
 
     def _produce(self, document: DocumentInput, out_dir: Path) -> ParserMeta:
@@ -591,12 +690,7 @@ class PaddleHttpParser(Parser):
             "fileType": 1,  # 1 = image; we always send a single-page PNG
             "visualize": False,
         }
-        try:
-            response = self.client.post(f"{self.base_url}/layout-parsing", json=payload, timeout=self.timeout_s)
-        except httpx.HTTPError as exc:
-            raise ParserError(self.backend, "http", f"page {index}: {type(exc).__name__}: {exc}") from exc
-        if response.status_code != 200:
-            raise ParserError(self.backend, "http", f"page {index} HTTP {response.status_code}: {response.text[:500]}")
+        response = self._post("/layout-parsing", f"page {index}", json=payload)
         try:
             result = response.json()["result"]["layoutParsingResults"][0]
         except (KeyError, IndexError, TypeError, ValueError) as exc:

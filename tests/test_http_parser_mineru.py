@@ -52,6 +52,14 @@ def mineru_response(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
+@pytest.fixture(autouse=True)
+def backoffs(monkeypatch) -> list[float]:
+    """The retry backoffs asked for, recorded instead of slept."""
+    delays: list[float] = []
+    monkeypatch.setattr("paperfacts.parsers.time.sleep", delays.append)
+    return delays
+
+
 @pytest.fixture
 def mineru() -> tuple[MinerUHttpParser, list[httpx.Request]]:
     client, requests = recording_client(lambda request: httpx.Response(200, json=mineru_response()))
@@ -315,6 +323,30 @@ def test_transport_level_failure_is_wrapped_in_a_parser_error(tmp_path: Path, do
 
     assert excinfo.value.stage == "http"
     assert "ConnectError" in excinfo.value.detail
+
+
+def test_a_timeout_is_retried_and_the_parse_can_then_succeed(
+    tmp_path: Path, document: DocumentInput, backoffs: list[float]
+):
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ReadTimeout("slow")
+        return httpx.Response(200, json=mineru_response())
+
+    MinerUHttpParser("http://svc", client=make_client(handler)).parse(document, tmp_path / "raw")
+
+    assert calls["n"] == 2 and backoffs == [parsers.HTTP_RETRY_BACKOFF_S]
+
+
+@pytest.mark.parametrize("body", [b"<html>gateway</html>", b"[1, 2]"])
+def test_a_body_that_is_not_a_json_object_is_a_parser_error(tmp_path: Path, document: DocumentInput, body: bytes):
+    parser = MinerUHttpParser("http://svc", client=make_client(lambda r: httpx.Response(200, content=body)))
+
+    with pytest.raises(ParserError, match=r"not (a )?JSON"):
+        parser.parse(document, tmp_path / "raw")
 
 
 def test_a_failed_run_leaves_no_meta_json_behind(tmp_path: Path, document: DocumentInput):
