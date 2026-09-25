@@ -113,6 +113,13 @@ producing byte-identical output to the subprocess path used on a Mac. Everything
 built locally, `vllm_config.yaml` for the VLM's memory and concurrency, and `host/*.sh` for the
 bare-metal route when Docker is unavailable. `deploy/README.md` is the long form; this is the shape of it.
 
+**Updating the running web service.** On the current workstation the web UI, the PaddleOCR-VL vLLM lane
+and the cloudflared tunnel run as `systemctl --user` units (`paperfacts.service`, `pf-vllm-paddle.service`,
+`paperfacts-tunnel.service`), and the venv is an editable install, so a deployment is pull, test, restart,
+verify: `scripts/deploy.sh --pull --rerun` does exactly that and then re-runs, from the LLM cache, every
+document whose stored results the new cache keys displaced. `scripts/deploy.sh --help` lists the rest
+(`--check` reports whether the running service is stale).
+
 **The current server has a single GPU (id 0).** All three services default to it; GPU ids are set per
 service by env var (Docker Compose's `device_ids`, or `CUDA_VISIBLE_DEVICES` for the host scripts), so a
 multi-GPU host can spread them out instead.
