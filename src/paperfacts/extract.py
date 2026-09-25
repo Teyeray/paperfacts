@@ -80,8 +80,19 @@ logger = logging.getLogger(__name__)
 # Block types that never hold an extractable value: page furniture and figure blocks (whose content is an
 # image path).
 NOISE_TYPES: frozenset[str] = frozenset({"unknown", "figure"})
-# Everything from this heading onwards is citations, not results.
-_END_SECTION = re.compile(r"^(references|reference|bibliography|literature cited)\b", re.IGNORECASE)
+# Everything from this heading onwards is citations, not results. The heading must be the whole block, with
+# at most a section number in front ("6. References", "VI. REFERENCES"): a prefix match cut a paper at a
+# section titled "Reference electrode", and without the number "6. References" kept the bibliography --
+# either way depending on how one parser wrote the heading, which is a lane asymmetry.
+_END_SECTION = re.compile(
+    r"(?:(?:\d+|[ivx]+)(?:\.\d+)*\.?\s+)?"
+    r"(?:references?(?:\s+and\s+notes)?|notes\s+and\s+references|reference\s+list|bibliography|literature\s+cited)"
+    r"\s*:?",
+    re.IGNORECASE,
+)
+# The block types a heading arrives as: MinerU labels it a title, PaddleOCR-VL sometimes plain text. The
+# whole-block match is what makes admitting text safe.
+_HEADING_TYPES = frozenset({"title", "text"})
 # Measured on a real 10-page paper: 71.9K characters billed as 21.4K tokens, rounded down so the guard
 # errs towards over-estimating.
 CHARS_PER_TOKEN = 3.0
@@ -130,9 +141,18 @@ def build_extraction_document(artifact: ParsedArtifact) -> ExtractionDocument:
 def informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
     """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography."""
     kept: list[SourceBlock] = []
-    for block in blocks:
-        if block.type == "title" and _END_SECTION.match(block.content.lstrip("# ").strip()):
-            break  # the bibliography and everything after it
+    for index, block in enumerate(blocks):
+        if block.type in _HEADING_TYPES and _END_SECTION.fullmatch(block.content.strip().strip("#* ")):
+            # The bibliography and everything after it. A cut early in the paper is either a very short
+            # paper or a heading misread as the references; say so rather than lose the rest silently.
+            if index < len(blocks) / 2:
+                logger.warning(
+                    "references heading %r at block %d of %d: everything after it is left out",
+                    block.content.strip(),
+                    index,
+                    len(blocks),
+                )
+            break
         if block.type in NOISE_TYPES or not block.content.strip():
             continue
         kept.append(block)
