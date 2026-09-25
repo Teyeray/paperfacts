@@ -2,6 +2,11 @@
 # Stop the mlx-vlm server that scripts/dev_up.sh started (its pid is recorded in data/). The web server
 # is stopped with Ctrl-C in its own terminal; this only handles the background process.
 set -euo pipefail
+# macOS only: it only ever stops what dev_up.sh started (the mlx-vlm server).
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "dev_down.sh is macOS-only; on Linux use systemctl --user stop paperfacts.service" >&2
+    exit 1
+fi
 cd "$(dirname "$0")/.."
 MLX_PID_FILE="${PAPERFACTS_MLX_PID_FILE:-data/mlx_vlm_server.pid}"
 if [ ! -f "$MLX_PID_FILE" ]; then
