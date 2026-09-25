@@ -36,6 +36,7 @@ from paperfacts.fields import FieldSpec
 from paperfacts.models import BACKENDS, Backend
 from paperfacts.normalize import (
     clean_unit,
+    compound_value,
     convert_to_canonical,
     delatex,
     normalize_key,
@@ -386,6 +387,15 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     approx = _APPROX.match(text)
     if approx:
         text = text[approx.end() :].strip()
+    notes: list[str] = []
+    if spelled != value.value_raw:
+        notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {spelled}")
+    if approx:
+        notes.append("原文为近似值，保留中心值")
+    compound = compound_value(spec, text)
+    if compound is not None:
+        # The comparison's reading (normalize_field), so the cell and the report agree on "3 h 30 min".
+        return compound, joined([*notes, f"原文为复合时长 {text!r}，合计 {compound:g} {spec.canonical_unit}"])
     parenthesised = _PARENTHESISED_UNCERTAINTY.fullmatch(text)
     if parenthesised:
         center, unit, uncertainty, again = parenthesised.group("center", "unit", "uncertainty", "again")
@@ -404,11 +414,7 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, value_text=match.group("center"))
     if canonical is None or not math.isfinite(canonical):
         return None, note or "单位无法转换为标准单位"
-    notes = [note or ""]
-    if spelled != value.value_raw:
-        notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {spelled}")
-    if approx:
-        notes.append("原文为近似值，保留中心值")
+    notes.insert(0, note or "")
     if match.group("uncertainty"):
         notes.append(f"原文不确定度 ±{match.group('uncertainty')} {value.unit_raw or ''}；保留中心值")
     return canonical, joined(notes) or None

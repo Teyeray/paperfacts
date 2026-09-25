@@ -269,6 +269,20 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     with a refusal -- or passes it on. A refusal is always better than a guess: the comparison turns None
     into AMBIGUOUS, while a wrong number is indistinguishable from a real measurement.
     """
+    text, notes = _set_aside(raw)
+    # The digits of a formula or a unit exponent are set aside before the value's own numbers are counted.
+    unglued = _GLUED_DIGITS.sub(" ", text)
+    if unglued != text:
+        notes.append("digits of a formula or unit exponent ignored")
+        text = unglued.strip()
+    value, reading = _read(text)
+    return value, _join([*notes, *reading])
+
+
+def _set_aside(raw: str) -> tuple[str, list[str]]:
+    """``raw`` without what surrounds the value -- typesetting, a qualifier, a name before "=", a condition
+    after it -- and a note for each thing set aside. The same for every spelling, scientific, plain or
+    compound, so none of them reads a condition's number as the value."""
     # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
     text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw)))
     # A command delatex has no reading for is typesetting; left in place, its letters would glue to the
@@ -279,8 +293,6 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     if match:
         notes.append(f"qualifier '{match.group('q')}' dropped")
         text = text[match.end() :].strip()
-    # The same two rules for every spelling, scientific or plain: a stated condition and the digits of a
-    # formula or a unit exponent are set aside before the value's own numbers are counted.
     named = _NAMED.match(text)
     if named and text[named.end() :]:
         notes.append(f"name {text[: named.end()].rstrip(' =')!r} before '=' ignored")
@@ -289,12 +301,7 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     if condition:
         notes.append(f"condition {condition.group(0).strip()!r} ignored")
         text = text[: condition.start()].strip()
-    unglued = _GLUED_DIGITS.sub(" ", text)
-    if unglued != text:
-        notes.append("digits of a formula or unit exponent ignored")
-        text = unglued.strip()
-    value, reading = _read(text)
-    return value, _join([*notes, *reading])
+    return text, notes
 
 
 _Reading = tuple[float | None, list[str]]
@@ -641,17 +648,24 @@ def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | Non
 # ---- Applying it to a lane ----------------------------------------------------------------------------------
 
 
-# "3 h 30 min", "2 hours and 15 minutes", "1 min 30 s": one quantity written in two units, larger first.
+# "3 h 30 min", "2 hours and 15 minutes", "1 min 30 s": one duration written in two units, larger first.
 _COMPOUND = re.compile(
     rf"^(?P<a>{_UNSIGNED})\s*(?P<ua>[a-zA-Z]+)\s*(?:and\s+)?(?P<b>{_UNSIGNED})\s*(?P<ub>[a-zA-Z]+)$", re.IGNORECASE
 )
+# The canonical units whose quantity is written as a sum of units. Only a duration is: anywhere else a second
+# unit restates the same value ("0.5 Pa 3.75 mTorr", "2 in 50 mm"), and adding the two doubles it.
+_SUMMED_UNITS = {"min"}
 
 
-def _compound(spec: FieldSpec, text: str) -> tuple[float, str] | None:
-    """``(canonical value, note)`` for a value spelled in two units of the field's own quantity, largest
-    first; None for anything else. Both units carry their own factor, so the model's ``unit_raw`` -- which
-    can only name one of them -- plays no part. parse_number cannot do this: it never sees the unit table."""
-    if spec.canonical_unit is None:
+def compound_value(spec: FieldSpec, text: str) -> float | None:
+    """The canonical value of a duration spelled in two of its units, larger first ("3 h 30 min" -> 210), or
+    None for anything else. The smaller part must be less than one of the larger unit: "1 h 90 min" is no
+    way anyone writes 150 minutes. Both units carry their own factor, so the model's ``unit_raw`` -- which can
+    name only one of them -- plays no part. ``text`` is the value alone: callers set aside what surrounds it.
+
+    The one reader of compound durations, for the comparison (:func:`normalize_field`) and for the dataset
+    cell (``decide``) alike, so the two never read one string differently."""
+    if spec.canonical_unit not in _SUMMED_UNITS:
         return None
     match = _COMPOUND.match(normalize_text(text).strip())
     if match is None:
@@ -660,8 +674,10 @@ def _compound(spec: FieldSpec, text: str) -> tuple[float, str] | None:
     big, small = convert(match.group("ua")), convert(match.group("ub"))
     if big is None or small is None or big <= small:
         return None
-    value = float(_plain(match.group("a"))) * big + float(_plain(match.group("b"))) * small
-    return value, f"compound {text.strip()!r} read as {value:g} {spec.canonical_unit}"
+    part = float(_plain(match.group("b"))) * small
+    if part >= big:
+        return None
+    return float(_plain(match.group("a"))) * big + part
 
 
 def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
@@ -671,11 +687,12 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
     word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
-    compound = _compound(spec, spelled)
+    bare, context_notes = _set_aside(spelled)
+    compound = compound_value(spec, bare)
     if compound is not None:
-        value, note = compound
-        note = "; ".join(n for n in (word_note, note) if n)
-        return field.model_copy(update={"value": value, "unit": spec.canonical_unit, "normalization_note": note})
+        compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"
+        note = "; ".join(n for n in (word_note, *context_notes, compound_note) if n)
+        return field.model_copy(update={"value": compound, "unit": spec.canonical_unit, "normalization_note": note})
     number, parse_note = parse_number(spelled)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})

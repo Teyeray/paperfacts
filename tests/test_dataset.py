@@ -640,6 +640,13 @@ def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
     assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (None, "conflict")
 
 
+def test_a_compound_duration_reaches_the_cell():
+    # The comparison read "3 h 30 min" as 210 min; the cell must read it the same way, not refuse it.
+    result = paired(*both([value("annealing_time", "3 h 30 min", "h")]))
+
+    assert (result.paper_row["annealing_time"], decision(result, "annealing_time")["decision"]) == (210.0, "agree")
+
+
 def test_two_peaks_inside_one_preference_entry_are_still_refused():
     fields = [
         value("transmittance", "95.0", "%", condition="peak 400-800 nm"),

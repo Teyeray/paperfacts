@@ -787,8 +787,9 @@ than guessed: a ratio such as `1:4` or `10/10`, a pair that does not ascend (`10
 without its caret as a range), a range whose exponent is written once (`1.2-1.5 × 10⁻³`), bounds in two
 different units, two values joined by "and", a list (`30, 40`), a number with its own unit before another
 number (`550 nm: 85%`, `140 nm ATO/25 nm ITO`), or scientific notation with other numbers beside it. One
-quantity written in two of its units, larger first, is one value: `3 h 30 min` is 210 min, `1 min 30 s` is
-1.5 min. A range
+duration written in two of its units, larger first, is one value: `3 h 30 min` is 210 min, `1 min 30 s` is
+1.5 min, in the comparison and the dataset cell alike (`1 h 90 min` is refused). Only a duration is a sum:
+elsewhere a second unit restates the value (`0.5 Pa 3.75 mTorr`), and that is refused. A range
 keeps its midpoint whether or not each bound repeats the unit (`80%–85%`, `500 °C to 530 °C`). A condition
 after the value (`550 nm at 80%`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
 unit exponent (`H2`, `cm^-3`) are set aside with a note, never read as the value. On a field whose bare
