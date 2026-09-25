@@ -693,7 +693,8 @@ The first three drop the value with an audited reason. Grounding only flags; it 
 the one that matters most and the one usually missing: without it, "traceable to a page and a bounding
 box" only means the model named a real block. It tolerates formatting differences — the same number
 reaches the model as `$( 4 0 \times 1 0 \mathrm { c m }$` from one parser and `(40 × 10 cm` from the other
-— while staying strict about digits, and a quote that straddles the junction between the cited block and
+— while staying strict about digits: a quoted `5` is not found inside `0.5` or `5.2`, nor `10` inside
+`10⁻⁴`. A quote that straddles the junction between the cited block and
 its same-page neighbour counts as grounded. A quote lying entirely inside the neighbour still does not.
 
 Two more rules shape the table. **Series fan-out**: when the model states that a value holds for every

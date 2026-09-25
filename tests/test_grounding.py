@@ -188,6 +188,15 @@ def test_ground_lane_leaves_everything_else_about_the_lane_unchanged():
         ),
         ("SnO2:Sb2O3(95:5)", "a paper about ITO films only", False, "a long value still has to be present"),
         ("9999", "nothing like that here", False, "genuinely absent"),
+        # A decimal point or a caret continues a number just as a digit does.
+        ("5", "a thickness of 0.5 nm", False, "fraction digits of a decimal"),
+        ("5", "a thickness of 5.2 nm", False, "integer part of a decimal"),
+        ("10", "a resistivity of 10^-4 ohm cm", False, "base of a power of ten"),
+        ("10", "a resistivity of 1.2 × 10⁻⁴ Ω·cm", False, "base of a superscript power of ten"),
+        ("4", "a resistivity of 10^4 ohm cm", False, "exponent of a power of ten"),
+        ("10^-4", "a resistivity of 10⁻⁴ Ω·cm", True, "the whole power matches"),
+        ("10^-4", "a resistivity of $1 0 ^ { - 4 }$", True, "LaTeX power with spaced caret"),
+        ("5", "the thickness was 5. The films", True, "a full stop is not a decimal point"),
     ],
 )
 def test_how_strictly_a_value_must_appear_in_the_block_it_cites(value_raw, block, grounded, why):
@@ -304,6 +313,22 @@ def test_the_digit_rule_still_applies_across_the_junction():
     # the join's space is an artefact we inserted, not spacing the PDF had.
     blocks, adjacency = make_blocks("the films were deposited for 4", "0 min at room temperature")
     value = make_field("sputtering_time", "4", source_ids=("mineru_p0_b1",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is False
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "needle"),
+    [
+        ("a thickness of 0.5", "nm was measured", "5 nm"),
+        ("a thickness of 3.5", "nm was measured", "5 nm"),
+    ],
+)
+def test_the_decimal_and_caret_rule_also_applies_across_the_junction(first, second, needle):
+    # The quote crosses the junction, so only the boundary rule stands between it and a false confirmation:
+    # "5 nm" is the tail of "0.5 nm" or of "3.5 nm", never a thickness of its own.
+    blocks, adjacency = make_blocks(first, second)
+    value = make_field("thickness", needle, source_ids=("mineru_p0_b1",))
 
     assert is_grounded(value, blocks, adjacency=adjacency) is False
 

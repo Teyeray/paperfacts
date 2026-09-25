@@ -27,14 +27,17 @@ _MULTIPLICATION = re.compile(r"[×✕✖⋅·]")
 # Decoration collapses to a single space rather than vanishing. `normalize_key` deletes it, which is right
 # for asking "are these two values equal" but wrong here: with separators gone, "76.7, 71.3, 68.4" becomes
 # one 12-digit run in which none of the three numbers has a boundary any more.
-_DECORATION = re.compile(f"[^{KEY_CHARACTERS}]+")
+# The caret is kept, glued to its exponent: it is what tells the boundary rule that "10" in "10^-4" is the
+# base of a power, not a number of its own.
+_DECORATION = re.compile(f"[^^{KEY_CHARACTERS}]+")
+_CARET = re.compile(r"\s*\^\s*")
 
 
 def grounding_key(text: str) -> str:
     """Reduce text to the form used for the containment test: no LaTeX, no case, no decoration."""
     folded = LATEX_WRAPPERS.sub(" ", delatex(normalize_text(text)))
     folded = _MULTIPLICATION.sub("x", folded).lower().replace("ω", "Ω")
-    return _DECORATION.sub(" ", folded).strip()
+    return _CARET.sub("^", _DECORATION.sub(" ", folded)).strip()
 
 
 _MIN_SQUEEZED_LENGTH = 4
@@ -111,11 +114,33 @@ def _contains(haystack: str, needle: str) -> bool:
     and, unlike a failed match, a wrong success is silent.
     """
     for match in re.finditer(re.escape(needle), haystack):
-        before = haystack[match.start() - 1] if match.start() else ""
-        after = haystack[match.end()] if match.end() < len(haystack) else ""
-        if not (before.isdigit() or after.isdigit()):
+        if not (_continues_before(haystack, match.start()) or _continues_after(haystack, match.end())):
             return True
     return False
+
+
+def _continues_before(text: str, start: int) -> bool:
+    """Whether the number ending at ``text[start - 1]`` runs on into position ``start``.
+
+    A digit does, and so does a decimal point after a digit ("5" in "0.5") and a caret or an exponent's sign
+    ("4" in "10^4", "10^-4"): each makes the match the tail of a longer number, not a number of its own.
+    """
+    before = text[start - 1] if start else ""
+    before2 = text[start - 2] if start > 1 else ""
+    return (
+        before.isdigit()
+        or before == "^"
+        or (before == "." and before2.isdigit())
+        or (before in "-+" and before2 == "^")
+    )
+
+
+def _continues_after(text: str, end: int) -> bool:
+    """Whether a number continues past ``end``: a digit, a decimal point before a digit ("5" in "5.2"), or a
+    caret ("10" in "10^-4")."""
+    after = text[end] if end < len(text) else ""
+    after2 = text[end + 1] if end + 1 < len(text) else ""
+    return after.isdigit() or after == "^" or (after == "." and after2.isdigit())
 
 
 def _grounded_across_boundary(
@@ -164,13 +189,11 @@ def _straddles(joined: str, needle: str, junction: int) -> bool:
 
     Strictly one side is not enough: a match must reach from one block's text into the other's
     (``start < junction <= end`` -- a needle ending exactly at the junction already touches both).
-    The digit-boundary strictness of :func:`_contains` applies in the joined text too, or a thickness
-    of "4" would ground via "deposited for 4" + "0 min" reading as "40".
+    The number-boundary strictness of :func:`_contains` applies in the joined text too, or a thickness
+    of "4" would ground via "deposited for 4" + "0 min" reading as "40", and "5" via "0." + "5 nm".
     """
     for match in re.finditer(re.escape(needle), joined):
-        before = joined[match.start() - 1] if match.start() else ""
-        after = joined[match.end()] if match.end() < len(joined) else ""
-        if before.isdigit() or after.isdigit():
+        if _continues_before(joined, match.start()) or _continues_after(joined, match.end()):
             continue
         if not (match.start() < junction <= match.end()):
             continue
@@ -183,11 +206,9 @@ def _straddles(joined: str, needle: str, junction: int) -> bool:
         squeezed = _squeeze(joined)
         start = match.start() - joined[: match.start()].count(" ")
         end = match.end() - joined[: match.end()].count(" ")
-        squeezed_before = squeezed[start - 1] if start else ""
-        squeezed_after = squeezed[end] if end < len(squeezed) else ""
-        if needle[0].isdigit() and squeezed_before.isdigit():
+        if needle[0].isdigit() and _continues_before(squeezed, start):
             continue
-        if needle[-1].isdigit() and squeezed_after.isdigit():
+        if needle[-1].isdigit() and _continues_after(squeezed, end):
             continue
         return True
     return False
