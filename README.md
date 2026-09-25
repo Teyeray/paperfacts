@@ -297,6 +297,8 @@ The flags worth knowing:
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
   `--jobs 1` is the old one-after-another run.
+- `--offline` on `run` and `batch` answers every model request from the LLM cache and fails on a miss; see
+  [Offline replay](#offline-replay).
 - `--data-root` overrides the data directory; `--verbose` / `-v` prints INFO logs.
 - `overlay` also takes `--dpi` and `--pages 0,3,4` (0-based).
 
@@ -362,7 +364,7 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
 | `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured, up to 120 s |
 | `retry_backoff_s` | Default 2.0 |
-| `offline` | `true` answers every model request from the LLM cache and fails on a miss instead of sending it; each miss is logged as `llm offline miss`. For proving that a refactor re-derives the corpus for free. Default `false` |
+| `offline` | Kept for compatibility; leave it `false` and switch replay on per run with `--offline` or `PAPERFACTS_LLM_OFFLINE=1` (see [Offline replay](#offline-replay)). Default `false` |
 
 `reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
 OpenAI-shaped `reasoning_effort` parameter. `null` omits the parameter entirely, which is the shipped
@@ -627,6 +629,27 @@ re-reads only them, since each costs minutes of a different model.
   key, the newest older file is shown and marked stale (旧版本读数); readings citing figure blocks the
   current parse no longer has are marked too, and both notes appear in the stage detail.
 
+### Offline replay
+
+`--offline` on `run` or `batch` (or `PAPERFACTS_LLM_OFFLINE=1` for any command) answers every model request,
+text and vision, from the LLM cache and never sends one. It is how a refactor proves it re-derives the
+corpus for zero model calls. It is a switch for one invocation, not a standing setting: `llm.offline` in
+`config.json` is still read, for compatibility, but a replay left switched on in the shared file would
+make every later run fail.
+
+A request the cache cannot answer raises `LlmOfflineMiss` and is logged as `llm offline miss key=… user=…`.
+A miss is never an outcome. It is not a failed panel, a failed figures stage or a failed sample matching:
+the paper fails, and nothing derived from the miss is written (no readings file, no comparison, no
+dataset). `batch` goes on with the other papers, so one replay collects every miss. `run` and `batch` end
+with `offline misses: N`, whether they finished or failed. When `PAPERFACTS_LLM_OFFLINE_REPORT` names a
+file, the misses are also written there as JSON (`key` is the first 16 hex digits of the cache key, `kind`
+is `json` or `vision`, and `user` is the first 120 characters of the question), so two replays can be
+compared by request rather than by count.
+
+A question that needed a repair replays too. Its rejected first answer is in the cache (see below). Replay
+serves it, validation fails as it did online, and the repair request is rebuilt byte-identical from that
+answer and pydantic's error, so the cache answers it as well.
+
 ## Caching, and why filenames carry keys
 
 Nothing is recomputed unless something it depends on changed, and each cache is keyed by a content hash of
@@ -646,9 +669,11 @@ are positional, so the old citations would point at whatever block now has that 
 free from the LLM cache whenever the rendered prompts are byte-identical. Files written before the hash was
 recorded have none and are read as before.
 
-Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
-costs one repair request and is never written, and an invalid answer already in the cache is asked again
-rather than replayed. A sample matching that failed (the model answered badly twice) is shown for that run
+Only an answer that validated is cached as an answer. A JSON reply cut off at `max_tokens` is an error and
+is never written. An invalid answer costs one repair request and is written marked `"rejected": true`, only
+so that offline replay can reach the repair. It never replaces an accepted answer. An online run asks a
+rejected or invalid cached answer again rather than replaying it. Entries without the marker, which is
+every entry written before it existed, are accepted answers. A sample matching that failed (the model answered badly twice) is shown for that run
 but not stored, so the next run asks again instead of serving the failure until `--force`.
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
