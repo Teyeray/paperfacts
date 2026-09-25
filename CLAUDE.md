@@ -55,7 +55,8 @@ this file is the part that is easy to get wrong.
   through its `from_*` factories and nowhere else.
 - Backend literals are `"mineru"` and `"paddleocr_vl"`. Source ids are `{backend}_p{page}_b{order}`, pages
   0-based.
-- All on-disk paths and atomic writes come from `storage.py`. A document's full sha256, display name and
+- All on-disk paths and atomic writes come from `storage.py`, and so do the path rules over a stored
+  document (`stored_pdf`, `is_runnable`, `stored_document`). A document's full sha256, display name and
   origin live only in `identity.json`, written the moment the directory is created.
 - **PDFium is not thread-safe.** Every pypdfium2 call goes through `pdf.py`, serialised behind its
   process-wide lock. Concurrent opens corrupt its global state, after which every subsequent open fails
@@ -76,10 +77,15 @@ this file is the part that is easy to get wrong.
   deterministic code, never a model call. Passage is the default; `.omc/research/extraction-modes.md` has
   the measurement that decided it.
 - A sample-level value the model cannot place on a sample goes to `LaneExtraction.unattributed`: kept,
-  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour. The two
-  exceptions are explicit, never inferred: a paper with exactly one sample owns every unplaced value, and a
-  value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
-  every sample with `series=True`.
+  grounded and shown, but compared with nothing. Never attach it to a plausible neighbour. Sample ids are
+  keyed by `records.sample_key` everywhere samples meet (attribution, the pass vote, exact cross-lane
+  pairing, both modes' `records.clean_samples`); never by `normalize_key`, which deletes Greek letters and
+  folds a case-distinguished suffix. The two exceptions are explicit, never inferred: a paper with exactly
+  one sample owns every unplaced value, and a value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
+  every sample with `series=True`. A value stated for a named subset ("all films deposited at 100 °C") is
+  placed by the model, once per sample id of that subset, and only when the excerpts or the sample list say
+  exactly which samples form it; otherwise it stays unplaced (passage mode) or is left out (document mode,
+  which has nowhere to keep an unplaced sample-level value). Code never infers a subset.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
 - Five guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
@@ -87,10 +93,17 @@ this file is the part that is easy to get wrong.
   (`valid_range`, judged on the converted value by `normalize.drop_implausible`), plus grounding
   (`grounding.py`), where the quoted text must occur in the block it cites. The first four drop the value
   with an audited reason; grounding only flags, never drops.
-- Cache keys live in `keys.py`. `extractor_key` hashes the model, the field schema, the prompts, the
-  sampling settings and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its
-  two prompts plus `retrieval_fingerprint` (the keywords, `passages.py` and `continuation.py`). `comparison_key` hashes
-  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt. Anything that is at its built-in
+- Cache keys live in `keys.py`. `extractor_key(options)` is the only extraction key: it hashes one frozen
+  `ExtractionOptions` (model, mode and every sampling/retrieval setting). The workflow builds it once with
+  `ExtractionOptions.from_settings` and passes it into `extract_lane`, and readers use
+  `extractor_key_for(settings)`, so writer and reader cannot disagree -- never spell the settings out a
+  second time. It also hashes the field schema *minus* the verdict-only cells (tolerances, categories,
+  condition preferences, display text), the prompts, and the source of the extraction modules (`extract.py`,
+  `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`,
+  `continuation.py`); passage mode adds its two prompts plus `retrieval_fingerprint` (the keywords,
+  `passages.py` and `continuation.py`). `comparison_key` hashes the whole field schema including
+  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `decide.py`, `dataset.py` and the matching prompt.
+  A tolerance edit therefore re-keys comparisons only. Anything that is at its built-in
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
   re-derives records for free as long as the rendered document and prompts stay byte-identical.
@@ -103,9 +116,12 @@ this file is the part that is easy to get wrong.
   paper-level, not a lane: its readings are approximate (±10 % / ±20 %), never create or identify a sample
   (chart x snaps to ticks), never fill a dataset cell and never join the two-lane comparison. They live in
   their own file, the 图中读数 sheet (`write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
-  and their own web section; `dataset.py` must not import `figures.py`. A failure in it marks only its own
+  and their own web section; `dataset.py` and `decide.py` must not import `figures.py`. A failure in it marks only its own
   stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
   tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
+- Where readings are stored and which are shown (`shown_figures`, `read_document_figures`) is `readings.py`,
+  not `figures.py`: `figures.py`'s source is hashed into `figure_key`, and moving storage code there would
+  rename every stored reading.
 - Vision requests go through `llm.complete_vision` on a `VisionClient`, never the extraction client;
   crops come from `pdf.render_region`.
 
@@ -113,13 +129,36 @@ this file is the part that is easy to get wrong.
 
 - `uv run pytest` — no models, no network, no real papers. Temporary PDFs are generated with pypdfium2.
 - `uv run pytest --run-parser` — integration; needs both parser environments and their weights.
+- `tests/fixtures/corpus/` records every numeric value string and sample id of the real corpus with how
+  `parse_number` and `sample_key` read them. A change to either that moves a corpus reading fails
+  `test_corpus_strings.py`; if it is intended, re-run `tests/fixtures/corpus/generate.py <data_root>`,
+  review the JSON diff, and add the string to `INTENDED_VALUE_CHANGES` with the reason.
 - Coverage target ≥ 80% (`--cov=paperfacts`).
+- The frontend has no JS test runner; `tests/e2e/web_races.py` drives it in headless Chromium against a seeded
+  library with a stub job (`PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py`, or
+  `PYTHONPATH=src uv run --with playwright pytest -m e2e`). A plain pytest run deselects the `e2e` marker, and
+  without Playwright it skips. A frontend change to routing, polling or layout should keep it passing.
 
 ## Web interface
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
   offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `table`, `fieldpicker`, `tsv`,
   `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
+- Async ownership: the router bumps `state.generation` on every navigation to another view. Every load, poll
+  and finish handler notes it before its first `await` and draws nothing once it has changed; do not add a
+  per-feature "is this still the current document" check instead. Polling retries with backoff and a loop is
+  owned by a token, so it cannot run twice.
+- Progress is the server's: `DocumentSummary.stages` (every `stage_names()` stage) and `runnable`. The
+  frontend never rebuilds a stage list of its own.
+- A results table is a list of columns `{header, head, html(item), text(item)}` (`table.js`); the rendered
+  rows and the clipboard copy are both built from that one list.
+- Controls that re-render their own table carry a `data-focus` key and the re-render goes through
+  `keepFocus`, so keyboard focus survives. Clickable rows and cells are focusable and act on Enter/Space.
+- The HTTP edge (`web/app.py`'s one middleware): Basic auth compared as UTF-8 bytes, a same-origin check
+  on every non-GET request (`Sec-Fetch-Site` decides alone when present; Origin/Referer against Host is
+  only the fallback), and frame/nosniff headers on every response. The upload size is the upload route's
+  own first step: a declared `Content-Length` is the fast path, the bytes that arrive are counted anyway,
+  so a chunked body is fine. `/api/jobs` is briefs without logs; finished jobs are pruned to the newest 200.
 - Background jobs run on `web.max_parallel_documents` workers, never two on the same document; a worker
   takes the oldest queued job whose document is free. A `Job` is a frozen value in a lock-guarded dict,
   replaced whole on every transition, so a poller never sees a half-applied state. Submitting the same

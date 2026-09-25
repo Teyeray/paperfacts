@@ -13,7 +13,8 @@ import unicodedata
 import pytest
 
 from paperfacts.fields import FIELD_BY_NAME
-from paperfacts.normalize import canonical_category, normalize_key, normalize_text, text_key
+from paperfacts.normalize import canonical_category, delatex, normalize_key, normalize_text, text_key
+from paperfacts.records import sample_key
 
 # ---- Superscripts: must be handled before NFKC ------------------------------------------------------
 
@@ -233,3 +234,66 @@ def test_the_tilde_operator_folds_to_an_ascii_tilde(raw):
     # U+223C TILDE OPERATOR is what papers actually print for "approximately", and NFKC leaves it alone.
     # Folding it here is what lets both the comparison lane and the dataset lane recognise the marker.
     assert normalize_text(raw) == "~83.6"
+
+
+# ---- sample_key -------------------------------------------------------------------------------------
+# A sample id is a name: the letters in it carry identity, the separators do not.
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("α-ITO", "β-ITO"),  # normalize_key deletes Greek letters: both became "-ito"
+        ("ITO-a", "ITO-A"),  # a case-distinguished suffix
+        ("Sample a", "Sample A"),
+        ("x=0.1", "x=0.01"),
+        ("T=-5", "T=5"),
+        ("样品1", "样品2"),
+        ("ITO-1-2", "ITO-12"),
+        ("T=−5", "T=5"),
+    ],
+)
+def test_sample_key_keeps_different_samples_apart(a, b):
+    assert sample_key(a) != sample_key(b)
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("Sample A", "SAMPLE  A"),  # a word's case is folded, a suffix letter's is not
+        ("S 1", "s1"),  # a leading letter is a prefix, not a suffix
+        ("ITO-1", "ITO_1"),
+        ("O2-100 sccm", "O₂ 100sccm"),
+        ("Film #2", "film 2"),
+        ("$\\alpha$-ITO", "α-ITO"),  # MinerU's LaTeX and PaddleOCR-VL's Unicode for one sample
+        ("WOx/NbOy-AR", "WO_x/NbO_y-AR"),  # MinerU subscripts; the corpus lost these pairs to the model
+        ("WOx", "WO<sub>x</sub>"),
+        ("$\\varepsilon$-Ga2O3", "ε-Ga2O3"),
+        ("ITO -1", "ITO-1"),  # a dash after a space is a separator, not a minus sign
+        ("In2O3:Sn", "IN2O3-SN"),  # only a trailing single letter keeps its case
+        ("Sample\u2013A", "Sample-A"),
+    ],
+)
+def test_sample_key_folds_spellings_of_one_sample_alike(a, b):
+    assert sample_key(a) == sample_key(b)
+
+
+@pytest.mark.parametrize("blank", [None, "", "  ", "#", "--"])
+def test_sample_key_of_an_id_with_no_letters_or_digits_is_empty(blank):
+    # An empty key is how extraction recognises an id it cannot use.
+    assert sample_key(blank) == ""
+
+
+@pytest.mark.parametrize(
+    ("latex", "folded"),
+    [
+        ("500 $^{\\circ}$C", "500 ° C"),
+        ("500 $^\\circ$C", "500 ° C"),
+        ("25 ^{\\circ} C", "25 ° C"),
+        ("5 at.\\%", "5 at.%"),
+    ],
+)
+def test_delatex_restores_the_degree_and_percent_symbols(latex, folded):
+    # One table (normalize.LATEX_SYMBOLS) serves retrieval, grounding and unit parsing, so the three fold a
+    # LaTeX degree the same way.
+    assert " ".join(delatex(latex).split()) == folded

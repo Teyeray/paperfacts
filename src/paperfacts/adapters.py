@@ -194,7 +194,12 @@ def convert_mineru(raw: RawParseOutput, document: DocumentInput, geometry: Docum
 
     for item in items:
         raw_type = str(item.get("type", "unknown"))
-        page = int(item.get("page_idx") or 0) + offset
+        page_idx = item.get("page_idx")
+        if not isinstance(page_idx, int) or isinstance(page_idx, bool) or page_idx < 0:
+            # Filed on page 0, it would be cited and highlighted there; a block with no page has no place.
+            collector.skip(page=-1, raw_label=raw_type, reason=f"no usable page_idx ({page_idx!r})")
+            continue
+        page = page_idx + offset
         try:
             bbox = NormalizedBBox.from_thousandths(item.get("bbox") or ())
         except ValueError as exc:

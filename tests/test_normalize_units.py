@@ -186,8 +186,15 @@ def test_a_percentage_field_above_one_is_read_as_a_percentage():
 
 
 def test_relative_density_follows_the_same_percentage_policy():
-    assert convert("density", 0.9, None) == (90.0, "%", "no unit; value ≤ 1 read as a fraction")
+    assert convert("density", 0.9, None) == (90.0, "%", "no unit; value < 1 read as a fraction")
     assert convert("density", 98.5, None) == (98.5, "%", "no unit; read as percent")
+
+
+@pytest.mark.parametrize("field", ["o2_ratio", "h2_ratio", "transmittance", "density"])
+def test_a_bare_one_is_one_percent_not_the_whole(field):
+    # "1" is far more often 1 % (1 % O2 in Ar) than a fraction of exactly one; 100 % would turn a trace
+    # admixture into the whole gas.
+    assert convert(field, 1.0, None) == (1.0, "%", "no unit; read as percent")
 
 
 @pytest.mark.parametrize("field", ["thickness", "sheet_resistance", "sputtering_time", "inch", "resistance"])

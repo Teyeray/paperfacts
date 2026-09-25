@@ -188,6 +188,25 @@ def test_ground_lane_leaves_everything_else_about_the_lane_unchanged():
         ),
         ("SnO2:Sb2O3(95:5)", "a paper about ITO films only", False, "a long value still has to be present"),
         ("9999", "nothing like that here", False, "genuinely absent"),
+        # A decimal point or a caret continues a number just as a digit does.
+        ("5", "a thickness of 0.5 nm", False, "fraction digits of a decimal"),
+        ("5", "a thickness of 5.2 nm", False, "integer part of a decimal"),
+        ("10", "a resistivity of 10^-4 ohm cm", False, "base of a power of ten"),
+        ("10", "a resistivity of 1.2 × 10⁻⁴ Ω·cm", False, "base of a superscript power of ten"),
+        ("4", "a resistivity of 10^4 ohm cm", False, "exponent of a power of ten"),
+        ("10^-4", "a resistivity of 10⁻⁴ Ω·cm", True, "the whole power matches"),
+        ("10^-4", "a resistivity of $1 0 ^ { - 4 }$", True, "LaTeX power with spaced caret"),
+        ("5", "the thickness was 5. The films", True, "a full stop is not a decimal point"),
+        # A raised degree sign is no exponent. MinerU's spellings, then PaddleOCR-VL's: 399 corpus temperatures
+        # stopped grounding when the caret after "500" was read as the start of a power.
+        ("500", "annealed at 500 $^{\\circ}$C for 1 h", True, "MinerU LaTeX degree"),
+        ("500", "annealed at 500 $^\\circ$C for 1 h", True, "MinerU LaTeX degree without braces"),
+        ("25", "at 25 ^{\\circ} C", True, "degree with the markers lost"),
+        ("150", "<td>$1 5 0 ^ { \\circ } \\mathrm { C }$</td>", True, "MinerU table cell"),
+        ("500", "annealed at 500 °C for 1 h", True, "PaddleOCR-VL degree sign"),
+        ("500", "annealed at 500℃ for 1 h", True, "PaddleOCR-VL degree Celsius sign"),
+        ("500", "annealed at $500^{\\circ}C$ for 1 h", True, "PaddleOCR-VL inline LaTeX"),
+        ("2", "an area of 1 cm$^{2}$", False, "a raised digit is still an exponent"),
     ],
 )
 def test_how_strictly_a_value_must_appear_in_the_block_it_cites(value_raw, block, grounded, why):
@@ -308,6 +327,22 @@ def test_the_digit_rule_still_applies_across_the_junction():
     assert is_grounded(value, blocks, adjacency=adjacency) is False
 
 
+@pytest.mark.parametrize(
+    ("first", "second", "needle"),
+    [
+        ("a thickness of 0.5", "nm was measured", "5 nm"),
+        ("a thickness of 3.5", "nm was measured", "5 nm"),
+    ],
+)
+def test_the_decimal_and_caret_rule_also_applies_across_the_junction(first, second, needle):
+    # The quote crosses the junction, so only the boundary rule stands between it and a false confirmation:
+    # "5 nm" is the tail of "0.5 nm" or of "3.5 nm", never a thickness of its own.
+    blocks, adjacency = make_blocks(first, second)
+    value = make_field("thickness", needle, source_ids=("mineru_p0_b1",))
+
+    assert is_grounded(value, blocks, adjacency=adjacency) is False
+
+
 def test_ground_lane_with_adjacency_flips_a_straddled_value_to_grounded_end_to_end():
     blocks, adjacency = make_blocks("The film is made of SnO2", "and Sb2O3 in a 95:5 ratio.")
     cited = "mineru_p0_b0"
@@ -318,3 +353,19 @@ def test_ground_lane_with_adjacency_flips_a_straddled_value_to_grounded_end_to_e
 
     assert without.sample("A").get("component").grounded is False
     assert with_adjacency.sample("A").get("component").grounded is True
+
+
+def test_a_power_of_ten_quoted_without_its_superscript_grounds_against_the_superscript():
+    # GM1: the block has "6.58 × 10<sup>−4</sup> Ω cm"; the model quoted "6.58 × 10−4".
+    block = make_block(content="from 6.58 × 10<sup>−4</sup> Ω cm to 5.74 × 10<sup>−4</sup> Ω cm")
+    value = make_field("resistivity", "6.58 × 10−4", source_ids=(block.source_id,))
+
+    assert is_grounded(value, {block.source_id: block.content}) is True
+
+
+def test_a_bare_hyphenated_pair_is_not_read_as_a_power_of_ten():
+    # "10-4" without a multiplication sign may be a range; it must not ground against "10^-4".
+    block = make_block(content="the exponent 10^-4 appears here")
+    value = make_field("thickness", "10-4", source_ids=(block.source_id,))
+
+    assert is_grounded(value, {block.source_id: block.content}) is False

@@ -14,14 +14,16 @@ from pathlib import Path
 import pytest
 from openpyxl import load_workbook
 
+import paperfacts.readings
 import paperfacts.workflow as workflow
 from paperfacts.config import Settings
 from paperfacts.errors import Cancelled, ConfigError, LlmError
 from paperfacts.figures import FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
+from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import read_document_figures, run_document, shown_figures
+from paperfacts.workflow import run_document
 from support.factories import make_block
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
 from test_workflow_run import install_fake_pipeline
@@ -349,13 +351,13 @@ def test_a_page_is_rendered_once_for_all_its_panels(monkeypatch, document: Docum
         blocks=tuple(blocks),
     ).write(DataLayout(settings.data_root).artifact_path(document.document_id, "mineru"))
     renders: list[int] = []
-    real = workflow.render_page
+    real = paperfacts.readings.render_page
 
     def counting(path, page, *, dpi):
         renders.append(page)
         return real(path, page, dpi=dpi)
 
-    monkeypatch.setattr(workflow, "render_page", counting)
+    monkeypatch.setattr("paperfacts.readings.render_page", counting)
 
     readings = read_document_figures(document, settings, FakeVisionClient(chart_answer()))
 
@@ -378,7 +380,7 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
         figures_started.set()
         assert stop.wait(timeout=5.0), "the failed paper never told the figures stage to stop"
         finished.append("figures stopped")
-        return "failed", "stopped"
+        return "skipped", "stopped: the rest of the paper failed"
 
     def failing_extraction(document, settings, *, force, on_stage):
         assert figures_started.wait(timeout=5.0)
@@ -386,11 +388,15 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
 
     monkeypatch.setattr("paperfacts.workflow._read_figures_stage", stoppable_figures)
     monkeypatch.setattr("paperfacts.workflow._extract_and_compare", failing_extraction)
+    marks: list[tuple[str, str, str]] = []
 
     with pytest.raises(LlmError):
-        run_document(document, settings)
+        run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
 
     assert finished == ["figures stopped"]  # joined, not left running
+    # Its own terminal mark, so the job layer does not stamp it with the extraction's error.
+    stopped = ("figures", "skipped", "stopped: the rest of the paper failed")
+    assert [m for m in marks if m[0] == "figures"][-1] == stopped
     assert not [t for t in threading.enumerate() if t.name.startswith("paperfacts-figures")]
 
 
@@ -403,7 +409,7 @@ def test_a_stopped_figures_stage_asks_no_further_panel_and_stores_nothing(docume
         return chart_answer()
 
     client = FakeVisionClient(stop_after_the_first)
-    artifact = workflow._figure_artifact(document, settings)
+    artifact = figure_artifact(document, settings)
     # Three panels of one figure, asked one at a time.
     panels = tuple(
         make_block(page=0, order=i, type="figure", content=f"{i}.jpg", bbox=BOX, document_id=document.document_id)

@@ -248,6 +248,88 @@ def test_a_sample_level_field_reported_under_the_target_is_dropped_and_logged():
     assert records.dropped == ("thickness: film-level field reported under the target",)
 
 
+# ---- The sample list: the same audit and placement rules as passage mode --------------------------
+
+
+def thickness(value_raw: str = "300", **extra) -> dict:
+    return {"field": "thickness", "value_raw": value_raw, "unit_raw": "nm", **extra}
+
+
+def test_a_sample_with_no_usable_id_keeps_its_values_unattributed_and_is_audited():
+    # It used to vanish in a generator filter, values and all, with nothing in the audit.
+    response = ExtractionResponse.model_validate(
+        {"samples": [{"sample_id": "A", "fields": [thickness()]}, {"sample_id": "  ", "fields": [thickness("250")]}]}
+    )
+
+    records = to_records(response)
+
+    assert [sample.sample_id for sample in records.samples] == ["A"]
+    assert [value.value_raw for value in records.unattributed] == ["250"]
+    assert records.dropped == ("inventory: a sample was listed with no usable id",)
+
+
+def test_a_sample_listed_twice_is_kept_once_its_values_filed_under_the_first_and_audited():
+    response = ExtractionResponse.model_validate(
+        {
+            "samples": [
+                {"sample_id": "S-1", "label": "first", "fields": [thickness()]},
+                {"sample_id": "S 1", "label": "second", "fields": [{"field": "transmittance", "value_raw": "85"}]},
+            ]
+        }
+    )
+
+    records = to_records(response)
+
+    assert [sample.label for sample in records.samples] == ["first"]
+    assert [value.field for value in records.samples[0].fields] == ["thickness", "transmittance"]
+    assert records.dropped == ("inventory: sample 'S 1' repeats an id already listed",)
+
+
+def test_a_series_value_under_the_target_is_written_onto_every_sample():
+    # Document mode's prompt asks for a whole-series value once, under the target, flagged; it is placed the
+    # way passage mode places the same flag.
+    response = ExtractionResponse.model_validate(
+        {
+            "target": {"fields": [thickness(applies_to_all_samples=True)]},
+            "samples": [{"sample_id": "A"}, {"sample_id": "B"}],
+        }
+    )
+
+    records = to_records(response)
+
+    assert records.target is None
+    for sample in records.samples:
+        assert [(value.value_raw, value.series) for value in sample.fields] == [("300", True)]
+    assert records.dropped == ()
+
+
+def test_a_series_value_with_no_sample_to_carry_it_is_kept_unattributed():
+    response = ExtractionResponse.model_validate({"target": {"fields": [thickness(applies_to_all_samples=True)]}})
+
+    records = to_records(response)
+
+    assert records.samples == ()
+    assert [(value.value_raw, value.series) for value in records.unattributed] == [("300", False)]
+
+
+def test_the_series_flag_changes_nothing_on_a_paper_level_field_or_under_a_sample():
+    response = ExtractionResponse.model_validate(
+        {
+            "target": {"fields": [{"field": "component", "value_raw": "ITO", "applies_to_all_samples": True}]},
+            "samples": [
+                {"sample_id": "A", "fields": [thickness(applies_to_all_samples=True)]},
+                {"sample_id": "B"},
+            ],
+        }
+    )
+
+    records = to_records(response)
+
+    assert records.target.get("component").series is False
+    assert [(value.value_raw, value.series) for value in records.samples[0].fields] == [("300", False)]
+    assert records.samples[1].fields == ()
+
+
 def test_a_correctly_scoped_field_of_every_group_survives():
     # Regression guard for the scope rule itself: it must reject the wrong scope without becoming
     # overzealous and rejecting the right one, for every group (target, process, film).
@@ -274,7 +356,7 @@ def test_a_correctly_scoped_field_of_every_group_survives():
     assert records.dropped == ()
 
 
-@pytest.mark.parametrize("value_raw", ["minimum", "n.a.", "high"])
+@pytest.mark.parametrize("value_raw", ["minimum", "n.a.", "high", "a dozen", "none"])
 def test_a_numeric_field_without_any_digit_is_dropped_and_logged(value_raw):
     # "minimum" is not a fact value; keeping it would only normalize to None and then show up as a line
     # of noise in the report.
@@ -376,6 +458,32 @@ def test_a_numeric_value_without_a_digit_is_dropped_with_the_reason():
 
     assert value is None
     assert cleaning.dropped == ["sheet_resistance: non-numeric value 'minimum'"]
+
+
+@pytest.mark.parametrize(
+    "value_raw", ["one of the samples", "five to ten", "one-third", "ten-fold", "two-step", "one order of magnitude"]
+)
+def test_a_number_word_inside_other_words_is_still_non_numeric(value_raw):
+    cleaning, value = clean_value("inch", value_raw, unit_raw="inch")
+
+    assert value is None
+    assert cleaning.dropped == [f"inch: non-numeric value {value_raw!r}"]
+
+
+def test_a_number_word_without_a_unit_is_still_non_numeric():
+    cleaning, value = clean_value("inch", "four")
+
+    assert value is None
+    assert cleaning.dropped == ["inch: non-numeric value 'four'"]
+
+
+@pytest.mark.parametrize("value_raw", ["four", "four-inch", "Two", "twelve"])
+def test_a_numeric_value_written_as_a_number_word_survives(value_raw):
+    # metals: "a four-inch ITO target" was dropped as non-numeric in both lanes.
+    cleaning, value = clean_value("inch", value_raw, unit_raw="inch")
+
+    assert value is not None and value.value_raw == value_raw
+    assert cleaning.dropped == []
 
 
 def test_a_composition_value_without_a_digit_survives_the_numeric_rule():

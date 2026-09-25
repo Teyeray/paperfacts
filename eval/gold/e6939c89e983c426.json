@@ -1,0 +1,1789 @@
+{
+  "doc_id": "e6939c89e983c426",
+  "sha256": "e6939c89e983c4263136ee9d3afc66748bb6cba6c1d2f36063c4d3569e931c19",
+  "title": "Zakaria et al. 2022, Study of wide bandgap SnOx thin films grown by reactive magnetron sputtering via a two-step method (Sci Rep 12:15294)",
+  "notes": [
+    "36 samples: 6 O2/Ar ratios × 2 deposition temperatures × {as-deposited, vacuum-annealed, air-annealed}.",
+    "Every sample has a Table 3 transmittance; only eight have a resistivity in the text (the rest are Fig. 2 only).",
+    "The Ar flow of 5 sccm belongs to vacuum ANNEALING, not deposition; 5e-4 Torr is the annealing pressure.",
+    "Deposition pressure is a range (4.4e-3 to 5.1e-3 Torr) depending on O2 flow, never per sample.",
+    "Table 5 figure of merit is not a field; sheet resistance is never stated."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "SnO (99.99%)",
+        "raw": "a high purity SnO (99.99%) 2\"-diameter target",
+        "page": 1,
+        "accept": [
+          "^\\s*SnO\\b(?!2)",
+          "SnO\\s*\\(99"
+        ]
+      }
+    ],
+    "inch": [
+      {
+        "value": 2,
+        "raw": "SnO (99.99%) 2\"- diameter target",
+        "page": 1
+      }
+    ]
+  },
+  "series": {
+    "mode": [
+      {
+        "value": "RF",
+        "raw": "RF magnetron sputtering",
+        "page": 1
+      }
+    ],
+    "sputtering_power": [
+      {
+        "value": 50,
+        "raw": "50 W power, 200 sccm of Ar flow and 30 min deposition time for all samples",
+        "page": 1
+      }
+    ],
+    "ar_flow_rate": [
+      {
+        "value": 200,
+        "raw": "200 sccm of Ar flow",
+        "page": 1
+      }
+    ],
+    "sputtering_time": [
+      {
+        "value": 30,
+        "raw": "30 min deposition time for all samples",
+        "page": 1
+      }
+    ],
+    "working_pressure": [
+      {
+        "value": null,
+        "raw": "the deposition pressure ... varied from 4.4×10−3 to 5.1×10−3 Torr",
+        "page": 1,
+        "ambiguous": true,
+        "why": "range across the series, not per sample"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "100C-0-asdep",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 0%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 0
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0,
+            "raw": "O2/Ar = 0% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 72,
+            "raw": "Table 3, O2/Ar 0%, asdep 100 °C: 72",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 100000000.0,
+            "raw": "a very high resistivity around 10^8 Ω cm for SnOx deposited without the presence of O2",
+            "page": 3,
+            "ambiguous": true,
+            "why": "order of magnitude only"
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-0.5-asdep",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 0.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 0.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0.5,
+            "raw": "O2/Ar = 0.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 78,
+            "raw": "Table 3, O2/Ar 0.5%, asdep 100 °C: 78",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 47,
+            "raw": "The resistivity decreases to its lowest value of 47 Ω cm at O2/Ar = 0.5% for SnOx samples deposited at 100 °C",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-1.5-asdep",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 1.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 1.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 1.5,
+            "raw": "O2/Ar = 1.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87,
+            "raw": "Table 3, O2/Ar 1.5%, asdep 100 °C: 87",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-2.5-asdep",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 2.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 2.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 2.5,
+            "raw": "O2/Ar = 2.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87,
+            "raw": "Table 3, O2/Ar 2.5%, asdep 100 °C: 87",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-4.5-asdep",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 4.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 4.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 4.5,
+            "raw": "O2/Ar = 4.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88,
+            "raw": "Table 3, O2/Ar 4.5%, asdep 100 °C: 88",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-7.5-asdep",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 7.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 7.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 7.5,
+            "raw": "O2/Ar = 7.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 89,
+            "raw": "Table 3, O2/Ar 7.5%, asdep 100 °C: 89",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-0-asdep",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 0%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 0
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0,
+            "raw": "O2/Ar = 0% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 80,
+            "raw": "Table 3, O2/Ar 0%, asdep 250 °C: 80",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 100000000.0,
+            "raw": "a very high resistivity around 10^8 Ω cm for SnOx deposited without the presence of O2",
+            "page": 3,
+            "ambiguous": true,
+            "why": "order of magnitude only"
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-0.5-asdep",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 0.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 0.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0.5,
+            "raw": "O2/Ar = 0.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 76,
+            "raw": "Table 3, O2/Ar 0.5%, asdep 250 °C: 76",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-1.5-asdep",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 1.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 1.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 1.5,
+            "raw": "O2/Ar = 1.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87,
+            "raw": "Table 3, O2/Ar 1.5%, asdep 250 °C: 87",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 4.5,
+            "raw": "and to its lowest value of 4.5 Ω cm at O2/Ar = 1.5% for SnOx samples deposited at 250 °C",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-2.5-asdep",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 2.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 2.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 2.5,
+            "raw": "O2/Ar = 2.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88,
+            "raw": "Table 3, O2/Ar 2.5%, asdep 250 °C: 88",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-4.5-asdep",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 4.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 4.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 4.5,
+            "raw": "O2/Ar = 4.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 90,
+            "raw": "Table 3, O2/Ar 4.5%, asdep 250 °C: 90",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-7.5-asdep",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 7.5%, asdep",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 7.5
+        },
+        "label": "as-?dep",
+        "label_not": "vac|\\bair\\b"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 7.5,
+            "raw": "O2/Ar = 7.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91,
+            "raw": "Table 3, O2/Ar 7.5%, asdep 250 °C: 91",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-0-vac",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 0%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 0
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0,
+            "raw": "O2/Ar = 0% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 70,
+            "raw": "Table 3, O2/Ar 0%, vac 100 °C: 70",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-0.5-vac",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 0.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 0.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0.5,
+            "raw": "O2/Ar = 0.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 80,
+            "raw": "Table 3, O2/Ar 0.5%, vac 100 °C: 80",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.14,
+            "raw": "the recorded resistivity values are 0.14 Ω cm for the best SnOx deposited at 100 °C (Table 2: best O2/Ar 0.5)",
+            "page": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-1.5-vac",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 1.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 1.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 1.5,
+            "raw": "O2/Ar = 1.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 86,
+            "raw": "Table 3, O2/Ar 1.5%, vac 100 °C: 86",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-2.5-vac",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 2.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 2.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 2.5,
+            "raw": "O2/Ar = 2.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87,
+            "raw": "Table 3, O2/Ar 2.5%, vac 100 °C: 87",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-4.5-vac",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 4.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 4.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 4.5,
+            "raw": "O2/Ar = 4.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87,
+            "raw": "Table 3, O2/Ar 4.5%, vac 100 °C: 87",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-7.5-vac",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 7.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 7.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 7.5,
+            "raw": "O2/Ar = 7.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 89,
+            "raw": "Table 3, O2/Ar 7.5%, vac 100 °C: 89",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-0-vac",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 0%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 0
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0,
+            "raw": "O2/Ar = 0% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 79,
+            "raw": "Table 3, O2/Ar 0%, vac 250 °C: 79",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-0.5-vac",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 0.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 0.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0.5,
+            "raw": "O2/Ar = 0.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 76,
+            "raw": "Table 3, O2/Ar 0.5%, vac 250 °C: 76",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-1.5-vac",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 1.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 1.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 1.5,
+            "raw": "O2/Ar = 1.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87,
+            "raw": "Table 3, O2/Ar 1.5%, vac 250 °C: 87",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.07,
+            "raw": "0.07 Ω cm for the best SnOx deposited at 250 °C ... O2/Ar = 1.5%",
+            "page": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-2.5-vac",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 2.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 2.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 2.5,
+            "raw": "O2/Ar = 2.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88,
+            "raw": "Table 3, O2/Ar 2.5%, vac 250 °C: 88",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-4.5-vac",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 4.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 4.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 4.5,
+            "raw": "O2/Ar = 4.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 89,
+            "raw": "Table 3, O2/Ar 4.5%, vac 250 °C: 89",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-7.5-vac",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 7.5%, vac",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 7.5
+        },
+        "label": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 7.5,
+            "raw": "O2/Ar = 7.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91,
+            "raw": "Table 3, O2/Ar 7.5%, vac 250 °C: 91",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (vac)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-0-air",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 0%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 0
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0,
+            "raw": "O2/Ar = 0% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 65,
+            "raw": "Table 3, O2/Ar 0%, air 100 °C: 65",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.13,
+            "raw": "For both air annealed series, the lowest resistivity of around 0.13 Ω cm ... samples deposited without O2 flow",
+            "page": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-0.5-air",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 0.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 0.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0.5,
+            "raw": "O2/Ar = 0.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 86,
+            "raw": "Table 3, O2/Ar 0.5%, air 100 °C: 86",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-1.5-air",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 1.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 1.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 1.5,
+            "raw": "O2/Ar = 1.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88,
+            "raw": "Table 3, O2/Ar 1.5%, air 100 °C: 88",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-2.5-air",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 2.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 2.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 2.5,
+            "raw": "O2/Ar = 2.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 89,
+            "raw": "Table 3, O2/Ar 2.5%, air 100 °C: 89",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-4.5-air",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 4.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 4.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 4.5,
+            "raw": "O2/Ar = 4.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 90,
+            "raw": "Table 3, O2/Ar 4.5%, air 100 °C: 90",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "100C-7.5-air",
+      "description": "SnOx, deposited at 100 °C, O2/Ar 7.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100,
+          "o2_ratio": 7.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 7.5,
+            "raw": "O2/Ar = 7.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "deposited at 100 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91,
+            "raw": "Table 3, O2/Ar 7.5%, air 100 °C: 91",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-0-air",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 0%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 0
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0,
+            "raw": "O2/Ar = 0% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 77,
+            "raw": "Table 3, O2/Ar 0%, air 250 °C: 77",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.13,
+            "raw": "For both air annealed series, the lowest resistivity of around 0.13 Ω cm ... samples deposited without O2 flow",
+            "page": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-0.5-air",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 0.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 0.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 0.5,
+            "raw": "O2/Ar = 0.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87,
+            "raw": "Table 3, O2/Ar 0.5%, air 250 °C: 87",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-1.5-air",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 1.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 1.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 1.5,
+            "raw": "O2/Ar = 1.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 89,
+            "raw": "Table 3, O2/Ar 1.5%, air 250 °C: 89",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-2.5-air",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 2.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 2.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 2.5,
+            "raw": "O2/Ar = 2.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 89,
+            "raw": "Table 3, O2/Ar 2.5%, air 250 °C: 89",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-4.5-air",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 4.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 4.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 4.5,
+            "raw": "O2/Ar = 4.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 90,
+            "raw": "Table 3, O2/Ar 4.5%, air 250 °C: 90",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "250C-7.5-air",
+      "description": "SnOx, deposited at 250 °C, O2/Ar 7.5%, air",
+      "match": {
+        "fields": {
+          "substrate_temperature": 250,
+          "o2_ratio": 7.5
+        },
+        "label": "\\bair\\b",
+        "label_not": "vac"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 7.5,
+            "raw": "O2/Ar = 7.5% (Table 3 row)",
+            "page": 5,
+            "condition": "O2/Ar"
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 250,
+            "raw": "deposited at 250 °C",
+            "page": 1
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91,
+            "raw": "Table 3, O2/Ar 7.5%, air 250 °C: 91",
+            "page": 5,
+            "condition": "average 400-700 nm"
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 400,
+            "raw": "post deposition annealing at 400 °C for 1 h (air)",
+            "page": 1
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 60,
+            "raw": "annealing at 400 °C for 1 h",
+            "page": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -610,9 +610,18 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
     Also returns how many points could not be put on any axis at all -- as opposed to points on an axis
     that plots something nobody asked about, which are dropped on purpose. Axis ids and series labels are
     matched case-insensitively: "Left" and "left" are the same axis to the model.
+
+    An axis without an id is keyed by its position, never by a default name: two id-less axes must not
+    collapse into one, or a sheet resistance of 12000 ohm/sq becomes a transmittance of 12000 %. A point
+    whose series names an axis is placed on that axis or nowhere; only a series that names none falls back
+    to the answer's single axis. The one allowance: a lone id-less axis answers to "left", the prompt's
+    default, since there is nothing else it could mean.
     """
     specs = {spec.name.lower(): spec for spec in request.fields}
-    axes = {_fold(axis.id) or "left": axis for axis in _items(answer, "y_axes", _Axis)}
+    described = _items(answer, "y_axes", _Axis)
+    axes = {_fold(axis.id) or f"#{index}": axis for index, axis in enumerate(described)}
+    if len(described) == 1 and not _fold(described[0].id):
+        axes["left"] = described[0]
     series = {_fold(entry.label): entry for entry in _items(answer, "series", _Series)}
     points = _items(answer, "points", _Point)
     try:
@@ -620,14 +629,14 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
     except ValidationError:
         x_axis = _XAxis()
     series_count = max(len(series), len({point.series for point in points}))
-    only_axis = next(iter(axes.values())) if len(axes) == 1 else None
+    only_axis = described[0] if len(described) == 1 else None
 
     readings: list[FigureReading] = []
     unplaced = 0
     for point in points:
         entry = series.get(_fold(point.series))
-        axis = axes.get(_fold(entry.y_axis)) if entry is not None and entry.y_axis else None
-        axis = axis or only_axis
+        named = _fold(entry.y_axis) if entry is not None else ""
+        axis = axes.get(named) if named else only_axis
         if axis is None:
             unplaced += 1
             continue
@@ -724,7 +733,8 @@ def _read_panel(
     if unplaced and not readings:
         detail = f"{unplaced} points, none of them on an axis the answer describes"
         return FigurePanel(**base, status="unreadable", detail=detail, usage=result.usage), ()
-    return FigurePanel(**base, status="read", readings=len(readings), usage=result.usage), readings
+    detail = f"{unplaced} points on no axis the answer describes, not read" if unplaced else ""
+    return FigurePanel(**base, status="read", readings=len(readings), detail=detail, usage=result.usage), readings
 
 
 def _crop(render: CropRenderer, request: PanelRequest) -> bytes | Exception:

@@ -142,12 +142,12 @@ def test_a_sample_reported_by_only_a_minority_of_passes_is_dropped_entirely():
 
 
 def test_passes_spelling_the_sample_id_differently_still_merge_into_one_sample():
-    # normalize_key keeps a hyphen but drops a space, so the three spellings below have to differ only by
-    # case and whitespace -- not by punctuation -- to actually land on the same key.
+    # sample_key folds the case of words and treats spaces and hyphens as separators; only a single-letter
+    # suffix keeps its case ("A" vs "a" may be two samples), so the three spellings keep that letter.
     passes = [
         records(samples=[make_sample("Sample A", [make_field("sheet_resistance", "12.5")])]),
-        records(samples=[make_sample("sample a", [make_field("sheet_resistance", "12.5")])]),
-        records(samples=[make_sample(" SAMPLE A ", [make_field("sheet_resistance", "12.5")])]),
+        records(samples=[make_sample("sample-A", [make_field("sheet_resistance", "12.5")])]),
+        records(samples=[make_sample(" SAMPLE  A ", [make_field("sheet_resistance", "12.5")])]),
     ]
 
     merged = merge_passes(passes)

@@ -43,20 +43,15 @@ def test_a_bare_integer_is_never_mistaken_for_scientific_notation():
     assert parse_number("2108") == (2108.0, None)
 
 
-def test_a_power_of_ten_without_a_mantissa_needs_the_caret():
-    """``"10-4"`` has no mantissa and no "^", so there is no way to tell whether it means 10⁻⁴ or something
-    else; rather than guess, the first number is taken and a note is left.
+@pytest.mark.parametrize("raw", ["10-4", "20-10", "300-200", "10-4 Ω·cm", "~10-4"])
+def test_a_pair_that_does_not_ascend_is_refused_rather_than_read_as_its_first_number(raw):
+    """``"10-4"`` has no mantissa and no "^": it is 10⁻⁴ that lost its caret as often as it is anything else,
+    and reading it as 10 makes a resistivity five orders of magnitude off. ``"300-200"`` is no range anybody
+    writes. Neither is a midpoint, and neither has a first number worth trusting, so both are refused."""
+    value, note = parse_number(raw)
 
-    The range rule requires a < b, so this also can't be misread as the midpoint (7) of a 10~4 range.
-    """
-    value, note = parse_number("10-4")
-
-    assert value == 10.0
-    assert note == "2 numbers found, first used"
-
-
-def test_a_descending_pair_is_not_a_range():
-    assert parse_number("20-10") == (20.0, "2 numbers found, first used")
+    assert value is None
+    assert "ambiguous" in note
 
 
 # ---- Qualifiers ------------------------------------------------------------------------
@@ -163,10 +158,17 @@ def test_a_thousands_separator_does_not_split_the_number():
 
 
 def test_the_first_number_wins_when_several_are_present_and_the_count_is_recorded():
-    value, note = parse_number("550 nm at 80%")
+    value, note = parse_number("550 nm, 80%")
 
     assert value == 550.0
     assert note == "2 numbers found, first used"
+
+
+def test_a_condition_after_the_value_is_set_aside_with_a_note():
+    # "at ..." states when the value was measured; its numbers are not the value's. The same rule holds for
+    # scientific notation, so "1.2 × 10^-4 at 300 K" is not refused for its "300".
+    assert parse_number("550 nm at 80%") == (550.0, "condition 'at 80%' ignored")
+    assert parse_number("1.2 × 10^-4 at 300 K") == (pytest.approx(1.2e-4), "condition 'at 300 K' ignored")
 
 
 def test_text_without_any_number_yields_none_and_says_so():
@@ -270,3 +272,81 @@ def test_two_single_digit_numbers_are_read_as_one_two_digit_number():
 def test_a_digit_wrapped_in_a_formatting_command_stays_part_of_its_number(raw):
     # MinerU bolds a table cell's last digit; "2 3 \\mathbf{0}" is 230, not 23 and a stray 0.
     assert parse_number(raw) == (230.0, None)
+
+
+# ---- Real OCR spellings, pinned as one table -------------------------------------------------
+# Each row is a spelling seen in a paper or produced by one of the parsers, with the reading the parser must
+# give: a value, or None when no reading is safe. The rows marked "refuse" used to return a confident wrong
+# number (1e-4 for a 4.5e-4 mantissa, -0.0015 for a range, 10 for 10^-4, 1 -> 100 % for a 1:4 gas ratio).
+
+SPELLINGS = [
+    # value_raw, expected value (None = refuse), a fragment the note must contain (None = no note)
+    ("(4.5 ± 0.2) × 10^-4", 4.5e-4, "uncertainty dropped"),
+    ("(4.5±0.2)×10−4", 4.5e-4, "uncertainty dropped"),
+    ("(4.5) × 10⁻⁴", 4.5e-4, None),
+    ("$( 4 . 5 \\pm 0 . 2 ) \\times 1 0 ^ { - 4 }$", 4.5e-4, "uncertainty dropped"),
+    ("1.2 × 10^(-4)", 1.2e-4, None),
+    ("3.2 x 10^-4 to 4.1 x 10^-4", 3.65e-4, "midpoint"),
+    ("1.2 x 10^-4 ± 0.1 x 10^-4", 1.2e-4, "uncertainty dropped"),
+    ("-1.5 × 10^-3", -1.5e-3, None),
+    ("1.2-1.5 × 10^-3", None, "ambiguous"),  # does the exponent apply to 1.2? refuse
+    ("4.5 ± 0.2 × 10^-4", None, "ambiguous"),  # the exponent may scale only the uncertainty
+    ("4.1 x 10^-4 - 3.2 x 10^-4", None, "descending"),
+    ("1.2 × 10^-4 at 550 nm", 1.2e-4, "condition 'at 550 nm' ignored"),
+    ("10-4", None, "ambiguous"),
+    ("300-200", None, "ambiguous"),
+    ("1:4", None, "ratio"),
+    ("O2/Ar = 1:4", None, "ratio"),
+    ("Ar:O2 = 9:1", None, "ratio"),
+    ("(12)", None, "parenthesis"),
+    ("x (5)", None, "parenthesis"),
+    ("12 (60", None, "parenthes"),
+    ("10–20 at 550 nm", 15.0, "midpoint"),
+    ("10–20 nm, 30 nm", None, "range among other numbers"),
+    # Still accepted, unchanged:
+    ("12 (60)", 12.0, "parenthesized alternative ignored"),
+    ("1.2 × 10⁻⁴ Ω·cm", 1.2e-4, None),
+    ("550 nm at 80%", 550.0, "condition"),
+    # Ranges with a unit on each bound, as for "3.2e-4 to 4.1e-4": the midpoint, never the first bound.
+    ("80%–85%", 82.5, "midpoint"),
+    ("20 W–100 W", 60.0, "midpoint"),
+    ("500 °C to 530 °C", 515.0, "midpoint"),
+    ("500 ℃ to 530 ℃", 515.0, "midpoint"),
+    ("5 nm - 10 μm", None, "different units"),
+    # Slash ratios are refused like colon ratios.
+    ("10/10", None, "ratio"),
+    ("12/10/3", None, "ratio"),
+    ("Ar/O2 = 20/1", None, "ratio"),
+    # The digits of a formula or a unit exponent are not the value.
+    ("O2/(Ar+O2) = 5%", 5.0, "before '='"),
+    ("5% H2", 5.0, "formula"),
+    ("4.5 × 10^20 cm^-3", 4.5e20, "formula"),
+    ("4.5 × 10^20 cm-3", None, "ambiguous"),  # without a caret "-3" may be a second number
+    ("x = 0.1", 0.1, "before '='"),
+    ("\\sim82", 82.0, "qualifier '~' dropped"),  # MinerU's \sim without the $ markers
+    ("$ \\sim $25 and 70", None, "joined by 'and'"),
+    ("25 nm or 70 nm", None, "joined by 'and'"),
+    ("1.2e-4", 1.2e-4, None),
+    ("1.2x10^-4", 1.2e-4, None),
+    ("15.6 to 16.3 nm", 15.95, "midpoint"),
+]
+
+
+@pytest.mark.parametrize(("raw", "expected", "fragment"), SPELLINGS)
+def test_real_spellings_read_as_the_value_or_are_refused(raw, expected, fragment):
+    value, note = parse_number(raw)
+
+    if expected is None:
+        assert value is None
+    else:
+        assert value == pytest.approx(expected)
+    if fragment is None:
+        assert note is None
+    else:
+        assert fragment in note
+
+
+@pytest.mark.parametrize("raw", ["four", "four-inch", "one of the samples", "five to ten", "ten-fold"])
+def test_parse_number_has_no_unit_context_and_so_reads_no_number_word(raw):
+    # Whether "four" is a value depends on its unit, which parse_number does not see; normalize_field decides.
+    assert parse_number(raw) == (None, "no number found")

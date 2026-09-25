@@ -1,0 +1,362 @@
+{
+  "doc_id": "e855631c6f46a0ee",
+  "sha256": "e855631c6f46a0ee090d8cb4c07ceddd9994a0b9a3a25091de77310564e6cdf6",
+  "title": "Seok & Kim 2019, Study of Sputtered ITO Films on Flexible Invar Metal Foils (Metals 9, 120)",
+  "notes": [
+    "Eight films: 50/100/150/200 nm ITO on SiO2/invar and on glass, same chamber.",
+    "Transmittance is measured only on the glass twins (invar is opaque).",
+    "The 2 µm SiO2 is PECVD, the NiO/MAPbI3/PCBM layers are spin-coated: none of their numbers belong to ITO.",
+    "Substrate temperature is 'room temperature' only."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "ITO",
+        "raw": "using a four-inch ITO target (Dasom RMS)",
+        "page": 1,
+        "ambiguous": true,
+        "why": "composition ratio not stated",
+        "accept": [
+          "\\bITO\\b",
+          "indium tin oxide"
+        ]
+      }
+    ],
+    "inch": [
+      {
+        "value": 4,
+        "raw": "using a four-inch ITO target",
+        "page": 1
+      }
+    ]
+  },
+  "series": {
+    "mode": [
+      {
+        "value": "DC",
+        "raw": "During ITO sputtering process, DC power of 100 W",
+        "page": 1
+      }
+    ],
+    "sputtering_power": [
+      {
+        "value": 100,
+        "raw": "DC power of 100 W",
+        "page": 1
+      }
+    ],
+    "ar_flow_rate": [
+      {
+        "value": 20,
+        "raw": "Ar flow rate of 20 sccm",
+        "page": 1
+      }
+    ],
+    "working_pressure": [
+      {
+        "value": 0.399966,
+        "raw": "a working pressure of 3 mTorr was kept constant",
+        "page": 1
+      }
+    ],
+    "substrate_temperature": [
+      {
+        "value": 25,
+        "raw": "sputtered ... at room temperature",
+        "page": 1,
+        "ambiguous": true,
+        "why": "room temperature; no number stated, 25 °C is only a convention"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "ITO-50nm-invar",
+      "description": "DC-sputtered ITO, 50 nm, on SiO2/invar foil",
+      "match": {
+        "fields": {
+          "thickness": 50
+        },
+        "label": "invar"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 50,
+            "raw": "Table 1 column 50 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 75.54,
+            "raw": "Table 1, Invar row, 50 nm: 75.54",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-100nm-invar",
+      "description": "DC-sputtered ITO, 100 nm, on SiO2/invar foil",
+      "match": {
+        "fields": {
+          "thickness": 100
+        },
+        "label": "invar"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 100,
+            "raw": "Table 1 column 100 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 54.74,
+            "raw": "Table 1, Invar row, 100 nm: 54.74",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-150nm-invar",
+      "description": "DC-sputtered ITO, 150 nm, on SiO2/invar foil",
+      "match": {
+        "fields": {
+          "thickness": 150
+        },
+        "label": "invar"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 150,
+            "raw": "Table 1 column 150 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 50.21,
+            "raw": "Table 1, Invar row, 150 nm: 50.21",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 94.31,
+            "raw": "The optimized ITO film exhibits ... high optical transmittance of up to 94.31%",
+            "page": 0,
+            "ambiguous": true,
+            "why": "a peak ('up to') value of the optimized 150 nm film, measured on its glass twin; no wavelength"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-200nm-invar",
+      "description": "DC-sputtered ITO, 200 nm, on SiO2/invar foil",
+      "match": {
+        "fields": {
+          "thickness": 200
+        },
+        "label": "invar"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 200,
+            "raw": "Table 1 column 200 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 44.57,
+            "raw": "Table 1, Invar row, 200 nm: 44.57",
+            "page": 3
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.000891,
+            "raw": "resistivity of 8.91 × 10−4 and 8.90 × 10−4 Ohm × cm, respectively (8.91 × 10−4)",
+            "page": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-50nm-glass",
+      "description": "DC-sputtered ITO, 50 nm, on glass",
+      "match": {
+        "fields": {
+          "thickness": 50
+        },
+        "label": "glass"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 50,
+            "raw": "Table 1 column 50 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 77.64,
+            "raw": "Table 1, Glass row, 50 nm: 77.64",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 86.23,
+            "raw": "Table 2, Glass, 50 nm: 86.23",
+            "page": 3,
+            "condition": "average 400-800 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-100nm-glass",
+      "description": "DC-sputtered ITO, 100 nm, on glass",
+      "match": {
+        "fields": {
+          "thickness": 100
+        },
+        "label": "glass"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 100,
+            "raw": "Table 1 column 100 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 53.3,
+            "raw": "Table 1, Glass row, 100 nm: 53.3",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 86.12,
+            "raw": "Table 2, Glass, 100 nm: 86.12",
+            "page": 3,
+            "condition": "average 400-800 nm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-150nm-glass",
+      "description": "DC-sputtered ITO, 150 nm, on glass",
+      "match": {
+        "fields": {
+          "thickness": 150
+        },
+        "label": "glass"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 150,
+            "raw": "Table 1 column 150 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 49.51,
+            "raw": "Table 1, Glass row, 150 nm: 49.51",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88.73,
+            "raw": "Table 2, Glass, 150 nm: 88.73",
+            "page": 3,
+            "condition": "average 400-800 nm"
+          },
+          {
+            "value": 94.31,
+            "raw": "The optimized ITO film exhibits ... high optical transmittance of up to 94.31%",
+            "page": 0,
+            "ambiguous": true,
+            "why": "a peak ('up to') value of the optimized 150 nm film, measured on its glass twin; no wavelength"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-200nm-glass",
+      "description": "DC-sputtered ITO, 200 nm, on glass",
+      "match": {
+        "fields": {
+          "thickness": 200
+        },
+        "label": "glass"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 200,
+            "raw": "Table 1 column 200 nm",
+            "page": 3
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 44.52,
+            "raw": "Table 1, Glass row, 200 nm: 44.52",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 87.01,
+            "raw": "Table 2, Glass, 200 nm: 87.01",
+            "page": 3,
+            "condition": "average 400-800 nm"
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00089,
+            "raw": "resistivity of 8.91 × 10−4 and 8.90 × 10−4 Ohm × cm, respectively (8.90 × 10−4)",
+            "page": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "IZTO-cathode",
+      "description": "200 nm IZTO top cathode of the curved PSC (linear facing target sputtering)",
+      "ambiguous": true,
+      "why": "a device layer with no process parameters; arguably a sputtered transparent electrode",
+      "match": {
+        "label": "IZTO"
+      },
+      "fields": {
+        "thickness": [
+          {
+            "value": 200,
+            "raw": "200 nm IZTO cathodes were formed ... linear facing target sputtering",
+            "page": 5
+          }
+        ]
+      }
+    }
+  ]
+}
