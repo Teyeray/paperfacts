@@ -8,6 +8,12 @@
 #
 # Any arguments are passed to `paperfacts serve` (e.g. --host 0.0.0.0 --port 8765).
 set -euo pipefail
+# macOS only: this starts an Apple-silicon mlx-vlm server and ls's for a macOS lsof. The Linux
+# deployment (systemd --user + a vLLM PaddleOCR-VL lane) is scripts/deploy.sh.
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "dev_up.sh is macOS-only; on Linux run scripts/deploy.sh --help" >&2
+    exit 1
+fi
 cd "$(dirname "$0")/.."
 
 # .env first, so a value set there wins over the defaults below (the app itself never overrides an
