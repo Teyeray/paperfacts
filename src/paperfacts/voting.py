@@ -24,14 +24,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from paperfacts.grounding import grounding_key
-from paperfacts.normalize import clean_unit, normalize_key
+from paperfacts.normalize import clean_unit, normalize_key, sample_key
 from paperfacts.records import ExtractedRecords, FieldValue, SampleRecord, TargetRecord
 
 
 class Scope(Enum):
     """The two scopes a value can have that are not a sample.
 
-    A sample's scope is its normalised id, a plain string, so these members cannot collide with one whatever
+    A sample's scope is its sample_key, a plain string, so these members cannot collide with one whatever
     a paper calls its samples -- a promise a reserved string like ``"__target__"`` could not make.
     """
 
@@ -159,10 +159,10 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
                 cited[slot] = (*cited[slot], *value.source_ids)
         for identity, slot in slot_of.items():
             slots[slot].supporters.append((identity[1], cited[slot]))
-        for scope in {normalize_key(sample.sample_id) for sample in records.samples}:
+        for scope in {sample_key(sample.sample_id) for sample in records.samples}:
             sample_counts[scope] += 1
         for sample in records.samples:
-            samples.setdefault(normalize_key(sample.sample_id), sample)
+            samples.setdefault(sample_key(sample.sample_id), sample)
         if records.target is not None and not target_ids:
             target_ids = records.target.source_ids
 
@@ -213,7 +213,7 @@ def _values(records: ExtractedRecords) -> Iterator[tuple[ScopeKey, FieldValue]]:
     for value in records.target.fields if records.target else ():
         yield Scope.TARGET, value
     for sample in records.samples:
-        scope = normalize_key(sample.sample_id)
+        scope = sample_key(sample.sample_id)
         for value in sample.fields:
             yield scope, value
     for value in records.unattributed:

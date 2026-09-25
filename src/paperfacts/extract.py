@@ -46,7 +46,7 @@ from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import ExtractionOptions, extractor_key, schema_fingerprint
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
-from paperfacts.normalize import drop_implausible, normalize_key
+from paperfacts.normalize import drop_implausible, sample_key
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -462,11 +462,12 @@ def passage_records(
 ) -> ExtractedRecords:
     """Assemble one pass of passage answers into records, placing each value on the sample it names.
 
-    Attribution is by normalised sample id -- the same key that pairs samples across lanes -- so the model
-    only has to repeat an id it was given. A sample-level value naming no sample, or one the inventory does
-    not have, is kept in ``unattributed`` rather than attached to a plausible neighbour: an unplaced value
-    is visible in the report, a misplaced one is indistinguishable from a real measurement. The one
-    exception is a paper with a single sample, where a value naming no sample has only one possible owner.
+    Attribution is by :func:`~paperfacts.normalize.sample_key` -- the same key that pairs samples across
+    lanes -- so the model only has to repeat an id it was given. A sample-level value naming no sample, or
+    one the inventory does not have, is kept in ``unattributed`` rather than attached to a plausible
+    neighbour: an unplaced value is visible in the report, a misplaced one is indistinguishable from a real
+    measurement. The one exception is a paper with a single sample, where a value naming no sample has only
+    one possible owner.
 
     A value the model flagged ``applies_to_all_samples`` is the other kind of null id: the paper stated it
     once for the whole series ("all films were RF sputtered"), so it is written onto every sample with
@@ -480,10 +481,10 @@ def passage_records(
     index_by_key: dict[str, int] = {}
     for item in inventory.samples:
         sample_id = item.sample_id.strip()
-        key = normalize_key(sample_id)
+        key = sample_key(sample_id)
         # min_length still admits "  ". A repeat means the model listed one sample twice under one id, and
         # every later value for it would land on the first: worth recording, not worth guessing about.
-        if not sample_id:
+        if not key:
             cleaning.dropped.append("inventory: a sample was listed with no usable id")
             continue
         if key in index_by_key:
@@ -525,7 +526,7 @@ def passage_records(
                 target_fields.append(value)
                 target_ids.extend(value.source_ids)
                 continue
-            index = index_by_key.get(normalize_key(item.sample_id)) if item.sample_id else None
+            index = index_by_key.get(sample_key(item.sample_id)) if item.sample_id else None
             if item.applies_to_all_samples and item.sample_id:
                 # An id and the series flag contradict each other. The id is the more specific claim and
                 # the one the prompt asks to be copied verbatim, so it wins; the flag is noise.

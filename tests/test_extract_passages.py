@@ -598,6 +598,45 @@ def test_the_same_number_in_two_units_stays_two_values():
 # ---- The inventory's own mistakes ---------------------------------------------------------------------
 
 
+def test_samples_distinguished_by_a_greek_letter_or_a_suffix_case_stay_separate():
+    # normalize_key merged "α-ITO" with "β-ITO" (and "ITO-a" with "ITO-A"): the second was dropped as a
+    # repeat and every value naming it landed on the first.
+    samples = [
+        {"sample_id": "α-ITO", "label": "", "conditions": {}},
+        {"sample_id": "β-ITO", "label": "", "conditions": {}},
+        {"sample_id": "ITO-a", "label": "", "conditions": {}},
+        {"sample_id": "ITO-A", "label": "", "conditions": {}},
+    ]
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(samples),
+            sheet_resistance=values_json(
+                {"sample_id": "β-ITO", "value_raw": "20"},
+                {"sample_id": "ITO-A", "value_raw": "30"},
+            ),
+        )
+    )
+
+    lane = extract(client)
+
+    assert [sample.sample_id for sample in lane.samples] == ["α-ITO", "β-ITO", "ITO-a", "ITO-A"]
+    assert lane.sample("β-ITO").get("sheet_resistance").value_raw == "20"
+    assert lane.sample("ITO-A").get("sheet_resistance").value_raw == "30"
+    assert lane.sample("α-ITO").fields == lane.sample("ITO-a").fields == ()
+    assert not any("repeats an id" in entry for entry in lane.dropped)
+
+
+def test_a_sample_whose_id_has_no_letter_or_digit_is_dropped_with_a_reason():
+    client = FakeLlmClient(
+        responder(inventory=inventory_json([{"sample_id": "#", "label": "", "conditions": {}}, *TWO_SAMPLES]))
+    )
+
+    lane = extract(client)
+
+    assert [sample.sample_id for sample in lane.samples] == ["A", "B"]
+    assert "inventory: a sample was listed with no usable id" in lane.dropped
+
+
 def test_a_sample_listed_twice_under_one_id_is_kept_once_and_audited():
     # The inventory prompt demands unique ids. A repeat means the model conflated two samples, and every
     # value later attributed to that id would land on the first of them, so the collision is recorded.

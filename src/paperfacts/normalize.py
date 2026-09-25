@@ -73,11 +73,47 @@ def normalize_text(text: str) -> str:
 
 def normalize_key(text: str | None) -> str:
     """A key for "are these the same" comparisons of text, conditions and compositions. Never use it for
-    units: lowercasing collides mΩ with MΩ; use :func:`clean_unit` there."""
+    units: lowercasing collides mΩ with MΩ; use :func:`clean_unit` there. Nor for sample ids: it deletes
+    Greek letters and folds a case-distinguished suffix; use :func:`sample_key` there."""
     if not text:
         return ""
     # .lower() turns Ω into ω; put it back before the whitelist filter or Ω would be stripped.
     return _NON_KEY.sub("", normalize_text(text).lower().replace("ω", "Ω"))
+
+
+# A sample id is a name, not a value, and the letters in it carry identity: "α-ITO" and "β-ITO" are two
+# films, "ITO-a" and "ITO-A" are two samples in a paper that uses both. normalize_key's whitelist deletes the
+# Greek letter and lower-cases the suffix, which merged such pairs into one sample and put the second one's
+# values on the first. The rule for ids is therefore stated on its own:
+#   - tokens are runs of letters (any script: Greek, CJK), numbers (with a decimal point), a sign in front
+#     of a number that follows no letter or digit ("T=-5"), and "%" or "+";
+#   - everything else -- spaces, hyphens, underscores, brackets -- only separates tokens, so "ITO-1",
+#     "ITO 1" and "ITO_1" are one id;
+#   - letters are case-folded ("Sample", "SAMPLE", "S1" vs "s1"), except a single letter after the first
+#     token, which keeps its case: a suffix is where papers distinguish samples by case ("ITO-a" vs "ITO-A").
+#   - a LaTeX Greek command is the letter it typesets: MinerU writes "$\\alpha$-ITO" where PaddleOCR-VL reads
+#     "α-ITO", and the two lanes must key the one sample alike.
+_SAMPLE_TOKEN = re.compile(r"[^\W\d_]+|\d+(?:\.\d+)?|(?<![^\W_])-(?=\d)|[%+]")
+_LATEX_LETTER = re.compile(r"\\([A-Za-z]+)")
+
+
+def _greek(match: re.Match[str]) -> str:
+    name = match.group(1)
+    case = "CAPITAL" if name[0].isupper() else "SMALL"
+    try:
+        return unicodedata.lookup(f"GREEK {case} LETTER {name.upper()}")
+    except KeyError:
+        return " "
+
+
+def sample_key(sample_id: str | None) -> str:
+    """The key two spellings of one sample id share, and two different samples never do. Used wherever
+    samples are keyed -- inventory de-duplication, value attribution, the vote across passes and the exact
+    pairing across lanes -- so both lanes and every pass apply the same rule."""
+    if not sample_id:
+        return ""
+    tokens = _SAMPLE_TOKEN.findall(_LATEX_LETTER.sub(_greek, normalize_text(sample_id)))
+    return " ".join(token if index and len(token) == 1 else token.lower() for index, token in enumerate(tokens))
 
 
 # ---- Closed category sets --------------------------------------------------------------------------------
