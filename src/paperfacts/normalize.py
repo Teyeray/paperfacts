@@ -577,43 +577,56 @@ check_canonical_units(FIELD_SPECS, FIELDS_SOURCE)
 # (normalize_text has already folded "×" to "x" and superscript digits to "^-4"). The caret, or an explicit
 # "x10", is required, so a unit that merely starts with digits can never be read as a factor.
 _SCALE_FACTOR = re.compile(r"(?:(?P<x>x)\s*10\s*\^?|10\s*\^)\s*(?P<e>[-+]?\d+)")
-# The symbol of the quantity a header names before its factor: "ρ", "R_s", "Rs", "\rho".
+# The symbol or name of the quantity a header names before its factor: "ρ", "R_s", "Resistivity", "\rho".
 _QUANTITY_SYMBOL = re.compile(r"\\?[A-Za-z\u0370-\u03ffΩμ□_]+")
+_OPENING, _CLOSING = "([", ")]"
 
 
-def split_scale_factor(unit_raw: str, is_unit: Callable[[str], object] = lambda unit: None) -> tuple[float | None, str]:
+def split_scale_factor(unit_raw: str, is_unit: Callable[[str], object]) -> tuple[float | None, str]:
     """``(factor, unit)``: the factor the cell is multiplied by to give the value, and the unit left over; the
     factor is None when the header does not say which way its power of ten goes.
 
     A table header carries a power of ten in one of two conventions, which the model copies into ``unit_raw``:
 
-    - on the **unit** -- "×10^-4 Ω·cm", "(10^-4 Ω cm)", "ρ (10^-4 Ω cm)": the column is in units of 10^-4 Ω·cm,
-      so a cell of 6.8 is 6.8 × 10^-4 Ω·cm, and the factor multiplies.
-    - on the **quantity** -- "ρ × 10^4 (Ω cm)", "ρ (10^4)": the column holds ρ multiplied by 10^4, so the same
-      cell is again 6.8 × 10^-4 Ω·cm, and the factor divides.
+    - on the **unit** -- "×10^-4 Ω·cm", "(10^-4 Ω cm)", "ρ (×10^-4 Ω cm)", "ρ × 10^-4 Ω·cm": the column is in
+      units of 10^-4 Ω·cm, so a cell of 6.8 is 6.8 × 10^-4 Ω·cm, and the factor multiplies.
+    - on the **quantity** -- "ρ × 10^4 (Ω cm)": the column holds ρ multiplied by 10^4, the unit bracketed apart,
+      so the same cell is again 6.8 × 10^-4 Ω·cm, and the factor divides.
 
-    The same exponent sign means opposite things, so a header that fits neither -- a unit before the factor
-    (``is_unit`` names the field's units), a factor glued to a symbol with nothing joining them -- is refused.
+    The same exponent sign means opposite things, and both lanes read one header the same way, so a wrong guess
+    would pass as agreement. What decides is where the brackets are, so they are read before anything is cleaned
+    away. A header that fits neither is refused: a unit before the factor (``is_unit`` names the field's units),
+    a factor glued to a symbol with nothing joining them, a factor bracketed alone beside the symbol
+    ("ρ (×10^-4) (Ω cm)": the column's multiplier, or ρ's?), or a factor on the quantity with no unit after it.
     """
-    unit = clean_unit(LATEX_WRAPPERS.sub(" ", delatex(normalize_text(unit_raw))))
-    match = _SCALE_FACTOR.search(unit)
+    text = LATEX_WRAPPERS.sub(" ", delatex(normalize_text(unit_raw))).strip()
+    match = _SCALE_FACTOR.search(text)
     if match is None:
-        return 1.0, unit
+        return 1.0, clean_unit(text)
     factor = 10.0 ** int(match.group("e"))
-    head, tail = unit[: match.start()].lstrip("("), unit[match.end() :]
-    if not head:
-        return factor, tail.strip("()").lstrip(".x*")
-    symbol = head.removesuffix("(")
+    head, tail = text[: match.start()].strip(), text[match.end() :].strip()
+
+    def unit_of(rest: str) -> str:
+        return clean_unit(rest.strip(_OPENING + _CLOSING + " ")).lstrip(".x*")
+
+    if not head.rstrip(_OPENING):
+        # The factor leads what follows, bracketed or not: "×10^-4 Ω·cm", "(10^-4 Ω cm)".
+        return factor, unit_of(tail)
+    symbol = head.rstrip(_OPENING).strip()
     if not _QUANTITY_SYMBOL.fullmatch(symbol) or is_unit(symbol) is not None:
-        return None, unit
-    if head.endswith("("):
-        inside, _, after = tail.partition(")")
-        if inside.lstrip(".x*"):
-            return factor, inside.lstrip(".x*")  # "ρ (10^-4 Ω cm)": the factor leads the unit
-        return 1 / factor, after.strip("()")  # "ρ (10^4) (Ω cm)": the factor stands alone beside the symbol
-    if match.group("x"):
-        return 1 / factor, tail.strip("()")  # "ρ × 10^4 (Ω cm)": the symbol multiplied by the factor
-    return None, unit
+        return None, clean_unit(text)
+    if head[-1] in _OPENING:
+        inside, _, _after = tail.partition(_CLOSING[_OPENING.index(head[-1])])
+        if unit_of(inside):
+            return factor, unit_of(inside)  # "ρ (10^-4 Ω cm)": the factor leads the bracketed unit
+        return None, clean_unit(text)  # "ρ (×10^-4) (Ω cm)": bracketed alone, it says nothing about direction
+    if not match.group("x"):
+        return None, clean_unit(text)  # "ρ 10^4 Ω cm": nothing joins the symbol and the factor
+    if tail[:1] in _OPENING and unit_of(tail):
+        return 1 / factor, unit_of(tail)  # "ρ × 10^4 (Ω cm)": ρ multiplied, the unit bracketed apart
+    if tail and tail[0] not in _OPENING:
+        return factor, unit_of(tail)  # "ρ × 10^-4 Ω·cm": the factor leads the unit written after it
+    return None, clean_unit(text)  # "ρ × 10^4": on the quantity, but no unit says so
 
 
 def has_scale_factor(text: str) -> bool:
@@ -650,7 +663,7 @@ def convert_to_canonical(
         # "1.2 × 10⁻⁴" under a column headed "(×10⁻⁴ Ω·cm)" is either 1.2e-4 or 1.2e-8 depending on whether
         # the author applied the header. Applying the factor twice would manufacture a value; refuse.
         return None, None, "scale factor in both value and unit; ambiguous"
-    scale_note = f"scale factor {scale:g} taken from the unit" if scale != 1.0 else None
+    scale_note = f"scale factor {scale:g} taken from the header in the unit" if scale != 1.0 else None
     value *= scale
     if not unit:
         canonical_value, canonical_unit, note = _bare_number(spec, value)

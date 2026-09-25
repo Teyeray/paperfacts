@@ -361,7 +361,7 @@ def test_a_power_of_ten_in_the_unit_is_applied_to_the_value(value, unit, expecte
 
 def test_a_unit_that_merely_starts_with_digits_is_not_read_as_a_factor():
     # Only an explicit "x10" or a caret makes a factor; "cm3/min" must stay the flow unit it is.
-    assert split_scale_factor("cm3/min") == (1.0, "cm3/min")
+    assert split_scale_factor("cm3/min", CONVERTERS["sccm"]) == (1.0, "cm3/min")
     assert convert("ar_flow_rate", 30.0, "cm3/min") == (30.0, "sccm", None)
 
 
@@ -371,7 +371,7 @@ def test_a_unit_that_is_only_a_factor_falls_back_to_the_bare_number_rule():
     number, canonical, note = convert("resistivity", 19.4, "×10^-4")
 
     assert (number, canonical) == (None, None)
-    assert note == "scale factor 0.0001 taken from the unit; no unit; resistivity requires one"
+    assert note == "scale factor 0.0001 taken from the header in the unit; no unit; resistivity requires one"
 
     # A field with a bare-number rule of its own keeps the scaled value.
     assert convert("transmittance", 0.85, "x10^2")[:2] == (pytest.approx(85.0), "%")
@@ -419,19 +419,28 @@ def test_a_power_of_ten_in_both_the_value_and_the_unit_is_refused():
 # ---- A power of ten in a table header: on the quantity or on the unit ---------------------------------------
 # "ρ × 10^4 (Ω cm)" heads a column of ρ multiplied by 10^4: a cell of 6.8 is 6.8 × 10^-4 Ω·cm (Guillén 2006).
 # "ρ (10^-4 Ω cm)" heads a column in units of 10^-4 Ω·cm: a cell of 6.8 is again 6.8 × 10^-4 Ω·cm. The same
-# exponent sign means opposite things, so which one the header wrote decides the value.
+# exponent sign means opposite things, so which one the header wrote decides the value: the factor belongs to
+# the quantity only when the unit follows it in brackets of its own.
 
 
 @pytest.mark.parametrize(
     ("unit", "expected"),
     [
+        # On the quantity, the unit bracketed apart: the cell is divided.
         ("ρ × 10^4 (Ω cm)", 6.8e-4),  # Guillén 2006, Table 1
         ("ρ×10⁴ (Ω·cm)", 6.8e-4),
         (r"$\rho \times 10^{4}$ ($\Omega$ cm)", 6.8e-4),
-        ("ρ (10^4) (Ω cm)", 6.8e-4),
+        ("ρ × 10^4 [Ω cm]", 6.8e-4),
+        # Leading the unit, inside its bracket or unbracketed: the cell is multiplied.
         ("ρ (10^-4 Ω cm)", 6.8e-4),
+        ("ρ (×10^-4 Ω cm)", 6.8e-4),
         ("(10^-4 Ω cm)", 6.8e-4),
+        ("(×10^-4 Ω cm)", 6.8e-4),
         ("×10^-4 Ω·cm", 6.8e-4),
+        ("ρ × 10^-4 Ω·cm", 6.8e-4),
+        ("ρ ×10^-4 Ωcm", 6.8e-4),
+        ("ρ×10⁻⁴ Ω·cm", 6.8e-4),
+        (r"\rho \times 10^{-4} \Omega cm", 6.8e-4),
     ],
 )
 def test_a_header_factor_is_applied_by_the_convention_it_was_written_in(unit, expected):
@@ -443,19 +452,36 @@ def test_a_header_factor_is_applied_by_the_convention_it_was_written_in(unit, ex
 
 
 @pytest.mark.parametrize(
-    ("unit", "expected"),
-    [("ρ (10^4)", (1e-4, "")), ("R_s × 10^-2", (100.0, "")), ("R_s × 10^-2 (Ω/sq)", (100.0, "Ω/sq"))],
+    ("field", "unit", "expected"),
+    [
+        ("thickness", "d ×10^2 nm", 680.0),
+        ("working_pressure", "P ×10^-1 Pa", 0.68),
+        ("sheet_resistance", "R_s × 10^-2 (Ω/sq)", 680.0),
+    ],
 )
-def test_a_factor_on_the_quantity_divides_the_cell(unit, expected):
-    factor, rest = split_scale_factor(unit)
-
-    assert (factor, rest) == (pytest.approx(expected[0]), expected[1])
+def test_the_header_convention_holds_for_every_field(field, unit, expected):
+    assert convert(field, 6.8, unit)[0] == pytest.approx(expected)
 
 
-@pytest.mark.parametrize("unit", ["Ω·cm × 10^-4", "ρ 10^4 Ω cm", "ρ, 10^4 (Ω cm)"])
+@pytest.mark.parametrize(
+    "unit",
+    [
+        # A unit before the factor, or a factor glued to the symbol with nothing saying how.
+        "Ω·cm × 10^-4",
+        "ρ 10^4 Ω cm",
+        "ρ, 10^4 (Ω cm)",
+        # A factor bracketed alone beside the symbol: "the column is ×10^-4" or "ρ is multiplied by it"?
+        "ρ (×10^-4) (Ω cm)",
+        "Resistivity (×10^-4) (Ω·cm)",
+        "ρ (10^-4) Ω cm",
+        "ρ (10^4) (Ω cm)",
+        # On the quantity with no unit to say so.
+        "ρ × 10^4",
+    ],
+)
 def test_a_header_factor_whose_convention_cannot_be_told_is_refused(unit):
-    # A unit before the factor, or a factor glued to the symbol with nothing saying how: dividing and
-    # multiplying are eight orders of magnitude apart, so neither is guessed.
+    # Dividing and multiplying are eight orders of magnitude apart, and both lanes would read the header the same
+    # way, so a wrong guess would show as agreement. Neither is guessed.
     number, canonical, note = convert("resistivity", 6.8, unit)
 
     assert (number, canonical) == (None, None)
@@ -472,7 +498,7 @@ def test_a_quantity_factor_and_a_value_with_its_own_power_of_ten_are_still_refus
 def test_a_leading_number_without_a_caret_or_x10_is_not_a_factor(unit):
     # "10mm" is a length someone wrote into the unit column, not a scale factor; reading it as 10^10 would
     # be catastrophic and silent.
-    assert split_scale_factor(unit) == (1.0, "10mm")
+    assert split_scale_factor(unit, CONVERTERS["nm"]) == (1.0, "10mm")
 
 
 # ---- Working pressure Pa ------------------------------------------------------------------
