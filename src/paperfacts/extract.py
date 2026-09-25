@@ -82,12 +82,13 @@ NOISE_TYPES: frozenset[str] = frozenset({"unknown", "figure"})
 # either way depending on how one parser wrote the heading, which is a lane asymmetry.
 _END_SECTION = re.compile(
     r"(?:(?:\d+|[ivx]+)(?:\.\d+)*\.?\s+)?"
-    r"(?:references?(?:\s+and\s+notes)?|notes\s+and\s+references|reference\s+list|bibliography|literature\s+cited)"
+    r"(?:references(?:\s+and\s+notes)?|notes\s+and\s+references|reference\s+list|bibliography|literature\s+cited)"
     r"\s*:?",
     re.IGNORECASE,
 )
 # The block types a heading arrives as: MinerU labels it a title, PaddleOCR-VL sometimes plain text. The
-# whole-block match is what makes admitting text safe.
+# whole-block match is what makes admitting text safe, and the plural is required: a lone "Reference" is as
+# often a chart legend or a table column as a heading, and a false cut empties the rest of one lane only.
 _HEADING_TYPES = frozenset({"title", "text"})
 # Measured on a real 10-page paper: 71.9K characters billed as 21.4K tokens, rounded down so the guard
 # errs towards over-estimating.
@@ -134,25 +135,37 @@ def build_extraction_document(artifact: ParsedArtifact) -> ExtractionDocument:
     return document
 
 
-def informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
-    """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography."""
-    kept: list[SourceBlock] = []
+def bibliography_cut(blocks: Sequence[SourceBlock]) -> int | None:
+    """The index of the references heading everything from which is citations, or None."""
     for index, block in enumerate(blocks):
         if block.type in _HEADING_TYPES and _END_SECTION.fullmatch(block.content.strip().strip("#* ")):
-            # The bibliography and everything after it. A cut early in the paper is either a very short
-            # paper or a heading misread as the references; say so rather than lose the rest silently.
-            if index < len(blocks) / 2:
-                logger.warning(
-                    "references heading %r at block %d of %d: everything after it is left out",
-                    block.content.strip(),
-                    index,
-                    len(blocks),
-                )
-            break
-        if block.type in NOISE_TYPES or not block.content.strip():
-            continue
-        kept.append(block)
-    return kept
+            return index
+    return None
+
+
+def informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
+    """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography."""
+    cut = bibliography_cut(blocks)
+    if cut is not None and cut < len(blocks) / 2:
+        # A cut early in the paper is either a very short paper or a heading misread as the references.
+        logger.warning(
+            "references heading %r at block %d of %d: everything after it is left out",
+            blocks[cut].content.strip(),
+            cut,
+            len(blocks),
+        )
+    body = blocks if cut is None else blocks[:cut]
+    return [block for block in body if block.type not in NOISE_TYPES and block.content.strip()]
+
+
+def _bibliography_audit(blocks: tuple[SourceBlock, ...]) -> tuple[str, ...]:
+    """The cut, as the lane's audit states it: which heading, and how much of the parse it removed. The two
+    lanes cut at their own headings, so a cut that differs between them is visible where the values are."""
+    cut = bibliography_cut(blocks)
+    if cut is None:
+        return ()
+    heading = blocks[cut].content.strip()
+    return (f"bibliography: {len(blocks) - cut} of {len(blocks)} blocks from the heading {heading!r} on were not read",)
 
 
 # ---- Extraction ---------------------------------------------------------------------------------------------
@@ -256,7 +269,7 @@ def extract_lane(
         target=records.target,
         samples=records.samples,
         invalid_source_ids=records.invalid_source_ids,
-        dropped=records.dropped,
+        dropped=(*_bibliography_audit(artifact.blocks), *records.dropped),
         unattributed=records.unattributed,
         passes=passes,
         usage=usage,

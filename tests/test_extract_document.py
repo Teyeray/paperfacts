@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.extract import build_extraction_document
+from paperfacts.extract import build_extraction_document, extract_lane
 from paperfacts.keys import extraction_code_fingerprint
-from support.extraction import make_artifact
+from support.extraction import lane_options, make_artifact
 from support.factories import make_block
+from support.llm import FakeLlmClient
 
 # ---- Noise filtering ------------------------------------------------------------------
 
@@ -78,7 +79,6 @@ def test_kept_and_dropped_block_counts_add_up_to_the_total():
         "References",
         "REFERENCES",
         "# References",
-        "Reference",
         "Bibliography",
         "Literature cited",
         "References and Notes",
@@ -121,7 +121,13 @@ def test_a_title_merely_mentioning_references_without_starting_with_it_is_kept()
 
 @pytest.mark.parametrize(
     "heading",
-    ["Reference electrode", "Reference samples", "References to Table 2", "2. Reference cells and substrates"],
+    [
+        "Reference electrode",
+        "Reference samples",
+        "References to Table 2",
+        "2. Reference cells and substrates",
+        "Reference",  # a chart legend or a table column as often as a heading
+    ],
 )
 def test_a_title_that_merely_starts_with_reference_is_kept(heading):
     # A prefix match cut the paper at these, dropping every result after them.
@@ -253,3 +259,16 @@ def test_extraction_code_fingerprint_is_a_stable_short_hex_string():
     assert first == second
     assert len(first) == 12
     assert all(ch in "0123456789abcdef" for ch in first)
+
+
+def test_the_cut_is_recorded_in_the_lanes_audit():
+    # A log line is gone after the run; the audit travels with the lane, so a lane that lost its tail to a
+    # misread heading shows it next to its values.
+    body = make_block(page=0, order=0, type="text", content="Sample A had a sheet resistance of 12.5 Ω/sq.")
+    heading = make_block(page=1, order=0, type="title", content="6. References")
+    citation = make_block(page=1, order=1, type="text", content="[1] Smith et al., Journal of Materials, 2020.")
+    client = FakeLlmClient(['{"target": null, "samples": []}'])
+
+    lane = extract_lane(make_artifact([body, heading, citation]), client, lane_options(mode="document"))
+
+    assert lane.dropped == ("bibliography: 2 of 3 blocks from the heading '6. References' on were not read",)
