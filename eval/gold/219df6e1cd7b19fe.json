@@ -1,0 +1,365 @@
+{
+  "doc_id": "219df6e1cd7b19fe",
+  "sha256": "219df6e1cd7b19fe2ce6b4b464f97c8e0b8ac72daa19b4f6c2ad03883e170b8b",
+  "title": "An et al. 2020, Cerium-doped indium oxide transparent electrode for semi-transparent perovskite and tandem cells (Solar Energy 196)",
+  "notes": [
+    "ICO and ITO films, ~100 nm, RF sputtered at RT to 200 °C; ICO-150 and ICO-200/ITO-200 are named in text/Table 1, the 50/100 °C films only in figures.",
+    "Power is given only as a density (2.6 W/cm2), so sputtering_power (W) has no gold value.",
+    "Traps: Hall measured at 22 °C, J-V at 25 °C, 80 nm evaporated ITO tunnel junction, ~10 Ω/sq commercial ITO glass, 9 nm MoOx.",
+    "Fig. 4a inset text (T550 and Rsheet) is recorded as figure_only."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "In2O3:CeO2 (3 wt%)",
+        "raw": "a ceramic In2O3:CeO2 target (3 wt%) and ceramic In2O3:SnO2 target (10 wt%), respectively",
+        "page": 2,
+        "ambiguous": true,
+        "why": "two targets (ICO and ITO) for two film families; the field holds one composition",
+        "accept": [
+          "CeO2?",
+          "\\bICO\\b",
+          "SnO2",
+          "\\bITO\\b"
+        ]
+      }
+    ]
+  },
+  "series": {
+    "mode": [
+      {
+        "value": "RF",
+        "raw": "by RF magnetron sputtering in a KJLC Lab-18 sputtering system",
+        "page": 2
+      }
+    ],
+    "working_pressure": [
+      {
+        "value": 0.199983,
+        "raw": "low pressure (1.5 mTorr) along with pure Ar plasma condition",
+        "page": 3
+      }
+    ],
+    "target_substrate_distance": [
+      {
+        "value": 19,
+        "raw": "The distance between the substrate and target was maintained at 190 mm",
+        "page": 2
+      }
+    ],
+    "thickness": [
+      {
+        "value": 100,
+        "raw": "ICO and ITO films about 100 nm (± 5 nm) thick were deposited",
+        "page": 2
+      }
+    ],
+    "sputtering_power": [
+      {
+        "value": null,
+        "raw": "low power density (2.6 W/cm2)",
+        "page": 2,
+        "ambiguous": true,
+        "why": "a power density, not a power in W"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "ICO-RT",
+      "description": "ICO at room temperature",
+      "match": {
+        "label": "(?=.*(ICO|Ce-doped|cerium))(?=.*(\\bRT\\b|room))",
+        "label_not": "(\\bITO\\b|Sn-doped)"
+      },
+      "fields": {
+        "resistivity": [
+          {
+            "value": 0.000574,
+            "raw": "a low resistivity of 5.74 × 10−4 Ω cm",
+            "page": 0
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 83.5,
+            "raw": "a high average transmittance of 83.5% ranging from 400 nm to 1800 nm",
+            "page": 0,
+            "condition": "average 400-1800 nm"
+          },
+          {
+            "value": 81.6,
+            "raw": "perovskite sensitive range (from 400 nm to 800 nm, varied from 77.7% to 81.6% with glass substrate)",
+            "page": 5,
+            "condition": "average 400-800 nm"
+          },
+          {
+            "value": 82.5,
+            "raw": "the average transmittance increases from 77.9% to 82.5% at the same wavelength range (450-700 nm)",
+            "page": 6,
+            "condition": "average 450-700 nm",
+            "ambiguous": true,
+            "why": "stated while discussing the device; film or device not explicit"
+          },
+          {
+            "value": 83.1,
+            "raw": "Fig. 4a inset: T550nm ICO 83.1%",
+            "page": 4,
+            "condition": "550 nm",
+            "figure_only": true
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 56,
+            "raw": "Fig. 4a inset: Rsheet ICO 56Ω",
+            "page": 4,
+            "figure_only": true
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 25,
+            "raw": "deposited at RT",
+            "page": 2,
+            "ambiguous": true,
+            "why": "room temperature; no number stated, 25 °C is only a convention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-50",
+      "description": "ICO at 50 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 50
+        },
+        "label": "(ICO|Ce-doped|cerium)",
+        "label_not": "(\\bITO\\b|Sn-doped)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 50,
+            "raw": "ICO-50 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      },
+      "ambiguous": true,
+      "why": "sample exists only as a label in Fig. 1 (XRD) / Fig. 2; no text or table value"
+    },
+    {
+      "id": "ICO-100",
+      "description": "ICO at 100 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100
+        },
+        "label": "(ICO|Ce-doped|cerium)",
+        "label_not": "(\\bITO\\b|Sn-doped)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "ICO-100 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      },
+      "ambiguous": true,
+      "why": "sample exists only as a label in Fig. 1 (XRD) / Fig. 2; no text or table value"
+    },
+    {
+      "id": "ICO-150",
+      "description": "ICO at 150 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 150
+        },
+        "label": "(ICO|Ce-doped|cerium)",
+        "label_not": "(\\bITO\\b|Sn-doped)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 150,
+            "raw": "ICO-150 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-200",
+      "description": "ICO at 200 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 200
+        },
+        "label": "(ICO|Ce-doped|cerium)",
+        "label_not": "(\\bITO\\b|Sn-doped)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 200,
+            "raw": "ICO-200 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-RT",
+      "description": "ITO at room temperature",
+      "match": {
+        "label": "(?=.*(\\bITO\\b|Sn-doped))(?=.*(\\bRT\\b|room))",
+        "label_not": "(ICO|Ce-doped|cerium)"
+      },
+      "fields": {
+        "resistivity": [
+          {
+            "value": 0.000658,
+            "raw": "resistivity enhancement of 12.8% (from 6.58 × 10−4 Ω cm to 5.74 × 10−4 Ω cm) compared to the traditional ITO films",
+            "page": 5
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 77.7,
+            "raw": "varied from 77.7% to 81.6% with glass substrate",
+            "page": 5,
+            "condition": "average 400-800 nm"
+          },
+          {
+            "value": 78.5,
+            "raw": "whole tandem configuration sensitive range (from 400 nm to 1800 nm, varied from 78.5% to 83.5%)",
+            "page": 5,
+            "condition": "average 400-1800 nm"
+          },
+          {
+            "value": 77.9,
+            "raw": "the average transmittance increases from 77.9% to 82.5%",
+            "page": 6,
+            "condition": "average 450-700 nm",
+            "ambiguous": true,
+            "why": "stated while discussing the device"
+          },
+          {
+            "value": 78.1,
+            "raw": "Fig. 4a inset: T550nm ITO 78.1%",
+            "page": 4,
+            "condition": "550 nm",
+            "figure_only": true
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 64,
+            "raw": "Fig. 4a inset: Rsheet ITO 64Ω",
+            "page": 4,
+            "figure_only": true
+          }
+        ],
+        "substrate_temperature": [
+          {
+            "value": 25,
+            "raw": "deposited at RT",
+            "page": 2,
+            "ambiguous": true,
+            "why": "room temperature; no number stated, 25 °C is only a convention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-50",
+      "description": "ITO at 50 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 50
+        },
+        "label": "(\\bITO\\b|Sn-doped)",
+        "label_not": "(ICO|Ce-doped|cerium)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 50,
+            "raw": "ITO-50 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      },
+      "ambiguous": true,
+      "why": "sample exists only as a label in Fig. 1 (XRD) / Fig. 2; no text or table value"
+    },
+    {
+      "id": "ITO-100",
+      "description": "ITO at 100 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 100
+        },
+        "label": "(\\bITO\\b|Sn-doped)",
+        "label_not": "(ICO|Ce-doped|cerium)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 100,
+            "raw": "ITO-100 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      },
+      "ambiguous": true,
+      "why": "sample exists only as a label in Fig. 1 (XRD) / Fig. 2; no text or table value"
+    },
+    {
+      "id": "ITO-150",
+      "description": "ITO at 150 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 150
+        },
+        "label": "(\\bITO\\b|Sn-doped)",
+        "label_not": "(ICO|Ce-doped|cerium)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 150,
+            "raw": "ITO-150 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      },
+      "ambiguous": true,
+      "why": "sample exists only as a label in Fig. 1 (XRD) / Fig. 2; no text or table value"
+    },
+    {
+      "id": "ITO-200",
+      "description": "ITO at 200 °C",
+      "match": {
+        "fields": {
+          "substrate_temperature": 200
+        },
+        "label": "(\\bITO\\b|Sn-doped)",
+        "label_not": "(ICO|Ce-doped|cerium)"
+      },
+      "fields": {
+        "substrate_temperature": [
+          {
+            "value": 200,
+            "raw": "ITO-200 (substrate temperature varied from RT to 200 °C)",
+            "page": 3
+          }
+        ]
+      }
+    }
+  ]
+}

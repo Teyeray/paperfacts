@@ -218,6 +218,37 @@ def test_the_condition_stated_in_the_same_block_as_the_rest_of_the_row_fills_the
     assert row["source_ids"] == "mineru_p0_b9; paddleocr_vl_p0_b9"
 
 
+def test_two_lanes_tying_different_conditions_to_the_row_are_not_committed_as_agreement():
+    # The review's scenario: each lane picks one condition by its own row block, but not the same one, and
+    # the two measurements used to be committed as one "agree" with conditions "450 nm; 600 nm".
+    def lane(backend, row_condition, other_condition):
+        values = {"450 nm": "85", "600 nm": "85.2"}
+        return [
+            _cited(value("resistivity", "5.74e-4", "Ω·cm", backend=backend), f"{backend}_p0_b9"),
+            _cited(value("transmittance", values[row_condition], "%", condition=row_condition), f"{backend}_p0_b9"),
+            _cited(value("transmittance", values[other_condition], "%", condition=other_condition), f"{backend}_p3_b2"),
+        ]
+
+    result = paired(lane("mineru", "450 nm", "600 nm"), lane("paddleocr_vl", "600 nm", "450 nm"))
+
+    row = decision(result, "transmittance")
+    assert row["decision"] == "multiple_conditions"
+    assert result.paper_row["transmittance"] is None
+
+
+def test_the_lanes_may_word_the_chosen_condition_differently():
+    def lane(backend, row_condition):
+        return [
+            _cited(value("resistivity", "5.74e-4", "Ω·cm", backend=backend), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "85", "%", condition=row_condition), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "80", "%", condition="at 600 nm"), f"{backend}_p3_b2"),
+        ]
+
+    result = paired(lane("mineru", "at 450 nm"), lane("paddleocr_vl", "450 nm wavelength"))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (85.0, "agree")
+
+
 def test_several_conditions_sharing_the_rows_block_stay_refused():
     fields = [
         _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),

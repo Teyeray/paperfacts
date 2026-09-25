@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.fields import FIELD_BY_NAME, FieldSpec
 from paperfacts.models import Backend
+from paperfacts.storage import write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,11 @@ class LaneExtraction(BaseModel):
     passes: int = Field(default=1, ge=1, description="extraction passes that were merged into this result")
     usage: dict[str, int] = Field(default_factory=dict)
     raw_response: str = Field(default="", description="the model's raw JSON, kept as evidence")
+    artifact_sha256: str | None = Field(
+        default=None,
+        description="ParsedArtifact.content_hash of the parse this lane was extracted from; None in files "
+        "written before it was recorded, which count as unknown rather than as a mismatch",
+    )
 
     def values(self) -> tuple[FieldValue, ...]:
         """Every field value in the lane, target first, unplaced ones last.
@@ -268,8 +274,7 @@ class LaneExtraction(BaseModel):
         return next((s for s in self.samples if s.sample_id == sample_id), None)
 
     def write(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        write_text_atomic(path, self.model_dump_json(indent=2))
 
     @classmethod
     def read(cls, path: Path) -> Self:

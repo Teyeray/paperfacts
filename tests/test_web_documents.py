@@ -274,6 +274,22 @@ def test_a_report_written_under_another_comparison_key_does_not_count(library: L
     assert library.report(DOC_KEY) is None
 
 
+def test_a_report_of_an_earlier_parse_does_not_count(library: Library):
+    # After `parse --force` the stored report cites blocks the new parse does not have; counted as compared,
+    # "run all" and `deploy.sh --rerun` would skip the paper for good.
+    old = seed_artifact(library, "mineru", blocks=(make_block(content="old"),))
+    report = seed_report(library)
+    report.model_copy(update={"artifact_sha256_a": old.content_hash()}).write(
+        library.layout.comparison_path(DOC_SHA, report.extractor_key, report.comparison_key)
+    )
+    assert library.summary(DOC_KEY).compared is True
+
+    seed_artifact(library, "mineru", blocks=(make_block(content="re-parsed"),))
+
+    assert library.summary(DOC_KEY).compared is False
+    assert library.report(DOC_KEY) is None
+
+
 # ---- name and uploaded_at both come from identity ----------------------------------------------------
 
 

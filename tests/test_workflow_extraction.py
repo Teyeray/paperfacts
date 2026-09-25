@@ -240,6 +240,80 @@ def test_changing_the_model_invalidates_the_extraction_cache(
     assert other.call_count == 1
 
 
+def _reparse(settings: Settings, document: DocumentInput, backend: Backend, content: str = "Rs = 99") -> None:
+    """Replace the stored artifact with a different parse of the same paper: same ids, other blocks."""
+    blocks = (
+        make_block(page=0, order=0, backend=backend, document_id=document.document_id, content="Sample A"),
+        make_block(page=0, order=1, backend=backend, document_id=document.document_id, content=content),
+    )
+    make_artifact(blocks, backend=backend, document_id=document.document_id).write(
+        DataLayout(settings.data_root).artifact_path(document.document_id, backend)
+    )
+
+
+def test_the_lane_records_the_parse_it_came_from(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    from paperfacts.records import LaneExtraction
+    from paperfacts.workflow import load_artifact
+
+    client = FakeLlmClient([extraction_json()])
+    extract_document(document, "mineru", settings, client)
+    path = DataLayout(settings.data_root).extraction_path(
+        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+    )
+
+    assert LaneExtraction.read(path).artifact_sha256 == load_artifact(document, "mineru", settings).content_hash()
+
+
+def test_a_lane_from_another_parse_is_re_derived_not_served(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    # The review's scenario: `parse --force` gave new blocks under the same positional ids; the old lane's
+    # citations would now point at whatever block has that ordinal.
+    client = FakeLlmClient([extraction_json(value="12.5"), extraction_json(value="99")])
+    extract_document(document, "mineru", settings, client)
+    _reparse(settings, document, "mineru")
+
+    lane = extract_document(document, "mineru", settings, client)
+
+    assert client.call_count == 2
+    assert lane.sample("A").get("sheet_resistance").value_raw == "99"
+
+
+def test_a_lane_file_without_a_recorded_parse_still_reads(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    from paperfacts.records import LaneExtraction
+
+    client = FakeLlmClient([extraction_json()])
+    extract_document(document, "mineru", settings, client)
+    path = DataLayout(settings.data_root).extraction_path(
+        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+    )
+    legacy = LaneExtraction.read(path).model_copy(update={"artifact_sha256": None})
+    legacy.write(path)
+
+    extract_document(document, "mineru", settings, client)
+
+    assert client.call_count == 1  # unknown is not a mismatch
+
+
+def test_a_comparison_of_other_parses_is_compared_again(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    client = FakeLlmClient([extraction_json(), extraction_json(), extraction_json(value="99")])
+    first = compare_document(document, settings, client)
+    _reparse(settings, document, BACKEND_B)
+
+    second = compare_document(document, settings, client)
+
+    assert client.call_count == 3  # lane B re-derived; lane A and the matching (exact ids) cost nothing
+    assert second.artifact_sha256_a == first.artifact_sha256_a
+    assert second.artifact_sha256_b != first.artifact_sha256_b
+    assert second.counts.conflict == 1
+
+
 def test_extracting_before_parsing_says_to_run_parse_first(settings: Settings, document: DocumentInput):
     client = FakeLlmClient([])
 
@@ -327,6 +401,30 @@ def test_force_redoes_the_comparison_without_re_extracting(
     # Only one extra matching call; both extractions went through their on-disk cache.
     assert client.call_count == calls_after_first + 1
     assert client.refreshes[-1] is True
+
+
+def test_a_failed_matching_is_reported_but_not_stored_so_the_next_run_asks_again(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    # Stored, a matching the model botched twice would blank the paper's sample cells on every later run.
+    good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
+    client = FakeLlmClient(
+        [extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), '{"pairs": 1}', '{"pairs": 2}', good]
+    )
+
+    failed = compare_document(document, settings, client)
+    path = DataLayout(settings.data_root).comparison_path(
+        document.document_id, failed.extractor_key, failed.comparison_key
+    )
+
+    assert failed.matching.failed
+    assert not path.is_file()
+
+    retried = compare_document(document, settings, client)
+
+    assert client.call_count == 5  # the lanes came from their cache; only matching was asked again
+    assert not retried.matching.failed
+    assert path.is_file()
 
 
 def test_the_report_path_carries_both_the_extractor_and_the_comparison_key(

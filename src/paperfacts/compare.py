@@ -32,12 +32,14 @@ from paperfacts.normalize import (
     NUMBER_RE,
     canonical_category,
     clean_unit,
+    delatex,
     normalize_key,
     normalize_lane,
     normalize_text,
     text_key,
 )
 from paperfacts.records import FieldValue, LaneExtraction
+from paperfacts.storage import write_text_atomic
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]
 
@@ -104,10 +106,12 @@ class ComparisonReport(BaseModel):
     matching: SampleMatching
     comparisons: tuple[FieldComparison, ...] = ()
     counts: ComparisonCounts = Field(default_factory=ComparisonCounts)
+    # The lanes' artifact_sha256, so a report is tied to the parses it compared (None: unknown, older file).
+    artifact_sha256_a: str | None = None
+    artifact_sha256_b: str | None = None
 
     def write(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        write_text_atomic(path, self.model_dump_json(indent=2))
 
     @classmethod
     def read(cls, path: Path) -> Self:
@@ -202,6 +206,8 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
         matching=matching,
         comparisons=tuple(comparisons),
         counts=_count(comparisons, matching, (lane_a, lane_b)),
+        artifact_sha256_a=lane_a.artifact_sha256,
+        artifact_sha256_b=lane_b.artifact_sha256,
     )
 
 
@@ -381,7 +387,7 @@ def _pair_values(
     return pairs
 
 
-def _conditions_measure_differently(condition_a: str | None, condition_b: str | None) -> bool:
+def conditions_measure_differently(condition_a: str | None, condition_b: str | None) -> bool:
     """Whether two conditions name different numbers, and so cannot describe the same measurement.
 
     Equal values are not enough to pair across conditions when the conditions themselves are numeric:
@@ -392,17 +398,25 @@ def _conditions_measure_differently(condition_a: str | None, condition_b: str | 
     does the same number said differently ("at 550 nm" against "550 nm wavelength"). A condition with no
     number on either side carries nothing to contradict, so it never blocks a pair.
     """
-    numbers_a = _condition_numbers(condition_a)
-    numbers_b = _condition_numbers(condition_b)
+    # As a multiset: "550 nm, 25 °C" and "at 25 °C and 550 nm" name the same numbers in another order.
+    numbers_a = sorted(condition_numbers(condition_a))
+    numbers_b = sorted(condition_numbers(condition_b))
     return bool(numbers_a) and bool(numbers_b) and numbers_a != numbers_b
 
 
-def _condition_numbers(condition: str | None) -> frozenset[float]:
-    """The numbers a condition names, as a set: "550 nm" -> {550}, "400-800 nm" -> {400, 800}."""
+def condition_numbers(condition: str | None) -> tuple[float, ...]:
+    """The numbers a condition names, in order: "550 nm" -> (550,), "400-800 nm" -> (400, 800).
+
+    The one definition of a condition's numbers: this module pairs values by it and ``dataset.py`` picks
+    and cross-checks conditions by it, so the two can never parse a condition differently. In order, so a
+    caller that cares (a configured preference "400-800") can match exactly; pairing across lanes compares
+    them as a multiset (:func:`conditions_measure_differently`). The text is de-LaTeXed first, since MinerU
+    spells a table's numbers "4 0 0".
+    """
     if not condition:
-        return frozenset()
-    text = normalize_text(condition)
-    numbers = set()
+        return ()
+    text = delatex(normalize_text(condition))
+    numbers: list[float] = []
     for match in NUMBER_RE.finditer(text):
         token = match.group()
         # A "-" straight after a digit is a range separator, not a sign: "400-800" names 400 and 800,
@@ -410,8 +424,8 @@ def _condition_numbers(condition: str | None) -> frozenset[float]:
         # written "400 to 800".
         if token[0] in "+-" and text[: match.start()].rstrip().endswith(tuple("0123456789")):
             token = token[1:]
-        numbers.add(float(token.replace(",", "")))
-    return frozenset(numbers)
+        numbers.append(float(token.replace(",", "")))
+    return tuple(numbers)
 
 
 def _equal_pairs(
@@ -425,7 +439,7 @@ def _equal_pairs(
     agreement by construction and can never manufacture a conflict.
 
     Conditions whose numbers disagree are refused outright, even when the values are equal: see
-    :func:`_conditions_measure_differently`.
+    :func:`conditions_measure_differently`.
     """
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     # Index-based removal: two values can be equal as models, and ``list.remove`` would then drop the
@@ -433,7 +447,7 @@ def _equal_pairs(
     i = 0
     while i < len(rest_a):
         for j, b in enumerate(rest_b):
-            if _conditions_measure_differently(rest_a[i].condition, b.condition):
+            if conditions_measure_differently(rest_a[i].condition, b.condition):
                 continue
             if compare_values(rest_a[i], b, spec)[0] == "agree":
                 pairs.append((rest_a.pop(i), rest_b.pop(j)))

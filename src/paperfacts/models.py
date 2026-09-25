@@ -19,13 +19,14 @@ Naming: ``document_id`` is the PDF's content sha256; ``source_id`` is ``{backend
 from __future__ import annotations
 
 import hashlib
-import os
-import uuid
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from paperfacts.storage import write_text_atomic
 
 # The two parsers. The string form appears in source ids, directory names and meta.json.
 Backend = Literal["mineru", "paddleocr_vl"]
@@ -249,6 +250,15 @@ class ParsedArtifact(BaseModel):
     def blocks_on_page(self, page: int) -> tuple[SourceBlock, ...]:
         return tuple(block for block in self.blocks if block.page == page)
 
+    def content_hash(self) -> str:
+        """sha256 over the blocks: what a citation resolves against, nothing that varies between runs.
+
+        Source ids are positional, so a lane derived from one parse and read against another would cite
+        whatever block now has that ordinal. Stored results record this hash to notice that.
+        """
+        blocks = [block.model_dump(mode="json") for block in self.blocks]
+        return hashlib.sha256(json.dumps(blocks, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
     def type_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         for block in self.blocks:
@@ -256,17 +266,8 @@ class ParsedArtifact(BaseModel):
         return dict(sorted(counts.items()))
 
     def write(self, path: Path) -> None:
-        """Atomic: a run killed mid-write leaves the previous artifact, never a truncated one.
-
-        Open-coded rather than calling ``storage.write_atomic`` because ``storage`` imports this module.
-        """
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            tmp.write_text(self.model_dump_json(indent=2), encoding="utf-8")
-            os.replace(tmp, path)
-        finally:
-            tmp.unlink(missing_ok=True)
+        """Atomic: a run killed mid-write leaves the previous artifact, never a truncated one."""
+        write_text_atomic(path, self.model_dump_json(indent=2))
 
     @classmethod
     def read(cls, path: Path) -> Self:

@@ -20,6 +20,7 @@ from paperfacts.cli import app
 from paperfacts.config import Settings
 from paperfacts.errors import ParserError
 from paperfacts.models import BACKENDS, Backend, DocumentInput, RawParseOutput
+from paperfacts.parsers import Parser
 from paperfacts.storage import DataLayout
 from support.extraction import make_artifact, make_lane
 from support.factories import RawOutputFactory, make_block, paddle_page_entry
@@ -346,7 +347,7 @@ def test_compare_closes_the_client(monkeypatch, two_page_pdf: Path, data_root: P
 # ---- run ----------------------------------------------------------------------------
 
 
-class FakeParser:
+class FakeParser(Parser):
     """Copies prepared native output into out_dir, standing in for the real parser."""
 
     def __init__(self, backend: Backend, source_dir: Path) -> None:
@@ -399,7 +400,7 @@ def test_run_goes_from_pdf_to_comparison_in_one_command(
 
 
 def test_run_stops_with_code_one_when_a_parser_fails(monkeypatch, two_page_pdf: Path, data_root: Path, api_key):
-    class ExplodingParser:
+    class ExplodingParser(Parser):
         def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:
             raise ParserError("mineru", "run", "exit code 3")
 

@@ -32,7 +32,7 @@ from paperfacts.storage import (
     read_identity,
     write_bytes_atomic,
 )
-from paperfacts.workflow import read_lane
+from paperfacts.workflow import read_lane, stored_comparison
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +134,8 @@ class Library:
     # ---- artifacts -----------------------------------------------------------------------
 
     def report(self, document_id: str) -> ComparisonReport | None:
-        path = self.layout.comparison_path(document_id, self.extractor_key, self.comparison_key)
-        return ComparisonReport.read(path) if path.is_file() else None
+        # Through workflow, so a comparison of an earlier parse counts as absent here too.
+        return stored_comparison(self.layout, document_id, self.extractor_key, self.comparison_key)
 
     def extraction(self, document_id: str, backend: Backend) -> LaneExtraction | None:
         # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.

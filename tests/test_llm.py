@@ -15,11 +15,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pydantic import BaseModel
 
 from paperfacts.config import DEFAULT_RETRY_ATTEMPTS as RETRY_ATTEMPTS
 from paperfacts.config import DEFAULT_RETRY_BACKOFF_S as RETRY_BACKOFF_S
-from paperfacts.errors import LlmError
-from paperfacts.llm import OpenAICompatibleClient
+from paperfacts.errors import LlmError, LlmResponseError
+from paperfacts.llm import MAX_RETRY_AFTER_S, OpenAICompatibleClient, complete_validated
 from support.http import make_client, recording_client
 
 BASE_URL = "https://api.example.com/v1"
@@ -552,6 +553,121 @@ def test_a_failed_call_leaves_no_cache_entry(tmp_path: Path):
         llm.complete_json(system="S", user="U")
 
     assert not cache_dir.exists()
+
+
+# ---- Only validated answers are cached ------------------------------------------------------------
+
+
+class _Answer(BaseModel):
+    ok: int
+
+
+def _chat(content: str, finish_reason: str | None = "stop") -> dict:
+    body = chat_response(content)
+    body["choices"][0]["finish_reason"] = finish_reason
+    return body
+
+
+def _validated(llm: OpenAICompatibleClient):
+    return complete_validated(
+        llm, _Answer, system="S", user="U", repair=lambda previous, error: f"fix {previous}: {error[:20]}"
+    )
+
+
+def test_a_reply_cut_off_at_max_tokens_is_an_error_and_is_not_cached(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    llm = make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": ', "length")), cache_dir=cache_dir)
+
+    # A response error, so sample matching records a failed matching instead of failing the paper.
+    with pytest.raises(LlmResponseError, match="max_tokens"):
+        llm.complete_json(system="S", user="U")
+
+    assert not cache_dir.exists()
+
+
+def test_content_that_is_not_text_is_an_llm_error():
+    llm = make_llm(lambda request: httpx.Response(200, json=chat_response([{"type": "text", "text": "{}"}])))
+
+    with pytest.raises(LlmError, match="non-text"):
+        llm.complete_json(system="S", user="U")
+
+
+def test_an_answer_the_caller_rejects_is_returned_but_not_cached(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    llm = make_llm(cache_dir=cache_dir)
+
+    result = llm.complete_json(system="S", user="U", accept=lambda text: False)
+
+    assert result.text == '{"samples": []}'
+    assert not cache_dir.exists()
+
+
+def test_two_invalid_answers_leave_nothing_behind_so_the_next_run_can_succeed(tmp_path: Path):
+    # The review's scenario: one question answered badly twice used to be cached both times, so every later
+    # run replayed the failure until --force re-asked the whole paper.
+    cache_dir = tmp_path / "llm_cache"
+    bad = make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": "no"}')), cache_dir=cache_dir)
+    with pytest.raises(LlmResponseError):
+        _validated(bad)
+    assert not cache_dir.exists()
+
+    good_requests: list[httpx.Request] = []
+
+    def good(request: httpx.Request) -> httpx.Response:
+        good_requests.append(request)
+        return httpx.Response(200, json=_chat('{"ok": 1}'))
+
+    parsed, _, _ = _validated(make_llm(good, cache_dir=cache_dir))
+
+    assert parsed.ok == 1
+    assert len(good_requests) == 1
+    assert [path.name for path in cache_dir.iterdir()] == [f"{cache_key_of(bad, 'S', 'U')}.json"]
+
+
+def test_the_repair_answer_that_validated_is_the_one_cached(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        user = json.loads(request.content)["messages"][1]["content"]
+        return httpx.Response(200, json=_chat('{"ok": 2}' if user.startswith("fix") else "{}"))
+
+    parsed, _, _ = _validated(make_llm(handler, cache_dir=cache_dir))
+
+    assert parsed.ok == 2
+    entries = [json.loads(path.read_text(encoding="utf-8"))["text"] for path in cache_dir.iterdir()]
+    assert entries == ['{"ok": 2}']
+
+
+def test_an_invalid_answer_already_in_the_cache_is_asked_again_not_replayed(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_chat('{"ok": 3}'))
+
+    llm = make_llm(handler, cache_dir=cache_dir)
+    cache_dir.mkdir(parents=True)
+    poisoned = cache_dir / f"{cache_key_of(llm, 'S', 'U')}.json"
+    poisoned.write_text(json.dumps({"text": '{"ok": "poison"}', "usage": {}}), encoding="utf-8")
+
+    parsed, _, _ = _validated(llm)
+
+    assert parsed.ok == 3
+    assert len(requests) == 1  # the first question again, not a repair of the poisoned answer
+    assert json.loads(poisoned.read_text(encoding="utf-8"))["text"] == '{"ok": 3}'
+    assert _validated(llm)[0].ok == 3
+    assert len(requests) == 1  # now a genuine cache hit
+
+
+def test_a_huge_retry_after_is_capped():
+    sleep = FakeSleep()
+    llm = make_llm(lambda request: httpx.Response(429, text="later", headers={"Retry-After": "3600"}), sleep=sleep)
+
+    with pytest.raises(LlmError, match="429"):
+        llm.complete_json(system="S", user="U")
+
+    assert sleep.delays == [MAX_RETRY_AFTER_S] * (RETRY_ATTEMPTS - 1)
 
 
 # ---- Vision requests -----------------------------------------------------------------------

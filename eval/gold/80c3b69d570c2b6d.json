@@ -1,0 +1,562 @@
+{
+  "doc_id": "80c3b69d570c2b6d",
+  "sha256": "80c3b69d570c2b6d88626e9b64a77a0a0e1d811f64de67644dfb658b35c82faf",
+  "title": "Zhao et al. 2026, Ultra-thin cerium-doped indium oxide TCO films with high carrier mobility (JMSE 37:1273)",
+  "notes": [
+    "Deposition is reactive plasma deposition (RPD), not magnetron sputtering; fields are filled as for sputtering.",
+    "Films: 100 nm ITO, 100 nm ICO, 30 nm ICO at 0.6% and 1% H2; each as-deposited and annealed (180 °C, 50 min, air).",
+    "Carrier transport speed (14.6 / 49 mm/s) is a linear speed, not a rotation_speed.",
+    "No substrate heating is used (no number); base pressure 4e-5 Pa is not a working pressure.",
+    "Table 1 rows other than 'ICO (this work)' are literature values.",
+    "O2/H2 percentages are shares of the reactive gas; the paper does not say relative to what."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "In2O3:CeO2 = 99:1 wt%",
+        "raw": "Cylindrical ITO (In2O3:SnO2 = 90:10 wt%) and ICO (In2O3:CeO2 = 99:1 wt%) targets",
+        "page": 1,
+        "ambiguous": true,
+        "why": "two targets (ITO and ICO) for two film families; the field holds one composition",
+        "accept": [
+          "99\\s*:\\s*1",
+          "CeO",
+          "90\\s*:\\s*10"
+        ]
+      }
+    ],
+    "inch": [
+      {
+        "value": 1.2598425196850394,
+        "raw": "targets with dimensions of Ø32 mm × 40 mm",
+        "page": 1,
+        "ambiguous": true,
+        "why": "cylindrical RPD tablet, diameter × length"
+      }
+    ]
+  },
+  "series": {
+    "ar_flow_rate": [
+      {
+        "value": 40,
+        "raw": "with a stable Ar flow of 40 sccm supplied to the plasma gun",
+        "page": 1
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "ITO-100nm-asdep",
+      "description": "100 nm RPD ITO, 10% O2 / 0.6% H2, as deposited",
+      "match": {
+        "fields": {
+          "thickness": 100
+        },
+        "label": "(?=.*\\bITO\\b)(?=.*as-?dep)"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 10,
+            "raw": "Using an optimized reactive gas mixture of 10% O2 and 0.6% H2, eight ITO film samples",
+            "page": 2,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 0.6,
+            "raw": "a mixture of 10% O2 and 0.6% H2",
+            "page": 2,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 100,
+            "raw": "eight ITO film samples were fabricated with a thickness of approximately 100 nm",
+            "page": 2
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 4,
+            "raw": "For ITO or ICO films with a target thickness of 100 nm, the process time required was approximately 4 min",
+            "page": 2
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88.6,
+            "raw": "the average transmittance reached 88.6%",
+            "page": 3,
+            "condition": "average 400-800 nm",
+            "ambiguous": true,
+            "why": "annealing state of the measured film not stated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ITO-100nm-annealed",
+      "description": "100 nm RPD ITO, annealed 180 °C",
+      "match": {
+        "fields": {
+          "thickness": 100
+        },
+        "label": "(?=.*\\bITO\\b)(?=.*anneal)",
+        "label_not": "as-?dep"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 10,
+            "raw": "Using an optimized reactive gas mixture of 10% O2 and 0.6% H2, eight ITO film samples",
+            "page": 2,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 0.6,
+            "raw": "a mixture of 10% O2 and 0.6% H2",
+            "page": 2,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 100,
+            "raw": "eight ITO film samples were fabricated with a thickness of approximately 100 nm",
+            "page": 2
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 180,
+            "raw": "The resulting films were then annealed in air at 180 °C for 50 min",
+            "page": 2
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 50,
+            "raw": "annealed in air at 180 °C for 50 min in a rapid thermal process furnace",
+            "page": 2
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 4,
+            "raw": "For ITO or ICO films with a target thickness of 100 nm, the process time required was approximately 4 min",
+            "page": 2
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.000186,
+            "raw": "As presented in Fig. 2a, the average resistivity was 1.86 × 10−4 Ω·cm",
+            "page": 2,
+            "why": "text gives no state; Fig. 2a places ~1.8e-4 on the annealed ITO curve (as-deposited is ~3.5e-4)"
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 88.6,
+            "raw": "the average transmittance reached 88.6%",
+            "page": 3,
+            "condition": "average 400-800 nm",
+            "ambiguous": true,
+            "why": "annealing state of the measured film not stated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-100nm-asdep",
+      "description": "100 nm RPD ICO, 6% O2 / 0.6% H2, as deposited",
+      "match": {
+        "fields": {
+          "thickness": 100
+        },
+        "label": "(?=.*(ICO|Ce))(?=.*100\\s*nm)(?=.*as-?dep)"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "an optimized reactive gas ratio of 6% O2 and 0.6% H2",
+            "page": 3,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 0.6,
+            "raw": "6% O2 and 0.6% H2",
+            "page": 3,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 100,
+            "raw": "eight ITO film samples were fabricated with a thickness of approximately 100 nm",
+            "page": 2
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 4,
+            "raw": "For ITO or ICO films with a target thickness of 100 nm, the process time required was approximately 4 min",
+            "page": 2
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00048,
+            "raw": "The as-deposited films exhibited an average resistivity of 4.8 × 10−4 Ω·cm",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91.9,
+            "raw": "exhibited favorable optical properties, with an average transmittance of 91.9%",
+            "page": 3,
+            "condition": "average 400-800 nm",
+            "ambiguous": true,
+            "why": "annealing state not stated"
+          },
+          {
+            "value": 92.2,
+            "raw": "and a peak value of 92.2% over the wavelength range of 400-800 nm",
+            "page": 3,
+            "condition": "peak 400-800 nm",
+            "ambiguous": true,
+            "why": "peak value; annealing state not stated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-100nm-annealed",
+      "description": "100 nm RPD ICO, annealed 180 °C",
+      "match": {
+        "fields": {
+          "thickness": 100
+        },
+        "label": "(?=.*(ICO|Ce))(?=.*100\\s*nm)(?=.*anneal)",
+        "label_not": "as-?dep"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "an optimized reactive gas ratio of 6% O2 and 0.6% H2",
+            "page": 3,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 0.6,
+            "raw": "6% O2 and 0.6% H2",
+            "page": 3,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 100,
+            "raw": "eight ITO film samples were fabricated with a thickness of approximately 100 nm",
+            "page": 2
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 180,
+            "raw": "The resulting films were then annealed in air at 180 °C for 50 min",
+            "page": 2
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 50,
+            "raw": "annealed in air at 180 °C for 50 min in a rapid thermal process furnace",
+            "page": 2
+          }
+        ],
+        "sputtering_time": [
+          {
+            "value": 4,
+            "raw": "For ITO or ICO films with a target thickness of 100 nm, the process time required was approximately 4 min",
+            "page": 2
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00022,
+            "raw": "which dropped to 2.2 × 10−4 Ω·cm upon annealing at 180 °C in air",
+            "page": 3
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 91.9,
+            "raw": "exhibited favorable optical properties, with an average transmittance of 91.9%",
+            "page": 3,
+            "condition": "average 400-800 nm",
+            "ambiguous": true,
+            "why": "annealing state not stated"
+          },
+          {
+            "value": 92.2,
+            "raw": "and a peak value of 92.2% over the wavelength range of 400-800 nm",
+            "page": 3,
+            "condition": "peak 400-800 nm",
+            "ambiguous": true,
+            "why": "peak value; annealing state not stated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-30nm-0.6H2-asdep",
+      "description": "30 nm RPD ICO, 0.6% H2, as deposited",
+      "match": {
+        "fields": {
+          "thickness": 30
+        },
+        "label": "(?=.*30\\s*nm)(?=.*0\\.6\\s*%?\\s*H)(?=.*as-?dep)"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "maintaining the oxygen concentration at 6%",
+            "page": 4
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 0.6,
+            "raw": "6% O2 and 0.6% H2",
+            "page": 3,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 30,
+            "raw": "High-performance 30 nm ICO films were successfully fabricated",
+            "page": 4
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00051,
+            "raw": "When the hydrogen volume was 0.6%, the average resistivity of the ICO films was 5.1 × 10−4 Ω·cm, which increased slightly after annealing",
+            "page": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-30nm-0.6H2-annealed",
+      "description": "30 nm RPD ICO, 0.6% H2, annealed 180 °C",
+      "match": {
+        "fields": {
+          "thickness": 30
+        },
+        "label": "(?=.*30\\s*nm)(?=.*0\\.6\\s*%?\\s*H)(?=.*anneal)",
+        "label_not": "as-?dep"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "maintaining the oxygen concentration at 6%",
+            "page": 4
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 0.6,
+            "raw": "6% O2 and 0.6% H2",
+            "page": 3,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 30,
+            "raw": "High-performance 30 nm ICO films were successfully fabricated",
+            "page": 4
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 180,
+            "raw": "The resulting films were then annealed in air at 180 °C for 50 min",
+            "page": 2
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 50,
+            "raw": "annealed in air at 180 °C for 50 min in a rapid thermal process furnace",
+            "page": 2
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 92.1,
+            "raw": "Within the 400–1100 nm wavelength range, the average optical transmittance reached 92.1%",
+            "page": 5,
+            "condition": "average 400-1100 nm",
+            "why": "Fig. 3 caption: transmittance after annealing"
+          },
+          {
+            "value": 96.6,
+            "raw": "In the near-infrared region (800–1100 nm), the average transmittance was 96.6%",
+            "page": 5,
+            "condition": "average 800-1100 nm"
+          },
+          {
+            "value": 92.4,
+            "raw": "with a peak value of 92.4%",
+            "page": 5,
+            "condition": "peak 400-1100 nm",
+            "ambiguous": true,
+            "why": "peak value"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-30nm-1H2-asdep",
+      "description": "30 nm RPD ICO, 1% H2, as deposited",
+      "match": {
+        "fields": {
+          "thickness": 30
+        },
+        "label": "(?=.*30\\s*nm)(?=.*\\b1\\s*%?\\s*H)(?=.*as-?dep)"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "maintaining the oxygen concentration at 6%",
+            "page": 4
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 1,
+            "raw": "increasing the hydrogen volume from 0.6% to 1%",
+            "page": 4,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 30,
+            "raw": "High-performance 30 nm ICO films were successfully fabricated",
+            "page": 4
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00047,
+            "raw": "The average resistivity decreased to 4.7 × 10−4 Ω·cm",
+            "page": 5,
+            "ambiguous": true,
+            "why": "annealing state of this average is not stated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ICO-30nm-1H2-annealed",
+      "description": "30 nm RPD ICO, 1% H2, annealed 180 °C",
+      "match": {
+        "fields": {
+          "thickness": 30
+        },
+        "label": "(?=.*30\\s*nm)(?=.*\\b1\\s*%?\\s*H)(?=.*anneal)",
+        "label_not": "as-?dep"
+      },
+      "fields": {
+        "o2_ratio": [
+          {
+            "value": 6,
+            "raw": "maintaining the oxygen concentration at 6%",
+            "page": 4
+          }
+        ],
+        "h2_ratio": [
+          {
+            "value": 1,
+            "raw": "increasing the hydrogen volume from 0.6% to 1%",
+            "page": 4,
+            "condition": "share of reactive gas; basis not stated"
+          }
+        ],
+        "thickness": [
+          {
+            "value": 30,
+            "raw": "High-performance 30 nm ICO films were successfully fabricated",
+            "page": 4
+          }
+        ],
+        "annealing_temperature": [
+          {
+            "value": 180,
+            "raw": "The resulting films were then annealed in air at 180 °C for 50 min",
+            "page": 2
+          }
+        ],
+        "annealing_time": [
+          {
+            "value": 50,
+            "raw": "annealed in air at 180 °C for 50 min in a rapid thermal process furnace",
+            "page": 2
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.00047,
+            "raw": "The average resistivity decreased to 4.7 × 10−4 Ω·cm; Table 1: 4.7",
+            "page": 5,
+            "ambiguous": true,
+            "why": "annealing state of this average is not stated"
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 93.2,
+            "raw": "the average transmittance increasing to 93.2% (400–1100 nm)",
+            "page": 5,
+            "condition": "average 400-1100 nm",
+            "why": "Fig. 3c: after annealing"
+          },
+          {
+            "value": 97.3,
+            "raw": "The average NIR transmittance in the 800–1100 nm range reached 97.3%",
+            "page": 5,
+            "condition": "average 800-1100 nm"
+          },
+          {
+            "value": 94.0,
+            "raw": "the peak value achieving 94.0%; Table 1 lists 94.0 as 'Average Transparent 400-1100 nm'",
+            "page": 5,
+            "condition": "400-1100 nm",
+            "ambiguous": true,
+            "why": "text calls 94.0 the peak, Table 1 calls it the average"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -118,7 +118,10 @@ and the cloudflared tunnel run as `systemctl --user` units (`paperfacts.service`
 `paperfacts-tunnel.service`), and the venv is an editable install, so a deployment is pull, test, restart,
 verify: `scripts/deploy.sh --pull --rerun` does exactly that and then re-runs, from the LLM cache, every
 document whose stored results the new cache keys displaced. `scripts/deploy.sh --help` lists the rest
-(`--check` reports whether the running service is stale).
+(`--check` reports whether the running service is stale). It refuses to restart only while a job is queued or
+running (`GET /api/jobs`; `--force` overrides), since a restart drops those; a document that was never run or
+failed for good does not block it. The web password is read from `.env` the way the service reads it, and
+reaches `curl` on stdin, never on its command line.
 
 **The current server has a single GPU (id 0).** All three services default to it; GPU ids are set per
 service by env var (Docker Compose's `device_ids`, or `CUDA_VISIBLE_DEVICES` for the host scripts), so a
@@ -346,7 +349,7 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `max_in_flight` | How many model requests, text and vision, the whole process has on the wire at once. Default 8 |
 | `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
 | `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
-| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured |
+| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured, up to 120 s |
 | `retry_backoff_s` | Default 2.0 |
 
 `reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
@@ -435,7 +438,7 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `parsers.paddle_render_dpi` | DPI pages are rasterised at for PaddleOCR-VL. Default 200. The subprocess and HTTP paths must agree or their pixel coordinates are not comparable |
 | `parsers.paddle_vl_backend` / `paddle_vl_server_url` / `paddle_vl_model_name` | Hand PaddleOCR-VL's vision stage to an external server, as `dev_up.sh` does with MLX |
 | `parsers.subprocess_timeout_s` | Default 3600: a first subprocess run downloads weights |
-| `parsers.http_timeout_s` | Default 900 |
+| `parsers.http_timeout_s` | Default 900. Per request; a timeout, a connection error or a 5xx is retried twice with a 5 s / 10 s backoff before the parse fails (PaddleOCR-VL retries the one page; MinerU re-sends the whole paper, but not after a read timeout, when the service is most likely still parsing it) |
 | `parsers.uv_bin` | The `uv` executable used to launch the runner scripts |
 | `server.host` / `server.port` | Defaults `127.0.0.1` and 8000 |
 | `server.max_upload_mb` | Default 200 |
@@ -620,6 +623,17 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Comparison (`comparison_key`) | the whole field schema including the tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
+
+Extractions and comparisons also record the parse they came from (a hash of the artifact's blocks).
+After a re-parse, a stored lane or comparison of the old parse is a miss and is derived again: source ids
+are positional, so the old citations would point at whatever block now has that ordinal. Re-deriving is
+free from the LLM cache whenever the rendered prompts are byte-identical. Files written before the hash was
+recorded have none and are read as before.
+
+Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
+costs one repair request and is never written, and an invalid answer already in the cache is asked again
+rather than replayed. A sample matching that failed (the model answered badly twice) is shown for that run
+but not stored, so the next run asks again instead of serving the failure until `--force`.
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
 serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own

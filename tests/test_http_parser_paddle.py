@@ -42,6 +42,14 @@ def paddle_response(**result_overrides: Any) -> dict[str, Any]:
     return {"result": {"layoutParsingResults": [result]}}
 
 
+@pytest.fixture(autouse=True)
+def backoffs(monkeypatch) -> list[float]:
+    """The retry backoffs asked for, recorded instead of slept."""
+    delays: list[float] = []
+    monkeypatch.setattr("paperfacts.parsers.time.sleep", delays.append)
+    return delays
+
+
 @pytest.fixture
 def paddle() -> tuple[PaddleHttpParser, list[httpx.Request]]:
     client, requests = recording_client(lambda request: httpx.Response(200, json=paddle_response()))
@@ -255,6 +263,67 @@ def test_transport_level_failure_names_the_failing_page(tmp_path: Path, document
 
     assert "page 0" in excinfo.value.detail
     assert "ReadTimeout" in excinfo.value.detail
+
+
+def test_a_transient_failure_costs_one_page_retry_not_the_paper(
+    tmp_path: Path, document: DocumentInput, backoffs: list[float]
+):
+    # The review's scenario: a 503 or a timeout at page k used to throw away pages 0..k-1.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return httpx.Response(503, text="busy")
+        if calls["n"] == 3:
+            raise httpx.ReadTimeout("slow")
+        return httpx.Response(200, json=paddle_response())
+
+    raw = PaddleHttpParser("http://svc", client=make_client(handler), render_dpi=100).parse(document, tmp_path / "raw")
+
+    pages = raw.meta.source.parsed_page_count
+    assert calls["n"] == pages + 2
+    assert backoffs == [parsers.HTTP_RETRY_BACKOFF_S, parsers.HTTP_RETRY_BACKOFF_S * 2]
+
+
+def test_retries_are_bounded(tmp_path: Path, document: DocumentInput, backoffs: list[float]):
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(502, text="bad gateway")
+
+    parser = PaddleHttpParser("http://svc", client=make_client(handler), render_dpi=100)
+
+    with pytest.raises(ParserError, match=f"after {parsers.HTTP_RETRY_ATTEMPTS} attempts"):
+        parser.parse(document, tmp_path / "raw")
+
+    assert calls["n"] == parsers.HTTP_RETRY_ATTEMPTS
+    assert len(backoffs) == parsers.HTTP_RETRY_ATTEMPTS - 1
+
+
+def test_a_client_error_is_not_retried(tmp_path: Path, document: DocumentInput, backoffs: list[float]):
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(400, text="bad image")
+
+    with pytest.raises(ParserError, match="HTTP 400"):
+        PaddleHttpParser("http://svc", client=make_client(handler), render_dpi=100).parse(document, tmp_path / "raw")
+
+    assert calls["n"] == 1 and backoffs == []
+
+
+def test_the_parser_closes_the_client_it_made_but_not_one_it_was_given():
+    own = PaddleHttpParser("http://svc")
+    given = make_client(lambda request: httpx.Response(200))
+
+    with own, PaddleHttpParser("http://svc", client=given):
+        pass
+
+    assert own.client.is_closed
+    assert not given.is_closed
 
 
 def test_missing_markdown_in_the_response_writes_an_empty_page_markdown(tmp_path: Path, document: DocumentInput):
