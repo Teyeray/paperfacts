@@ -24,6 +24,12 @@ PDF_POINTS_PER_INCH = 72
 # job thread; concurrent calls corrupt pdfium's global state, after which every later open of the same PDF
 # fails with "Data format error" until the process restarts. One process-wide lock serialises every call;
 # a page renders in a few hundred milliseconds, so this costs nothing noticeable.
+#
+# Freeing is a call too. Every page and bitmap is closed explicitly inside the lock: left to the garbage
+# collector, one would be freed by whichever thread happened to collect it, outside the lock and in the middle
+# of another document's render. With several documents processed at once that crashed the whole process
+# (SIGTRAP, core dumped), and pypdfium2's "Weakref ... was not cleaned up from ObjectTracker" warnings were the
+# sign of it.
 _PDFIUM_LOCK = threading.Lock()
 
 
@@ -39,13 +45,20 @@ def _open(pdf_path: Path) -> Iterator[pdfium.PdfDocument]:
 
 def read_geometry(pdf_path: Path) -> DocumentGeometry:
     """Every page's size, in PDF points."""
+    sizes: list[tuple[float, float]] = []
     with _open(pdf_path) as document:
-        pages = tuple(
+        for index in range(len(document)):
+            page = document[index]
+            try:
+                sizes.append(page.get_size())
+            finally:
+                page.close()
+    return DocumentGeometry(
+        pages=tuple(
             PageGeometry(index=index, width_pt=width_pt, height_pt=height_pt)
-            for index in range(len(document))
-            for width_pt, height_pt in (document[index].get_size(),)
+            for index, (width_pt, height_pt) in enumerate(sizes)
         )
-    return DocumentGeometry(pages=pages)
+    )
 
 
 def render_page(pdf_path: Path, page_index: int, *, dpi: int) -> Image.Image:
@@ -55,7 +68,16 @@ def render_page(pdf_path: Path, page_index: int, *, dpi: int) -> Image.Image:
     with _open(pdf_path) as document:
         if not 0 <= page_index < len(document):
             raise IndexError(f"page index {page_index} out of range, document has {len(document)} pages")
-        return document[page_index].render(scale=dpi / PDF_POINTS_PER_INCH).to_pil().convert("RGB")
+        page = document[page_index]
+        try:
+            bitmap = page.render(scale=dpi / PDF_POINTS_PER_INCH)
+            try:
+                # to_pil() shares the bitmap's buffer; the copy is what outlives the bitmap being closed.
+                return bitmap.to_pil().convert("RGB").copy()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
 
 
 def render_page_cached(pdf_path: Path, page_index: int, *, dpi: int, cache_dir: Path) -> Path:
