@@ -23,7 +23,7 @@ from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.keys import ExtractionOptions, extractor_key
-from paperfacts.prompts import field_system_prompt, inventory_system_prompt
+from paperfacts.prompts import extraction_system_prompt, field_system_prompt, inventory_system_prompt
 from support.extraction import lane_options, make_artifact
 from support.factories import make_block
 from support.llm import FakeLlmClient
@@ -798,6 +798,16 @@ def test_the_field_question_asks_for_the_series_flag_and_says_when_it_is_true():
     assert '"applies_to_all_samples"' in system
     assert "applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample" in system
     assert "`sample_id` must be null" in system
+
+
+def test_both_modes_ask_for_a_subset_value_once_per_sample_of_the_subset():
+    # s41598: "all films deposited at 100 °C" came back as one entry with no sample id and no series flag, and
+    # all 36 samples lost their substrate temperature. Both modes must say the same thing about a subset.
+    rule = "report it once per sample of the subset, each time under that sample's own id"
+
+    assert rule in field_system_prompt()
+    assert rule in extraction_system_prompt()
+    assert "{subset_scope}" not in field_system_prompt() + extraction_system_prompt()
 
 
 def test_a_series_value_is_written_onto_every_sample_keeping_its_citation():
