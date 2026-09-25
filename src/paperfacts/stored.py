@@ -12,8 +12,6 @@ import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from paperfacts.compare import ComparisonReport
 from paperfacts.dataset import DatasetPayload
 from paperfacts.models import BACKENDS, Backend, ParsedArtifact
@@ -166,8 +164,8 @@ def _extract_stage(path: Path, backend: Backend) -> Stage:
     name = f"extract:{backend}"
     try:
         unanswered = _by_stamp(path, _unanswered_fields)
-    except (OSError, ValueError):
-        unanswered = ()  # the file is there; what it holds is for the lane view to report
+    except (OSError, ValueError):  # pydantic's ValidationError is a ValueError
+        return Stage(name=name, status="failed", detail="the stored extraction is unreadable; run it again")
     if unanswered is None:
         return Stage(name=name, status="pending")
     if unanswered:
@@ -182,7 +180,7 @@ def is_finished(layout: DataLayout, document_id: str, *, extractor_key: str, com
     and so is one whose run was not kept (``workflow.run_document`` stores no dataset for it). A dataset of
     other parses (:func:`stored_dataset`) or one that cannot be read is unfinished too: running the paper
     again is what replaces it."""
-    try:
-        return stored_dataset(layout, document_id, extractor_key, comparison_key) is not None
-    except (OSError, ValidationError):
-        return False
+    # The rule and the cache stored_stages' export mark uses, so the two can never disagree.
+    return _current(
+        layout, document_id, layout.dataset_json_path(document_id, extractor_key, comparison_key), _dataset_hashes
+    )

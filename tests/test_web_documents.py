@@ -378,6 +378,17 @@ def test_a_lane_with_an_unanswered_question_shows_as_a_failed_extraction(library
     assert stage(library, "extract:paddleocr_vl").status == "pending"
 
 
+def test_an_unreadable_lane_does_not_show_as_done(library: Library):
+    path = library.layout.extraction_path(DOC_SHA, "mineru", library.extractor_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ torn", encoding="utf-8")
+
+    extract = stage(library, "extract:mineru")
+
+    assert extract.status == "failed"
+    assert "unreadable" in extract.detail
+
+
 def test_results_of_an_earlier_parse_show_as_pending_stages(library: Library):
     # The same rule as /report, /dataset and run all: a comparison or table of another parse is not done.
     old = seed_artifact(library, "mineru", blocks=(make_block(content="old"),))
