@@ -335,6 +335,8 @@ class SubprocessParser(Parser):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                # A runner printing non-UTF-8 bytes must not turn a clean exit into a UnicodeDecodeError.
+                errors="replace",
                 env=merged_env,
                 # `uv run` spawns the real parser as a grandchild, so killing the direct child alone leaves
                 # a multi-gigabyte python process behind. Its own session makes the whole tree killable as
