@@ -122,6 +122,10 @@ this file is the part that is easy to get wrong.
 
 - `uv run pytest` — no models, no network, no real papers. Temporary PDFs are generated with pypdfium2.
 - `uv run pytest --run-parser` — integration; needs both parser environments and their weights.
+- `tests/fixtures/corpus/` records every numeric value string and sample id of the real corpus with how
+  `parse_number` and `sample_key` read them. A change to either that moves a corpus reading fails
+  `test_corpus_strings.py`; if it is intended, re-run `tests/fixtures/corpus/generate.py <data_root>`,
+  review the JSON diff, and add the string to `INTENDED_VALUE_CHANGES` with the reason.
 - Coverage target ≥ 80% (`--cov=paperfacts`).
 
 ## Web interface
