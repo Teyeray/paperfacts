@@ -16,9 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.errors import LlmResponseError
 from paperfacts.llm import LlmClient, complete_validated
-from paperfacts.normalize import sample_key
 from paperfacts.prompts import matching_system_prompt, matching_user_prompt, repair_prompt
-from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
+from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, sample_key
 
 logger = logging.getLogger(__name__)
 

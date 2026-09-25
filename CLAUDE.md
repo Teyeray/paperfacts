@@ -77,11 +77,10 @@ this file is the part that is easy to get wrong.
   the measurement that decided it.
 - A sample-level value the model cannot place on a sample goes to `LaneExtraction.unattributed`: kept,
   grounded and shown, but compared with nothing. Never attach it to a plausible neighbour. Sample ids are
-  keyed by `normalize.sample_key` everywhere samples meet (attribution, the pass vote, exact cross-lane
+  keyed by `records.sample_key` everywhere samples meet (attribution, the pass vote, exact cross-lane
   pairing, both modes' `records.clean_samples`); never by `normalize_key`, which deletes Greek letters and
-  folds a case-distinguished suffix. The two
-  exceptions are explicit, never inferred: a paper with exactly one sample owns every unplaced value, and a
-  value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
+  folds a case-distinguished suffix. The two exceptions are explicit, never inferred: a paper with exactly
+  one sample owns every unplaced value, and a value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
   every sample with `series=True`.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.

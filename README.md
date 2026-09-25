@@ -408,10 +408,11 @@ pass's values at temperature 0. Two passes are therefore a reproducibility filte
 not a way to find more.
 
 Sample ids are keyed by one rule wherever samples meet: placing a value on a sample, merging passes, and
-pairing the two lanes before the model is asked. Spaces, hyphens and punctuation only separate tokens, and
-word case is folded, so `O2-100 sccm` and `O₂ 100sccm` are one sample. Greek letters, decimals, a sign and
-the case of a single-letter suffix are kept, so `α-ITO` and `β-ITO`, or `ITO-a` and `ITO-A`, stay two.
-A LaTeX `\alpha` counts as `α`, so both lanes key the one sample alike.
+pairing the two lanes before the model is asked. Spaces, hyphens, underscores and punctuation are dropped
+(only two adjacent numbers keep a boundary) and word case is folded, so `O2-100 sccm` and `O₂ 100sccm`, or
+`WOx` and `WO_x`, are one sample. Greek letters, decimals, a leading or `=`-sign and the case of a trailing
+single-letter suffix are kept, so `α-ITO` and `β-ITO`, or `ITO-a` and `ITO-A`, stay two. A LaTeX `\alpha`
+(or `\varepsilon`) counts as the letter, so both lanes key the one sample alike.
 
 ### `figures`
 

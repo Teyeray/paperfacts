@@ -19,6 +19,8 @@ sample list through :func:`clean_samples` and place a whole-series value through
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol, Self
@@ -27,7 +29,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.fields import FIELD_BY_NAME, FieldSpec
 from paperfacts.models import Backend
-from paperfacts.normalize import sample_key
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,53 @@ class SampleRecord(BaseModel):
 
     def get(self, name: str) -> FieldValue | None:
         return next((f for f in self.fields if f.field == name), None)
+
+
+# ---- Sample identity ----------------------------------------------------------------------------
+# A sample id is a name, not a value, and the letters in it carry identity: "α-ITO" and "β-ITO" are two
+# films, "ITO-a" and "ITO-A" two samples of a paper that uses both. normalize_key's whitelist deletes the
+# Greek letter and lower-cases the suffix, which merged such pairs and put the second one's values on the
+# first. So ids have their own rule, and it lives here, beside the records it identifies:
+#   - tokens are runs of letters (any script: Greek, CJK), numbers (with a decimal point), a sign that starts
+#     the id or follows "=" ("T=-5"), and "%" or "+";
+#   - everything else -- spaces, hyphens, underscores, brackets, HTML tags -- is dropped, and the tokens are
+#     joined with nothing between them: "ITO-1", "ITO 1", "ITO_1" are one id, and so are "WOx" and MinerU's
+#     subscripted "WO_x". Only two numbers keep a boundary ("1-2" is not "12");
+#   - letters are case-folded ("Sample", "SAMPLE", "S1" vs "s1"), except a trailing single-letter suffix,
+#     which keeps its case: that is where papers distinguish samples by case ("ITO-a" vs "ITO-A");
+#   - a LaTeX Greek command is the letter it typesets (\\varepsilon too): MinerU writes "$\\alpha$-ITO" where
+#     PaddleOCR-VL reads "α-ITO", and the two lanes must key the one sample alike.
+_SAMPLE_TOKEN = re.compile(r"[^\W\d_]+|\d+(?:\.\d+)?|(?:(?<==)|^)\s*[-−](?=\d)|[%+]")
+_LATEX_LETTER = re.compile(r"\\(?:var)?([A-Za-z]+)")
+_HTML_TAG = re.compile(r"<[^>]*>")
+
+
+def _greek(match: re.Match[str]) -> str:
+    name = match.group(1)
+    case = "CAPITAL" if name[0].isupper() else "SMALL"
+    try:
+        return unicodedata.lookup(f"GREEK {case} LETTER {name.upper()}")
+    except KeyError:
+        return " "
+
+
+def sample_key(sample_id: str | None) -> str:
+    """The key two spellings of one sample id share, and two different samples never do. Used wherever
+    samples are keyed -- inventory de-duplication, value attribution, the vote across passes and the exact
+    pairing across lanes -- so both lanes, both modes and every pass apply the same rule."""
+    if not sample_id:
+        return ""
+    text = unicodedata.normalize("NFKC", _LATEX_LETTER.sub(_greek, _HTML_TAG.sub(" ", sample_id)))
+    tokens = [token.strip() for token in _SAMPLE_TOKEN.findall(text)]
+    suffix = len(tokens) > 1 and len(tokens[-1]) == 1 and tokens[-1].isalpha()
+    last = len(tokens) - 1
+    folded = [token if suffix and index == last else token.lower() for index, token in enumerate(tokens)]
+    key = ""
+    for index, token in enumerate(folded):
+        if index and token[0].isdigit() and folded[index - 1][-1].isdigit():
+            key += " "
+        key += token.replace("−", "-")
+    return key
 
 
 class LaneExtraction(BaseModel):

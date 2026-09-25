@@ -46,7 +46,7 @@ from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import ExtractionOptions, extraction_schema_fingerprint, extractor_key
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
-from paperfacts.normalize import drop_implausible, sample_key
+from paperfacts.normalize import drop_implausible
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -71,6 +71,7 @@ from paperfacts.records import (
     clean_samples,
     place_on_every_sample,
     response_to_records,
+    sample_key,
 )
 from paperfacts.threads import ContextThreadPoolExecutor
 from paperfacts.voting import deduplicate, merge_passes
@@ -483,7 +484,7 @@ def passage_records(
 ) -> ExtractedRecords:
     """Assemble one pass of passage answers into records, placing each value on the sample it names.
 
-    Attribution is by :func:`~paperfacts.normalize.sample_key` -- the same key that pairs samples across
+    Attribution is by :func:`~paperfacts.records.sample_key` -- the same key that pairs samples across
     lanes -- so the model only has to repeat an id it was given. A sample-level value naming no sample, or
     one the inventory does not have, is kept in ``unattributed`` rather than attached to a plausible
     neighbour: an unplaced value is visible in the report, a misplaced one is indistinguishable from a real

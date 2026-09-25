@@ -13,7 +13,8 @@ import unicodedata
 import pytest
 
 from paperfacts.fields import FIELD_BY_NAME
-from paperfacts.normalize import canonical_category, delatex, normalize_key, normalize_text, sample_key, text_key
+from paperfacts.normalize import canonical_category, delatex, normalize_key, normalize_text, text_key
+from paperfacts.records import sample_key
 
 # ---- Superscripts: must be handled before NFKC ------------------------------------------------------
 
@@ -249,6 +250,7 @@ def test_the_tilde_operator_folds_to_an_ascii_tilde(raw):
         ("T=-5", "T=5"),
         ("样品1", "样品2"),
         ("ITO-1-2", "ITO-12"),
+        ("T=−5", "T=5"),
     ],
 )
 def test_sample_key_keeps_different_samples_apart(a, b):
@@ -264,6 +266,11 @@ def test_sample_key_keeps_different_samples_apart(a, b):
         ("O2-100 sccm", "O₂ 100sccm"),
         ("Film #2", "film 2"),
         ("$\\alpha$-ITO", "α-ITO"),  # MinerU's LaTeX and PaddleOCR-VL's Unicode for one sample
+        ("WOx/NbOy-AR", "WO_x/NbO_y-AR"),  # MinerU subscripts; the corpus lost these pairs to the model
+        ("WOx", "WO<sub>x</sub>"),
+        ("$\\varepsilon$-Ga2O3", "ε-Ga2O3"),
+        ("ITO -1", "ITO-1"),  # a dash after a space is a separator, not a minus sign
+        ("In2O3:Sn", "IN2O3-SN"),  # only a trailing single letter keeps its case
         ("Sample\u2013A", "Sample-A"),
     ],
 )
