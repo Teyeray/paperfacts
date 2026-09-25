@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.fields import FIELD_BY_NAME, FieldSpec
 from paperfacts.models import Backend
+from paperfacts.storage import write_text_atomic
 
 # ---- Response models: field names are exactly the JSON keys the prompt asks for ----------------
 
@@ -212,8 +213,7 @@ class LaneExtraction(BaseModel):
         return next((s for s in self.samples if s.sample_id == sample_id), None)
 
     def write(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        write_text_atomic(path, self.model_dump_json(indent=2))
 
     @classmethod
     def read(cls, path: Path) -> Self:

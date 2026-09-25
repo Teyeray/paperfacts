@@ -39,7 +39,7 @@ from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import crop_region, png_bytes, read_geometry, render_page
 from paperfacts.records import LaneExtraction
-from paperfacts.storage import DataLayout, ensure_identity
+from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
 from paperfacts.threads import ContextThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ def parse_document(
         artifact, cache_hit, runtime_s = stored, True, 0.0
         if not markdown_path.is_file():
             # The artifact alone is not a complete document directory; re-render rather than leave a hole.
-            markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+            write_text_atomic(markdown_path, render_markdown(artifact.blocks))
     else:
         if not document.pdf_path.is_file():
             # Only the real parse path needs the file; say so plainly instead of failing inside the parser.
@@ -181,7 +181,7 @@ def parse_document(
         artifact = convert(raw, document, read_geometry(document.pdf_path))
         runtime_s = time.monotonic() - clock
         cache_hit = raw.cache_hit
-        markdown_path.write_text(render_markdown(artifact.blocks), encoding="utf-8")
+        write_text_atomic(markdown_path, render_markdown(artifact.blocks))
         artifact.write(artifact_path)  # last: its existence means parsed/ is complete
 
     report = ParseReport(

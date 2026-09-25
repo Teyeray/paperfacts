@@ -435,7 +435,8 @@ def test_a_crash_while_writing_the_markdown_leaves_no_artifact_json(
     original_write_text = Path.write_text
 
     def explode_on_markdown(self, data, *args, **kwargs):
-        if self == markdown_path:
+        # The Markdown is written atomically, so the write that fails is the one to its temp file beside it.
+        if self.parent == markdown_path.parent and markdown_path.name in self.name:
             raise OSError("disk full")
         return original_write_text(self, data, *args, **kwargs)
 

@@ -21,9 +21,11 @@ one shows every intermediate state of one paper:
 
     data/llm_cache/<sha256>.json      content-addressed cache of LLM requests, shared across documents
 
-A file's existence means its content is complete. ``meta.json`` and ``artifact.json`` earn that by being
-written last; page renders, ``identity.json`` and the uploaded PDF are written atomically (a temp file in
-the same directory, then ``os.replace``) because concurrent web requests may write them.
+A file's existence means its content is complete. ``meta.json`` earns that by being written last into a
+staging directory; every other stored file (artifacts, extractions, comparisons, datasets, readings,
+Markdown, overlays, page renders, ``identity.json``, the uploaded PDF) is written atomically (a temp file in
+the same directory, then ``os.replace``), because the web server reads them while a job may be writing them
+and a run killed mid-write must leave the previous file, not a torn one.
 """
 
 from __future__ import annotations
@@ -34,10 +36,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from paperfacts.models import Backend, DocumentInput
+if TYPE_CHECKING:
+    # Annotations only: `models` writes its artifacts through this module's atomic helpers, so importing it
+    # at runtime here would be a cycle.
+    from paperfacts.models import Backend, DocumentInput
 
 DOC_DIR_ID_LENGTH = 16
 

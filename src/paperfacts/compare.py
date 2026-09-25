@@ -38,6 +38,7 @@ from paperfacts.normalize import (
     text_key,
 )
 from paperfacts.records import FieldValue, LaneExtraction
+from paperfacts.storage import write_text_atomic
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]
 
@@ -106,8 +107,7 @@ class ComparisonReport(BaseModel):
     counts: ComparisonCounts = Field(default_factory=ComparisonCounts)
 
     def write(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        write_text_atomic(path, self.model_dump_json(indent=2))
 
     @classmethod
     def read(cls, path: Path) -> Self:
