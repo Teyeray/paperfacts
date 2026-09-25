@@ -545,7 +545,10 @@ A sample often has one field measured several ways -- transmittance averaged ove
 over 400-1800 nm -- and the dataset has one cell for it. The cell takes the measurement stated in the same
 block as the rest of the sample's row; failing that, the first entry of `condition_preference` that picks
 exactly one condition. An entry names the numbers a condition states, so `"400-800"` matches "average
-400–800 nm" and "from 400 to 800 nm" alike. If neither settles it the cell stays empty as
+400–800 nm" and "from 400 to 800 nm" alike. When one entry matches several conditions in a lane, a condition
+that says peak / max / maximum is set aside in favour of the rest (one that also says average / avg / mean /
+AVT counts as an average), and the entry is tried again. The shipped transmittance preference is 400-800,
+380-780, 400-700, 400-1100, then 550 nm. If none of that settles it the cell stays empty as
 `multiple_conditions`. Every measurement stays in the facts either way. The preference changes only which
 cell is committed, so editing it re-compares without re-extracting.
 

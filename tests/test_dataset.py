@@ -278,16 +278,57 @@ def test_without_a_row_sharing_condition_the_fields_preference_picks_the_cell():
 
 
 def test_a_preference_matching_two_conditions_in_one_lane_moves_on_to_the_next():
-    # Both name 400 and 800; the tie is not settled by the first entry, so 550 decides.
+    # Both name 400 and 800 and neither is a peak; the tie is not settled by the first entry, so 550 decides.
     fields = [
-        value("transmittance", "91.9", "%", condition="average 400-800 nm"),
-        value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
+        value("transmittance", "91.9", "%", condition="average 400-800 nm, as deposited"),
+        value("transmittance", "90.5", "%", condition="average 400-800 nm, after bending"),
         value("transmittance", "92.2", "%", condition="550 nm"),
     ]
 
     result = paired(fields, [])
 
     assert result.paper_row["transmittance"] == 92.2
+
+
+def test_inside_one_preference_entry_an_average_beats_a_peak():
+    fields = [
+        value("transmittance", "91.9", "%", condition="average 400-800 nm"),
+        value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
+        value("transmittance", "92.2", "%", condition="550 nm"),
+    ]
+
+    result = paired(fields, [value("transmittance", "91.9", "%", condition="avg. 400-800 nm", backend="paddleocr_vl")])
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (91.9, "agree")
+    assert "平均值优先于峰值" in row["detail"]
+
+
+def test_zhaos_average_over_400_to_1100_nm_is_preferred_over_the_other_ranges():
+    # Zhao ICO-30nm annealed: averaged over 400-1100 nm, over 800-1100 nm, and a peak value.
+    def lane(backend, average):
+        return [
+            value("transmittance", average, "%", condition="average 400-1100 nm", backend=backend),
+            value("transmittance", "96.6", "%", condition="average 800-1100 nm", backend=backend),
+            value("transmittance", "98.1", "%", condition="maximum transmittance", backend=backend),
+        ]
+
+    result = paired(lane("mineru", "92.1"), lane("paddleocr_vl", "92.1"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (92.1, "agree")
+    assert "优先条件 400-1100" in row["detail"]
+
+
+def test_two_peaks_inside_one_preference_entry_are_still_refused():
+    fields = [
+        value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
+        value("transmittance", "96.0", "%", condition="max 400-800 nm after anneal"),
+    ]
+
+    result = paired(fields, [])
+
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
 
 
 def test_the_other_lanes_value_for_a_condition_set_aside_cannot_vouch_for_the_chosen_one():

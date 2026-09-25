@@ -61,6 +61,9 @@ _PARENTHESISED_UNCERTAINTY = re.compile(
 )
 # The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
 _APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
+# How a condition says it is an average or a peak; used only to break a tie inside one preference entry.
+_AVERAGE_WORDS = re.compile(r"\b(?:average[ds]?|avg|mean|avt)\b", re.IGNORECASE)
+_PEAK_WORDS = re.compile(r"\b(?:peak|max|maximum)\b", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _DATA_COLUMNS = (
     ("document_id", "文档ID"),
@@ -350,6 +353,10 @@ def _one_condition(
        that is the one a reader expects in the cell.
     2. The field's ``condition_preference``, entry by entry: a condition matches an entry when it names
        exactly the entry's numbers, so "average 400–800 nm" and "from 400 to 800 nm" both match "400-800".
+       When an entry matches several conditions in one lane, a condition that says peak / max / maximum
+       (and not also average / avg / mean / AVT) is set aside and the entry tried again: "average 400-1100
+       nm" is the measurement a reader compares across papers, "peak in 400-1100 nm" is not. If that still
+       leaves several, the next entry is tried.
 
     Once a rule chooses, every lane is held to it: a lane keeps only its values the rule picks, so a lane
     quoting a different condition cannot vouch for the one chosen. A rule that picks two conditions in one
@@ -367,11 +374,26 @@ def _one_condition(
                 lambda value, numbers=numbers: condition_numbers(value.condition) == numbers,
             )
         )
+        rules.append(
+            (
+                f"按字段配置的优先条件 {entry} 选取，平均值优先于峰值",
+                lambda value, numbers=numbers: (
+                    condition_numbers(value.condition) == numbers and not _is_peak(value.condition)
+                ),
+            )
+        )
     for reason, picks in rules:
         kept = _held_to(trusted, picks)
         if kept:
             return kept, reason
     return None
+
+
+def _is_peak(condition: str | None) -> bool:
+    """Whether a condition names a peak rather than an average; one naming both ("the maximum average
+    transmittance") is an average."""
+    text = condition or ""
+    return bool(_PEAK_WORDS.search(text)) and not _AVERAGE_WORDS.search(text)
 
 
 def _held_to(
