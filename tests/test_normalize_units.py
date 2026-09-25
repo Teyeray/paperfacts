@@ -416,6 +416,58 @@ def test_a_power_of_ten_in_both_the_value_and_the_unit_is_refused():
     assert convert_to_canonical(spec, 19.4, "×10^-4 Ω-cm", value_text="19.4")[0] == pytest.approx(1.94e-3)
 
 
+# ---- A power of ten in a table header: on the quantity or on the unit ---------------------------------------
+# "ρ × 10^4 (Ω cm)" heads a column of ρ multiplied by 10^4: a cell of 6.8 is 6.8 × 10^-4 Ω·cm (Guillén 2006).
+# "ρ (10^-4 Ω cm)" heads a column in units of 10^-4 Ω·cm: a cell of 6.8 is again 6.8 × 10^-4 Ω·cm. The same
+# exponent sign means opposite things, so which one the header wrote decides the value.
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected"),
+    [
+        ("ρ × 10^4 (Ω cm)", 6.8e-4),  # Guillén 2006, Table 1
+        ("ρ×10⁴ (Ω·cm)", 6.8e-4),
+        (r"$\rho \times 10^{4}$ ($\Omega$ cm)", 6.8e-4),
+        ("ρ (10^4) (Ω cm)", 6.8e-4),
+        ("ρ (10^-4 Ω cm)", 6.8e-4),
+        ("(10^-4 Ω cm)", 6.8e-4),
+        ("×10^-4 Ω·cm", 6.8e-4),
+    ],
+)
+def test_a_header_factor_is_applied_by_the_convention_it_was_written_in(unit, expected):
+    number, canonical, note = convert("resistivity", 6.8, unit)
+
+    assert number == pytest.approx(expected)
+    assert canonical == "Ω·cm"
+    assert "scale factor" in note
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected"),
+    [("ρ (10^4)", (1e-4, "")), ("R_s × 10^-2", (100.0, "")), ("R_s × 10^-2 (Ω/sq)", (100.0, "Ω/sq"))],
+)
+def test_a_factor_on_the_quantity_divides_the_cell(unit, expected):
+    factor, rest = split_scale_factor(unit)
+
+    assert (factor, rest) == (pytest.approx(expected[0]), expected[1])
+
+
+@pytest.mark.parametrize("unit", ["Ω·cm × 10^-4", "ρ 10^4 Ω cm", "ρ, 10^4 (Ω cm)"])
+def test_a_header_factor_whose_convention_cannot_be_told_is_refused(unit):
+    # A unit before the factor, or a factor glued to the symbol with nothing saying how: dividing and
+    # multiplying are eight orders of magnitude apart, so neither is guessed.
+    number, canonical, note = convert("resistivity", 6.8, unit)
+
+    assert (number, canonical) == (None, None)
+    assert "ambiguous" in note
+
+
+def test_a_quantity_factor_and_a_value_with_its_own_power_of_ten_are_still_refused():
+    spec = FIELD_BY_NAME["resistivity"]
+
+    assert convert_to_canonical(spec, 6.8e-4, "ρ × 10^4 (Ω cm)", value_text="6.8 × 10^-4")[0] is None
+
+
 @pytest.mark.parametrize("unit", ["10mm", "10 mm"])
 def test_a_leading_number_without_a_caret_or_x10_is_not_a_factor(unit):
     # "10mm" is a length someone wrote into the unit column, not a scale factor; reading it as 10^10 would

@@ -793,7 +793,11 @@ different units, two values joined by "and", a list (`30, 40`), a number with it
 number (`550 nm: 85%`, `140 nm ATO/25 nm ITO`), or scientific notation with other numbers beside it. One
 duration written in two of its units, larger first, is one value: `3 h 30 min` is 210 min, `1 min 30 s` is
 1.5 min, in the comparison and the dataset cell alike (`1 h 90 min` is refused). Only a duration is a sum:
-elsewhere a second unit restates the value (`0.5 Pa 3.75 mTorr`), and that is refused. A range
+elsewhere a second unit restates the value (`0.5 Pa 3.75 mTorr`), and that is refused. A power of ten in a
+table header is copied by the model into `unit_raw` and applied by the code in the convention the header
+wrote: on the unit (`ρ (10^-4 Ω cm)`, `×10^-4 Ω·cm`) the cell is multiplied by it, on the quantity
+(`ρ × 10^4 (Ω cm)`) it is divided, so a cell of 6.8 is 6.8 × 10⁻⁴ Ω·cm either way. A header that says
+neither (`Ω·cm × 10^-4`), or a cell that carries its own power of ten as well, is refused. A range
 keeps its midpoint whether or not each bound repeats the unit (`80%–85%`, `500 °C to 530 °C`). A condition
 after the value (`550 nm at 80%`, `400 °C for 2 h`, `500 °C under N2`; `at`, `for`, `during`, `under`, `after`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
 unit exponent (`H2`, `cm^-3`) are set aside with a note, never read as the value. On a field whose bare

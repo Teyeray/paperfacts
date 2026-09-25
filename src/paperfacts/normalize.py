@@ -573,23 +573,47 @@ def check_canonical_units(specs: tuple[FieldSpec, ...], source: Path) -> None:
 check_canonical_units(FIELD_SPECS, FIELDS_SOURCE)
 
 
-# A power-of-ten factor written into the unit: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm" (normalize_text has
-# already folded "×" to "x" and superscript digits to "^-4"). The caret, or an explicit "x10", is required,
-# so a unit that merely starts with digits can never be read as a factor.
-_SCALE_FACTOR = re.compile(r"^(?:x\s*10\s*\^?|10\s*\^)\s*(?P<e>[-+]?\d+)")
+# A power-of-ten factor in a transcribed table header: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm", "ρ × 10^4"
+# (normalize_text has already folded "×" to "x" and superscript digits to "^-4"). The caret, or an explicit
+# "x10", is required, so a unit that merely starts with digits can never be read as a factor.
+_SCALE_FACTOR = re.compile(r"(?:(?P<x>x)\s*10\s*\^?|10\s*\^)\s*(?P<e>[-+]?\d+)")
+# The symbol of the quantity a header names before its factor: "ρ", "R_s", "Rs", "\rho".
+_QUANTITY_SYMBOL = re.compile(r"\\?[A-Za-z\u0370-\u03ffΩμ□_]+")
 
 
-def split_scale_factor(unit_raw: str) -> tuple[float, str]:
-    """``(factor, unit)``: a scale factor written into the unit belongs to the value, not to the unit.
+def split_scale_factor(unit_raw: str, is_unit: Callable[[str], object] = lambda unit: None) -> tuple[float | None, str]:
+    """``(factor, unit)``: the factor the cell is multiplied by to give the value, and the unit left over; the
+    factor is None when the header does not say which way its power of ten goes.
 
-    Papers head a table column "ρ (×10⁻⁴ Ω·cm)" and the model transcribes the whole parenthesis as the unit,
-    leaving the value a bare "19.4". Without this the unit is unrecognised and the fact is lost.
+    A table header carries a power of ten in one of two conventions, which the model copies into ``unit_raw``:
+
+    - on the **unit** -- "×10^-4 Ω·cm", "(10^-4 Ω cm)", "ρ (10^-4 Ω cm)": the column is in units of 10^-4 Ω·cm,
+      so a cell of 6.8 is 6.8 × 10^-4 Ω·cm, and the factor multiplies.
+    - on the **quantity** -- "ρ × 10^4 (Ω cm)", "ρ (10^4)": the column holds ρ multiplied by 10^4, so the same
+      cell is again 6.8 × 10^-4 Ω·cm, and the factor divides.
+
+    The same exponent sign means opposite things, so a header that fits neither -- a unit before the factor
+    (``is_unit`` names the field's units), a factor glued to a symbol with nothing joining them -- is refused.
     """
     unit = clean_unit(LATEX_WRAPPERS.sub(" ", delatex(normalize_text(unit_raw))))
-    match = _SCALE_FACTOR.match(unit)
+    match = _SCALE_FACTOR.search(unit)
     if match is None:
         return 1.0, unit
-    return 10.0 ** int(match.group("e")), unit[match.end() :].lstrip(".x*")
+    factor = 10.0 ** int(match.group("e"))
+    head, tail = unit[: match.start()].lstrip("("), unit[match.end() :]
+    if not head:
+        return factor, tail.strip("()").lstrip(".x*")
+    symbol = head.removesuffix("(")
+    if not _QUANTITY_SYMBOL.fullmatch(symbol) or is_unit(symbol) is not None:
+        return None, unit
+    if head.endswith("("):
+        inside, _, after = tail.partition(")")
+        if inside.lstrip(".x*"):
+            return factor, inside.lstrip(".x*")  # "ρ (10^-4 Ω cm)": the factor leads the unit
+        return 1 / factor, after.strip("()")  # "ρ (10^4) (Ω cm)": the factor stands alone beside the symbol
+    if match.group("x"):
+        return 1 / factor, tail.strip("()")  # "ρ × 10^4 (Ω cm)": the symbol multiplied by the factor
+    return None, unit
 
 
 def has_scale_factor(text: str) -> bool:
@@ -615,7 +639,13 @@ def convert_to_canonical(
         return value, None, None
     if unit_raw is None:
         return _bare_number(spec, value)
-    scale, unit = split_scale_factor(unit_raw)
+    scale, unit = split_scale_factor(unit_raw, CONVERTERS[canonical])
+    if scale is None:
+        return (
+            None,
+            None,
+            f"power of ten in {unit_raw!r}: cannot tell whether it scales the quantity or the unit; ambiguous",
+        )
     if scale != 1.0 and value_text is not None and has_scale_factor(value_text):
         # "1.2 × 10⁻⁴" under a column headed "(×10⁻⁴ Ω·cm)" is either 1.2e-4 or 1.2e-8 depending on whether
         # the author applied the header. Applying the factor twice would manufacture a value; refuse.

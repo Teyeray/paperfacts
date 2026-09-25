@@ -810,6 +810,14 @@ THREE_SAMPLES = [
 ]
 
 
+@pytest.mark.parametrize("system", [field_system_prompt(), extraction_system_prompt()])
+def test_both_modes_tell_the_model_to_copy_a_header_power_of_ten_into_the_unit(system):
+    # Guillén 2006 heads a column "ρ × 10^4 (Ω cm)"; both lanes stored its 6.8 as 6.8 Ω·cm. The code applies
+    # the factor (normalize.split_scale_factor) only if the model copies it, and it must never apply it itself.
+    assert '"ρ × 10^4 (Ω cm)"' in system
+    assert "never apply the factor yourself" in system
+
+
 def test_the_field_question_asks_for_the_series_flag_and_says_when_it_is_true():
     system = field_system_prompt()
 
