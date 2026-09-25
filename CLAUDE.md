@@ -99,7 +99,7 @@ this file is the part that is easy to get wrong.
   `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`,
   `continuation.py`); passage mode adds its two prompts plus `retrieval_fingerprint` (the keywords,
   `passages.py` and `continuation.py`). `comparison_key` hashes the whole field schema including
-  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt.
+  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `decide.py`, `dataset.py` and the matching prompt.
   A tolerance edit therefore re-keys comparisons only. Anything that is at its built-in
   baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
   hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
@@ -113,7 +113,7 @@ this file is the part that is easy to get wrong.
   paper-level, not a lane: its readings are approximate (±10 % / ±20 %), never create or identify a sample
   (chart x snaps to ticks), never fill a dataset cell and never join the two-lane comparison. They live in
   their own file, the 图中读数 sheet (`write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
-  and their own web section; `dataset.py` must not import `figures.py`. A failure in it marks only its own
+  and their own web section; `dataset.py` and `decide.py` must not import `figures.py`. A failure in it marks only its own
   stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
   tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
 - Where readings are stored and which are shown (`shown_figures`, `read_document_figures`) is `readings.py`,
