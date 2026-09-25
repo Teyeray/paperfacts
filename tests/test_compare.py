@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.compare import ComparisonReport, compare_lanes, compare_values
+from paperfacts import dataset
+from paperfacts.compare import ComparisonReport, compare_lanes, compare_values, condition_numbers
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_BY_NAME
 from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key
 from paperfacts.matching import SampleMatch, SampleMatching
@@ -754,3 +755,30 @@ def test_the_report_round_trips_through_disk(tmp_path):
     report.write(path)
 
     assert ComparisonReport.read(path) == report
+
+
+# ---- The one definition of a condition's numbers ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("condition", "numbers"),
+    [
+        ("550 nm", (550.0,)),
+        ("400-800 nm", (400.0, 800.0)),
+        ("from 400 to 800 nm", (400.0, 800.0)),
+        ("800–400 nm", (800.0, 400.0)),
+        ("-20 °C", (-20.0,)),
+        ("AM1.5, 400-800 nm", (1.5, 400.0, 800.0)),
+        ("$4 0 0 ^ { \\circ } \\mathrm { C }$", (400.0,)),
+        ("", ()),
+        (None, ()),
+    ],
+)
+def test_condition_numbers_are_ordered_signed_and_range_aware(condition, numbers):
+    assert condition_numbers(condition) == numbers
+
+
+def test_dataset_judges_conditions_by_the_same_definition_as_compare():
+    # Two definitions disagreed on ranges, signs and extra numbers, so compare could pair two values as
+    # one fact while dataset treated them as two conditions.
+    assert dataset.condition_numbers is condition_numbers

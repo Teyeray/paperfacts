@@ -22,10 +22,14 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, ConfigDict
 
-from paperfacts.compare import ComparisonReport, FieldComparison
+from paperfacts.compare import (
+    ComparisonReport,
+    FieldComparison,
+    condition_numbers,
+    conditions_measure_differently,
+)
 from paperfacts.fields import (
     AMBIGUOUS_MATCH_CONFIDENCE,
-    CONDITION_NUMBER,
     FIELD_SPECS,
     SAMPLE_FIELDS,
     TARGET_FIELDS,
@@ -349,17 +353,18 @@ def _one_condition(
 
     Once a rule chooses, every lane is held to it: a lane keeps only its values the rule picks, so a lane
     quoting a different condition cannot vouch for the one chosen. A rule that picks two conditions in one
-    lane, or nothing in any, settles nothing and the next is tried.
+    lane, two different conditions across the lanes, or nothing in any, settles nothing and the next is
+    tried.
     """
     rules: list[tuple[str, Callable[[FieldValue], bool]]] = [
         ("采用与本行其他字段引用同一原文块的条件", lambda value: bool(row_sources.intersection(value.source_ids)))
     ]
     for entry in spec.condition_preference:
-        numbers = _condition_numbers(entry)
+        numbers = condition_numbers(entry)
         rules.append(
             (
                 f"按字段配置的优先条件 {entry} 选取",
-                lambda value, numbers=numbers: _condition_numbers(value.condition) == numbers,
+                lambda value, numbers=numbers: condition_numbers(value.condition) == numbers,
             )
         )
     for reason, picks in rules:
@@ -369,14 +374,20 @@ def _one_condition(
     return None
 
 
-def _condition_numbers(condition: str | None) -> tuple[float, ...]:
-    return tuple(float(number) for number in CONDITION_NUMBER.findall(delatex(normalize_text(condition or ""))))
-
-
 def _held_to(
     trusted: Sequence[tuple[Backend, FieldValue]], picks: Callable[[FieldValue], bool]
 ) -> list[tuple[Backend, FieldValue]] | None:
+    """Each lane's values ``picks`` keeps, when every lane keeps one condition and the lanes keep the same
+    one; otherwise None.
+
+    A rule is judged per lane (rule 1 looks at each lane's own blocks), so each lane can pick one condition
+    and still not the other lane's: "85 % @ 550 nm" in one and "85.2 % @ 400-800 nm" in the other are two
+    measurements, and committing them as one agreement is the manufactured agreement this module refuses.
+    Across lanes the wording differs, so "the same condition" is compare.py's rule: they do not name
+    different numbers.
+    """
     kept: list[tuple[Backend, FieldValue]] = []
+    chosen: dict[Backend, str | None] = {}
     for backend in BACKENDS:
         groups: dict[str, list[FieldValue]] = {}
         for lane, value in trusted:
@@ -384,7 +395,11 @@ def _held_to(
                 groups.setdefault(normalize_key(value.condition), []).append(value)
         if len(groups) > 1:
             return None
-        kept += [(backend, value) for values in groups.values() for value in values]
+        for values in groups.values():
+            chosen[backend] = values[0].condition
+            kept += [(backend, value) for value in values]
+    if len(chosen) == 2 and conditions_measure_differently(*chosen.values()):
+        return None
     return kept or None
 
 
