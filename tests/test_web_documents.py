@@ -264,6 +264,28 @@ def test_compared_and_counts_come_from_the_report(library: Library):
     assert (summary.counts.agree, summary.counts.conflict, summary.counts.total) == (7, 2, 13)
 
 
+def test_the_counts_follow_a_rewritten_report(library: Library):
+    # The tally is parsed once per version of the file; a rerun that rewrites the report must show.
+    seed_report(library, counts=ComparisonCounts(agree=1, total=1))
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(agree=1, total=1)
+
+    seed_report(library, counts=ComparisonCounts(agree=5, conflict=2, total=7))
+
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(agree=5, conflict=2, total=7)
+
+
+def test_the_counts_are_not_reparsed_while_the_report_is_unchanged(library: Library, monkeypatch):
+    seed_report(library, counts=ComparisonCounts(agree=3, total=3))
+    library.summary(DOC_KEY)
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("the report was parsed again")
+
+    monkeypatch.setattr("paperfacts.web.documents.ComparisonReport.read", fail)
+
+    assert [summary.counts for summary in library.list()] == [ComparisonCounts(agree=3, total=3)]
+
+
 def test_a_report_written_under_another_comparison_key_does_not_count(library: Library):
     # comparison_key fingerprints the tolerance + normalization rules: change it and an old report must be recomputed.
     seed_report(library, comparison_key="0123456789ab")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -32,7 +33,16 @@ from paperfacts.storage import (
     read_identity,
     write_bytes_atomic,
 )
-from paperfacts.workflow import read_lane
+from paperfacts.web.jobs import Stage
+from paperfacts.workflow import (
+    has_cached_parse,
+    is_finished,
+    is_runnable,
+    read_lane,
+    stored_document,
+    stored_pdf,
+    stored_stages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +55,13 @@ class DocumentSummary(BaseModel):
     document_id: str = Field(description="directory name (first 16 hex chars of the sha256)")
     name: str
     pdf_available: bool
+    runnable: bool = Field(description="a rerun can be queued: there is a PDF, or a stored parse of both lanes")
     parsed: dict[str, bool]
     extracted: dict[str, bool]
     compared: bool
+    stages: tuple[Stage, ...] = Field(
+        default=(), description="every pipeline stage in execution order, as far as the files on disk show"
+    )
     counts: ComparisonCounts | None = None
     uploaded_at: str | None = None
 
@@ -85,6 +99,8 @@ class Library:
         # The same key the pipeline writes under, or the browser looks for a file nothing ever wrote.
         self.extractor_key = extractor_key_for(settings)
         self.comparison_key = comparison_key()
+        self._counts_cache: dict[Path, tuple[tuple[int, int], ComparisonCounts]] = {}
+        self._counts_lock = threading.Lock()
 
     # ---- listing and detail ----------------------------------------------------------------
 
@@ -113,20 +129,45 @@ class Library:
 
     def summary(self, document_id: str) -> DocumentSummary:
         """How far processing got. An unseen but well-formed id gets an "empty" summary; existence
-        itself is answered by :meth:`exists`."""
+        itself is answered by :meth:`exists`, which is what every other route checks."""
         self._require_key(document_id)
         identity = self.identity(document_id)
-        report = self.report(document_id)
+        stages = stored_stages(document_id, self.settings)
+        status = dict(stages)
+        counts = self._counts(document_id)
         return DocumentSummary(
             document_id=document_id,
             name=identity.name if identity else document_id,
             pdf_available=self.pdf_path(document_id) is not None,
-            parsed={b: self.layout.artifact_path(document_id, b).is_file() for b in BACKENDS},
-            extracted={b: self.layout.extraction_path(document_id, b, self.extractor_key).is_file() for b in BACKENDS},
-            compared=report is not None,
-            counts=report.counts if report else None,
+            runnable=self.runnable(document_id),
+            parsed={b: status[f"parse:{b}"] == "done" for b in BACKENDS},
+            extracted={b: status[f"extract:{b}"] == "done" for b in BACKENDS},
+            compared=counts is not None,
+            stages=tuple(Stage(name=name, status=value) for name, value in stages),
+            counts=counts,
             uploaded_at=identity.created_at if identity and identity.uploaded else None,
         )
+
+    def _counts(self, document_id: str) -> ComparisonCounts | None:
+        """The report's tally, parsed once per version of the file.
+
+        The list and every summary need only these few numbers, and a report is the largest file a document
+        has; reparsing all of them on every refresh made the library cost grow with the size of every paper.
+        """
+        path = self.layout.comparison_path(document_id, self.extractor_key, self.comparison_key)
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return None
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        with self._counts_lock:
+            cached = self._counts_cache.get(path)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        counts = ComparisonReport.read(path).counts
+        with self._counts_lock:
+            self._counts_cache[path] = (stamp, counts)
+        return counts
 
     def identity(self, document_id: str) -> DocumentIdentity | None:
         return read_identity(self.layout, document_id)
@@ -209,15 +250,7 @@ class Library:
     # ---- PDF and DocumentInput --------------------------------------------------------
 
     def pdf_path(self, document_id: str) -> Path | None:
-        """A web-uploaded source.pdf wins; a CLI-processed document falls back to the original
-        path recorded in its identity (only valid on the same machine)."""
-        uploaded = self.layout.source_pdf(document_id)
-        if uploaded.is_file():
-            return uploaded
-        identity = self.identity(document_id)
-        if identity and identity.source_path and Path(identity.source_path).is_file():
-            return Path(identity.source_path)
-        return None
+        return stored_pdf(self.layout, document_id)
 
     def page_image(self, document_id: str, page: int, *, dpi: int) -> Path:
         """A rendered image of one page (cached). Raises ``FileNotFoundError`` when there's no
@@ -227,38 +260,24 @@ class Library:
             raise FileNotFoundError("This document has no available PDF to render pages from")
         return render_page_cached(pdf, page, dpi=dpi, cache_dir=self.layout.page_cache_dir(document_id, dpi))
 
+    # Which PDF a document runs from and whether it can run at all are pipeline rules, kept in workflow.py
+    # so the web and a rerun cannot disagree; these are the library's names for them.
+
     def has_cached_parse(self, document_id: str) -> bool:
-        """Whether both lanes' artifacts are on disk, so the pipeline can run without ever opening the PDF."""
         self._require_key(document_id)
-        return all(self.layout.artifact_path(document_id, backend).is_file() for backend in BACKENDS)
+        return has_cached_parse(self.layout, document_id)
 
     def runnable(self, document_id: str) -> bool:
-        """Whether ``run_document`` can be asked to process this document at all.
+        self._require_key(document_id)
+        return is_runnable(self.layout, document_id)
 
-        A PDF is only needed for a real parse. A document parsed on another machine arrives here with both
-        artifacts and no PDF, and extraction, comparison and export need nothing else.
-        """
-        return self.pdf_path(document_id) is not None or self.has_cached_parse(document_id)
+    def finished(self, document_id: str) -> bool:
+        self._require_key(document_id)
+        return is_finished(document_id, self.settings)
 
     def document(self, document_id: str) -> DocumentInput:
-        identity = self.identity(document_id)
-        if identity is None:
-            raise FileNotFoundError(
-                f"Document {document_id} has no identity.json: please re-upload or reprocess via the CLI"
-            )
-        pdf = self.pdf_path(document_id)
-        if pdf is None:
-            if not self.has_cached_parse(document_id):
-                raise FileNotFoundError(
-                    f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
-                )
-            # Both artifacts are stored, so nothing downstream opens the file. A path is carried anyway,
-            # pointing at where this document's PDF would live if it had one: the export names its
-            # workbook from ``display_name`` (set below), so no path has to be invented to name it.
-            pdf = self.layout.source_pdf(identity.sha256)
-        return DocumentInput(
-            document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name
-        )
+        self._require_key(document_id)
+        return stored_document(self.layout, document_id)
 
     def register_upload(self, filename: str, data: bytes) -> DocumentInput:
         """Store an uploaded PDF in its document directory (re-uploading the same content is

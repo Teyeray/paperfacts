@@ -9,6 +9,7 @@ service (a GPU server), an empty one means the ``runners/`` script as a subproce
 from __future__ import annotations
 
 import logging
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -39,7 +40,7 @@ from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import crop_region, png_bytes, read_geometry, render_page
 from paperfacts.records import LaneExtraction
-from paperfacts.storage import DataLayout, ensure_identity
+from paperfacts.storage import DataLayout, ensure_identity, read_identity
 from paperfacts.threads import ContextThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
@@ -926,3 +927,91 @@ def run_batch(
         duplicates,
         output,
     )
+
+
+# ---- Stored documents: what a rerun and the web library decide from what is on disk -------------------------
+
+
+def stored_pdf(layout: DataLayout, document_id: str) -> Path | None:
+    """The PDF a stored document is processed from. A web-uploaded source.pdf wins; a CLI-processed document
+    falls back to the original path recorded in its identity, which is only valid on the machine that ran it."""
+    uploaded = layout.source_pdf(document_id)
+    if uploaded.is_file():
+        return uploaded
+    identity = read_identity(layout, document_id)
+    if identity and identity.source_path and Path(identity.source_path).is_file():
+        return Path(identity.source_path)
+    return None
+
+
+def has_cached_parse(layout: DataLayout, document_id: str) -> bool:
+    """Whether both lanes' artifacts are on disk, so the pipeline can run without ever opening the PDF."""
+    return all(layout.artifact_path(document_id, backend).is_file() for backend in BACKENDS)
+
+
+def is_runnable(layout: DataLayout, document_id: str) -> bool:
+    """Whether :func:`run_document` can be asked to process this stored document at all.
+
+    A PDF is only needed for a real parse. A document parsed on another machine arrives with both artifacts
+    and no PDF, and extraction, comparison and export need nothing else.
+    """
+    return stored_pdf(layout, document_id) is not None or has_cached_parse(layout, document_id)
+
+
+def stored_document(layout: DataLayout, document_id: str) -> DocumentInput:
+    """The :class:`DocumentInput` that reprocesses a stored document. Raises ``FileNotFoundError`` when it
+    has no identity, or neither a PDF nor a parse of both lanes."""
+    identity = read_identity(layout, document_id)
+    if identity is None:
+        raise FileNotFoundError(
+            f"Document {document_id} has no identity.json: please re-upload or reprocess via the CLI"
+        )
+    pdf = stored_pdf(layout, document_id)
+    if pdf is None:
+        if not has_cached_parse(layout, document_id):
+            raise FileNotFoundError(
+                f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
+            )
+        # Both artifacts are stored, so nothing downstream opens the file. A path is carried anyway, pointing
+        # at where this document's PDF would live if it had one: the export names its workbook from
+        # ``display_name`` (set below), so no path has to be invented to name it.
+        pdf = layout.source_pdf(identity.sha256)
+    return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name)
+
+
+def stored_stages(document_id: str, settings: Settings) -> tuple[tuple[str, StageStatus], ...]:
+    """How far a stored document got, one entry per :func:`stage_names` stage, read off the file each stage
+    writes under the current keys. It is the progress to show when no running job describes the document."""
+    layout = DataLayout(settings.data_root)
+    extractor = extractor_key_for(settings)
+    comparison = comparison_key()
+
+    def done(path: Path) -> StageStatus:
+        return "done" if path.is_file() else "pending"
+
+    figures = done(layout.figures_path(document_id, figure_key_for(settings)))
+    status: dict[str, StageStatus] = {
+        **{f"parse:{b}": done(layout.artifact_path(document_id, b)) for b in BACKENDS},
+        # Opt-in: switched off and never read is a skip, not work still to do.
+        "figures": figures if figures == "done" or settings.figures_enabled else "skipped",
+        **{f"extract:{b}": done(layout.extraction_path(document_id, b, extractor)) for b in BACKENDS},
+        "compare": done(layout.comparison_path(document_id, extractor, comparison)),
+        "export": done(layout.dataset_json_path(document_id, extractor, comparison)),
+    }
+    return tuple((name, status[name]) for name in stage_names())
+
+
+def is_finished(document_id: str, settings: Settings) -> bool:
+    """Whether a run under the current keys went all the way. The export is the last stage, so a document
+    whose comparison exists but whose export failed is still unfinished."""
+    return dict(stored_stages(document_id, settings))["export"] == "done"
+
+
+def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings) -> bytes:
+    """One workbook for several stored documents, each document's chart readings beside its data."""
+    figure_views = (shown_figures(d.document_id, d.filename, settings) for d in datasets)
+    rows = [row for view in figure_views if view for row in view.rows]
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "paperfacts.xlsx"
+        write_dataset(datasets, path, figure_rows=rows)
+        return path.read_bytes()
