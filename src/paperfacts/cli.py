@@ -24,7 +24,7 @@ from typing import Annotated, NoReturn, assert_never
 import typer
 
 from paperfacts.config import EXTRACTION_MODES, Settings
-from paperfacts.errors import PaperFactsError, ParserError
+from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
@@ -156,6 +156,7 @@ def _settings(
     mode: ModeOption | None = None,
     figures: bool | None = None,
     offline: bool = False,
+    force: bool = False,
 ) -> Settings:
     settings = Settings.from_env()
     changes: dict[str, object] = {}
@@ -170,8 +171,14 @@ def _settings(
     if mode is not None:
         changes["extraction_mode"] = mode.value
     settings = dataclasses.replace(settings, **changes) if changes else settings
+    if settings.llm_offline and force:
+        # A forced request skips the cache by definition, so an offline forced run is all misses.
+        typer.secho("--force re-asks the model; it cannot be combined with offline replay", fg="red", err=True)
+        raise typer.Exit(code=2)
     # Every command reads its settings here, once: the one place this process sizes the in-flight limit.
     set_max_in_flight(settings.llm_max_in_flight)
+    # And the one place it starts its miss record: a command's summary counts its own misses only.
+    OFFLINE_MISSES.clear()
     return settings
 
 
@@ -272,7 +279,7 @@ def extract(
 ) -> None:
     """Extract sample-level records from parsed Markdown with the LLM. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode)
+    settings = _settings(data_root, passes, mode, force=force)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
@@ -293,7 +300,7 @@ def compare(
 ) -> None:
     """Match samples across the two lanes and compare their fields. Needs parse."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode)
+    settings = _settings(data_root, passes, mode, force=force)
     document = DocumentInput.from_path(pdf)
     try:
         with build_llm_client(settings) as client:
@@ -317,7 +324,7 @@ def run(
 ) -> None:
     """Parse, extract, compare and automatically save a consolidated Excel workbook."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures, offline)
+    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures)
     document = DocumentInput.from_path(pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
@@ -396,7 +403,7 @@ def batch(
 ) -> None:
     """Recursively process all PDFs and save one paper per row in Excel, with a merged sample sheet."""
     _configure_logging(verbose)
-    settings = _settings(data_root, passes, mode, figures, offline)
+    settings = _settings(data_root, passes, mode, figures, offline, force or force_figures)
     _batch_summary(source, settings, output, force=force, export_only=False, force_figures=force_figures, jobs=jobs)
 
 
@@ -445,7 +452,11 @@ def serve(
     host = host or settings.server_host
     port = port or settings.server_port
     typer.echo(f"PaperFacts UI -> http://{host}:{port}   (data_root={settings.data_root}, model={settings.llm_model})")
-    uvicorn.run(create_app(settings), host=host, port=port, log_level="info" if verbose else "warning")
+    try:
+        web_app = create_app(settings)
+    except ConfigError as exc:
+        _fail("serve", exc)
+    uvicorn.run(web_app, host=host, port=port, log_level="info" if verbose else "warning")
 
 
 if __name__ == "__main__":
