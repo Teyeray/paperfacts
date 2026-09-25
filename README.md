@@ -548,7 +548,8 @@ exactly one condition. An entry names the numbers a condition states, so `"400-8
 400–800 nm" and "from 400 to 800 nm" alike. When one entry matches several conditions in a lane, the one
 that says average / avg / mean / AVT is taken and the others (a peak, a minimum, an unlabelled range) are set
 aside; without such an average the next entry is tried. The shipped transmittance preference is 400-800,
-380-780, 400-700, 400-1100, then 550 nm. If none of that settles it the cell stays empty as
+380-780, 400-700, 550, then 400-1100 nm, last so that a paper stating both keeps the 550 nm value it has
+always committed. If none of that settles it the cell stays empty as
 `multiple_conditions`. Every measurement stays in the facts either way. The preference changes only which
 cell is committed, so editing it re-compares without re-extracting.
 

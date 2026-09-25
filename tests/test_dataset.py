@@ -539,6 +539,19 @@ def test_zhaos_average_over_400_to_1100_nm_is_preferred_over_the_other_ranges():
     assert "优先条件 400-1100" in row["detail"]
 
 
+def test_a_paper_stating_550_nm_and_400_to_1100_nm_keeps_its_550_nm_value():
+    # 400-1100 nm was added for Zhao, whose 30 nm films state no 550 nm value; it comes after 550 so that no
+    # paper stating both changes the cell it has always had.
+    fields = [
+        value("transmittance", "90.1", "%", condition="at 550 nm"),
+        value("transmittance", "87.4", "%", condition="average 400-1100 nm"),
+    ]
+
+    result = paired(*both(fields))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
+
+
 def test_two_peaks_inside_one_preference_entry_are_still_refused():
     fields = [
         value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
