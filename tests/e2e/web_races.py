@@ -329,6 +329,74 @@ async def reupload(page: Page, base: str, docs: dict[str, str], pdf: Path) -> No
     await page.wait_for_selector("#document-view .stage.running", timeout=5000)
 
 
+@check("an upload does not pull the reader back after they moved to another document")
+async def upload_elsewhere(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.route("**/api/documents?force=*", delayed(1.5))
+    await page.set_input_files("#file-input", str(pdf))
+    await page.wait_for_timeout(200)
+    await page.evaluate(f"location.hash = '#/doc/{docs['B']}'")
+    await page.wait_for_timeout(2500)
+    expect((await page.evaluate("location.hash")).startswith(f"#/doc/{docs['B']}"), "the upload navigated away")
+    expect((await title(page)).startswith("B "), f"shows {await title(page)!r} under #/doc/B")
+
+
+@check("a failed library refresh keeps the rail refreshing")
+async def library_retry(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await page.goto(f"{base}/")
+    await page.wait_for_selector("#doc-list .doc-item")
+    lists: list[float] = []
+
+    async def flaky(route: Route) -> None:
+        lists.append(time.monotonic())
+        if len(lists) == 1:
+            await route.abort()
+        else:
+            await route.continue_()
+
+    await page.route("**/api/documents", flaky)
+    # Queued from outside this page, so nothing here but the rail's own refresh can notice it.
+    await page.evaluate(f"fetch('/api/documents/{docs['B']}/run', {{method: 'POST'}})")
+    await page.click("#refresh-library")  # dropped: the next refresh must still come by itself
+    await page.wait_for_timeout(7000)
+    expect(len(lists) >= 2, "the rail stopped refreshing after one failed request")
+    expect(await page.locator(".doc-item .queued").count() == 0, "the rail still marks a finished job as running")
+
+
+@check("an older library list never paints over a newer one")
+async def library_order(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await page.goto(f"{base}/")
+    await page.wait_for_selector("#doc-list .doc-item")
+    first = {"pending": True}
+
+    async def stale_then_fresh(route: Route) -> None:
+        if first["pending"]:
+            first["pending"] = False
+            await asyncio.sleep(1.5)
+            with contextlib.suppress(Exception):
+                await route.fulfill(status=200, content_type="application/json", body="[]")
+        else:
+            await route.continue_()
+
+    await page.route("**/api/documents", stale_then_fresh)
+    await page.click("#refresh-library")  # answered late, with an empty (older) list
+    await page.wait_for_timeout(100)
+    await page.click("#refresh-library")  # answered at once
+    await page.wait_for_timeout(2500)
+    expect(await page.locator("#doc-list .doc-item").count() > 0, "the late, older list replaced the newer one")
+
+
+@check("重新处理 pressed as the view reloads still follows the new job")
+async def rerun_during_reload(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["B"])
+    await page.route(f"**/api/documents/{docs['B']}/run?*", delayed(1.0))
+    await page.click('#document-view [data-action="run"]')
+    # What the previous job's finish handler does while this request is out: reload the view.
+    await page.evaluate("import('/router.js').then((router) => router.reloadView())")
+    await page.wait_for_selector("#document-view .stage.running", timeout=5000)
+    await page.wait_for_selector("text=处理完成", timeout=len(stage_names()) * STAGE_SECONDS * 1000 + 10000)
+
+
 @check("a link to no document says so in Chinese")
 async def missing(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     for bad in ("0000000000000000", "zz"):

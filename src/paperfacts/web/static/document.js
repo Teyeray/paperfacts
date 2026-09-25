@@ -84,6 +84,10 @@ async function openDocument(id) {
     state.viewer = null;
     state.selectedFact = null;
   }
+  // A rerun queued while this load was on its way may be newer than the job list it read: keep following it
+  // rather than let the list's finished job stop the poll (see rerun).
+  const held = switching ? null : currentJob();
+  if (isActive(held) && !isActive(data.job) && held.job_id !== data.job?.job_id) data.job = held;
   state.current = id;
   Object.assign(state, data);
   renderLibrary();
@@ -189,18 +193,21 @@ const pollCallbacks = {
   },
 };
 
+// Guarded by the document rather than the view generation: pressed just as the previous job finishes, that
+// job's finish handler reloads the view (a new generation) while this request is out, and the new job must
+// still be followed. The reload in flight keeps it too (openDocument).
 async function rerun(button, force) {
   button.disabled = true; // lock the button while queued; the backend's resubmission for the same document is idempotent too
-  const generation = state.generation;
+  const id = state.current;
   try {
-    const job = await submitRun(state.current, force);
-    if (!isCurrent(generation)) return;
+    const job = await submitRun(id, force);
+    if (state.current !== id) return;
     state.job = job;
     toast(force ? "已排队：全部重跑" : "已排队：按缓存增量处理");
     renderJobPanels();
     startPolling(job.job_id, pollCallbacks);
   } catch (error) {
     toast(`无法重新处理：${error.message}`, true);
-    if (isCurrent(generation)) button.disabled = false;
+    if (state.current === id) button.disabled = false;
   }
 }

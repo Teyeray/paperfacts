@@ -4,26 +4,43 @@
 import { api } from "./api.js";
 import { escapeHtml, keepFocus, toast } from "./html.js";
 import { documentHash, navigate, reloadView } from "./router.js";
-import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, state } from "./state.js";
+import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, isCurrent, state } from "./state.js";
 
 // While anything is queued or running, the rail refreshes itself: a bulk run's progress would otherwise
-// stay frozen until the reader pressed ↻.
+// stay frozen until the reader pressed ↻. A failed refresh is retried with a growing pause, like job
+// polling, so one dropped request cannot end the auto-refresh.
 const REFRESH_MS = 5000;
+const MAX_REFRESH_BACKOFF_MS = 60000;
 let refreshTimer = null;
+let refreshFailures = 0;
+// Refreshes overlap (the timer, ↻, a finished job, run-all, an upload); each takes a token and only the
+// newest one paints, so an older list that arrives late can never overwrite a newer one.
+let refreshToken = 0;
 // Stacked layout: the rail sits above the content, so its list is folded away rather than pushing the
 // home table and every document ~3000 px down the page.
 const WIDE = window.matchMedia("(min-width: 961px)");
 
 export async function loadLibrary() {
+  const token = ++refreshToken;
+  clearTimeout(refreshTimer);
+  refreshTimer = null;
+  let docs;
   try {
-    state.docs = await api("/api/documents");
+    docs = await api("/api/documents");
   } catch (error) {
-    toast(`读取文档库失败：${error.message}`, true);
+    if (token !== refreshToken) return;
+    refreshFailures += 1;
+    // Said once per outage, not on every retry; the last list read stays on screen meanwhile.
+    if (refreshFailures === 1) toast(`读取文档库失败：${error.message}`, true);
+    refreshTimer = setTimeout(loadLibrary, Math.min(REFRESH_MS * 2 ** (refreshFailures - 1), MAX_REFRESH_BACKOFF_MS));
     return;
   }
-  await loadActiveDocs();
+  const activeDocs = await loadActiveDocs();
+  if (token !== refreshToken) return;
+  refreshFailures = 0;
+  state.docs = docs;
+  state.activeDocs = activeDocs;
   renderLibrary();
-  clearTimeout(refreshTimer);
   refreshTimer = state.activeDocs.size ? setTimeout(loadLibrary, REFRESH_MS) : null;
 }
 
@@ -32,12 +49,12 @@ export async function loadLibrary() {
 async function loadActiveDocs() {
   try {
     const jobs = await api("/api/jobs");
-    state.activeDocs = new Set(jobs.filter(isActive).map((job) => job.document_id));
+    return new Set(jobs.filter(isActive).map((job) => job.document_id));
   } catch (error) {
     // The marker is a nicety; a failure here must not hide the library — but it must not vanish
     // without trace either, or a broken /api/jobs looks like "nothing is running".
     console.warn("读取任务列表失败：", error);
-    state.activeDocs = new Set();
+    return new Set();
   }
 }
 
@@ -125,10 +142,12 @@ export function setupUpload() {
   zone.addEventListener("drop", (e) => uploadAll([...e.dataTransfer.files]));
 }
 
-// One request per file, in order (the server takes one PDF per upload); the last one that went in is opened.
-// `reload`, because it may be the document already on screen, whose new job the view must start following.
+// One request per file, in order (the server takes one PDF per upload); the last one that went in is opened,
+// unless the reader moved to another view while the files went up. `reload`, because it may be the document
+// already on screen, whose new job the view must start following.
 async function uploadAll(files) {
   if (!files.length) return;
+  const generation = state.generation;
   const zone = document.getElementById("dropzone");
   const force = document.getElementById("upload-force").checked;
   let last = null;
@@ -149,7 +168,7 @@ async function uploadAll(files) {
     zone.classList.remove("busy");
   }
   await loadLibrary();
-  if (last) navigate(documentHash(last), { reload: true });
+  if (last && isCurrent(generation)) navigate(documentHash(last), { reload: true });
 }
 
 // Queue everything that is not finished yet. The backend decides what counts as unfinished; here we
