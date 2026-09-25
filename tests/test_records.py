@@ -12,7 +12,13 @@ import pytest
 from pydantic import ValidationError
 
 from paperfacts.fields import FIELD_BY_NAME
-from paperfacts.records import ExtractionResponse, ResponseCleaning, response_to_records
+from paperfacts.records import (
+    ExtractionResponse,
+    InventoryResponse,
+    ResponseCleaning,
+    response_models,
+    response_to_records,
+)
 
 # Cleaning needs to know both "which source_ids actually exist" and "which fields are in the schema";
 # tests are given one fixed known set.
@@ -20,7 +26,7 @@ KNOWN_IDS = frozenset({"b1", "b2", "b8", "b9", "mineru_p1_b9"})
 
 
 def to_records(response: ExtractionResponse, *, known_ids: frozenset[str] = KNOWN_IDS):
-    return response_to_records(response, known_ids=known_ids)
+    return response_to_records(response, fields=FIELD_BY_NAME, known_ids=known_ids)
 
 
 # ---- ExtractionResponse validation -----------------------------------------------------
@@ -72,6 +78,44 @@ def test_an_empty_response_is_valid_and_means_nothing_was_found():
     response = ExtractionResponse.model_validate({})
 
     assert response.target is None and response.samples == []
+
+
+# ---- response_models: the JSON keys a profile names -------------------------------------
+
+
+def test_a_profile_s_keys_land_on_the_unchanged_attributes():
+    models = response_models("paper", "no_samples_in_scope")
+
+    extraction = models.extraction.model_validate({"paper": {"fields": [{"field": "density", "value_raw": "98"}]}})
+    inventory = models.inventory.model_validate({"samples": [], "no_samples_in_scope": True})
+
+    assert extraction.target is not None and extraction.target.fields[0].value_raw == "98"
+    assert inventory.no_tco_film is True
+    # The attribute names are not what this profile's model is told to emit, so they are not read.
+    assert models.extraction.model_validate({"target": {"fields": []}}).target is None
+
+
+@pytest.mark.parametrize(
+    ("model", "answer"),
+    [
+        ("extraction", '{"target": {"fields": "12 nm"}}'),
+        ("extraction", '{"samples": [{"sample_id": "S1", "fields": [{"value_raw": "12"}]}]}'),
+        ("inventory", '{"samples": [], "no_tco_film": "maybe"}'),
+        ("inventory", '{"samples": {"sample_id": "S1"}}'),
+    ],
+)
+def test_under_the_shipped_keys_a_rejected_answer_reads_exactly_as_before(model, answer):
+    # The error text goes back to the model in the repair request, whose bytes are its cache key.
+    base = {"extraction": ExtractionResponse, "inventory": InventoryResponse}[model]
+    keyed = getattr(response_models("target", "no_tco_film"), model)
+
+    with pytest.raises(ValidationError) as expected:
+        base.model_validate_json(answer)
+    with pytest.raises(ValidationError) as actual:
+        keyed.model_validate_json(answer)
+
+    assert keyed.__name__ == base.__name__
+    assert str(actual.value) == str(expected.value)
 
 
 # ---- response_to_records ---------------------------------------------------------------

@@ -525,29 +525,29 @@ def test_without_the_setting_every_question_inherits_the_clients_effort():
     assert all(call.reasoning_effort is INHERIT for call in client.calls)
 
 
-def test_the_inventory_effort_is_stored_in_the_extractor_key():
+def test_the_inventory_effort_is_stored_in_the_extractor_key(tco_profile):
     client = FakeLlmClient(responder())
 
     lane = extract(client, inventory_reasoning_effort="none")
 
     assert lane.extractor_key == extractor_key(
-        ExtractionOptions(client.model, mode="passage", inventory_reasoning_effort="none")
+        ExtractionOptions(tco_profile, client.model, mode="passage", inventory_reasoning_effort="none")
     )
-    assert lane.extractor_key != extractor_key(ExtractionOptions(client.model, mode="passage"))
+    assert lane.extractor_key != extractor_key(ExtractionOptions(tco_profile, client.model, mode="passage"))
 
 
 # ---- the mode itself ------------------------------------------------------------------------------
 
 
-def test_passage_mode_stores_a_different_extractor_key_than_document_mode():
+def test_passage_mode_stores_a_different_extractor_key_than_document_mode(tco_profile):
     # The two modes read different text and produce different results, so one's cached facts must never be
     # served under the other's name.
     client = FakeLlmClient(responder())
 
     lane = extract(client)
 
-    assert lane.extractor_key == extractor_key(ExtractionOptions(client.model, mode="passage"))
-    assert lane.extractor_key != extractor_key(ExtractionOptions(client.model, mode="document"))
+    assert lane.extractor_key == extractor_key(ExtractionOptions(tco_profile, client.model, mode="passage"))
+    assert lane.extractor_key != extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
 
 
 def test_an_unknown_mode_is_rejected_before_any_call_is_made():

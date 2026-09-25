@@ -19,6 +19,7 @@ from collections.abc import Callable
 from functools import cache
 
 from paperfacts.fields import FIELD_BY_NAME, FieldSpec
+from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
 from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS
@@ -588,20 +589,20 @@ def normalize_lane(lane: LaneExtraction) -> LaneExtraction:
     return lane.model_copy(update={"target": target, "samples": samples, "unattributed": unattributed})
 
 
-def drop_implausible(records: ExtractedRecords) -> ExtractedRecords:
+def drop_implausible(records: ExtractedRecords, profile: DomainProfile) -> ExtractedRecords:
     """Drop every value whose converted number falls outside its field's ``valid_range``, with the reason.
 
-    The range lives in the canonical unit, so this has to run on the converted value: "2 μm" is outside a
-    500 nm ceiling although its digits are not. A value that cannot be converted is kept, since there is no
-    number to judge and the comparison already reports it as unparsed.
+    The range lives in the canonical unit, so this has to run on the converted value, in ``profile``'s units:
+    "2 μm" is outside a 500 nm ceiling although its digits are not. A value that cannot be converted is kept,
+    since there is no number to judge and the comparison already reports it as unparsed.
     """
     dropped: list[str] = []
 
     def plausible(value: FieldValue) -> bool:
-        spec = FIELD_BY_NAME.get(value.field)
+        spec = profile.by_name.get(value.field)
         if spec is None or spec.describe_range() is None:
             return True
-        number = normalize_field(value, spec).value
+        number = normalize_field(value, spec, profile.units).value
         if number is None or spec.in_range(number):
             return True
         unit = f" {value.unit_raw}" if value.unit_raw else ""

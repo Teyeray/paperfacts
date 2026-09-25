@@ -41,7 +41,7 @@ from paperfacts.config import (
     load_config,
 )
 from paperfacts.errors import ConfigError
-from paperfacts.fields import FIELD_SPECS, FieldSpec, load_condition_keywords, load_field_specs
+from paperfacts.fields import FIELD_SPECS, FieldRole, FieldSpec, load_condition_keywords, load_field_specs
 
 SHIPPED = config_path({})
 
@@ -457,32 +457,23 @@ def test_every_shipped_field_has_a_chinese_label():
     assert all(spec.label for spec in FIELD_SPECS)
 
 
-def test_a_label_changes_neither_cache_key(monkeypatch):
+def keys_under(profile, specs) -> tuple[str, str, str]:
+    """The document- and passage-mode extractor keys and the comparison key of ``profile`` with its field table
+    replaced by ``specs``."""
+    edited = dataclasses.replace(profile, fields=specs)
+    return (
+        keys.extractor_key(keys.ExtractionOptions(edited, "a-model", mode="document")),
+        keys.extractor_key(keys.ExtractionOptions(edited, "a-model", mode="passage")),
+        keys.comparison_key(edited),
+    )
+
+
+def test_a_label_changes_neither_cache_key(tco_profile):
     # It is a column header, nothing more: adding or editing one must not re-extract or re-compare a paper.
     plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
     labelled = load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": "厚度"}]}))
 
-    def keys_for(specs):
-        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        for cached in (
-            keys.schema_fingerprint,
-            keys.extraction_schema_fingerprint,
-            keys.category_fingerprint,
-            keys.retrieval_fingerprint,
-        ):
-            cached.cache_clear()
-        return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
-
-    try:
-        assert keys_for(plain) == keys_for(labelled)
-    finally:
-        for cached in (
-            keys.schema_fingerprint,
-            keys.extraction_schema_fingerprint,
-            keys.category_fingerprint,
-            keys.retrieval_fingerprint,
-        ):
-            cached.cache_clear()
+    assert keys_under(tco_profile, plain) == keys_under(tco_profile, labelled)
 
 
 def test_a_chinese_description_is_optional_and_read_when_it_is_given():
@@ -503,32 +494,12 @@ def test_every_shipped_field_has_a_chinese_description():
     assert all(spec.description_zh for spec in FIELD_SPECS)
 
 
-def test_a_chinese_description_changes_neither_cache_key(monkeypatch):
+def test_a_chinese_description_changes_neither_cache_key(tco_profile):
     # Like the label: it reaches a tooltip and a spreadsheet sheet, never a prompt and never a verdict.
     plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
     described = load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": "薄膜厚度"}]}))
 
-    def keys_for(specs):
-        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        for cached in (
-            keys.schema_fingerprint,
-            keys.extraction_schema_fingerprint,
-            keys.category_fingerprint,
-            keys.retrieval_fingerprint,
-        ):
-            cached.cache_clear()
-        return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
-
-    try:
-        assert keys_for(plain) == keys_for(described)
-    finally:
-        for cached in (
-            keys.schema_fingerprint,
-            keys.extraction_schema_fingerprint,
-            keys.category_fingerprint,
-            keys.retrieval_fingerprint,
-        ):
-            cached.cache_clear()
+    assert keys_under(tco_profile, plain) == keys_under(tco_profile, described)
 
 
 def test_an_unknown_key_in_a_field_names_the_field_and_the_valid_keys():
@@ -793,35 +764,18 @@ def test_a_malformed_range_names_the_field_and_the_problem(entry, expected):
     assert "thickness" in str(excinfo.value)
 
 
-def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(monkeypatch):
+def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(tco_profile):
     # It changes what the model is told and which values survive, so it must re-extract; but a table that
     # declares no range has to keep the keys it had before ranges existed.
     plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
     ranged = load_field_specs(document({"fields": [RANGED_FIELD | {"valid_range": {"max": 500}}]}))
 
-    def keys_for(specs):
-        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        keys.schema_fingerprint.cache_clear()
-        keys.extraction_schema_fingerprint.cache_clear()
-        return (
-            keys.schema_fingerprint(),
-            keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")),
-            keys.comparison_key(),
-        )
-
-    try:
-        schema, extraction, comparison = keys_for(plain)
-        without_the_cell = [
-            {k: v for k, v in dataclasses.asdict(spec).items() if k not in keys._SCHEMA_EXCLUDED | {"valid_range"}}
-            for spec in plain
-        ]
-        assert schema == keys.content_fingerprint(json.dumps(without_the_cell, ensure_ascii=False, sort_keys=True))
-        ranged_schema, ranged_extraction, ranged_comparison = keys_for(ranged)
-        assert ranged_schema != schema
-        assert ranged_extraction != extraction and ranged_comparison != comparison
-    finally:
-        keys.schema_fingerprint.cache_clear()
-        keys.extraction_schema_fingerprint.cache_clear()
+    everything = (FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT)
+    assert "valid_range" not in keys._field_material(plain[0], *everything)
+    assert "valid_range" in keys._field_material(ranged[0], *everything)
+    document_key, passage_key, comparison = keys_under(tco_profile, plain)
+    ranged_document, ranged_passage, ranged_comparison = keys_under(tco_profile, ranged)
+    assert ranged_document != document_key and ranged_passage != passage_key and ranged_comparison != comparison
 
 
 # Every FieldSpec cell the extraction key hashes: what the model is told, and what cleaning its answer reads.
@@ -834,56 +788,41 @@ EXTRACTION_CELLS = {
     "condition_hint",
     "bare_number",
     "valid_range",
+    "level",
+    "condition_rule",
+    "range_policy",
 }
 
 
 def test_every_field_cell_is_classified_for_the_cache_keys():
-    # A cell nobody classified lands in extractor_key by default and renames every stored extraction. Adding
-    # one means deciding here which key it belongs to (and, if excluded, in keys.py).
-    cells = {field.name for field in dataclasses.fields(FieldSpec)}
-
-    assert cells == EXTRACTION_CELLS | keys._SCHEMA_EXCLUDED | keys._VERDICT_ONLY
-    assert not EXTRACTION_CELLS & (keys._SCHEMA_EXCLUDED | keys._VERDICT_ONLY)
+    # A cell nobody classified lands in no key or the wrong one. Its roles (fields.py) decide; the extraction
+    # key hashes the PROMPT and CLEANING ones.
+    assert set(keys.attributes_with(FieldRole.PROMPT, FieldRole.CLEANING)) == EXTRACTION_CELLS
 
 
-def test_a_tolerance_moves_only_the_comparison_key(monkeypatch):
+def test_a_tolerance_moves_only_the_comparison_key(tco_profile):
     # A tolerance decides whether two quoted values agree; the model is never told it and no cleaning rule
     # reads it, so editing one must leave every stored extraction where it is.
     plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
     tolerant = load_field_specs(document({"fields": [RANGED_FIELD | {"rel_tol": 0.1, "abs_tol": 2}]}))
 
-    def keys_for(specs):
-        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        keys.schema_fingerprint.cache_clear()
-        keys.extraction_schema_fingerprint.cache_clear()
-        return (
-            keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")),
-            keys.extractor_key(keys.ExtractionOptions("a-model", mode="passage")),
-            keys.comparison_key(),
-        )
-
-    try:
-        document_key, passage_key, comparison = keys_for(plain)
-        document_after, passage_after, comparison_after = keys_for(tolerant)
-        assert (document_key, passage_key) == (document_after, passage_after)
-        assert comparison != comparison_after
-    finally:
-        keys.schema_fingerprint.cache_clear()
-        keys.extraction_schema_fingerprint.cache_clear()
+    document_key, passage_key, comparison = keys_under(tco_profile, plain)
+    document_after, passage_after, comparison_after = keys_under(tco_profile, tolerant)
+    assert (document_key, passage_key) == (document_after, passage_after)
+    assert comparison != comparison_after
 
 
 @pytest.mark.parametrize("mode", ["document", "passage"])
-def test_the_range_sentence_the_model_reads_is_part_of_the_extractor_key(monkeypatch, mode):
+def test_the_range_sentence_the_model_reads_is_part_of_the_extractor_key(monkeypatch, mode, tco_profile):
     # The "Plausible values are ..." line is written by FieldSpec.describe_range and reaches every question,
     # in passage mode through the field question's user half, which is not hashed by value there. The
     # rendered field table is in the key by value (the document prompt carries it), so a change in how
     # the range is worded re-keys both modes, not just a change of the range itself.
-    from paperfacts.fields import FieldSpec
 
-    before = keys.extractor_key(keys.ExtractionOptions("a-model", mode=mode))
+    before = keys.extractor_key(keys.ExtractionOptions(tco_profile, "a-model", mode=mode))
     monkeypatch.setattr(FieldSpec, "describe_range", lambda self: "no more than a little")
 
-    assert keys.extractor_key(keys.ExtractionOptions("a-model", mode=mode)) != before
+    assert keys.extractor_key(keys.ExtractionOptions(tco_profile, "a-model", mode=mode)) != before
 
 
 def test_fields_py_is_part_of_the_extraction_code_fingerprint(monkeypatch):
@@ -914,24 +853,14 @@ def test_a_condition_preference_must_be_a_list_of_entries_naming_numbers(bad):
         load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": bad}]}))
 
 
-def test_a_condition_preference_moves_only_the_comparison_key(monkeypatch):
+def test_a_condition_preference_moves_only_the_comparison_key(tco_profile):
     # It picks a dataset cell among values already extracted; the model never hears of it.
     plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
     preferring = load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": ["550"]}]}))
 
-    def keys_for(specs):
-        monkeypatch.setattr(keys, "FIELD_SPECS", specs)
-        for cached in (keys.schema_fingerprint, keys.extraction_schema_fingerprint, keys.preference_fingerprint):
-            cached.cache_clear()
-        return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
-
-    try:
-        (extraction, comparison), (extraction_after, comparison_after) = keys_for(plain), keys_for(preferring)
-        assert extraction == extraction_after
-        assert comparison != comparison_after
-    finally:
-        for cached in (keys.schema_fingerprint, keys.extraction_schema_fingerprint, keys.preference_fingerprint):
-            cached.cache_clear()
+    (document_key, passage_key, comparison), after = keys_under(tco_profile, plain), keys_under(tco_profile, preferring)
+    assert (document_key, passage_key) == after[:2]
+    assert comparison != after[2]
 
 
 # ---- figures: the opt-in chart-reading stage ------------------------------------------------
@@ -1085,10 +1014,10 @@ def test_offline_replay_is_off_by_default_and_the_environment_can_turn_it_on(tmp
     assert Settings.from_env(env_for(path, PAPERFACTS_LLM_OFFLINE="true")).llm_offline is True
 
 
-def test_offline_replay_moves_no_cache_key(tmp_path: Path):
+def test_offline_replay_moves_no_cache_key(tmp_path: Path, tco_profile):
     # It decides whether a request is sent, never what is asked, so stored results keep their names.
     path = write_config(tmp_path / "config.json")
     online = Settings.from_env(env_for(path))
     offline = Settings.from_env(env_for(path, PAPERFACTS_LLM_OFFLINE="1"))
 
-    assert keys.extractor_key_for(online) == keys.extractor_key_for(offline)
+    assert keys.extractor_key_for(online, tco_profile) == keys.extractor_key_for(offline, tco_profile)

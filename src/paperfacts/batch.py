@@ -20,6 +20,7 @@ from paperfacts.dataset import DocumentDataset, consolidate_document, incomplete
 from paperfacts.errors import Cancelled, ConfigError, PaperFactsError
 from paperfacts.keys import comparison_key, extractor_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput
+from paperfacts.profile import default_profile
 from paperfacts.readings import shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout
@@ -64,8 +65,9 @@ def discover_pdfs(source: Path) -> tuple[Path, ...]:
 def export_document(document: DocumentInput, settings: Settings) -> DocumentDataset:
     """Rebuild a workbook row from current cached extractions without starting a parser or an LLM."""
     layout = DataLayout(settings.data_root)
-    key = extractor_key_for(settings)
-    report_path = layout.comparison_path(document.document_id, key, comparison_key())
+    profile = default_profile()
+    key = extractor_key_for(settings, profile)
+    report_path = layout.comparison_path(document.document_id, key, comparison_key(profile))
     if not report_path.is_file():
         raise FileNotFoundError(f"no current comparison for {document.display_filename}; run `paperfacts run` first")
     report = ComparisonReport.read(report_path)

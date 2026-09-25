@@ -2,18 +2,20 @@
 
 Two keys name the files under a document directory:
 
-- :func:`extractor_key` covers the model, the part of the field table extraction reads (everything but
-  the tolerances, categories, preferences and display text), the extraction prompts, how the document is
-  rendered for the model, and the code that decides which of the model's claims survive. Changing any of
+- :func:`extractor_key` covers the model, the part of the profile extraction reads (every field attribute
+  with the PROMPT or CLEANING role, the groups, the declared units), the extraction prompts, how the document
+  is rendered for the model, and the code that decides which of the model's claims survive. Changing any of
   them invalidates the stored extraction. The model's own answer is cached separately by request payload,
   so a code-only change re-derives records for free.
-- :func:`comparison_key` covers the whole field table including the tolerances, the normalisation rules
-  and the sample-matching prompt. Changing a tolerance recomputes the comparison and leaves every stored
-  extraction where it is.
+- :func:`comparison_key` covers that plus every VERDICT attribute (tolerances, categories, condition
+  preferences), the normalisation rules and the sample-matching prompt. Changing a tolerance recomputes the
+  comparison and leaves every stored extraction where it is.
 
 A third, :func:`figure_key`, names the figure readings, which belong to neither lane.
 
-Module sources are hashed instead of versioned by hand, so nobody has to remember to bump a number.
+Which key a field attribute reaches follows from its :class:`~paperfacts.fields.FieldRole` set alone; DISPLAY
+text and the profile's file name reach none. Module sources are hashed instead of versioned by hand, so nobody
+has to remember to bump a number.
 """
 
 from __future__ import annotations
@@ -38,8 +40,8 @@ from paperfacts.config import (
     ReasoningEffort,
     Settings,
 )
-from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, CONDITION_KEYWORDS, FIELD_SPECS
-from paperfacts.profile import default_profile
+from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FieldRole, FieldSpec
+from paperfacts.profile import DomainProfile
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
@@ -50,25 +52,6 @@ from paperfacts.prompts import (
 # Long enough that a collision is not a practical concern, short enough to read in a filename.
 FINGERPRINT_LENGTH = 12
 _PACKAGE_DIR = Path(__file__).parent
-# Cells that change a verdict or retrieval but never what the model is asked; each has its own fingerprint.
-# ``label`` is excluded outright: it is a Chinese column header for the UI, so it changes no prompt and no
-# verdict and gets no fingerprint of its own -- renaming a column must never re-extract or re-compare.
-_SCHEMA_EXCLUDED = {"keywords", "categories", "label", "description_zh", "condition_preference"} | {
-    # No stage reads these yet, so no stored result depends on them: ``level`` restates the group, which is
-    # hashed, and the rest keep today's behaviour at their defaults until the code that reads them lands.
-    "level",
-    "condition_rule",
-    "missing_condition_note_zh",
-    "figure_readable",
-    "display_format",
-    "range_policy",
-}
-# Cells only a verdict reads: the numeric tolerance of a comparison. Nothing in extraction -- no prompt, no
-# cleaning rule, not drop_implausible -- looks at them, so they stay out of extractor_key.
-_VERDICT_ONLY = {"rel_tol", "abs_tol"}
-# Cells added after stored results existed: left out of the material while at their default, so a field that
-# does not use one keeps the fingerprint it had before the cell was introduced.
-_SCHEMA_OMITTED_AT_DEFAULT = {"valid_range": (None, None)}
 _NO_DEFAULT = object()
 
 
@@ -81,69 +64,75 @@ def source_fingerprint(*module_files: str) -> str:
     return content_fingerprint("\n".join((_PACKAGE_DIR / name).read_text(encoding="utf-8") for name in module_files))
 
 
-def _table_fingerprint(excluded: set[str]) -> str:
-    table = [
-        {
-            name: value
-            for name, value in dataclasses.asdict(spec).items()
-            if name not in excluded and _SCHEMA_OMITTED_AT_DEFAULT.get(name, _NO_DEFAULT) != value
-        }
-        for spec in FIELD_SPECS
-    ]
-    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+def _dumps(material: object) -> str:
+    return json.dumps(material, ensure_ascii=False, sort_keys=True)
 
 
 @cache
-def extraction_schema_fingerprint() -> str:
-    """The field table as extraction reads it: what the model is told (name, group, kind, description,
-    canonical unit, condition hint, plausible range) and what the cleaning of its answer reads (the bare
-    number policy, through ``drop_implausible``). The tolerances are left out: they only decide verdicts,
-    so editing one must never rename a stored extraction."""
-    return _table_fingerprint(_SCHEMA_EXCLUDED | _VERDICT_ONLY)
+def attributes_with(*roles: FieldRole) -> tuple[str, ...]:
+    """The :class:`FieldSpec` attributes a stage with any of ``roles`` reads, in declaration order. Which key an
+    attribute lands in follows from its roles alone, so adding one is a decision made where it is declared."""
+    wanted = set(roles)
+    return tuple(item.name for item in dataclasses.fields(FieldSpec) if item.metadata["roles"] & wanted)
+
+
+def _field_material(spec: FieldSpec, *roles: FieldRole) -> dict[str, object]:
+    """The attributes of ``spec`` with any of ``roles``, each left out while at its dataclass default: a field
+    that does not use an attribute keeps the fingerprint it had before the attribute existed."""
+    defaults = {item.name: item.default for item in dataclasses.fields(FieldSpec)}
+    return {
+        name: getattr(spec, name)
+        for name in attributes_with(*roles)
+        if getattr(spec, name) != defaults.get(name, _NO_DEFAULT)
+    }
+
+
+def _schema_material(profile: DomainProfile, *roles: FieldRole) -> dict[str, object]:
+    material: dict[str, object] = {
+        "fields": [_field_material(spec, *roles) for spec in profile.fields],
+        # A group's level decides the scope rules; its Chinese label is display text.
+        "groups": [[group.name, group.level] for group in profile.groups],
+    }
+    if profile.units.declared:
+        material["units"] = profile.units.material()
+    return material
 
 
 @cache
-def schema_fingerprint() -> str:
-    """The field table as the comparison sees it: descriptions, units, tolerances, policies.
-
-    ``keywords`` is deliberately left out. It steers passage-mode retrieval and nothing else -- never a
-    prompt, never a tolerance -- so folding it in here would invalidate document-mode extractions and every
-    stored comparison each time a synonym is added. :func:`retrieval_fingerprint` covers it instead.
-
-    ``label`` is left out because nothing downstream of it is cached: it is only what the web table prints
-    above a column.
-
-    ``categories`` is left out for the same reason in the other direction: it renames nothing the model is
-    asked and only decides whether two quoted spellings count as the same answer, which is a verdict.
-    :func:`category_fingerprint` folds it into ``comparison_key`` alone.
-    """
-    return _table_fingerprint(_SCHEMA_EXCLUDED)
+def profile_extraction_fingerprint(profile: DomainProfile) -> str:
+    """The profile as extraction reads it: every field attribute that is rendered into a prompt or decides which
+    of the model's values survive (and what they convert to), the groups, and the units the profile declares.
+    Tolerances, categories, condition preferences and display text are left out: they only decide verdicts or
+    what a page prints, so editing one never renames a stored extraction. Recorded on every lane
+    (``LaneExtraction.profile_fingerprint``), so two lanes can be checked to come from the same profile."""
+    return content_fingerprint(_dumps(_schema_material(profile, FieldRole.PROMPT, FieldRole.CLEANING)))
 
 
 @cache
-def category_fingerprint() -> str:
-    """The closed answer sets of text fields, empty for a table that declares none -- so a checkout without
-    any keeps the comparison keys it already has."""
-    table = {spec.name: list(spec.categories) for spec in FIELD_SPECS if spec.categories}
-    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+def profile_comparison_fingerprint(profile: DomainProfile) -> str:
+    """The profile as a comparison reads it: what extraction reads plus every verdict attribute (tolerances,
+    categories, condition preferences). The keywords stay out: they steer retrieval and nothing else, so a new
+    synonym must not recompute every stored comparison."""
+    return content_fingerprint(
+        _dumps(_schema_material(profile, FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT))
+    )
 
 
 @cache
-def preference_fingerprint() -> str:
-    """The condition preferences that pick a dataset cell among several measurements; a verdict rule."""
-    table = {spec.name: list(spec.condition_preference) for spec in FIELD_SPECS if spec.condition_preference}
-    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
-
-
-@cache
-def retrieval_fingerprint() -> str:
-    """Everything that decides which blocks a passage-mode question is shown."""
-    material = {
-        "keywords": {spec.name: list(spec.keywords) for spec in FIELD_SPECS},
-        "condition_keywords": list(CONDITION_KEYWORDS),
+def retrieval_fingerprint(profile: DomainProfile) -> str:
+    """Everything that decides which blocks a passage-mode question is shown: the fields' retrieval attributes
+    (their keywords), the profile's condition words and unit pattern for the inventory question, how its own
+    units are found in running text, and the code that applies them."""
+    material: dict[str, object] = {
+        # In question order, not by name: a field's name reaches the prompts, which the extraction schema covers.
+        "fields": [_field_material(spec, FieldRole.RETRIEVAL) for spec in profile.fields],
+        "retrieval": dataclasses.asdict(profile.retrieval),
         "code": source_fingerprint("passages.py", "continuation.py", "units.py", "text.py"),
     }
-    return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
+    unit_patterns = [[unit.canonical, unit.retrieval] for unit in profile.units.declared if unit.retrieval]
+    if unit_patterns:
+        material["units"] = unit_patterns
+    return content_fingerprint(_dumps(material))
 
 
 @cache
@@ -192,22 +181,26 @@ def comparison_code_fingerprint() -> str:
     re-reads two stored extractions -- so a change here must never be served from a file written by the old
     rules. ``matching.py`` is in here because which samples were paired decides every verdict below them, and
     ``dataset.py`` and ``decide.py`` because the consolidated table they write is stored under this key and is
-    itself a set of verdicts (which cells are committed, which are refused). ``profile.py`` holds the defaults
-    the matching prompt's slots fall back on."""
-    return source_fingerprint("compare.py", "matching.py", "dataset.py", "decide.py", "profile.py")
+    itself a set of verdicts (which cells are committed, which are refused). ``fields.py`` declares the
+    attribute defaults the schema material leaves out, and ``profile.py`` the defaults the matching prompt's
+    slots fall back on."""
+    return source_fingerprint("compare.py", "matching.py", "dataset.py", "decide.py", "fields.py", "profile.py")
 
 
 @dataclass(frozen=True)
 class ExtractionOptions:
     """Every setting that decides what one lane's model is asked, in one value.
 
-    Built once from the settings (:meth:`from_settings`) and handed to
-    :func:`paperfacts.extract.extract_lane`, which records ``extractor_key(options)`` on the lane; every reader
-    computes the same key from the same settings (:func:`extractor_key_for`). Two hand-spelled argument
+    Built once per document from the settings and the profile (:meth:`from_settings`) and handed to both
+    lanes' :func:`paperfacts.extract.extract_lane`, which records ``extractor_key(options)`` on the lane; every
+    reader computes the same key from the same settings (:func:`extractor_key_for`). Two hand-spelled argument
     lists once disagreed about ``context_tokens``; one object cannot. The defaults are the built-in baselines,
     which the key leaves out.
     """
 
+    # Hashed through its role-derived material and its rendered prompts, never as a whole: display text and
+    # the file name must not rename a stored extraction.
+    profile: DomainProfile = dataclasses.field(metadata={"by_roles": True})
     model: str
     mode: ExtractionMode
     passes: int = 1
@@ -223,8 +216,9 @@ class ExtractionOptions:
     context_tokens: int = dataclasses.field(default=DEFAULT_LLM_CONTEXT_TOKENS, metadata={"passage_only": True})
 
     @classmethod
-    def from_settings(cls, settings: Settings, model: str | None = None) -> ExtractionOptions:
+    def from_settings(cls, settings: Settings, profile: DomainProfile, model: str | None = None) -> ExtractionOptions:
         return cls(
+            profile=profile,
             model=model or settings.llm_model,
             mode=settings.extraction_mode,
             passes=settings.extraction_passes,
@@ -244,10 +238,11 @@ def extractor_key(options: ExtractionOptions) -> str:
     report, so tuning it must not throw away the expensive per-lane extractions. Every option at its
     built-in baseline is left out of the material, so an unedited config.json keeps the filenames it has.
     """
+    profile = options.profile
     material: dict[str, object] = {
         "model": options.model,
-        "schema": extraction_schema_fingerprint(),
-        "extraction_system": extraction_system_prompt(default_profile()),
+        "schema": profile_extraction_fingerprint(profile),
+        "extraction_system": extraction_system_prompt(profile),
         "code": extraction_code_fingerprint(),
     }
     # Pinned to "document" rather than to the configured default: whole-document mode sends exactly the
@@ -256,61 +251,47 @@ def extractor_key(options: ExtractionOptions) -> str:
     passage = options.mode != "document"
     if passage:
         material["mode"] = options.mode
-        material["inventory_system"] = inventory_system_prompt(default_profile())
-        material["field_system"] = field_system_prompt(default_profile())
-        material["retrieval"] = retrieval_fingerprint()
+        material["inventory_system"] = inventory_system_prompt(profile)
+        material["field_system"] = field_system_prompt(profile)
+        material["retrieval"] = retrieval_fingerprint(profile)
     for option in dataclasses.fields(ExtractionOptions):
-        if option.name in {"model", "mode"} or (option.metadata.get("passage_only") and not passage):
+        if (
+            option.name in {"model", "mode"}
+            or option.metadata.get("by_roles")
+            or (option.metadata.get("passage_only") and not passage)
+        ):
             continue
         value = getattr(options, option.name)
         if value != option.default:
             material[option.name] = value
-    return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
+    return content_fingerprint(_dumps(material))
 
 
-def extractor_key_for(settings: Settings, model: str | None = None) -> str:
+def extractor_key_for(settings: Settings, profile: DomainProfile, model: str | None = None) -> str:
     """The key a run with these settings writes, so the reader and the writer cannot disagree about it."""
-    return extractor_key(ExtractionOptions.from_settings(settings, model))
+    return extractor_key(ExtractionOptions.from_settings(settings, profile, model))
 
 
-def comparison_key() -> str:
+def comparison_key(profile: DomainProfile) -> str:
     material = {
-        "schema": schema_fingerprint(),
+        "schema": profile_comparison_fingerprint(profile),
         "ambiguous_confidence": AMBIGUOUS_MATCH_CONFIDENCE,
         "normalization": normalization_fingerprint(),
         "code": comparison_code_fingerprint(),
-        "matching_system": matching_system_prompt(default_profile()),
+        "matching_system": matching_system_prompt(profile),
     }
-    # Only present when a field declares categories: a table without any keeps the filenames it had before
-    # the concept existed, the same way every other baseline stays out of the material.
-    if any(spec.categories for spec in FIELD_SPECS):
-        material["categories"] = category_fingerprint()
-    if any(spec.condition_preference for spec in FIELD_SPECS):
-        material["condition_preference"] = preference_fingerprint()
-    return content_fingerprint(
-        json.dumps(
-            material,
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-    )
+    return content_fingerprint(_dumps(material))
 
 
 @cache
 def figure_field_fingerprint() -> str:
-    """The part of the field table figure reading uses: which fields a caption can name (the keywords),
-    what the model is told about them, and how a reading is converted."""
+    """The part of the field table figure reading uses: every FIGURE attribute of the fields a chart may be
+    read for -- which fields a caption can name (the keywords), what the model is told about them, and how a
+    reading is converted."""
     table = [
-        {
-            "name": spec.name,
-            "description": spec.description,
-            "keywords": list(spec.keywords),
-            "canonical_unit": spec.canonical_unit,
-            "bare_number": spec.bare_number,
-        }
-        for spec in figures.figure_fields()
+        {name: getattr(spec, name) for name in attributes_with(FieldRole.FIGURE)} for spec in figures.figure_fields()
     ]
-    return content_fingerprint(json.dumps(table, ensure_ascii=False, sort_keys=True))
+    return content_fingerprint(_dumps(table))
 
 
 def figure_key(
@@ -339,7 +320,7 @@ def figure_key(
         "fields": figure_field_fingerprint(),
         "code": source_fingerprint("figures.py", "normalize.py", "passages.py", "units.py", "text.py"),
     }
-    return content_fingerprint(json.dumps(material, ensure_ascii=False, sort_keys=True))
+    return content_fingerprint(_dumps(material))
 
 
 def figure_key_for(settings: Settings) -> str:

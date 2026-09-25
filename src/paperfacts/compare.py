@@ -39,6 +39,7 @@ from paperfacts.normalize import (
     normalize_text,
     text_key,
 )
+from paperfacts.profile import default_profile
 from paperfacts.records import FieldValue, LaneExtraction
 from paperfacts.storage import write_text_atomic
 
@@ -201,7 +202,7 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
     return ComparisonReport(
         document_id=lane_a.document_id,
         extractor_key=lane_a.extractor_key,
-        comparison_key=comparison_key(),
+        comparison_key=comparison_key(default_profile()),
         backend_a=a_name,
         backend_b=b_name,
         matching=matching,

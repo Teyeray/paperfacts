@@ -162,7 +162,7 @@ def extraction_json(sample_id: str = "A", value: str = "12.5", source_id: str | 
 
 
 def test_extract_document_calls_the_model_once_and_writes_the_result(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     client = FakeLlmClient([extraction_json()])
 
@@ -170,14 +170,14 @@ def test_extract_document_calls_the_model_once_and_writes_the_result(
 
     assert client.call_count == 1
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+        document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
     assert path.is_file()
     assert lane.sample("A") is not None
 
 
 def test_the_returned_lane_is_normalized_but_the_file_on_disk_is_not(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     """What is written to disk is the verbatim-level result; what is returned is normalized.
 
@@ -190,7 +190,7 @@ def test_the_returned_lane_is_normalized_but_the_file_on_disk_is_not(
 
     lane = extract_document(document, "mineru", settings, client)
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+        document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
     on_disk = LaneExtraction.read(path)
 
@@ -225,14 +225,16 @@ def test_force_re_asks_the_model_and_bypasses_the_llm_cache_too(
     assert refreshed.sample("A").get("sheet_resistance").value_raw == "99"
 
 
-def test_each_backend_has_its_own_cache_entry(settings: Settings, document: DocumentInput, parsed: dict[Backend, str]):
+def test_each_backend_has_its_own_cache_entry(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
+):
     client = FakeLlmClient([extraction_json(), extraction_json()])
 
     extract_document(document, "mineru", settings, client)
     extract_document(document, "paddleocr_vl", settings, client)
 
     layout = DataLayout(settings.data_root)
-    key = extractor_key(ExtractionOptions(client.model, mode="document"))
+    key = extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     assert layout.extraction_path(document.document_id, "mineru", key).is_file()
     assert layout.extraction_path(document.document_id, "paddleocr_vl", key).is_file()
     assert client.call_count == 2
@@ -261,7 +263,7 @@ def _reparse(settings: Settings, document: DocumentInput, backend: Backend, cont
 
 
 def test_the_lane_records_the_parse_it_came_from(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     from paperfacts.records import LaneExtraction
     from paperfacts.workflow import load_artifact
@@ -269,7 +271,7 @@ def test_the_lane_records_the_parse_it_came_from(
     client = FakeLlmClient([extraction_json()])
     extract_document(document, "mineru", settings, client)
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+        document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
 
     assert LaneExtraction.read(path).artifact_sha256 == load_artifact(document, "mineru", settings).content_hash()
@@ -291,14 +293,14 @@ def test_a_lane_from_another_parse_is_re_derived_not_served(
 
 
 def test_a_lane_file_without_a_recorded_parse_still_reads(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     from paperfacts.records import LaneExtraction
 
     client = FakeLlmClient([extraction_json()])
     extract_document(document, "mineru", settings, client)
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+        document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
     legacy = LaneExtraction.read(path).model_copy(update={"artifact_sha256": None})
     legacy.write(path)
@@ -346,7 +348,7 @@ def test_the_source_ids_are_validated_against_the_artifact_on_disk(
 
 
 def test_compare_document_extracts_both_lanes_then_matches_and_writes_the_report(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     # Both lanes use the same sample_id -> exact match, no need for a third model call.
     client = FakeLlmClient([extraction_json(), extraction_json()])
@@ -355,7 +357,9 @@ def test_compare_document_extracts_both_lanes_then_matches_and_writes_the_report
 
     assert client.call_count == 2
     path = DataLayout(settings.data_root).comparison_path(
-        document.document_id, extractor_key(ExtractionOptions(client.model, mode="document")), comparison_key()
+        document.document_id,
+        extractor_key(ExtractionOptions(tco_profile, client.model, mode="document")),
+        comparison_key(tco_profile),
     )
     assert path.is_file()
     assert report.backend_a == BACKEND_A and report.backend_b == BACKEND_B
@@ -380,7 +384,7 @@ def test_the_matching_model_is_called_when_the_sample_ids_differ(
 
 
 def test_an_offline_miss_in_matching_stores_no_comparison(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     answers = iter([extraction_json(sample_id="A1"), extraction_json(sample_id="B1")])
 
@@ -394,7 +398,9 @@ def test_an_offline_miss_in_matching_stores_no_comparison(
         compare_document(document, settings, FakeLlmClient(replay))
 
     comparisons = DataLayout(settings.data_root).comparison_path(
-        document.document_id, extractor_key(ExtractionOptions("fake-model", mode="document")), comparison_key()
+        document.document_id,
+        extractor_key(ExtractionOptions(tco_profile, "fake-model", mode="document")),
+        comparison_key(tco_profile),
     )
     assert not comparisons.exists()
 
@@ -433,14 +439,14 @@ def test_force_redoes_the_comparison_without_re_extracting(
 
 
 def test_a_stored_lane_with_an_unanswered_question_is_extracted_again(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     # Its invalid answers were never cached, so extracting again re-asks only that question; every other
     # request replays from the LLM cache (this fake has none, so it simply answers twice).
     client = FakeLlmClient([extraction_json(), extraction_json()])
     extract_document(document, "mineru", settings, client)
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+        document.document_id, "mineru", extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
     incomplete = LaneExtraction.read(path).model_copy(
         update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
@@ -514,7 +520,7 @@ def test_an_offline_export_stores_the_comparison_it_rebuilt(
 
 
 def test_an_offline_export_of_a_lane_with_an_unanswered_question_is_refused(
-    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile
 ):
     # The comparison on disk came from a complete run; the lane stored since is not complete. A table built
     # from it would mark the paper finished with that question never asked again.
@@ -522,7 +528,7 @@ def test_an_offline_export_of_a_lane_with_an_unanswered_question_is_refused(
     client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good])
     compare_document(document, settings, client)
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, BACKEND_A, extractor_key(ExtractionOptions(client.model, mode="document"))
+        document.document_id, BACKEND_A, extractor_key(ExtractionOptions(tco_profile, client.model, mode="document"))
     )
     LaneExtraction.read(path).model_copy(
         update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
@@ -599,8 +605,10 @@ EDITED_OPTIONS = {
 }
 
 
-def test_from_settings_reads_every_extraction_option(tmp_path: Path):
-    options = ExtractionOptions.from_settings(Settings(repo_root=tmp_path, llm_model="edited", **EDITED_OPTIONS))
+def test_from_settings_reads_every_extraction_option(tmp_path: Path, tco_profile):
+    options = ExtractionOptions.from_settings(
+        Settings(repo_root=tmp_path, llm_model="edited", **EDITED_OPTIONS), tco_profile
+    )
 
     for option in dataclasses.fields(ExtractionOptions):
         if option.name != "mode":
@@ -608,7 +616,7 @@ def test_from_settings_reads_every_extraction_option(tmp_path: Path):
 
 
 def test_a_lane_extracted_with_edited_settings_carries_the_key_the_reader_looks_up(
-    tmp_path: Path, document: DocumentInput
+    tmp_path: Path, document: DocumentInput, tco_profile
 ):
     settings = Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", **EDITED_OPTIONS)
     layout = DataLayout(settings.data_root)
@@ -632,17 +640,17 @@ def test_a_lane_extracted_with_edited_settings_carries_the_key_the_reader_looks_
 
     extract_document(document, "mineru", settings, client)
 
-    key = extractor_key_for(settings)
+    key = extractor_key_for(settings, tco_profile)
     stored = LaneExtraction.read(layout.extraction_path(document.document_id, "mineru", key))
     assert stored.extractor_key == key
-    assert key != extractor_key(ExtractionOptions(settings.llm_model, mode="passage"))
+    assert key != extractor_key(ExtractionOptions(tco_profile, settings.llm_model, mode="passage"))
 
 
-def test_the_client_built_from_settings_asks_with_the_options_built_from_them(tmp_path: Path):
+def test_the_client_built_from_settings_asks_with_the_options_built_from_them(tmp_path: Path, tco_profile):
     # The writer's key comes from ExtractionOptions.from_settings, the requests from build_llm_client; if the
     # two ever read a setting differently, the key would describe requests that were never sent.
     settings = Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", **EDITED_OPTIONS)
-    options = ExtractionOptions.from_settings(settings)
+    options = ExtractionOptions.from_settings(settings, tco_profile)
 
     with build_llm_client(settings) as client:
         sent = (client.model, client.temperature, client.max_tokens, client.reasoning_effort)
@@ -650,8 +658,8 @@ def test_the_client_built_from_settings_asks_with_the_options_built_from_them(tm
     assert sent == (options.model, options.temperature, options.max_tokens, options.reasoning_effort)
 
 
-def test_extract_lane_refuses_options_that_do_not_describe_the_client():
+def test_extract_lane_refuses_options_that_do_not_describe_the_client(tco_profile):
     client = FakeLlmClient([], temperature=0.7)
 
     with pytest.raises(ValueError, match="extraction options describe"):
-        extract_lane(make_artifact(), client, ExtractionOptions(client.model, mode="document"))
+        extract_lane(make_artifact(), client, ExtractionOptions(tco_profile, client.model, mode="document"))

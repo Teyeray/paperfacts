@@ -237,43 +237,43 @@ def _records(*, samples=(), unattributed=()) -> ExtractedRecords:
     )
 
 
-def test_a_value_outside_its_range_is_dropped_with_the_reason():
+def test_a_value_outside_its_range_is_dropped_with_the_reason(tco_profile):
     # Shipped range: thickness at most 5000 nm. A 280 µm wafer read as the film is the observed confusion.
     records = _records(samples=(make_sample("S1", [make_field("thickness", "6000", unit_raw="nm")]),))
 
-    kept = drop_implausible(records)
+    kept = drop_implausible(records, tco_profile)
 
     assert kept.samples[0].fields == ()
     assert len(kept.dropped) == 1
     assert "thickness" in kept.dropped[0] and "6000" in kept.dropped[0] and "at most 5000 nm" in kept.dropped[0]
 
 
-def test_the_range_is_judged_after_conversion_to_the_canonical_unit():
+def test_the_range_is_judged_after_conversion_to_the_canonical_unit(tco_profile):
     # "0.006" has digits well under 5000, but in mm it is 6000 nm.
     inside = make_field("thickness", "3", unit_raw="μm")
     outside = make_field("thickness", "0.006", unit_raw="mm")
     records = _records(samples=(make_sample("S1", [inside, outside]),))
 
-    assert drop_implausible(records).samples[0].fields == (inside,)
+    assert drop_implausible(records, tco_profile).samples[0].fields == (inside,)
 
 
-def test_unattributed_values_are_held_to_the_same_range():
+def test_unattributed_values_are_held_to_the_same_range(tco_profile):
     records = _records(unattributed=(make_field("rotation_speed", "3000", unit_raw="rpm"),))
 
-    kept = drop_implausible(records)
+    kept = drop_implausible(records, tco_profile)
 
     assert kept.unattributed == ()
     assert "rotation_speed" in kept.dropped[0]
 
 
-def test_a_value_that_cannot_be_converted_is_kept_since_there_is_nothing_to_judge():
+def test_a_value_that_cannot_be_converted_is_kept_since_there_is_nothing_to_judge(tco_profile):
     unconvertible = make_field("thickness", "600", unit_raw="furlongs")
     records = _records(samples=(make_sample("S1", [unconvertible]),))
 
-    assert drop_implausible(records) == records
+    assert drop_implausible(records, tco_profile) == records
 
 
-def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_were():
+def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_were(tco_profile):
     records = _records(
         samples=(
             make_sample(
@@ -286,10 +286,10 @@ def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_
         )
     )
 
-    assert drop_implausible(records) is records
+    assert drop_implausible(records, tco_profile) is records
 
 
-def test_a_target_whose_every_field_is_dropped_keeps_its_citations():
+def test_a_target_whose_every_field_is_dropped_keeps_its_citations(tco_profile):
     spec = FIELD_BY_NAME["thickness"]  # any ranged field will do; the target is judged like a sample
     records = ExtractedRecords(
         target=TargetRecord(source_ids=("mineru_p0_b1",), fields=(make_field(spec.name, "9", unit_raw="μm"),)),
@@ -298,6 +298,6 @@ def test_a_target_whose_every_field_is_dropped_keeps_its_citations():
         dropped=(),
     )
 
-    kept = drop_implausible(records)
+    kept = drop_implausible(records, tco_profile)
 
     assert kept.target == TargetRecord(source_ids=("mineru_p0_b1",), fields=())

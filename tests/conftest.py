@@ -20,12 +20,12 @@ from typing import Any
 
 import pytest
 
-from paperfacts.config import Settings
 from paperfacts.llm import OFFLINE_MISSES
 from paperfacts.models import DocumentGeometry, DocumentInput
 from paperfacts.pdf import read_geometry
-from paperfacts.profile import DomainProfile, load_profile, profile_path
+from paperfacts.profile import DomainProfile
 from support.factories import FIXTURES_DIR, RawOutputFactory, make_blank_pdf
+from support.profiles import shipped_profile
 
 # ---- Command-line switch: --run-parser ----------------------------------------------
 
@@ -71,10 +71,9 @@ def no_offline_misses_carried_over():
 
 @pytest.fixture(scope="session")
 def tco_profile() -> DomainProfile:
-    """The shipped TCO profile, from the built-in settings rather than the environment, so a developer's
-    PAPERFACTS_PROFILE cannot change what a test runs against. Synthetic profiles come from
+    """The shipped TCO profile (:func:`support.profiles.shipped_profile`). Synthetic profiles come from
     :func:`support.profiles.make_profile`."""
-    return load_profile(profile_path(Settings()))
+    return shipped_profile()
 
 
 # ---- PDF / document / geometry -------------------------------------------------------

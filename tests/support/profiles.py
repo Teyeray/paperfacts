@@ -11,7 +11,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from paperfacts.profile import DomainProfile, parse_profile
+from paperfacts.config import Settings
+from paperfacts.profile import DomainProfile, load_profile, parse_profile, profile_path
 
 # One paper-level group and one sample-level group, a numeric field in each, and a text field: the least a
 # profile needs to exercise both scopes.
@@ -75,6 +76,13 @@ def profile_data(changes: Mapping[str, Any] | None = None) -> dict[str, Any]:
         else:
             node[key] = value
     return data
+
+
+def shipped_profile() -> DomainProfile:
+    """The shipped TCO profile, from the built-in settings rather than the environment, so a developer's
+    PAPERFACTS_PROFILE cannot change what a test runs against. Tests take it from the ``tco_profile`` fixture;
+    this is for the builders in :mod:`support` that have no fixture to take it from."""
+    return load_profile(profile_path(Settings()))
 
 
 def make_profile(changes: Mapping[str, Any] | None = None, *, source: Path | None = None) -> DomainProfile:

@@ -23,6 +23,7 @@ from paperfacts.decide import CellValue
 from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
+from paperfacts.profile import default_profile
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import (
     DataLayout,
@@ -105,8 +106,9 @@ class Library:
         self.settings = settings
         self.layout = DataLayout(settings.data_root)
         # The same key the pipeline writes under, or the browser looks for a file nothing ever wrote.
-        self.extractor_key = extractor_key_for(settings)
-        self.comparison_key = comparison_key()
+        profile = default_profile()
+        self.extractor_key = extractor_key_for(settings, profile)
+        self.comparison_key = comparison_key(profile)
         self.figure_key = figure_key_for(settings)
         self._counts_cache: dict[Path, tuple[tuple[tuple[int, int, int] | None, ...], ComparisonCounts | None]] = {}
         self._counts_lock = threading.Lock()

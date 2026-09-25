@@ -36,13 +36,14 @@ from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
 from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
 from paperfacts.figures import FigureReadings
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
+from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key
 from paperfacts.llm import LlmClient, OpenAICompatibleClient
 from paperfacts.matching import match_samples
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
+from paperfacts.profile import default_profile
 from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
@@ -281,14 +282,17 @@ def extract_document(
     client: LlmClient,
     *,
     force: bool = False,
+    options: ExtractionOptions | None = None,
 ) -> LaneExtraction:
     """Extract one lane. What is stored is the model's own wording; what is returned is normalised.
 
     Changing the prompt, the model or the schema changes ``extractor_key`` and re-runs the extraction.
-    ``force`` bypasses both this cache and the LLM cache, and really re-asks.
+    ``force`` bypasses both this cache and the LLM cache, and really re-asks. A caller extracting both lanes
+    passes the one ``options`` it built for the document, so the two lanes cannot be asked differently.
     """
     layout = DataLayout(settings.data_root)
-    options = ExtractionOptions.from_settings(settings, client.model)
+    if options is None:
+        options = ExtractionOptions.from_settings(settings, default_profile(), client.model)
     key = extractor_key(options)
     artifact = load_artifact(document, backend, settings)
     if not force:
@@ -331,13 +335,13 @@ def compare_document(
     rechecks grounding on read. The standalone ``compare`` CLI command relies on that loader.
     """
     layout = DataLayout(settings.data_root)
-    path = layout.comparison_path(
-        document.document_id,
-        extractor_key_for(settings, client.model),
-        comparison_key(),
-    )
+    profile = default_profile()
+    options = ExtractionOptions.from_settings(settings, profile, client.model)
+    path = layout.comparison_path(document.document_id, extractor_key(options), comparison_key(profile))
     if lanes is None:
-        lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
+        lanes = {
+            backend: extract_document(document, backend, settings, client, options=options) for backend in BACKENDS
+        }
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
     # A stored report is never of an incomplete lane (see below), so with one it would be of other lanes.
     incomplete_lanes = bool(lane_a.failed_questions or lane_b.failed_questions)
@@ -672,6 +676,8 @@ def _extract_and_compare(
     """Both extraction lanes, then the comparison: the part of :func:`run_document` that uses the LLM."""
     lanes: dict[Backend, LaneExtraction] = {}
     with build_llm_client(settings) as client:
+        # One value for both lanes: whatever decides what a lane is asked cannot differ between them.
+        options = ExtractionOptions.from_settings(settings, default_profile(), client.model)
         # The two lanes are independent and both spend their time waiting on the model, so they overlap.
         # Nothing here touches pdf.py: extraction reads the stored artifact JSON and never opens the PDF,
         # so PDFium's process-wide lock is not involved. Both lanes are handed the same `settings` and the
@@ -684,7 +690,9 @@ def _extract_and_compare(
             on_stage(f"extract:{backend}", "running", "")
         with ContextThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
             futures: dict[Backend, Future[LaneExtraction]] = {
-                backend: pool.submit(extract_document, document, backend, settings, client, force=force)
+                backend: pool.submit(
+                    extract_document, document, backend, settings, client, force=force, options=options
+                )
                 for backend in BACKENDS
             }
             extracted = _every_lane(futures, "extract", on_stage=on_stage, describe=_lane_detail)

@@ -41,6 +41,8 @@ class PipelineSpy:
     extract: list[tuple[Backend, bool]] = field(default_factory=list)
     compare: list[bool] = field(default_factory=list)
     clients: list[object] = field(default_factory=list)
+    # The ExtractionOptions each lane was handed.
+    options: list[object] = field(default_factory=list)
     client: FakeLlmClient = field(default_factory=lambda: FakeLlmClient([]))
     # The lanes each compare_document call was handed, so a test can prove they are the extracted ones.
     compare_lanes: list[Mapping[Backend, LaneExtraction] | None] = field(default_factory=list)
@@ -80,11 +82,18 @@ def install_fake_pipeline(
         return None, report
 
     def fake_extract(
-        document: DocumentInput, backend: Backend, settings: Settings, client: object, *, force: bool = False
+        document: DocumentInput,
+        backend: Backend,
+        settings: Settings,
+        client: object,
+        *,
+        force: bool = False,
+        options=None,
     ) -> LaneExtraction:
         with spy.lock:
             spy.extract.append((backend, force))
             spy.clients.append(client)
+            spy.options.append(options)
             spy._in_flight += 1
             spy.peak_concurrent_lanes = max(spy.peak_concurrent_lanes, spy._in_flight)
         # Long enough that a sequential implementation could not show two lanes in flight at once.
@@ -186,6 +195,19 @@ def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: Docum
     assert [name for name, status, _ in marks if status in {"running", "skipped"}] == list(stage_names())
 
 
+def test_both_lanes_are_handed_the_one_options_object_of_the_document(
+    monkeypatch, document: DocumentInput, settings: Settings, tco_profile
+):
+    # Lane symmetry by construction: whatever decides what a lane is asked is one value, built once.
+    spy = install_fake_pipeline(monkeypatch)
+
+    run(document, settings)
+
+    first, second = spy.options
+    assert first is second
+    assert first.profile == tco_profile and first.model == spy.client.model
+
+
 def test_a_cached_parse_says_so_in_the_stage_detail(monkeypatch, document: DocumentInput, settings: Settings):
     # The user needs to see "11 blocks (cached)" to know why this step returned instantly.
     install_fake_pipeline(monkeypatch, cache_hit=True)
@@ -249,7 +271,7 @@ def test_a_run_with_an_unanswered_field_question_is_not_finished(
     install_fake_pipeline(monkeypatch)
     fake_extract = workflow_module.extract_document
 
-    def incomplete(document, backend, settings, client, *, force: bool = False):
+    def incomplete(document, backend, settings, client, *, force: bool = False, options=None):
         lane = fake_extract(document, backend, settings, client, force=force)
         return lane.model_copy(update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off"),)})
 
@@ -331,7 +353,7 @@ def test_the_lane_that_succeeded_is_marked_done_when_the_other_fails(
     # had succeeded and was cached, because the job layer stamps every stage still running.
     install_fake_pipeline(monkeypatch)
 
-    def one_lane_fails(document, backend, settings, client, *, force: bool = False):
+    def one_lane_fails(document, backend, settings, client, *, force: bool = False, options=None):
         if backend == "paddleocr_vl":
             raise RuntimeError("paddle lane exploded")
         return make_lane(backend=backend, samples=(make_sample("A"),))
@@ -354,7 +376,7 @@ def test_a_callback_that_raises_while_failing_does_not_mask_the_failure(
     # A stopped batch raises Cancelled from its callback; the paper's own error must still be the one raised.
     install_fake_pipeline(monkeypatch)
 
-    def one_lane_fails(document, backend, settings, client, *, force: bool = False):
+    def one_lane_fails(document, backend, settings, client, *, force: bool = False, options=None):
         raise RuntimeError(f"{backend} lane exploded")
 
     def refusing(stage: str, status: str, detail: str) -> None:
@@ -397,7 +419,7 @@ def test_a_lane_failure_still_surfaces_as_itself(monkeypatch, document: Document
     """Running the lanes together must not wrap, swallow or reorder the error one of them raises."""
     install_fake_pipeline(monkeypatch)
 
-    def failing_extract(document, backend, settings, client, *, force: bool = False):
+    def failing_extract(document, backend, settings, client, *, force: bool = False, options=None):
         if backend == BACKENDS[1]:
             raise RuntimeError("paddle lane exploded")
         return make_lane(backend=backend, samples=(make_sample("A"),))
@@ -412,7 +434,7 @@ def test_the_client_is_closed_even_when_a_lane_fails(monkeypatch, document: Docu
     """The other lane is awaited on the way out, so the shared client is never closed underneath it."""
     spy = install_fake_pipeline(monkeypatch)
 
-    def failing_extract(document, backend, settings, client, *, force: bool = False):
+    def failing_extract(document, backend, settings, client, *, force: bool = False, options=None):
         raise RuntimeError("both lanes exploded")
 
     monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
@@ -445,7 +467,7 @@ def test_the_first_lane_in_backends_order_wins_when_both_fail(
     other one's exception is logged rather than dropped."""
     install_fake_pipeline(monkeypatch)
 
-    def failing_extract(document, backend, settings, client, *, force: bool = False):
+    def failing_extract(document, backend, settings, client, *, force: bool = False, options=None):
         raise RuntimeError(f"{backend} lane exploded")
 
     monkeypatch.setattr("paperfacts.workflow.extract_document", failing_extract)
@@ -465,7 +487,7 @@ def test_a_surviving_lane_is_not_reported_as_a_failure(
     """Only the lane that raised is explained; the one that succeeded has nothing to say."""
     install_fake_pipeline(monkeypatch)
 
-    def failing_extract(document, backend, settings, client, *, force: bool = False):
+    def failing_extract(document, backend, settings, client, *, force: bool = False, options=None):
         if backend == BACKENDS[0]:
             raise RuntimeError("mineru lane exploded")
         return make_lane(backend=backend, samples=(make_sample("A"),))

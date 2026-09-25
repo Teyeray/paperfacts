@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from paperfacts.keys import ExtractionOptions, extraction_schema_fingerprint
+from paperfacts.keys import ExtractionOptions, profile_extraction_fingerprint
 from paperfacts.models import Backend, PageGeometry, ParsedArtifact, SourceBlock
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, TargetRecord
 from support.factories import DOC_ID, make_block
+from support.profiles import shipped_profile
 
 # Placeholder extractor_key for extraction-layer tests: the real value is computed by extractor_key();
 # the comparison layer only requires both lanes to carry the same one.
@@ -109,7 +110,7 @@ def make_lane(
         backend=backend,
         extractor_key=extractor_key,
         model=model,
-        schema_version=extraction_schema_fingerprint(),
+        schema_version=profile_extraction_fingerprint(shipped_profile()),
         target=target,
         samples=tuple(samples),
         invalid_source_ids=tuple(invalid_source_ids),
@@ -122,7 +123,9 @@ def make_lane(
 
 def lane_options(client=None, *, mode, **overrides) -> ExtractionOptions:
     """The options a caller builds for ``client``: its sampling settings, plus the extraction mode and any
-    other option a test moves off its default. Without a client, those of a default ``FakeLlmClient``."""
+    other option a test moves off its default. Without a client, those of a default ``FakeLlmClient``. The
+    profile is the shipped one unless the test passes its own."""
+    overrides.setdefault("profile", shipped_profile())
     if client is None:
         return ExtractionOptions(model=DEFAULT_MODEL, mode=mode, **overrides)
     return ExtractionOptions(

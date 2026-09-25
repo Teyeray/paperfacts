@@ -735,16 +735,16 @@ def test_two_lanes_from_different_extractors_cannot_be_compared():
         compare_lanes(lane_a, lane_b, SampleMatching())
 
 
-def test_the_comparison_key_is_stable_and_short():
-    assert comparison_key() == comparison_key()
-    assert len(comparison_key()) == FINGERPRINT_LENGTH
+def test_the_comparison_key_is_stable_and_short(tco_profile):
+    assert comparison_key(tco_profile) == comparison_key(tco_profile)
+    assert len(comparison_key(tco_profile)) == FINGERPRINT_LENGTH
 
 
-def test_the_report_records_both_keys():
+def test_the_report_records_both_keys(tco_profile):
     report = compare_lanes(make_lane(), make_lane(backend="paddleocr_vl"), SampleMatching())
 
     assert report.extractor_key == make_lane().extractor_key
-    assert report.comparison_key == comparison_key()
+    assert report.comparison_key == comparison_key(tco_profile)
 
 
 # ---- Persisting to disk --------------------------------------------------------------------

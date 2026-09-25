@@ -251,7 +251,7 @@ def test_extracted_is_per_backend(library: Library):
     assert summary.extracted == {"mineru": True, "paddleocr_vl": False}
 
 
-def test_an_extraction_from_another_model_does_not_count_as_extracted(library: Library):
+def test_an_extraction_from_another_model_does_not_count_as_extracted(library: Library, tco_profile):
     """The extraction artifact's path carries an ``extractor_key`` (a fingerprint of the model +
     prompt + field schema).
 
@@ -259,7 +259,9 @@ def test_an_extraction_from_another_model_does_not_count_as_extracted(library: L
     model's results without knowing it.
     """
     seed_extraction(
-        library, "mineru", extractor_key=extractor_key(ExtractionOptions("some-other-model", mode="document"))
+        library,
+        "mineru",
+        extractor_key=extractor_key(ExtractionOptions(tco_profile, "some-other-model", mode="document")),
     )
 
     assert library.summary(DOC_KEY).extracted["mineru"] is False

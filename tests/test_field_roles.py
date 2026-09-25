@@ -1,15 +1,18 @@
 """Every FieldSpec attribute says which stages read it, and the cache keys agree with what it says.
 
 An attribute nobody classified would land in a key by accident, or miss one it should be in. The roles are
-the classification: this pins them, and pins that today's key material follows from them.
+the classification: this pins them, and pins that the key material follows from them.
 """
 
 from __future__ import annotations
 
 import dataclasses
 
+import pytest
+
 from paperfacts import keys
 from paperfacts.fields import FieldRole, FieldSpec, field_roles
+from support.profiles import make_profile
 
 P, C, V, R, F, D = (
     FieldRole.PROMPT,
@@ -44,14 +47,29 @@ ROLES = {
     "display_format": {D},
     "range_policy": {C, V},
 }
-# Attributes no stage reads yet: excluded from every key until the code that reads them lands.
-NOT_YET_READ = {
-    "level",
-    "condition_rule",
-    "missing_condition_note_zh",
-    "figure_readable",
-    "display_format",
-    "range_policy",
+# A value off each attribute's default, set on one field of the demo profile to see which fingerprints move.
+EDITS = {
+    "name": "coating_depth",
+    "group": "precursor",
+    "kind": "text",
+    "description": "Something else.",
+    "keywords": ("depth",),
+    "canonical_unit": "μm",
+    "label": "厚度",
+    "description_zh": "涂层厚度",
+    "rel_tol": 0.1,
+    "abs_tol": 1.0,
+    "condition_hint": "the wavelength",
+    "bare_number": "assume_canonical",
+    "categories": ("thin", "thick"),
+    "valid_range": (0.0, 500.0),
+    "condition_preference": ("550",),
+    "level": "paper",
+    "condition_rule": "the wavelength or spectral range",
+    "missing_condition_note_zh": "未注明波长",
+    "figure_readable": True,
+    "display_format": "scientific",
+    "range_policy": "reject",
 }
 
 
@@ -68,20 +86,33 @@ def test_field_roles_reads_the_metadata():
     assert field_roles("valid_range") == frozenset({P, C})
 
 
-def test_the_extraction_schema_hashes_exactly_the_prompt_and_cleaning_attributes_in_use():
-    hashed = set(ROLES) - keys._SCHEMA_EXCLUDED - keys._VERDICT_ONLY
-
-    assert hashed == {name for name, roles in ROLES.items() if roles & {P, C}} - NOT_YET_READ
-
-
-def test_display_text_reaches_no_key():
-    assert {name for name, roles in ROLES.items() if roles == {D}} <= keys._SCHEMA_EXCLUDED
+def _fingerprints(profile) -> dict[str, str]:
+    return {
+        "extraction": keys.profile_extraction_fingerprint(profile),
+        "comparison": keys.profile_comparison_fingerprint(profile),
+        "retrieval": keys.retrieval_fingerprint(profile),
+    }
 
 
-def test_a_verdict_only_attribute_stays_out_of_the_extraction_key():
-    for name in keys._VERDICT_ONLY:
-        assert V in ROLES[name] and not ROLES[name] & {P, C}, name
+@pytest.mark.parametrize("attribute", sorted(ROLES))
+def test_an_attribute_moves_exactly_the_fingerprints_its_roles_name(attribute):
+    profile = make_profile()
+    spec = profile.fields[1]
+    edited = dataclasses.replace(
+        profile,
+        fields=(profile.fields[0], dataclasses.replace(spec, **{attribute: EDITS[attribute]}), *profile.fields[2:]),
+    )
+    assert getattr(spec, attribute) != EDITS[attribute]
+
+    before, after = _fingerprints(profile), _fingerprints(edited)
+    moved = {name for name in before if before[name] != after[name]}
+
+    roles = ROLES[attribute]
+    expected = {
+        name for name, reads in (("extraction", {P, C}), ("comparison", {P, C, V}), ("retrieval", {R})) if roles & reads
+    }
+    assert moved == expected
 
 
-def test_the_attributes_no_stage_reads_yet_are_in_no_key():
-    assert NOT_YET_READ <= keys._SCHEMA_EXCLUDED
+def test_the_figure_material_is_exactly_the_figure_attributes():
+    assert set(keys.attributes_with(F)) == {name for name, roles in ROLES.items() if F in roles}
