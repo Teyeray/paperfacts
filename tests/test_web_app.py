@@ -208,6 +208,7 @@ def test_uploading_again_while_the_first_run_is_still_active_joins_that_run(sett
             second = upload(client, pdf_bytes)
 
             assert second["job"]["job_id"] == first["job"]["job_id"]
+            gate.set()  # leaving the app waits for the running job, so it must be able to finish
     finally:
         gate.set()
     wait_for_status(manager, first["job"]["job_id"], "done")
@@ -764,6 +765,7 @@ def test_running_everything_twice_while_the_jobs_are_active_reuses_them(
 
             assert len(first["submitted"]) == 2
             assert [job["job_id"] for job in second["submitted"]] == [job["job_id"] for job in first["submitted"]]
+            gate.set()  # leaving the app waits for the running job, so it must be able to finish
     finally:
         gate.set()
 
@@ -821,7 +823,7 @@ def test_an_unknown_path_is_not_found(client: TestClient):
 
 
 def test_the_job_worker_is_shut_down_with_the_app(settings: Settings, runner: RecordingRunner):
-    # stop accepting new jobs on exit; otherwise shutdown waits on queued jobs, or the thread outlives the process
+    # stop accepting new jobs on exit; queued ones are dropped and running ones finish before the app is gone
     manager = JobManager(runner, stage_names())
     with TestClient(create_app(settings, jobs=manager)):
         pass

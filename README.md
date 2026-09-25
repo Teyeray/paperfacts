@@ -191,7 +191,9 @@ stage to run again. Each library entry shows the paper's name and four badges: �
 found it). 「处理全部未完成」 queues every document that can run and is not already compared under the
 current keys, one job each, in library order; a document already queued or running simply gets its
 existing job back, so pressing it twice costs nothing. Documents with neither a PDF nor a cached parse
-are skipped with a reason.
+are skipped with a reason. Up to `web.max_parallel_documents` (default 3) documents run at once, started in
+the order they were queued; a document is never worked on twice at the same time, so 「强制重跑」 on a
+paper that is already running waits for that run to end.
 
 **The home page** is 论文结果总表: one row per processed paper, showing the sample that paper selected
 across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
@@ -251,6 +253,7 @@ PDF and can be re-rendered on another machine. The HTTP API is documented at `/a
 uv run paperfacts run paper.pdf            # parse both lanes, extract both, compare, write the workbook
 uv run paperfacts run paper.pdf --figures  # the same, and read the paper's charts with the vision model
 uv run paperfacts batch template_files --output data/exports/template_files.xlsx
+uv run paperfacts batch template_files --jobs 4   # four papers at once; default web.max_parallel_documents
 uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
 uv run paperfacts fields                   # list the field table the package actually loaded
 ```
@@ -278,6 +281,8 @@ The flags worth knowing:
   over `figures.enabled`; `--force-figures` re-reads the charts without redoing anything else.
 - `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
+- `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
+  `--jobs 1` is the old one-after-another run.
 - `--data-root` overrides the data directory; `--verbose` / `-v` prints INFO logs.
 - `overlay` also takes `--dpi` and `--pages 0,3,4` (0-based).
 
@@ -286,6 +291,34 @@ once. Every completed or failed paper checkpoints the workbook atomically, so re
 reuses the caches and rebuilds the table without appending duplicate rows. Failed papers are listed in the
 运行记录 sheet, processing continues past them, and **the command exits with status 1 if any paper
 failed.**
+
+With `--jobs` above 1 the papers overlap, but the workbook, the failure list and the summary are in input
+order, so the table is the one a serial run writes; each progress line is prefixed with its paper
+(`[3/28 x.pdf parse:mineru] done ...`). Stopping one (Ctrl-C, or a workbook that cannot be written) starts
+no new paper and prints `[batch] failed stopping; waiting for N running papers to reach a stage boundary`:
+each running paper finishes the stage it is in -- a request already paid for is worth caching -- and stops
+there, marked `skipped`. That can take as long as one stage (minutes for a first parse or extraction).
+Stopped papers are neither rows nor failures, and the caches make the next run resume where this one
+stopped. `export` always reads one paper at a time, since it only reads the caches.
+
+Three things keep parallel papers from multiplying the load:
+
+- **Parsing is one paper per parser at a time.** The server has one GPU, and two papers sent to the same
+  parser service only compete for its memory; MinerU and PaddleOCR-VL may parse two different papers side
+  by side, and with a parser service configured the two lanes of one paper parse side by side too. On a workstation the two runner subprocesses share one lock instead, because both model sets do
+  not fit in its memory at once. A cached parse never waits.
+- **Model requests share `llm.max_in_flight`** (default 8) across every paper, lane and stage in the
+  process, so the Model Studio rate limit sees at most that many open requests however many papers run.
+- **Each paper writes only its own directory**, the LLM cache is written atomically under unique temp
+  names, and the batch workbook is checkpointed under a lock in input order.
+
+The defaults are conservative on purpose. 3 papers at once is enough to keep 8 requests in flight while
+one paper waits for a parser; more papers than that mostly queue for the GPU or the limit. 8 in flight is
+twice one paper's two lanes at `llm.concurrency` 4, and a Model Studio workspace answering 429 costs a
+retry out of a fixed budget where a queued request costs only time. Raise `llm.max_in_flight` first if
+the endpoint takes it, then `--jobs`. One setting serves both the web queue and `batch` rather than two,
+because both are bounded by the same GPU and the same endpoint; `--jobs` overrides it for one run. The
+limits are per process: a `batch` run beside the web server has its own.
 
 `export` is offline. It requires cached extractions and comparisons matching the current model, field
 schema and comparison rules, and reports outdated or absent results as failures rather than silently
@@ -310,6 +343,7 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `temperature` | Default 0.0 |
 | `max_tokens` | Completion budget, hidden reasoning included. Default 65536 |
 | `concurrency` | How many of one lane's field questions are in flight at once. Default 4 |
+| `max_in_flight` | How many model requests, text and vision, the whole process has on the wire at once. Default 8 |
 | `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
 | `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
 | `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured |
@@ -336,8 +370,17 @@ passage mode only, since document mode never asks the question.
 
 `concurrency` is the one knob here that changes only *when* requests are sent, never what they contain, so
 it stays out of both cache keys: raising or lowering it never re-extracts and never re-compares. The two
-lanes always run as a pair, so at most twice this many requests are open. Set it to 1 to send every
-question strictly one after another.
+lanes always run as a pair, so one paper has at most twice this many requests open, and `max_in_flight`
+caps the sum over every paper running. Set it to 1 to send every question strictly one after another.
+
+`max_in_flight` is the ceiling over everything else: every lane of every document running at once, the
+figures stage and the sample matching all take a slot before a request goes out and give it back when the
+answer arrives. A cache hit takes none, so a resumed run replays at disk speed. The slot covers the HTTP call
+only, never a retry's backoff, so a request waiting out a 429 does not hold up the others. 8 is two
+documents' worth of lanes at the default `concurrency`; it is a guess at what one Model Studio workspace
+serves without answering 429, kept low because a throttled request costs a retry out of a fixed budget
+while a queued one costs only time. The limit is per process: the web server and a `batch` run at the same
+time each have their own. Like `concurrency`, it is in neither cache key.
 
 ### `extraction`
 
@@ -391,6 +434,7 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `server.max_upload_mb` | Default 200 |
 | `server.page_dpi.default` / `.min` / `.max` | Page renders for the viewer. Defaults 110, 50, 220 |
 | `web.username` | HTTP Basic username. Default `paperfacts`. The password is never here |
+| `web.max_parallel_documents` | Documents processed at once, by the web job queue and by `batch` (unless `--jobs` says otherwise). Default 3 |
 | `overlay.dpi` | Default 150 |
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
 | `condition_keywords` | The words that mark a measurement condition worth recording |
@@ -407,11 +451,11 @@ points at its own services without editing the shared file:
 `PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`,
 `PAPERFACTS_LLM_TIMEOUT_S`, `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`,
 `PAPERFACTS_LLM_MAX_TOKENS`, `PAPERFACTS_LLM_REASONING_EFFORT`,
-`PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`,
+`PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`, `PAPERFACTS_LLM_MAX_IN_FLIGHT`,
 `PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
-`PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`,
+`PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_WEB_MAX_PARALLEL_DOCUMENTS`,
 `PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
 `PAPERFACTS_FIGURES_MAX_PER_DOCUMENT`, `PAPERFACTS_FIGURES_DPI`, `PAPERFACTS_FIGURES_MAX_PIXELS`,
 `PAPERFACTS_FIGURES_TIMEOUT_S`.

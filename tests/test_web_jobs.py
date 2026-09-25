@@ -1,21 +1,22 @@
-"""Background jobs: a single worker thread runs the whole pipeline, and the web frontend polls for
-status and logs.
+"""Background jobs: a few worker threads run the whole pipeline, one document each, and the web frontend
+polls for status and logs.
 
 This is the only threaded layer in the codebase, so the tests here follow two hard rules:
 
-1. **Timing is staged with** :class:`threading.Event`, and waiting for a result polls with a
-   timeout (see :mod:`support.web`); any ``sleep(0.1)`` would only be "not flaky on this machine,
-   for now".
+1. **Timing is staged with** :class:`threading.Event` (and barriers), and waiting for a result polls
+   with a timeout (see :mod:`support.web`); any ``sleep(0.1)`` would only be "not flaky on this
+   machine, for now".
 2. **A failure must leave a trace**: if the worker thread's exception isn't caught and doesn't show
    up in the snapshot, the job died silently and the web page would show "running" forever.
 
 During a job, the ``paperfacts`` logger is temporarily raised to INFO — the default root logger is
 WARNING, and an INFO record gets dropped **before** it reaches any handler; it must be restored
-afterwards. Both of these each get their own test case.
+afterwards, and with several jobs running only when the last one ends. Each of these has its own case.
 """
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import logging
 import threading
@@ -189,12 +190,14 @@ def test_the_traceback_is_kept_so_the_failure_can_be_diagnosed_from_the_page():
 
 
 def test_log_records_from_the_pipeline_pools_reach_the_job_log_and_request_threads_do_not():
-    # run_document extracts the two lanes on a pool named "paperfacts-lane"; an HTTP request thread has no such name.
+    # run_document's pools run every task in a copy of the submitting thread's context; an HTTP request
+    # thread starts with an empty one.
     def body(job: Job, mark) -> None:
         def say(message: str) -> None:
             logging.getLogger("paperfacts.extract").warning(message)
 
-        pool = threading.Thread(target=say, args=("from a lane pool",), name="paperfacts-lane_0")
+        context = contextvars.copy_context()
+        pool = threading.Thread(target=context.run, args=(say, "from a lane pool"), name="paperfacts-lane_0")
         other = threading.Thread(target=say, args=("from a request thread",), name="AnyIO worker thread")
         for thread in (pool, other):
             thread.start()

@@ -102,6 +102,12 @@ DEFAULT_RETRY_BACKOFF_S = 2.0
 # request is byte-identical to the one the sequential loop would have sent, so it is deliberately absent
 # from extractor_key and comparison_key. 1 restores the strictly sequential behaviour.
 DEFAULT_LLM_CONCURRENCY = 4
+# How many model requests (text and vision, every lane of every document) may be on the wire at once in
+# one process. The per-lane `llm.concurrency` alone multiplies with the lanes, the figures stage and the
+# documents running beside each other; this is the one number that bounds the product, so a corpus run
+# stays under the Model Studio workspace's rate limit instead of spending its retries on 429s. 8 is two
+# documents' worth of lanes at the default `llm.concurrency`. Scheduling only, so absent from every key.
+DEFAULT_LLM_MAX_IN_FLIGHT = 8
 DEFAULT_CANDIDATE_LIMIT = 8
 DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8000
@@ -110,6 +116,10 @@ DEFAULT_SERVER_PORT = 8000
 # none, because it looks like protection.
 DEFAULT_WEB_USERNAME = "paperfacts"
 DEFAULT_MAX_UPLOAD_MB = 200
+# How many documents the web job queue and `paperfacts batch` process at once. Parsing is still one paper
+# per parser at a time (the single GPU), so extra documents mostly overlap their model waits; three keeps
+# the in-flight limit above busy without letting a queue of papers pile up behind it.
+DEFAULT_MAX_PARALLEL_DOCUMENTS = 3
 DEFAULT_PAGE_DPI = 110
 DEFAULT_OVERLAY_DPI = 150
 
@@ -270,9 +280,11 @@ class Settings:
     # INHERIT reuses llm_reasoning_effort, None omits the parameter, a value overrides it -- for passage
     # mode's inventory question only.
     llm_inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT
-    # Per-field questions in flight per lane. The two lanes themselves always run as a pair, so the peak
-    # number of open requests is twice this. It changes nothing about what is asked, only when.
+    # Per-field questions in flight per lane. The two lanes themselves always run as a pair, so one paper's
+    # peak is twice this; llm_max_in_flight caps the total. It changes nothing about what is asked, only when.
     llm_concurrency: int = DEFAULT_LLM_CONCURRENCY
+    # The process-wide ceiling on requests in flight, over every lane, stage and document together.
+    llm_max_in_flight: int = DEFAULT_LLM_MAX_IN_FLIGHT
     llm_retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
     llm_retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S
     # Extract each lane this many times and keep what a majority of passes agree on. Costs one LLM call
@@ -288,6 +300,8 @@ class Settings:
     web_username: str = DEFAULT_WEB_USERNAME
     web_password: str | None = field(default=None, repr=False)
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_MB * 1024 * 1024
+    # Documents processed at once, by the web job queue and by `batch` unless it is given --jobs.
+    max_parallel_documents: int = DEFAULT_MAX_PARALLEL_DOCUMENTS
     page_dpi: int = DEFAULT_PAGE_DPI
     page_dpi_min: int = 50
     page_dpi_max: int = 220
@@ -354,6 +368,9 @@ class Settings:
                 "llm.concurrency",
                 file.path,
             ),
+            llm_max_in_flight=_positive(
+                number("LLM_MAX_IN_FLIGHT", file.get("llm.max_in_flight", int), int), "llm.max_in_flight", file.path
+            ),
             llm_retry_attempts=_positive(
                 number("LLM_RETRY_ATTEMPTS", file.get("llm.retry_attempts", int), int), "llm.retry_attempts", file.path
             ),
@@ -371,6 +388,11 @@ class Settings:
             server_port=number("SERVER_PORT", file.get("server.port", int), int),
             web_username=get("WEB_USERNAME") or file.get("web.username", str),
             web_password=get("WEB_PASSWORD"),
+            max_parallel_documents=_positive(
+                number("WEB_MAX_PARALLEL_DOCUMENTS", file.get("web.max_parallel_documents", int), int),
+                "web.max_parallel_documents",
+                file.path,
+            ),
             max_upload_bytes=number("MAX_UPLOAD_MB", file.get("server.max_upload_mb", int), int) * 1024 * 1024,
             page_dpi=number("PAGE_DPI", file.get("server.page_dpi.default", int), int),
             page_dpi_min=number("PAGE_DPI_MIN", file.get("server.page_dpi.min", int), int),

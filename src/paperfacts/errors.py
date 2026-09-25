@@ -40,3 +40,8 @@ class LlmResponseError(LlmError):
 
 class ContextBudgetError(PaperFactsError):
     """The paper does not fit in the model's context window."""
+
+
+class Cancelled(PaperFactsError):
+    """A run was asked to stop before it finished: the paper it served failed elsewhere, or a batch was
+    interrupted. Whatever it had already paid for is in the caches, so the next run picks it up for free."""

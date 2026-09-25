@@ -30,14 +30,15 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from paperfacts.errors import Cancelled
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.llm import VisionClient
 from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
@@ -49,6 +50,7 @@ from paperfacts.normalize import convert_to_canonical, normalize_text
 # passage-mode extractor_key and would rename every stored extraction for no change in behaviour.
 from paperfacts.passages import _names, _searchable
 from paperfacts.storage import write_text_atomic
+from paperfacts.threads import ContextThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -675,6 +677,19 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
 CropRenderer = Callable[[int, NormalizedBBox], bytes]
 
 
+def _read_panel_unless_stopped(
+    request: PanelRequest,
+    image: bytes | Exception,
+    client: VisionClient,
+    *,
+    refresh: bool,
+    stop: threading.Event | None,
+) -> tuple[FigurePanel, tuple[FigureReading, ...]]:
+    if stop is not None and stop.is_set():
+        raise Cancelled("figure reading was stopped")
+    return _read_panel(request, image, client, refresh=refresh)
+
+
 def _read_panel(
     request: PanelRequest, image: bytes | Exception, client: VisionClient, *, refresh: bool
 ) -> tuple[FigurePanel, tuple[FigureReading, ...]]:
@@ -731,18 +746,28 @@ def read_figures(
     concurrency: int = 1,
     refresh: bool = False,
     refresh_panels: frozenset[str] = frozenset(),
+    stop: threading.Event | None = None,
 ) -> FigureReadings:
     """Read every selected chart panel of ``artifact``: one vision request per panel.
 
     Crops are rendered first, one after another, because rendering goes through pdf.py's process-wide lock
     anyway; the requests then overlap, ``concurrency`` at a time, since each spends a minute waiting.
+
+    ``stop`` is checked before each panel is asked: once it is set, no new request goes out and
+    :class:`Cancelled` is raised when the ones already out have answered. Nothing is returned, so nothing
+    partial is stored; the answers that did arrive are in the LLM cache.
     """
     requests = select_panels(artifact.blocks, limit=max_per_document)
     images = [_crop(render, request) for request in requests]
-    with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
+    with ContextThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
         futures = [
             pool.submit(
-                _read_panel, request, image, client, refresh=refresh or request.block.source_id in refresh_panels
+                _read_panel_unless_stopped,
+                request,
+                image,
+                client,
+                refresh=refresh or request.block.source_id in refresh_panels,
+                stop=stop,
             )
             for request, image in zip(requests, images, strict=True)
         ]
