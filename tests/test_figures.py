@@ -14,6 +14,7 @@ from paperfacts import figures, keys
 from paperfacts.config import Settings
 from paperfacts.errors import LlmError, LlmOfflineMiss
 from paperfacts.figures import (
+    USER_PROMPT,
     FigureReadings,
     figure_groups,
     parse_answer,
@@ -194,6 +195,22 @@ def test_a_reading_cites_the_figure_block_and_converts_y_with_the_axis_multiplie
     assert first.unit == "Ω/sq"
     assert first.approximate is True
     assert first.x_value == 100 and first.x_unit == "sccm"
+
+
+def test_an_axis_whose_title_multiplies_the_quantity_divides_the_reading():
+    # "ρ × 10^4 (Ω cm)" plots ρ multiplied by 10^4: the "6.8" gridline is 6.8 × 10^-4 Ω·cm. The reading goes
+    # through the same header reader as a table (normalize.split_scale_factor), so the symbol must reach it.
+    answer = chart_answer(field="resistivity", unit="ρ × 10^4 (Ω cm)", points=((100, 6.8), (200, 5.0)))
+
+    first = run(artifact(*SELECTED), FakeVisionClient(answer)).readings[0]
+
+    assert first.y == pytest.approx(6.8e-4)
+    assert first.unit == "Ω·cm"
+
+
+def test_the_prompt_keeps_the_quantity_symbol_with_an_axis_multiplier():
+    assert '"ρ × 10^4 (Ω cm)"' in USER_PROMPT
+    assert "quantity symbol" in USER_PROMPT
 
 
 def test_a_unit_that_will_not_convert_keeps_the_raw_reading_with_a_note():
