@@ -156,7 +156,7 @@ def test_an_unreadable_profile_is_a_config_error_naming_the_path(tmp_path, monke
     def refuse(self, *args, **kwargs):
         raise PermissionError(13, "Permission denied")
 
-    monkeypatch.setattr(Path, "read_text", refuse)
+    monkeypatch.setattr(Path, "read_bytes", refuse)
 
     with pytest.raises(ConfigError, match=r"cannot read the profile at .*locked\.json"):
         load_profile(path)

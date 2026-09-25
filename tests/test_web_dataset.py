@@ -167,7 +167,7 @@ def seed_figures(library: Library, settings: Settings) -> None:
     )
     FigureReadings(
         document_id=DOC_SHA, figure_key=key, model="qwen3.7-plus", backend="mineru", readings=(reading,)
-    ).write(library.layout.figures_path(DOC_SHA, key))
+    ).write(library.layout.figures_path(DOC_SHA, key, "tco"))
 
 
 def test_a_document_without_figure_readings_has_an_empty_list(client: TestClient, parsed_only: str):

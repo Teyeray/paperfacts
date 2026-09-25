@@ -177,6 +177,42 @@ def test_a_copy_of_a_repository_profile_is_accepted(tmp_path: Path):
     assert load_run_profile(Settings(repo_root=tmp_path / "repo", profile=str(copy))).name == "demo"
 
 
+def test_a_copy_differing_only_in_display_text_is_refused(tmp_path: Path):
+    # Same content hash, but a workbook titled from either file would carry the other's display text.
+    _write_profile(tmp_path / "repo" / "profiles" / "demo.json")
+    copy = _write_profile(tmp_path / "mine" / "demo.json", {"title_zh": "另一个标题"})
+
+    with pytest.raises(ConfigError, match="differ"):
+        load_run_profile(Settings(repo_root=tmp_path / "repo", profile=str(copy)))
+
+
+def test_a_relative_path_to_a_copy_is_accepted(monkeypatch, tmp_path: Path):
+    _write_profile(tmp_path / "repo" / "profiles" / "demo.json")
+    copy = _write_profile(tmp_path / "mine" / "demo.json")
+    monkeypatch.chdir(tmp_path)
+
+    profile = load_run_profile(Settings(repo_root=tmp_path / "repo", profile="mine/demo.json"))
+
+    assert profile.source == copy.resolve()
+
+
+def test_a_symlink_to_the_repository_file_is_that_file(tmp_path: Path):
+    shipped = _write_profile(tmp_path / "repo" / "profiles" / "demo.json")
+    link = tmp_path / "mine" / "demo.json"
+    link.parent.mkdir()
+    link.symlink_to(shipped)
+
+    profile = load_run_profile(Settings(repo_root=tmp_path / "repo", profile=str(link)))
+
+    assert profile.source == shipped.resolve()
+
+
+def test_a_bare_name_is_the_repository_file(tmp_path: Path):
+    shipped = _write_profile(tmp_path / "repo" / "profiles" / "demo.json")
+
+    assert load_run_profile(Settings(repo_root=tmp_path / "repo", profile="demo")).source == shipped.resolve()
+
+
 def test_the_legacy_export_name_is_reserved(tmp_path: Path):
     path = _write_profile(tmp_path / "paperfacts.json")
 

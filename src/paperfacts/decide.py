@@ -189,7 +189,9 @@ def _commit(
     sources = joined(sorted({source for c in final for source in c.value.source_ids}))
     if spec.condition_rule and not conditions:
         # A field whose prompt demands a condition: a value without one is kept, but the reader is told.
-        details.append(spec.missing_condition_note_zh or f"原文提取结果未注明{spec.label or spec.name}的测量条件")
+        # The note is the profile's (validation requires it with the rule), so the text stored here is covered by
+        # comparison_key; a label is display text, which no key covers.
+        details.append(spec.missing_condition_note_zh or f"原文提取结果未注明{spec.name}的测量条件")
     details.append(f"采用 {chosen.backend}；抽取重复一致率 {chosen.value.agreement:g}；合并重复证据")
     return Decision(
         chosen.scalar,
@@ -431,7 +433,8 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
     allowed_units = {clean_unit(unit) for unit in (value.unit_raw, spec.canonical_unit) if unit}
     if tail and clean_unit(tail) not in allowed_units:
         return None, "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
-    number, _ = parse_number(match.group("center"), range_policy=spec.range_policy)
+    # No range_policy: "center" is one number, so a dataset cell refuses a range under every policy (_SCALAR above).
+    number, _ = parse_number(match.group("center"))
     if number is None or not math.isfinite(number):
         return None, "数值不可解析或非有限数"
     canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, units, value_text=match.group("center"))

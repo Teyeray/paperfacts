@@ -43,7 +43,7 @@ from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
 from paperfacts.pdf import read_geometry
-from paperfacts.profile import PROFILES_DIRNAME, DomainProfile, load_profile, profile_path
+from paperfacts.profile import PROFILES_DIRNAME, DomainProfile, load_profile, loaded_file_sha256, profile_path
 from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
@@ -73,7 +73,8 @@ def load_run_profile(settings: Settings) -> DomainProfile:
     shipped = settings.repo_root / PROFILES_DIRNAME / f"{profile.name}.json"
     if shipped.is_file() and shipped.resolve() != profile.source:
         other = load_profile(shipped)
-        if other.content_hash != profile.content_hash:
+        # The bytes, not content_hash: a copy differing only in display text would still title the workbooks.
+        if loaded_file_sha256(other) != loaded_file_sha256(profile):
             raise ConfigError(
                 f"{profile.source} and {other.source} are both named {profile.name!r} but differ; their workbooks "
                 "would overwrite each other, so rename one"

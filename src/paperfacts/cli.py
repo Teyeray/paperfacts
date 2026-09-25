@@ -26,7 +26,7 @@ from typing import Annotated, NoReturn, assert_never
 import typer
 
 from paperfacts.batch import run_batch
-from paperfacts.config import EXTRACTION_MODES, Settings
+from paperfacts.config import DEFAULT_REPO_ROOT, ENV_PREFIX, EXTRACTION_MODES, Settings
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
@@ -178,7 +178,7 @@ def _settings(
     force: bool = False,
     profile: str | None = None,
 ) -> Settings:
-    settings = Settings.from_env()
+    settings = _env_settings()
     changes: dict[str, object] = {}
     if profile is not None:
         changes["profile"] = profile
@@ -202,6 +202,15 @@ def _settings(
     # And the one place it starts its miss record: a command's summary counts its own misses only.
     OFFLINE_MISSES.clear()
     return settings
+
+
+def _env_settings() -> Settings:
+    """config.json under the environment. A broken configuration is one red line naming the key and the file,
+    for every command, not a traceback."""
+    try:
+        return Settings.from_env()
+    except ConfigError as exc:
+        _fail("config", exc)
 
 
 def _profile(settings: Settings) -> DomainProfile:
@@ -476,7 +485,7 @@ def export(
 def fields(profile: ProfileOpt = None) -> None:
     """List the field table of the profile a run would load, so an edit to it can be checked at a glance."""
     # Not _settings(): a listing asks no model, so it leaves the in-flight limit and the miss record alone.
-    settings = Settings.from_env()
+    settings = _env_settings()
     if profile is not None:
         settings = dataclasses.replace(settings, profile=profile)
     for spec in _profile(settings).fields:
@@ -506,27 +515,31 @@ def profiles(
         # The loader logs its warnings (a large field table, say); an author checking a file wants them here.
         handler = BufferingHandler(capacity=1000)
         handler.setLevel(logging.WARNING)
-        profile_logger = logging.getLogger("paperfacts.profile")
-        profile_logger.addHandler(handler)
+        package_logger = logging.getLogger("paperfacts")
+        package_logger.addHandler(handler)
         try:
             domain = load_profile(check)
         except ConfigError as exc:
-            typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+            # Validation names every problem, one per line; each gets its own "error:".
+            for line in str(exc).splitlines():
+                typer.secho(f"error: {line}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from exc
         finally:
-            profile_logger.removeHandler(handler)
+            package_logger.removeHandler(handler)
         typer.echo(_profile_line(domain))
         _echo_lines(f"warning: {record.getMessage()}" for record in handler.buffer)
         typer.echo("ok")
         return
-    directory = Settings.from_env().repo_root / PROFILES_DIRNAME
+    # Not the settings: listing the profiles must work while config.json is broken, which is when one is checked.
+    directory = Path(os.environ.get(f"{ENV_PREFIX}REPO_ROOT", "").strip() or DEFAULT_REPO_ROOT) / PROFILES_DIRNAME
     failed = False
     for path in sorted(directory.glob("*.json")):
         try:
             typer.echo(_profile_line(load_profile(path)))
         except ConfigError as exc:
             # One broken file should not hide the others from the listing.
-            typer.secho(f"{path.stem:<20} invalid: {exc}", fg=typer.colors.RED, err=True)
+            for line in str(exc).splitlines():
+                typer.secho(f"{path.stem:<20} invalid: {line}", fg=typer.colors.RED, err=True)
             failed = True
     if failed:
         raise typer.Exit(code=1)
@@ -540,7 +553,7 @@ def prompts(
     ] = None,
 ) -> None:
     """Print the system prompts a profile renders, exactly as the model gets them. No model is called."""
-    settings = Settings.from_env()
+    settings = _env_settings()
     if profile is not None:
         settings = dataclasses.replace(settings, profile=profile)
     domain = _profile(settings)

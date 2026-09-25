@@ -172,7 +172,9 @@ this file is the part that is easy to get wrong.
   caller's context; a plain `ThreadPoolExecutor` would drop its records from the log.
 - One server per data root. The per-document and per-parser locks are process-local, so two servers (say,
   under two profiles) over one `data_root` can parse the same document at once. A server's profile is read
-  once; `pipeline_runner` refuses a job once the file's content hash on disk differs from the loaded one.
+  once; `pipeline_runner` refuses a job once the file's bytes on disk (re-resolved from the path it was named
+  by) differ from the ones loaded. That sha256 is `profile.loaded_file_sha256`, kept beside the profile, never in
+  `content_hash` or a key.
 - Parallel documents are bounded twice: `parsers.py` holds one lock per parser around the actual parse
   (not around a cache hit), and every model request takes a slot of `llm.IN_FLIGHT` around the HTTP call
   only -- never while waiting on a future or a backoff, which is what keeps the nested pools deadlock-free.

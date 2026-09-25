@@ -49,6 +49,10 @@ def test_the_demo_profile_is_valid():
         pytest.param({"format": DELETE}, "format", id="format-missing"),
         pytest.param({"name": "other"}, "file name", id="name-not-the-stem"),
         pytest.param({"maturity": "beta"}, "maturity", id="maturity"),
+        # "$" matches before a trailing newline, so every identifier is matched whole.
+        pytest.param({"name": "demo\n"}, "name must match", id="name-trailing-newline"),
+        pytest.param({"fields.1.name": "coating_thickness\n"}, "name must match", id="field-name-trailing-newline"),
+        pytest.param({"prompt.paper_key": "paper\n"}, "paper_key must match", id="paper-key-trailing-newline"),
         pytest.param({"title_zh": 5}, "title_zh", id="title-not-text"),
         # Groups
         pytest.param({"groups.1.level": "global"}, "level", id="group-level"),
@@ -67,6 +71,11 @@ def test_the_demo_profile_is_valid():
         pytest.param({"fields": [field(0)]}, "level 'sample'", id="no-sample-level-field"),
         pytest.param({"fields": [field(1, name=f"f{i}") for i in range(101)]}, "at most 100", id="too-many-fields"),
         pytest.param({"fields.1.condition_rule": "the substrate"}, "condition_hint", id="rule-without-hint"),
+        pytest.param(
+            {"fields.1.condition_hint": "the substrate", "fields.1.condition_rule": "the substrate"},
+            "field 'coating_thickness': condition_rule needs missing_condition_note_zh",
+            id="rule-without-note",
+        ),
         pytest.param({"fields.1.figure_readable": "yes"}, "figure_readable", id="readable-not-a-boolean"),
         pytest.param({"fields.2.figure_readable": True}, "figure_readable", id="readable-text-field"),
         pytest.param({"fields.1.figure_readable": True}, "figures", id="readable-without-figure-slots"),
@@ -120,7 +129,11 @@ def test_a_readable_field_with_figure_slots_is_accepted():
 
 def test_a_condition_rule_with_its_hint_is_accepted():
     profile = make_profile(
-        {"fields.1.condition_hint": "the substrate", "fields.1.condition_rule": "the substrate it was coated on"}
+        {
+            "fields.1.condition_hint": "the substrate",
+            "fields.1.condition_rule": "the substrate it was coated on",
+            "fields.1.missing_condition_note_zh": "未注明基底",
+        }
     )
 
     assert profile.by_name["coating_thickness"].condition_rule == "the substrate it was coated on"

@@ -29,6 +29,7 @@ from paperfacts.config import (
     DEFAULT_MAX_PARALLEL_DOCUMENTS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_OVERLAY_DPI,
+    DEFAULT_REPO_ROOT,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_S,
     DEFAULT_TEMPERATURE,
@@ -212,7 +213,15 @@ def test_a_key_that_moved_to_the_profile_names_itself_the_file_and_where_it_live
         Settings.from_env(env_for(path))
 
     message = str(excinfo.value)
-    assert f"{key} moved to profiles/battery.json" in message and str(path) in message
+    assert f"{key} moved to {DEFAULT_REPO_ROOT / 'profiles' / 'battery.json'}" in message and str(path) in message
+
+
+def test_the_moved_key_hint_names_a_profile_given_as_a_path_as_that_path(tmp_path: Path):
+    mine = tmp_path / "mine" / "battery.json"
+    path = write_config(tmp_path / "config.json", {"fields": [], "profile": str(mine)})
+
+    with pytest.raises(ConfigError, match=f"fields moved to {re.escape(str(mine))};"):
+        Settings.from_env(env_for(path))
 
 
 def test_the_shipped_configuration_holds_no_domain():

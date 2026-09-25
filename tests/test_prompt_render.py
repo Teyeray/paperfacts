@@ -183,6 +183,8 @@ def test_each_field_with_a_condition_rule_gets_its_sentence():
             "fields.0.condition_rule": "the purity grade",
             "fields.1.condition_hint": "method",
             "fields.1.condition_rule": "the measuring method",
+            "fields.0.missing_condition_note_zh": "未注明纯度等级",
+            "fields.1.missing_condition_note_zh": "未注明测量方法",
         }
     )
 

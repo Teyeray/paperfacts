@@ -8,6 +8,7 @@ next. The real parsing is replaced by a monkeypatched fake parser; not one subpr
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -17,12 +18,12 @@ import pytest
 from typer.testing import CliRunner
 
 from paperfacts.cli import BackendOption, app
-from paperfacts.errors import ParserError
+from paperfacts.errors import ConfigError, ParserError
 from paperfacts.models import Backend, DocumentInput, RawParseOutput
 from paperfacts.parsers import Parser
 from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
-from support.profiles import SHIPPED_PROFILE_PATH, profile_data
+from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data
 
 runner = CliRunner()
 
@@ -361,3 +362,79 @@ def test_prompts_for_an_unknown_field_names_the_fields_there_are():
 
     assert result.exit_code == 1
     assert "colour" in result.output and "thickness" in result.output
+
+
+# ---- A broken configuration --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def broken_config(monkeypatch, tmp_path: Path) -> Path:
+    path = tmp_path / "config.json"
+    path.write_text("{", encoding="utf-8")
+    monkeypatch.setenv("PAPERFACTS_CONFIG", str(path))
+    return path
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["parse", "{pdf}"],
+        ["overlay", "{pdf}"],
+        ["extract", "{pdf}"],
+        ["compare", "{pdf}"],
+        ["run", "{pdf}"],
+        ["batch", "{dir}"],
+        ["export", "{dir}"],
+        ["fields"],
+        ["prompts"],
+        ["serve"],
+    ],
+)
+def test_a_broken_configuration_is_one_red_line_and_exit_one(broken_config: Path, two_page_pdf: Path, command):
+    arguments = [part.format(pdf=two_page_pdf, dir=two_page_pdf.parent) for part in command]
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1, result.output
+    assert result.output.startswith("[config] failed:") and "not valid JSON" in result.output
+    assert len(result.output.strip().splitlines()) == 1
+    assert not isinstance(result.exception, ConfigError)
+
+
+def test_profiles_lists_without_a_valid_configuration(broken_config: Path, tco_profile):
+    result = runner.invoke(app, ["profiles"])
+
+    assert result.exit_code == 0
+    assert any(line.startswith("tco ") for line in result.output.splitlines())
+
+
+def test_profiles_check_prints_every_problem_of_a_file(tmp_path: Path):
+    changes = {
+        "maturity": "beta",
+        "fields.0.kind": "number",
+        "fields.2.name": "Solvent",
+        "retrieval.condition_keywords": 3,
+    }
+
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json", profile_data(changes)))])
+
+    errors = [line for line in result.output.splitlines() if line.startswith("error:")]
+    assert result.exit_code == 1
+    assert len(errors) == 4
+    assert all(str(tmp_path / "demo.json") in line for line in errors)
+    assert any("maturity" in line for line in errors) and any("condition_keywords" in line for line in errors)
+    assert any("'precursor_purity'" in line and "kind" in line for line in errors)
+    assert any("'Solvent'" in line for line in errors)
+
+
+def test_profiles_check_prints_warnings_from_the_whole_package(monkeypatch, tmp_path: Path):
+    def load_and_warn(path: Path):
+        logging.getLogger("paperfacts.units").warning("a unit warning")
+        return make_profile()
+
+    monkeypatch.setattr("paperfacts.cli.load_profile", load_and_warn)
+
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json"))])
+
+    assert result.exit_code == 0
+    assert "warning: a unit warning" in result.output.splitlines()

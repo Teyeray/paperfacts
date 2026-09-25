@@ -35,7 +35,7 @@ from __future__ import annotations
 import base64
 import binascii
 import dataclasses
-import json
+import hashlib
 import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -59,7 +59,7 @@ from paperfacts.errors import ConfigError
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.profile import DomainProfile, parse_profile
+from paperfacts.profile import DomainProfile, loaded_file_sha256, profile_path
 from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
@@ -135,13 +135,21 @@ def same_origin(request: Request) -> bool:
     return urlsplit(source).netloc in hosts - {None, ""}
 
 
-def profile_on_disk_hash(profile: DomainProfile) -> str:
-    """The content hash of the file ``profile`` was loaded from, as it is now. Read past load_profile's cache,
-    which keeps the value the server started with for the life of the process."""
-    try:
-        return parse_profile(json.loads(profile.source.read_text(encoding="utf-8")), profile.source).content_hash
-    except (OSError, ValueError, ConfigError) as exc:
-        return f"unreadable: {exc}"
+def profile_origin(settings: Settings, profile: DomainProfile) -> Path:
+    """The path ``profile`` is named by, unresolved: the settings' own when it leads to the file the profile was
+    loaded from, so a symlink retargeted later is followed again; otherwise that file itself."""
+    named = profile_path(settings)
+    return named if named.resolve() == profile.source else profile.source
+
+
+def profile_file_changed(profile: DomainProfile, origin: Path) -> bool:
+    """Whether the file ``origin`` leads to now holds other bytes than ``profile`` was loaded from. Every byte
+    counts, display text included: a server keeps showing the text it started with. Raises OSError when the file
+    cannot be read; a profile built in memory has no file, and never changed."""
+    loaded = loaded_file_sha256(profile)
+    if loaded is None:
+        return False
+    return hashlib.sha256(origin.resolve().read_bytes()).hexdigest() != loaded
 
 
 def profile_view(profile: DomainProfile) -> dict[str, Any]:
@@ -174,9 +182,19 @@ def pipeline_runner(settings: Settings, profile: DomainProfile, library: Library
     The profile file is checked first: after an edit on disk the server would still run the old profile and
     store its results under keys the edited file no longer names, so the job is refused until a restart."""
 
+    origin = profile_origin(settings, profile)
+
     def run(job: Job, mark: StageCallback) -> None:
-        if profile_on_disk_hash(profile) != profile.content_hash:
-            logger.error("profile %s changed on disk (%s); restart the server", profile.name, profile.source)
+        try:
+            changed = profile_file_changed(profile, origin)
+        except OSError as exc:
+            # Deleted, locked, or caught mid-save: not known to have changed, and not safe to run under either.
+            logger.error("cannot read the profile file %s (%s)", origin, exc)
+            raise ConfigError(
+                f"无法读取领域配置文件 {origin}，请检查后重启服务器 (cannot read the profile file {origin}: {exc})"
+            ) from exc
+        if changed:
+            logger.error("profile %s changed on disk (%s); restart the server", profile.name, origin)
             raise ConfigError(f"领域配置 {profile.source.name} 在磁盘上已改动，请重启服务器 (profile changed on disk)")
         run_document(library.document(job.document_id), settings, profile, force=job.force, on_stage=mark)
 
@@ -282,13 +300,20 @@ def create_app(
         except RuntimeError as exc:  # the manager has shut down: the server is on its way out
             raise HTTPException(status_code=503, detail="The server is shutting down; try again shortly") from exc
 
+    origin = profile_origin(settings, profile)
+
     @app.get("/api/health")
-    def health() -> dict[str, str]:
+    def health() -> dict[str, str | bool]:
+        try:
+            changed = profile_file_changed(profile, origin)
+        except OSError:
+            changed = True  # a file that cannot be read is no longer the one being served
         return {
             "status": "ok",
             "model": settings.llm_model,
             "profile": profile.name,
             "profile_hash": profile.content_hash[:12],
+            "profile_on_disk_changed": changed,
         }
 
     @app.get("/api/profile")
