@@ -460,6 +460,23 @@ def test_a_numeric_value_without_a_digit_is_dropped_with_the_reason():
     assert cleaning.dropped == ["sheet_resistance: non-numeric value 'minimum'"]
 
 
+@pytest.mark.parametrize(
+    "value_raw", ["one of the samples", "five to ten", "one-third", "ten-fold", "two-step", "one order of magnitude"]
+)
+def test_a_number_word_inside_other_words_is_still_non_numeric(value_raw):
+    cleaning, value = clean_value("inch", value_raw, unit_raw="inch")
+
+    assert value is None
+    assert cleaning.dropped == [f"inch: non-numeric value {value_raw!r}"]
+
+
+def test_a_number_word_without_a_unit_is_still_non_numeric():
+    cleaning, value = clean_value("inch", "four")
+
+    assert value is None
+    assert cleaning.dropped == ["inch: non-numeric value 'four'"]
+
+
 @pytest.mark.parametrize("value_raw", ["four", "four-inch", "Two", "twelve"])
 def test_a_numeric_value_written_as_a_number_word_survives(value_raw):
     # metals: "a four-inch ITO target" was dropped as non-numeric in both lanes.

@@ -267,10 +267,6 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     # digits after it ("\\sim82").
     text = _LATEX_COMMAND.sub(" ", text).strip()
     notes: list[str] = []
-    spelled = spell_number_word(text)
-    if spelled != text:
-        notes.append(f"number word {re.split(r'[-\s]', text, maxsplit=1)[0]!r} read as {spelled.split()[0]}")
-        text = spelled
     match = _QUALIFIERS.match(text)
     if match:
         notes.append(f"qualifier '{match.group('q')}' dropped")
@@ -633,11 +629,14 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
         return field
-    number, parse_note = parse_number(field.value_raw)
+    # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
+    spelled = spell_number_word(field.value_raw, field.unit_raw)
+    word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    number, parse_note = parse_number(spelled)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
-    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, value_text=field.value_raw)
-    note = "; ".join(n for n in (parse_note, unit_note) if n) or None
+    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, value_text=spelled)
+    note = "; ".join(n for n in (word_note, parse_note, unit_note) if n) or None
     return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 
 

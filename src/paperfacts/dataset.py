@@ -248,7 +248,8 @@ def _joined(values: Sequence[str]) -> str:
 def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     if spec.kind != "numeric":
         return value.value_raw.strip(), None
-    text = spell_number_word(delatex(normalize_text(value.value_raw)).strip())
+    spelled = spell_number_word(value.value_raw, value.unit_raw)
+    text = delatex(normalize_text(spelled)).strip()
     approx = _APPROX.match(text)
     if approx:
         text = text[approx.end() :].strip()
@@ -271,6 +272,8 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     if canonical is None or not math.isfinite(canonical):
         return None, note or "单位无法转换为标准单位"
     notes = [note or ""]
+    if spelled != value.value_raw:
+        notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {spelled}")
     if approx:
         notes.append("原文为近似值，保留中心值")
     if match.group("uncertainty"):

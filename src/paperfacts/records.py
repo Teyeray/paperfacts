@@ -309,17 +309,31 @@ NUMBER_WORDS = {
         ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"), 1
     )
 }
-_NUMBER_WORD = re.compile(rf"^(?P<word>{'|'.join(NUMBER_WORDS)})(?![a-z])-?\s*", re.IGNORECASE)
+# The word, then optionally its unit after a hyphen or a space ("four-inch", "four inch"); nothing else.
+_NUMBER_WORD = re.compile(rf"^(?P<word>{'|'.join(NUMBER_WORDS)})(?:(?:-|\s+)(?P<rest>\S.*))?$", re.IGNORECASE)
 
 
-def spell_number_word(text: str) -> str:
-    """``text`` with a leading English number word written in digits ("four-inch" -> "4 inch"). A text that
-    carries a digit of its own, or does not start with a number word, comes back unchanged."""
-    stripped = text.strip()
+def _unit_fold(unit: str) -> str:
+    return unicodedata.normalize("NFKC", unit).replace(" ", "").rstrip(".").casefold()
+
+
+def spell_number_word(value_raw: str, unit_raw: str | None) -> str:
+    """``value_raw`` as digits when it is an English number word standing for the value: "four" or
+    "four-inch" with ``unit_raw`` "inch" -> "4". Anything else comes back unchanged.
+
+    The word must be the whole value, or be followed only by the unit the value was quoted with, and the value
+    must carry a unit. "one of the samples", "five to ten", "one-third", "ten-fold", "two-step" and "one order
+    of magnitude" are words that contain a number, not values; reading them would put a made-up number into the
+    comparison, which is worse than the drop they get.
+    """
+    stripped = value_raw.strip()
     match = _NUMBER_WORD.match(stripped)
-    if match is None or any(character.isdigit() for character in stripped):
-        return text
-    return f"{NUMBER_WORDS[match.group('word').lower()]} {stripped[match.end() :]}".strip()
+    if match is None or not unit_raw or not unit_raw.strip():
+        return value_raw
+    rest = match.group("rest")
+    if rest is not None and _unit_fold(rest) != _unit_fold(unit_raw):
+        return value_raw
+    return str(NUMBER_WORDS[match.group("word").lower()])
 
 
 class ResponseCleaning:
@@ -352,7 +366,7 @@ class ResponseCleaning:
     ) -> FieldValue | None:
         """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
         text = value_raw.strip()
-        if spec.kind == "numeric" and not any(character.isdigit() for character in spell_number_word(text)):
+        if spec.kind == "numeric" and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
             return None
         return FieldValue(

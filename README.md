@@ -722,7 +722,7 @@ failure it catches was observed on real input:
 
 | Guardrail | What it catches |
 |---|---|
-| Schema and type cleaning | Fields outside the target schema; numeric fields holding words like `"minimum"` or `"n.a."` (a number word from one to twelve, as in `"four-inch"`, is a number and is read as 4) |
+| Schema and type cleaning | Fields outside the target schema; numeric fields holding words like `"minimum"` or `"n.a."` (a number word from one to twelve that is the whole value, or is followed only by the value's own unit -- `"four"` or `"four-inch"` quoted with the unit `inch` -- is read as 4; `"one of the samples"`, `"five to ten"`, `"one-third"`, `"ten-fold"` are not numbers) |
 | Scope enforcement | A paper-level field attached to one sample, or the reverse — a film's dopant concentration reported as the sputtering target's composition |
 | Citation validation | Block ids the model invented, or ids from parts of the document it was never shown |
 | Grounding | The quoted text cannot be found in the block it cites — a real id attached to a value that did not come from it |
