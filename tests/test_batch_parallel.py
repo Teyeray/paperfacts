@@ -210,7 +210,7 @@ def test_the_cli_takes_jobs_from_the_flag_or_the_parallel_documents_setting(
         raise ParserError("mineru", "run", "stop here")
 
     monkeypatch.setattr("paperfacts.cli.run_batch", fake_run_batch)
-    monkeypatch.setenv("PAPERFACTS_MAX_PARALLEL_DOCUMENTS", "3")
+    monkeypatch.setenv("PAPERFACTS_WEB_MAX_PARALLEL_DOCUMENTS", "3")
 
     CliRunner().invoke(app, ["batch", str(paper.parent), "--data-root", str(tmp_path / "data"), *flags])
 
@@ -226,7 +226,7 @@ def test_export_reads_the_caches_one_paper_at_a_time(monkeypatch, tmp_path: Path
         raise ParserError("mineru", "run", "stop here")
 
     monkeypatch.setattr("paperfacts.cli.run_batch", fake_run_batch)
-    monkeypatch.setenv("PAPERFACTS_MAX_PARALLEL_DOCUMENTS", "4")
+    monkeypatch.setenv("PAPERFACTS_WEB_MAX_PARALLEL_DOCUMENTS", "4")
 
     CliRunner().invoke(app, ["export", str(paper.parent), "--data-root", str(tmp_path / "data")])
 

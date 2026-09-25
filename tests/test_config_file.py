@@ -698,7 +698,7 @@ def test_a_non_integer_concurrency_still_names_the_key(tmp_path: Path):
     ("dotted", "variable", "attribute"),
     [
         ("llm.max_in_flight", "LLM_MAX_IN_FLIGHT", "llm_max_in_flight"),
-        ("web.max_parallel_documents", "MAX_PARALLEL_DOCUMENTS", "max_parallel_documents"),
+        ("web.max_parallel_documents", "WEB_MAX_PARALLEL_DOCUMENTS", "max_parallel_documents"),
     ],
 )
 def test_a_parallelism_limit_comes_from_the_file_and_the_environment_wins(

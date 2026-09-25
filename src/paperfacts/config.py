@@ -389,7 +389,7 @@ class Settings:
             web_username=get("WEB_USERNAME") or file.get("web.username", str),
             web_password=get("WEB_PASSWORD"),
             max_parallel_documents=_positive(
-                number("MAX_PARALLEL_DOCUMENTS", file.get("web.max_parallel_documents", int), int),
+                number("WEB_MAX_PARALLEL_DOCUMENTS", file.get("web.max_parallel_documents", int), int),
                 "web.max_parallel_documents",
                 file.path,
             ),
