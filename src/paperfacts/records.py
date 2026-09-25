@@ -248,6 +248,11 @@ class LaneExtraction(BaseModel):
         default=(),
         description="sample-level values the model could not place on a sample: kept and grounded, never compared",
     )
+    no_tco_film: bool = Field(
+        default=False,
+        description="the inventory found no sample because the paper deposits no TCO film of its own, so no "
+        "sample-level question was asked; an empty lane for any other reason leaves it False",
+    )
     passes: int = Field(default=1, ge=1, description="extraction passes that were merged into this result")
     usage: dict[str, int] = Field(default_factory=dict)
     raw_response: str = Field(default="", description="the model's raw JSON, kept as evidence")

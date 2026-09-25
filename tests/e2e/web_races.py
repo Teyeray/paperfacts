@@ -58,7 +58,6 @@ FIELDS = [
     {"name": "transmittance", "label": "透过率", "unit": "%", "scope": "sample", "description": "可见光平均透过率"},
     {"name": "target_purity", "label": "靶材纯度", "unit": "%", "scope": "target", "description": "靶材纯度"},
 ]
-NO_FILM = "thickness: the paper deposits no TCO film of its own, so it was not asked about"
 
 
 # ---- a seeded library and a live server --------------------------------------------------------------------
@@ -92,13 +91,10 @@ def seed_document(library: Library, root: Path, index: int, name: str, *, sample
             make_sample(f"S{n}", [make_field("thickness", f"{100 * n}", unit_raw="nm", value=100.0 * n, unit="nm")])
             for n in range(1, samples + 1)
         ]
-        make_lane(
-            backend=backend,
-            samples=lane_samples,
-            document_id=sha,
-            extractor_key=library.extractor_key,
-            dropped=() if samples else (NO_FILM,),
-        ).write(library.layout.extraction_path(sha, backend, library.extractor_key))
+        lane = make_lane(backend=backend, samples=lane_samples, document_id=sha, extractor_key=library.extractor_key)
+        # A paper with no samples is one that deposits no film of its own, the case with its own message.
+        lane = lane.model_copy(update={"no_tco_film": not samples})
+        lane.write(library.layout.extraction_path(sha, backend, library.extractor_key))
     rows = tuple(
         FieldComparison(
             scope=f"sample:S{n % max(samples, 1) + 1}|S{n % max(samples, 1) + 1}",

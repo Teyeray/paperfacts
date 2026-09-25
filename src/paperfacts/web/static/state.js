@@ -62,14 +62,10 @@ export const isActive = (job) => Boolean(job) && ACTIVE_JOB_STATUS.has(job.statu
 // slots in the document view template
 export const slot = (name, root = document.getElementById("document-view")) => root.querySelector(`[data-slot="${name}"]`);
 
-// Why a processed paper has no samples. The extraction keeps the inventory's "this paper deposits no TCO
-// film of its own" verdict only as the reason it skipped every sample-level question (extract.py), so that
-// reason is what is looked for; any other empty lane just found no samples.
-const NO_FILM_REASON = "deposits no TCO film";
+// Why a processed paper has no samples. Each lane carries the inventory's "this paper deposits no TCO film
+// of its own" verdict as `no_tco_film` (extract.py); any other empty lane just found no samples.
 export function noSamplesReason() {
   const lanes = LANES.map((lane) => state.lanes[lane]).filter(Boolean);
-  const noFilm =
-    lanes.length > 0 &&
-    lanes.every((lane) => !lane.samples?.length && (lane.dropped ?? []).some((reason) => reason.includes(NO_FILM_REASON)));
+  const noFilm = lanes.length > 0 && lanes.every((lane) => !lane.samples?.length && lane.no_tco_film === true);
   return noFilm ? "该论文没有自己沉积的 TCO 膜，所以没有样品级数据。" : "未识别到样品：两路抽取都没有给出样品。";
 }

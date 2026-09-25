@@ -313,6 +313,8 @@ def test_a_paper_depositing_no_tco_film_is_asked_only_paper_level_fields():
     assert client.call_count == 1
     assert lane.samples == () and lane.unattributed == ()
     assert any(entry.startswith(f"{ASKED_FIELD}: the paper deposits no TCO film") for entry in lane.dropped)
+    # the verdict travels as data, so the web page never has to match the audit text above
+    assert lane.no_tco_film is True
 
 
 def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
@@ -325,6 +327,17 @@ def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
 
     assert client.call_count == 5
     assert [field.value_raw for field in lane.unattributed] == ["12.5"]
+    assert lane.no_tco_film is False
+
+
+def test_a_no_film_verdict_beside_named_samples_is_not_trusted():
+    # Contradictory: samples were named, so they are asked about and the lane does not claim "no film".
+    client = FakeLlmClient(responder(inventory=json.dumps({"samples": TWO_SAMPLES, "no_tco_film": True})))
+
+    lane = extract(client)
+
+    assert len(lane.samples) == 2
+    assert lane.no_tco_film is False
 
 
 def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattributed():

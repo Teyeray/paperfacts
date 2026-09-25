@@ -271,6 +271,9 @@ def extract_lane(
         invalid_source_ids=records.invalid_source_ids,
         dropped=(*_bibliography_audit(artifact.blocks), *records.dropped),
         unattributed=records.unattributed,
+        # Carried as data, not left to the audit text in `dropped`, so the web page can say why the lane is
+        # empty without matching prose. The same condition that skips the sample-level questions below.
+        no_tco_film=inventory is not None and _deposits_no_film(inventory.response),
         passes=passes,
         usage=usage,
         raw_response=raw_response,
@@ -393,7 +396,7 @@ def _extract_passages(
     questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
     for spec in FIELD_SPECS:
-        if spec.is_sample_level and inventory.response.no_tco_film and not inventory.response.samples:
+        if spec.is_sample_level and _deposits_no_film(inventory.response):
             # A device paper on purchased ITO glass: asking anyway only harvests the absorber's thickness and
             # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
             # empty for any other reason -- it missed the sample text -- still gets every question, so one
@@ -461,6 +464,11 @@ def _extract_passages(
         dropped=dropped,
     )
     return records, usage, "\n\n".join(raw_parts)
+
+
+def _deposits_no_film(inventory: InventoryResponse) -> bool:
+    """The inventory's verdict that the paper has no film of its own, trusted only when it named no sample."""
+    return inventory.no_tco_film and not inventory.samples
 
 
 def _render_sample_list(samples: Sequence[InventorySample]) -> str:
