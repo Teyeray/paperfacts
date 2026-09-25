@@ -18,7 +18,7 @@ import re
 from collections.abc import Callable
 from functools import cache
 
-from paperfacts.fields import FIELD_BY_NAME, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
@@ -572,20 +572,24 @@ def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry = BU
     return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 
 
-def _normalize_fields(fields: tuple[FieldValue, ...]) -> tuple[FieldValue, ...]:
+def _normalize_fields(fields: tuple[FieldValue, ...], profile: DomainProfile) -> tuple[FieldValue, ...]:
     # Fields outside the schema were dropped at extraction time; this is a defensive second check.
-    return tuple(normalize_field(f, FIELD_BY_NAME[f.field]) if f.field in FIELD_BY_NAME else f for f in fields)
+    specs = profile.by_name
+    return tuple(normalize_field(f, specs[f.field], profile.units) if f.field in specs else f for f in fields)
 
 
-def normalize_lane(lane: LaneExtraction) -> LaneExtraction:
-    """Fill in ``value`` / ``unit`` for every field. Pure and idempotent: always returns a new object."""
+def normalize_lane(lane: LaneExtraction, profile: DomainProfile) -> LaneExtraction:
+    """Fill in ``value`` / ``unit`` for every field, in ``profile``'s units. Pure and idempotent: always returns
+    a new object."""
     target: TargetRecord | None = None
     if lane.target is not None:
-        target = lane.target.model_copy(update={"fields": _normalize_fields(lane.target.fields)})
-    samples = tuple(sample.model_copy(update={"fields": _normalize_fields(sample.fields)}) for sample in lane.samples)
+        target = lane.target.model_copy(update={"fields": _normalize_fields(lane.target.fields, profile)})
+    samples = tuple(
+        sample.model_copy(update={"fields": _normalize_fields(sample.fields, profile)}) for sample in lane.samples
+    )
     # Unattributed values are compared now, so they need canonical values like every other; leaving them
     # raw would silently turn every such comparison into "unparsed" and bury real agreements.
-    unattributed = _normalize_fields(lane.unattributed)
+    unattributed = _normalize_fields(lane.unattributed, profile)
     return lane.model_copy(update={"target": target, "samples": samples, "unattributed": unattributed})
 
 

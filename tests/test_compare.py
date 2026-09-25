@@ -20,12 +20,13 @@ from paperfacts.compare import (
     condition_numbers,
     conditions_measure_differently,
 )
+from paperfacts.config import Settings
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_BY_NAME
-from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key
+from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key_for
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import normalize_field
 from paperfacts.records import FieldValue, TargetRecord
-from support.extraction import make_field, make_lane, make_sample
+from support.extraction import comparison_options, make_field, make_lane, make_sample
 
 
 def normalized(field: FieldValue) -> FieldValue:
@@ -206,7 +207,7 @@ def test_target_fields_are_compared_at_the_paper_level():
         backend="paddleocr_vl", target=TargetRecord(fields=(make_field("density", "98.6", unit_raw="%"),))
     )
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching())
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
     assert [(c.scope, c.field, c.status) for c in report.comparisons] == [("target", "density", "agree")]
 
@@ -218,7 +219,7 @@ def test_a_target_field_that_shows_up_inside_a_sample_is_ignored():
     lane_a = make_lane(backend="mineru", samples=[make_sample("A", fields)])
     lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("A", fields)])
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert report.comparisons == ()
 
@@ -241,7 +242,7 @@ def test_matched_samples_are_compared_field_by_field():
         ],
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert statuses(report) == [("thickness", "conflict"), ("transmittance", "agree")]
 
@@ -252,7 +253,7 @@ def test_the_scope_names_both_sides_of_a_matched_pair():
         backend="paddleocr_vl", samples=[make_sample("B1", [make_field("thickness", "300", unit_raw="nm")])]
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match("A1", "B1"))
+    report = compare_lanes(lane_a, lane_b, exact_match("A1", "B1"), comparison_options())
 
     assert report.comparisons[0].scope == "sample:A1|B1"
 
@@ -265,7 +266,7 @@ def test_lanes_are_normalized_inside_compare_lanes():
         backend="paddleocr_vl", samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm")])]
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert report.comparisons[0].status == "agree"
     assert report.comparisons[0].a.value == 300.0
@@ -288,7 +289,7 @@ def test_the_same_field_under_two_conditions_is_two_separate_facts():
     lane_a = make_lane(backend="mineru", samples=[make_sample("A", fields_a)])
     lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("A", fields_b)])
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert [(c.condition, c.status) for c in report.comparisons] == [
         ("550 nm", "agree"),
@@ -308,7 +309,7 @@ def test_leftover_equal_numeric_values_pair_when_the_condition_wording_differs()
         samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm", condition="from ellipsometric")])],
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
     only = report.comparisons[0]
 
     assert only.status == "agree"
@@ -329,7 +330,7 @@ def test_unequal_values_under_differently_worded_conditions_stay_one_sided():
         samples=[make_sample("A", [make_field("thickness", "900", unit_raw="nm", condition="from SEM")])],
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert [(c.condition, c.status, c.missing_in) for c in report.comparisons] == [
         ("ellipsometric", "missing", "paddleocr_vl"),
@@ -348,7 +349,7 @@ def test_numeric_values_within_tolerance_pair_across_differently_worded_conditio
         samples=[make_sample("A", [make_field("thickness", "305", unit_raw="nm", condition="cross-sectional SEM")])],
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert statuses(report) == [("thickness", "agree")]
     assert report.counts.agree == 1 and report.counts.missing == 0
@@ -378,7 +379,7 @@ def test_equal_text_values_pair_across_differently_worded_conditions():
         ),
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
     paired = next(c for c in report.comparisons if c.status == "agree")
 
     assert sorted(statuses(report)) == [("component", "agree"), ("component", "missing")]
@@ -402,7 +403,7 @@ def test_equal_values_under_conditions_naming_different_numbers_are_not_paired()
         samples=[make_sample("A", [make_field("transmittance", "85", unit_raw="%", condition="at 600 nm")])],
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert [(c.condition, c.status, c.missing_in) for c in report.comparisons] == [
         ("at 550 nm", "missing", "paddleocr_vl"),
@@ -421,7 +422,7 @@ def test_the_same_number_worded_differently_still_pairs():
         samples=[make_sample("A", [make_field("transmittance", "85", unit_raw="%", condition="550 nm wavelength")])],
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert statuses(report) == [("transmittance", "agree")]
     assert "conditions worded differently" in report.comparisons[0].detail
@@ -435,7 +436,7 @@ def test_unattributed_equal_values_under_different_numbers_stay_visible_as_ambig
         backend="paddleocr_vl", unattributed=[make_field("transmittance", "85", unit_raw="%", condition="at 600 nm")]
     )
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching())
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
     assert statuses(report) == [("transmittance", "ambiguous")]
     assert report.counts.agree == 0 and report.counts.unattributed_compared == 1
@@ -457,7 +458,7 @@ def test_unparsed_leftovers_cannot_be_paired_by_proximity_and_stay_one_sided():
         samples=[make_sample("A", [make_field("thickness", "not measured", unit_raw="nm", condition="ellipsometry")])],
     )
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert [(c.condition, c.status, c.missing_in) for c in report.comparisons] == [
         ("SEM", "missing", "paddleocr_vl"),
@@ -472,7 +473,7 @@ def test_a_field_only_one_lane_reported_is_missing_in_the_other():
     lane_a = make_lane(backend="mineru", samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm")])])
     lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("A", [])])
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
     only = report.comparisons[0]
 
     assert only.status == "missing"
@@ -486,7 +487,9 @@ def test_an_unmatched_sample_makes_every_one_of_its_fields_missing_in_the_other_
         backend="paddleocr_vl", samples=[make_sample("T1", [make_field("thickness", "400", unit_raw="nm")])]
     )
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching(unmatched_a=("S1",), unmatched_b=("T1",)))
+    report = compare_lanes(
+        lane_a, lane_b, SampleMatching(unmatched_a=("S1",), unmatched_b=("T1",)), comparison_options()
+    )
 
     assert [(c.scope, c.status, c.missing_in) for c in report.comparisons] == [
         ("sample:S1", "missing", "paddleocr_vl"),
@@ -503,7 +506,7 @@ def test_a_matching_failure_downgrades_unmatched_samples_to_ambiguous():
     )
     matching = SampleMatching(unmatched_a=("S1",), unmatched_b=("T1",), failed=True, failure="two bad answers")
 
-    report = compare_lanes(lane_a, lane_b, matching)
+    report = compare_lanes(lane_a, lane_b, matching, comparison_options())
 
     assert {c.status for c in report.comparisons} == {"ambiguous"}
     assert all(c.missing_in is None for c in report.comparisons)
@@ -515,7 +518,9 @@ def test_an_unmatched_id_with_no_matching_sample_is_skipped():
     lane_a = make_lane(backend="mineru", samples=[])
     lane_b = make_lane(backend="paddleocr_vl", samples=[])
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching(unmatched_a=("ghost",), unmatched_b=("ghost",)))
+    report = compare_lanes(
+        lane_a, lane_b, SampleMatching(unmatched_a=("ghost",), unmatched_b=("ghost",)), comparison_options()
+    )
 
     assert report.comparisons == ()
 
@@ -524,7 +529,7 @@ def test_a_pair_naming_a_sample_that_is_not_in_the_lane_is_skipped():
     lane_a = make_lane(backend="mineru", samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm")])])
     lane_b = make_lane(backend="paddleocr_vl", samples=[])
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert report.comparisons == ()
 
@@ -544,7 +549,7 @@ def test_a_low_confidence_pair_keeps_the_real_status_and_records_the_confidence(
     lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("A", fields)])
     weak = SampleMatching(pairs=(SampleMatch(a_id="A", b_id="A", confidence=0.3, justification="weak", method="llm"),))
 
-    report = compare_lanes(lane_a, lane_b, weak)
+    report = compare_lanes(lane_a, lane_b, weak, comparison_options())
 
     assert report.comparisons[0].status == "agree"
     assert report.comparisons[0].match_confidence == 0.3
@@ -558,7 +563,7 @@ def test_an_exact_pair_carries_no_confidence():
     lane_a = make_lane(backend="mineru", samples=[make_sample("A", fields)])
     lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("A", fields)])
 
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
     assert report.comparisons[0].match_confidence is None
 
@@ -571,7 +576,7 @@ def test_a_confident_llm_pair_is_not_counted_as_low_confidence():
         pairs=(SampleMatch(a_id="A", b_id="A", confidence=AMBIGUOUS_MATCH_CONFIDENCE, justification="", method="llm"),)
     )
 
-    report = compare_lanes(lane_a, lane_b, strong)
+    report = compare_lanes(lane_a, lane_b, strong, comparison_options())
 
     assert report.counts.low_confidence_matches == 0
 
@@ -600,7 +605,7 @@ def test_the_counts_cover_every_status_and_the_sample_bookkeeping():
     )
     matching = SampleMatching(pairs=exact_match().pairs, unmatched_a=("S1",), unmatched_b=("T1",))
 
-    counts = compare_lanes(lane_a, lane_b, matching).counts
+    counts = compare_lanes(lane_a, lane_b, matching, comparison_options()).counts
 
     assert counts.agree == 1 and counts.conflict == 1 and counts.missing == 2 and counts.ambiguous == 0
     assert counts.total == 4
@@ -610,7 +615,9 @@ def test_the_counts_cover_every_status_and_the_sample_bookkeeping():
 
 def test_the_counts_have_every_key_even_when_zero():
     # Every key is present even at zero, so downstream consumers never need to guard against KeyError.
-    counts = compare_lanes(make_lane(), make_lane(backend="paddleocr_vl"), SampleMatching()).counts.model_dump()
+    counts = compare_lanes(
+        make_lane(), make_lane(backend="paddleocr_vl"), SampleMatching(), comparison_options()
+    ).counts.model_dump()
 
     assert set(counts) == {
         "agree",
@@ -643,7 +650,7 @@ def test_the_same_unattributed_value_in_both_lanes_agrees():
         unattributed=[make_field("transmittance", "81", unit_raw="%", condition="500-2500 nm")],
     )
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching())
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
     assert statuses(report) == [("transmittance", "agree")]
     assert report.comparisons[0].scope == "unattributed"
@@ -657,7 +664,7 @@ def test_conflicting_unattributed_values_conflict():
     lane_a = make_lane(backend="mineru", unattributed=[make_field("transmittance", "80", unit_raw="%")])
     lane_b = make_lane(backend="paddleocr_vl", unattributed=[make_field("transmittance", "95", unit_raw="%")])
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching())
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
     assert statuses(report) == [("transmittance", "conflict")]
     assert report.counts.unattributed_compared == 1
@@ -669,7 +676,7 @@ def test_a_value_unattributed_in_one_lane_only_stays_uncompared():
     lane_a = make_lane(backend="mineru", unattributed=[make_field("transmittance", "80", unit_raw="%")])
     lane_b = make_lane(backend="paddleocr_vl")
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching())
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
     assert report.comparisons == ()
     assert report.counts.total == 0 and report.counts.unattributed_compared == 0
@@ -692,7 +699,7 @@ def test_unattributed_values_pair_by_condition_then_equality_like_sample_values(
         ],
     )
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching())
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
     # 80 ≈ 80.5 pair under (differently worded) 550 nm conditions; 75 vs 50 pair under the same condition.
     assert sorted(statuses(report)) == [("transmittance", "agree"), ("transmittance", "conflict")]
@@ -711,7 +718,7 @@ def test_unattributed_values_that_disagree_under_different_conditions_are_ambigu
         backend="paddleocr_vl", unattributed=[make_field("transmittance", "95", unit_raw="%", condition="IR range")]
     )
 
-    report = compare_lanes(lane_a, lane_b, SampleMatching())
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
     assert statuses(report) == [("transmittance", "ambiguous")]
     assert report.comparisons[0].detail == (
@@ -732,19 +739,19 @@ def test_two_lanes_from_different_extractors_cannot_be_compared():
     lane_b = make_lane(backend="paddleocr_vl", extractor_key="bbbbbbbbbbbb")
 
     with pytest.raises(ValueError, match="different extractor_key"):
-        compare_lanes(lane_a, lane_b, SampleMatching())
+        compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
 
 def test_the_comparison_key_is_stable_and_short(tco_profile):
-    assert comparison_key(tco_profile) == comparison_key(tco_profile)
-    assert len(comparison_key(tco_profile)) == FINGERPRINT_LENGTH
+    assert comparison_key_for(Settings(), tco_profile) == comparison_key_for(Settings(), tco_profile)
+    assert len(comparison_key_for(Settings(), tco_profile)) == FINGERPRINT_LENGTH
 
 
 def test_the_report_records_both_keys(tco_profile):
-    report = compare_lanes(make_lane(), make_lane(backend="paddleocr_vl"), SampleMatching())
+    report = compare_lanes(make_lane(), make_lane(backend="paddleocr_vl"), SampleMatching(), comparison_options())
 
     assert report.extractor_key == make_lane().extractor_key
-    assert report.comparison_key == comparison_key(tco_profile)
+    assert report.comparison_key == comparison_key_for(Settings(), tco_profile)
 
 
 # ---- Persisting to disk --------------------------------------------------------------------
@@ -755,7 +762,7 @@ def test_the_report_round_trips_through_disk(tmp_path):
     lane_b = make_lane(
         backend="paddleocr_vl", samples=[make_sample("A", [make_field("thickness", "305", unit_raw="nm")])]
     )
-    report = compare_lanes(lane_a, lane_b, exact_match())
+    report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
     path = tmp_path / "comparisons" / "key.json"
 
     report.write(path)

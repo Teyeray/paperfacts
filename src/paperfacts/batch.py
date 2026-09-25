@@ -18,7 +18,7 @@ from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
 from paperfacts.dataset import DocumentDataset, consolidate_document, incomplete_reason
 from paperfacts.errors import Cancelled, ConfigError, PaperFactsError
-from paperfacts.keys import comparison_key, extractor_key_for
+from paperfacts.keys import ComparisonOptions, comparison_key, extractor_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.profile import default_profile
 from paperfacts.readings import shown_figures
@@ -67,13 +67,14 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
     layout = DataLayout(settings.data_root)
     profile = default_profile()
     key = extractor_key_for(settings, profile)
-    report_path = layout.comparison_path(document.document_id, key, comparison_key(profile))
+    options = ComparisonOptions.from_settings(settings, profile)
+    report_path = layout.comparison_path(document.document_id, key, comparison_key(options))
     if not report_path.is_file():
         raise FileNotFoundError(f"no current comparison for {document.display_filename}; run `paperfacts run` first")
     report = ComparisonReport.read(report_path)
     lanes: dict[Backend, LaneExtraction] = {}
     for backend in BACKENDS:
-        lane = read_lane(layout, document.document_id, backend, key)
+        lane = read_lane(layout, document.document_id, backend, key, profile)
         if lane is None:
             raise FileNotFoundError(f"no current {backend} extraction for {document.display_filename}")
         lanes[backend] = lane
@@ -81,12 +82,12 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
         raise FileNotFoundError(f"the comparison of {document.display_filename} predates its parse; run it again")
     # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
     # serves the report beside the table, and the two must be the same verdicts.
-    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
+    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching, options)
     reason = incomplete_reason(lanes, report)
     if reason:
         raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")
     report.write(report_path)
-    dataset = consolidate_document(document, lanes, report)
+    dataset = consolidate_document(document, lanes, report, options)
     # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
     store_dataset(layout, dataset)
     return dataset
@@ -129,6 +130,7 @@ def run_batch(
     if jobs < 1:
         raise ConfigError(f"--jobs must be at least 1, got {jobs}")
 
+    profile = default_profile()
     # Two locks, so a paper reporting progress never waits for another paper's workbook checkpoint.
     progress_lock = threading.Lock()
     results_lock = threading.Lock()
@@ -169,6 +171,7 @@ def run_batch(
             write_dataset(
                 [datasets[i] for i in sorted(datasets)],
                 output,
+                profile,
                 failures=[failures[i] for i in sorted(failures)],
                 figure_rows=[row for i in sorted(figure_rows) for row in figure_rows[i]],
             )

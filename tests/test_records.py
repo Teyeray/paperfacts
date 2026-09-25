@@ -118,6 +118,15 @@ def test_under_the_shipped_keys_a_rejected_answer_reads_exactly_as_before(model,
     assert str(actual.value) == str(expected.value)
 
 
+@pytest.mark.parametrize("model", ["extraction", "inventory"])
+def test_under_the_shipped_keys_the_json_schema_is_the_base_class_s(model):
+    # create_model does not inherit the docstring, which the schema publishes as its description.
+    base = {"extraction": ExtractionResponse, "inventory": InventoryResponse}[model]
+    keyed = getattr(response_models("target", "no_tco_film"), model)
+
+    assert keyed.model_json_schema() == base.model_json_schema()
+
+
 # ---- response_to_records ---------------------------------------------------------------
 
 

@@ -22,6 +22,7 @@ import paperfacts.workflow as workflow_module
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.errors import Cancelled, ParserError
+from paperfacts.keys import profile_comparison_fingerprint
 from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.records import FailedQuestion, LaneExtraction
@@ -30,6 +31,7 @@ from paperfacts.stored import is_finished
 from paperfacts.workflow import ParseReport, run_document, stage_names
 from support.extraction import make_lane, make_sample
 from support.llm import FakeLlmClient
+from support.profiles import shipped_profile
 
 
 @dataclass
@@ -130,6 +132,7 @@ def install_fake_pipeline(
             backend_b="paddleocr_vl",
             matching=matching or SampleMatching(),
             counts=counts,
+            profile_fingerprint=profile_comparison_fingerprint(shipped_profile()),
         )
 
     monkeypatch.setattr("paperfacts.workflow.parse_document", fake_parse)

@@ -15,7 +15,7 @@ import json
 import pytest
 
 from paperfacts.adapters import render_markdown
-from paperfacts.config import INHERIT
+from paperfacts.config import INHERIT, Settings
 from paperfacts.errors import ContextBudgetError, LlmResponseError
 from paperfacts.extract import extract_lane
 from paperfacts.keys import (
@@ -535,12 +535,12 @@ def test_tuning_the_matching_prompt_does_not_invalidate_extractions(monkeypatch,
 
 
 def test_tuning_the_matching_prompt_does_invalidate_comparisons(monkeypatch, tco_profile):
-    from paperfacts.keys import comparison_key
+    from paperfacts.keys import comparison_key_for
 
-    before = comparison_key(tco_profile)
+    before = comparison_key_for(Settings(), tco_profile)
     monkeypatch.setattr("paperfacts.keys.matching_system_prompt", lambda profile: "something else")
 
-    assert comparison_key(tco_profile) != before
+    assert comparison_key_for(Settings(), tco_profile) != before
 
 
 # ---- A profile of another domain ----------------------------------------------------------

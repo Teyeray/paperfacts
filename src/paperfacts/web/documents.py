@@ -20,7 +20,7 @@ from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload, DocumentDataset, FieldColumn
 from paperfacts.decide import CellValue
-from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
+from paperfacts.keys import comparison_key_for, extractor_key_for, figure_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
 from paperfacts.profile import default_profile
@@ -106,9 +106,9 @@ class Library:
         self.settings = settings
         self.layout = DataLayout(settings.data_root)
         # The same key the pipeline writes under, or the browser looks for a file nothing ever wrote.
-        profile = default_profile()
-        self.extractor_key = extractor_key_for(settings, profile)
-        self.comparison_key = comparison_key(profile)
+        self.profile = default_profile()
+        self.extractor_key = extractor_key_for(settings, self.profile)
+        self.comparison_key = comparison_key_for(settings, self.profile)
         self.figure_key = figure_key_for(settings)
         self._counts_cache: dict[Path, tuple[tuple[tuple[int, int, int] | None, ...], ComparisonCounts | None]] = {}
         self._counts_lock = threading.Lock()
@@ -206,7 +206,7 @@ class Library:
 
     def extraction(self, document_id: str, backend: Backend) -> LaneExtraction | None:
         # The same read path as the CLI, so the browser never shows a stale grounding or normalisation.
-        return read_lane(self.layout, document_id, backend, self.extractor_key)
+        return read_lane(self.layout, document_id, backend, self.extractor_key, self.profile)
 
     def dataset(self, document_id: str) -> DatasetPayload | None:
         """The consolidated per-sample table, or ``None`` until the export ran under the current keys.

@@ -18,21 +18,11 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
-from paperfacts.dataset import DocumentDataset, Row, field_columns
-from paperfacts.fields import FIELD_SPECS
+from paperfacts.dataset import DocumentDataset, Row, data_columns, field_columns
+from paperfacts.profile import DomainProfile
 from paperfacts.storage import write_atomic
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-_DATA_COLUMNS = (
-    ("document_id", "文档ID"),
-    ("filename", "文件名"),
-    ("sample_id", "样品ID"),
-    ("sample_label", "样品标签"),
-    ("conditions", "样品及测量条件"),
-    ("available_fields", "可用字段数"),
-    ("agree_fields", "双路一致字段数"),
-    *((spec.name, spec.name) for spec in FIELD_SPECS),
-)
 _QUALITY_COLUMNS = (
     ("document_id", "文档ID"),
     ("filename", "文件名"),
@@ -121,6 +111,7 @@ def _worksheet(
 def write_dataset(
     documents: Sequence[DocumentDataset],
     output: Path,
+    profile: DomainProfile,
     *,
     failures: Sequence[dict[str, str]] = (),
     figure_rows: Sequence[Row] = (),
@@ -135,8 +126,9 @@ def write_dataset(
     )
     workbook = Workbook()
     workbook.remove(workbook.active)
-    _worksheet(workbook, "论文数据", _DATA_COLUMNS, [doc.paper_row for doc in unique], "Papers")
-    _worksheet(workbook, "样品数据", _DATA_COLUMNS, [row for doc in unique for row in doc.sample_rows], "Samples")
+    columns = data_columns(profile)
+    _worksheet(workbook, "论文数据", columns, [doc.paper_row for doc in unique], "Papers")
+    _worksheet(workbook, "样品数据", columns, [row for doc in unique for row in doc.sample_rows], "Samples")
     descriptions: list[Row] = [
         column.model_dump()
         | {
@@ -145,7 +137,7 @@ def write_dataset(
             "unit": column.unit or "文本",
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
-        for column in field_columns()
+        for column in field_columns(profile)
     ]
     _worksheet(
         workbook,

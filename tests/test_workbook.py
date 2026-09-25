@@ -12,7 +12,7 @@ from support.factories import DOC_ID
 from test_dataset import dataset, paired, value
 
 
-def test_excel_reopens_with_numeric_fields_text_ids_and_no_pdf_formulas(tmp_path):
+def test_excel_reopens_with_numeric_fields_text_ids_and_no_pdf_formulas(tmp_path, tco_profile):
     a = make_lane(
         samples=[
             make_sample(
@@ -33,6 +33,7 @@ def test_excel_reopens_with_numeric_fields_text_ids_and_no_pdf_formulas(tmp_path
     write_dataset(
         [result, result],
         output,
+        tco_profile,
         failures=[{"document_id": "b" * 64, "filename": "failed.pdf", "error": "parser failed"}],
     )
     workbook = load_workbook(output)
@@ -57,21 +58,21 @@ def test_excel_reopens_with_numeric_fields_text_ids_and_no_pdf_formulas(tmp_path
     assert all(cell.data_type != "f" for page in workbook for row in page for cell in row)
 
 
-def test_an_empty_export_still_records_failures(tmp_path):
+def test_an_empty_export_still_records_failures(tmp_path, tco_profile):
     output = tmp_path / "empty.xlsx"
-    write_dataset([], output, failures=[{"filename": "bad.pdf", "error": "unreadable"}])
+    write_dataset([], output, tco_profile, failures=[{"filename": "bad.pdf", "error": "unreadable"}])
     workbook = load_workbook(output)
     assert workbook["论文数据"].max_row == 1
     assert workbook["运行记录"].cell(2, 3).value == "failed"
 
 
-def test_the_series_mark_reaches_the_quality_sheet(tmp_path):
+def test_the_series_mark_reaches_the_quality_sheet(tmp_path, tco_profile):
     result = paired(
         [value("thickness", "300", "nm", series=True)],
         [value("thickness", "300", "nm", backend="paddleocr_vl", series=True)],
     )
     output = tmp_path / "dataset.xlsx"
-    write_dataset([result], output)
+    write_dataset([result], output, tco_profile)
 
     sheet = load_workbook(output)["数据质量"]
     columns = {cell.value: cell.column for cell in sheet[1]}
@@ -80,10 +81,10 @@ def test_the_series_mark_reaches_the_quality_sheet(tmp_path):
     assert sheet.cell(rows["resistivity"], columns["系列级"]).value is False
 
 
-def test_the_lane_column_reaches_the_quality_sheet(tmp_path):
+def test_the_lane_column_reaches_the_quality_sheet(tmp_path, tco_profile):
     result = paired([value("thickness", "300", "nm")], [value("thickness", "300", "nm", backend="paddleocr_vl")])
     output = tmp_path / "dataset.xlsx"
-    write_dataset([result], output)
+    write_dataset([result], output, tco_profile)
 
     sheet = load_workbook(output)["数据质量"]
     columns = {cell.value: cell.column for cell in sheet[1]}
@@ -91,12 +92,12 @@ def test_the_lane_column_reaches_the_quality_sheet(tmp_path):
     assert sheet.cell(rows["thickness"], columns["证据来源通道"]).value == "mineru; paddleocr_vl"
 
 
-def test_figure_rows_fill_only_their_own_sheet(tmp_path: Path):
+def test_figure_rows_fill_only_their_own_sheet(tmp_path: Path, tco_profile):
     output = tmp_path / "dataset.xlsx"
     result = dataset(make_lane(samples=[make_sample("A", [value("thickness", "100", "nm")])]))
     row = {"document_id": DOC_ID, "figure": "Fig. 3", "value": None, "value_raw": "25 10^2 ohm/sq", "precision": "±20%"}
 
-    write_dataset([result], output, figure_rows=[row])
+    write_dataset([result], output, tco_profile, figure_rows=[row])
 
     workbook = load_workbook(output)
     sheet = workbook["图中读数"]

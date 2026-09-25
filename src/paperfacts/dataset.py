@@ -16,17 +16,13 @@ from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict
 
-from paperfacts.compare import ComparisonReport, FieldComparison
+from paperfacts.compare import ComparisonReport, FieldComparison, check_profile
 from paperfacts.decide import CellValue, Decision, decide, joined
-from paperfacts.fields import (
-    AMBIGUOUS_MATCH_CONFIDENCE,
-    FIELD_SPECS,
-    SAMPLE_FIELDS,
-    TARGET_FIELDS,
-    FieldSpec,
-)
+from paperfacts.fields import FieldSpec
+from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.normalize import normalize_lane
+from paperfacts.profile import DomainProfile
 from paperfacts.records import LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
@@ -71,10 +67,12 @@ class DatasetPayload(BaseModel):
     paper_row: dict[str, CellValue] = {}
     sample_rows: tuple[dict[str, CellValue], ...] = ()
     quality_rows: tuple[dict[str, CellValue], ...] = ()
+    # keys.profile_comparison_fingerprint of the profile the table was consolidated under (None: an older file).
+    profile_fingerprint: str | None = None
 
 
-def field_columns() -> tuple[FieldColumn, ...]:
-    """The field table as columns, in the order the dataset writes them."""
+def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
+    """``profile``'s fields as columns, in the order the dataset writes them."""
     return tuple(
         FieldColumn(
             name=spec.name,
@@ -83,7 +81,21 @@ def field_columns() -> tuple[FieldColumn, ...]:
             scope="sample" if spec.is_sample_level else "target",
             description=spec.description_zh,
         )
-        for spec in FIELD_SPECS
+        for spec in profile.fields
+    )
+
+
+def data_columns(profile: DomainProfile) -> tuple[tuple[str, str], ...]:
+    """``(key, header)`` of a paper or sample row, in order: who the row is, then one column per field."""
+    return (
+        ("document_id", "文档ID"),
+        ("filename", "文件名"),
+        ("sample_id", "样品ID"),
+        ("sample_label", "样品标签"),
+        ("conditions", "样品及测量条件"),
+        ("available_fields", "可用字段数"),
+        ("agree_fields", "双路一致字段数"),
+        *((spec.name, spec.name) for spec in profile.fields),
     )
 
 
@@ -100,6 +112,8 @@ class DocumentDataset:
     # Why this run's table is not a finished result (incomplete_reason), or "". Such a table is written to the
     # run's workbook but never stored as dataset.json, so it never crosses the payload.
     incomplete: str = ""
+    fields: tuple[FieldColumn, ...] = ()
+    profile_fingerprint: str | None = None
 
     def to_payload(self) -> DatasetPayload:
         """The serialisable view the web UI and ``dataset.json`` share.
@@ -113,18 +127,17 @@ class DocumentDataset:
             extractor_key=self.extractor_key,
             comparison_key=self.comparison_key,
             artifact_sha256=dict(self.artifact_sha256),
-            fields=field_columns(),
+            fields=self.fields,
             paper_row=dict(self.paper_row),
             sample_rows=tuple(dict(row) for row in self.sample_rows),
             quality_rows=tuple(dict(row) for row in self.quality_rows),
+            profile_fingerprint=self.profile_fingerprint,
         )
 
     @classmethod
     def from_payload(cls, payload: DatasetPayload) -> DocumentDataset:
         """The exact inverse of :meth:`to_payload`, so a dataset read back from disk can be exported again
-        without re-running the pipeline. The field list is not restored: it is derived from FIELD_SPECS on
-        the way out, and a payload written under a different field table lives under a different
-        extractor_key and is never read next to this one.
+        without re-running the pipeline.
 
         The payload arrives already validated -- a malformed file fails at the disk boundary, where the
         caller can decide whether to skip that document or raise.
@@ -138,6 +151,8 @@ class DocumentDataset:
             extractor_key=payload.extractor_key,
             comparison_key=payload.comparison_key,
             artifact_sha256=dict(payload.artifact_sha256),
+            fields=payload.fields,
+            profile_fingerprint=payload.profile_fingerprint,
         )
 
 
@@ -157,7 +172,7 @@ class _Scope:
     matching_failed: bool = False
 
 
-def _matching_blocked(scope: _Scope | None) -> str | None:
+def _matching_blocked(scope: _Scope | None, ambiguous_match_confidence: float) -> str | None:
     """Why nothing measured on this scope may be committed, or None if it may.
 
     Scope-wide rather than per-field: if the two lanes' samples were not confidently identified as the
@@ -168,7 +183,7 @@ def _matching_blocked(scope: _Scope | None) -> str | None:
         return None
     if scope.matching_failed:
         return "样品匹配失败，无法确认跨通道身份"
-    if scope.confidence is not None and scope.confidence < AMBIGUOUS_MATCH_CONFIDENCE:
+    if scope.confidence is not None and scope.confidence < ambiguous_match_confidence:
         return "样品匹配置信度低于阈值"
     return None
 
@@ -227,9 +242,15 @@ def incomplete_reason(lanes: Mapping[Backend, LaneExtraction], report: Compariso
 
 
 def consolidate_document(
-    document: DocumentInput, lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport
+    document: DocumentInput,
+    lanes: Mapping[Backend, LaneExtraction],
+    report: ComparisonReport,
+    options: ComparisonOptions,
 ) -> DocumentDataset:
     """Collapse source evidence, then select the most complete trustworthy sample row."""
+    profile = options.profile
+    fingerprint = profile_comparison_fingerprint(profile)
+    check_profile(report.profile_fingerprint, fingerprint, "the comparison report")
     if report.document_id != document.document_id or any(
         lane.document_id != document.document_id for lane in lanes.values()
     ):
@@ -238,7 +259,7 @@ def consolidate_document(
         raise ValueError("extraction lanes and comparison report have different extractor keys")
     incomplete = incomplete_reason(lanes, report)
     unanswered = {question.field for lane in lanes.values() for question in lane.failed_questions}
-    lanes = {backend: normalize_lane(lane) for backend, lane in lanes.items()}
+    lanes = {backend: normalize_lane(lane, profile) for backend, lane in lanes.items()}
     metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.display_filename}
     quality: list[Row] = []
 
@@ -262,7 +283,7 @@ def consolidate_document(
         )
 
     target: dict[str, Decision] = {}
-    for spec in TARGET_FIELDS:
+    for spec in profile.paper_fields:
         evidence = [
             (backend, field)
             for backend, lane in lanes.items()
@@ -274,16 +295,17 @@ def consolidate_document(
             spec,
             evidence,
             [c for c in report.comparisons if c.scope == "target" and c.field == spec.name],
+            units=profile.units,
             unanswered=spec.name in unanswered,
         )
-    for spec in TARGET_FIELDS:
+    for spec in profile.paper_fields:
         record("target", spec, target[spec.name])
 
     sample_rows: list[Row] = []
     for scope in _scopes(lanes, report):
         scope_comparisons = _scope_comparisons(scope, report)
         decisions = dict(target)
-        for spec in SAMPLE_FIELDS:
+        for spec in profile.sample_fields:
             evidence = [
                 (backend, field)
                 for backend, sample in ((report.backend_a, scope.a), (report.backend_b, scope.b))
@@ -303,7 +325,8 @@ def consolidate_document(
                 spec,
                 evidence,
                 [c for c in scope_comparisons if c.field == spec.name],
-                blocked=_matching_blocked(scope),
+                units=profile.units,
+                blocked=_matching_blocked(scope, options.ambiguous_match_confidence),
                 unanswered=spec.name in unanswered,
                 row_sources=row_sources,
             )
@@ -314,7 +337,7 @@ def consolidate_document(
             [f"{key}={value}" for sample in samples for key, value in sorted(sample.conditions.items())]
             + [
                 f"{spec.name}: {decisions[spec.name].conditions}"
-                for spec in SAMPLE_FIELDS
+                for spec in profile.sample_fields
                 if decisions[spec.name].conditions
             ]
         )
@@ -346,7 +369,7 @@ def consolidate_document(
                 "conditions": "",
                 "available_fields": sum(d.value is not None for d in target.values()),
                 "agree_fields": sum(d.status == "agree" for d in target.values()),
-                **{spec.name: target[spec.name].value if spec.name in target else None for spec in FIELD_SPECS},
+                **{spec.name: target[spec.name].value if spec.name in target else None for spec in profile.fields},
             }
         )
         selection = "未提取到可匹配样品；论文行仅保留唯一的靶材字段"
@@ -378,4 +401,6 @@ def consolidate_document(
             if sha is not None
         },
         incomplete,
+        field_columns(profile),
+        fingerprint,
     )

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from paperfacts import keys
+from paperfacts.config import Settings
 from paperfacts.profile import DomainProfile
 from support.profiles import make_profile
 
@@ -20,7 +21,7 @@ def all_keys(profile: DomainProfile) -> dict[str, str]:
     return {
         "document": keys.extractor_key(keys.ExtractionOptions(profile, "a-model", mode="document")),
         "passage": keys.extractor_key(keys.ExtractionOptions(profile, "a-model", mode="passage")),
-        "comparison": keys.comparison_key(profile),
+        "comparison": keys.comparison_key_for(Settings(), profile),
     }
 
 

@@ -272,15 +272,40 @@ def extractor_key_for(settings: Settings, profile: DomainProfile, model: str | N
     return extractor_key(ExtractionOptions.from_settings(settings, profile, model))
 
 
-def comparison_key(profile: DomainProfile) -> str:
+@dataclass(frozen=True)
+class ComparisonOptions:
+    """Every setting that decides a stored comparison and the table consolidated from it, in one value.
+
+    Built once per document (:meth:`from_settings`) and handed to :func:`paperfacts.compare.compare_lanes` and
+    :func:`paperfacts.dataset.consolidate_document`, so the verdicts and the key they are stored under cannot
+    come from two different profiles.
+    """
+
+    profile: DomainProfile
+    ambiguous_match_confidence: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings, profile: DomainProfile) -> ComparisonOptions:
+        # The threshold is file-only (config.json, no PAPERFACTS_* override), so ``settings`` holds no copy of
+        # it yet; it is taken so that comparison options are built the way extraction options are.
+        return cls(profile=profile, ambiguous_match_confidence=AMBIGUOUS_MATCH_CONFIDENCE)
+
+
+def comparison_key(options: ComparisonOptions) -> str:
+    profile = options.profile
     material = {
         "schema": profile_comparison_fingerprint(profile),
-        "ambiguous_confidence": AMBIGUOUS_MATCH_CONFIDENCE,
+        "ambiguous_confidence": options.ambiguous_match_confidence,
         "normalization": normalization_fingerprint(),
         "code": comparison_code_fingerprint(),
         "matching_system": matching_system_prompt(profile),
     }
     return content_fingerprint(_dumps(material))
+
+
+def comparison_key_for(settings: Settings, profile: DomainProfile) -> str:
+    """The key a comparison with these settings is stored under, so the reader and the writer cannot disagree."""
+    return comparison_key(ComparisonOptions.from_settings(settings, profile))
 
 
 @cache

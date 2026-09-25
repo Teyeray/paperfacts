@@ -147,32 +147,32 @@ def test_a_text_field_is_returned_untouched():
 # ---- normalize_lane -----------------------------------------------------------------
 
 
-def test_normalize_lane_returns_a_new_object_and_leaves_the_input_alone():
+def test_normalize_lane_returns_a_new_object_and_leaves_the_input_alone(tco_profile):
     # The models are frozen, but a misplaced model_copy could still leak the normalized result back
     # through the original object reference.
     lane = make_lane(samples=[make_sample("A", [make_field("thickness", "1.2", unit_raw="μm")])])
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized is not lane
     assert lane.samples[0].fields[0].value is None
     assert normalized.samples[0].fields[0].value == 1200.0
 
 
-def test_normalize_lane_covers_the_target_record_too():
+def test_normalize_lane_covers_the_target_record_too(tco_profile):
     lane = make_lane(target=TargetRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized.target.fields[0].value == 98.5
     assert normalized.target.fields[0].unit == "%"
 
 
-def test_normalize_lane_keeps_a_missing_target_as_none():
-    assert normalize_lane(make_lane()).target is None
+def test_normalize_lane_keeps_a_missing_target_as_none(tco_profile):
+    assert normalize_lane(make_lane(), tco_profile).target is None
 
 
-def test_normalize_lane_normalizes_every_field_of_every_sample():
+def test_normalize_lane_normalizes_every_field_of_every_sample(tco_profile):
     lane = make_lane(
         samples=[
             make_sample(
@@ -182,24 +182,24 @@ def test_normalize_lane_normalizes_every_field_of_every_sample():
         ]
     )
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert [f.value for f in normalized.samples[0].fields] == [300.0, 85.0]
     assert normalized.samples[1].fields[0].value == 120.0
 
 
-def test_a_field_outside_the_schema_survives_untouched():
+def test_a_field_outside_the_schema_survives_untouched(tco_profile):
     # The extraction layer already filtered these out once; this is a defensive second line — better to
     # leave it untouched than let a KeyError blow up the whole document.
     unknown = FieldValue(field="carrier_concentration", value_raw="1e20")
     lane = make_lane(samples=[make_sample("A", [unknown])])
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized.samples[0].fields[0] == unknown
 
 
-def test_normalize_lane_preserves_everything_that_is_not_a_field_value():
+def test_normalize_lane_preserves_everything_that_is_not_a_field_value(tco_profile):
     lane = make_lane(
         backend="paddleocr_vl",
         samples=[
@@ -211,7 +211,7 @@ def test_normalize_lane_preserves_everything_that_is_not_a_field_value():
         raw_response='{"samples": []}',
     )
 
-    normalized = normalize_lane(lane)
+    normalized = normalize_lane(lane, tco_profile)
 
     assert normalized.backend == "paddleocr_vl"
     assert normalized.usage == {"total_tokens": 42}
@@ -220,12 +220,14 @@ def test_normalize_lane_preserves_everything_that_is_not_a_field_value():
     assert normalized.samples[0].conditions == {"O2": "100"}
 
 
-def test_normalizing_twice_changes_nothing_further():
+def test_normalizing_twice_changes_nothing_further(tco_profile):
     # Normalization is redone every time a lane is read (so a rule change doesn't require re-calling the
     # LLM), which means it must be idempotent.
-    lane = normalize_lane(make_lane(samples=[make_sample("A", [make_field("thickness", "1.2", unit_raw="μm")])]))
+    lane = normalize_lane(
+        make_lane(samples=[make_sample("A", [make_field("thickness", "1.2", unit_raw="μm")])]), tco_profile
+    )
 
-    assert normalize_lane(lane) == lane
+    assert normalize_lane(lane, tco_profile) == lane
 
 
 # ---- drop_implausible --------------------------------------------------------------------

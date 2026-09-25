@@ -464,7 +464,7 @@ def keys_under(profile, specs) -> tuple[str, str, str]:
     return (
         keys.extractor_key(keys.ExtractionOptions(edited, "a-model", mode="document")),
         keys.extractor_key(keys.ExtractionOptions(edited, "a-model", mode="passage")),
-        keys.comparison_key(edited),
+        keys.comparison_key_for(Settings(), edited),
     )
 
 
