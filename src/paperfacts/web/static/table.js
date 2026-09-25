@@ -1,16 +1,20 @@
 // Results table: the consolidated dataset (one row per sample, one column per field) that the pipeline
 // exports. This is the deliverable; the comparison workbench below it explains how each cell got there.
+//
+// Both results tables -- this one and the corpus table on the home view (corpus.js) -- are a list of
+// columns. A column is `{ header, head, html(item), text(item) }`: its clipboard header, its <th>, its <td>
+// for one row, and the raw value the clipboard gets for that row. The rendered table and the copy are both
+// `columns.map(...)` over the same list, so they cannot disagree about which column holds what.
 
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
-import { escapeHtml, fmt } from "./html.js";
-import { clearEvidence, showEvidence, TARGET_SID } from "./samples.js";
-import { LANE_LABEL, state } from "./state.js";
-import { copyTable, tsvHeader, tsvRow } from "./tsv.js";
+import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
+import { releaseFact } from "./facts.js";
+import { clearEvidence, showEvidence } from "./samples.js";
+import { LANE_LABEL, noSamplesReason, state } from "./state.js";
+import { copyTable } from "./tsv.js";
+import { revealViewer } from "./viewer.js";
 
-const TARGET_ROW_ID = "target";
 const TARGET_LABEL = "靶材（论文级）";
-// The identity columns of the per-sample results table, shared by its header and its clipboard copy.
-const LEADING = ["样品", "标签", "条件", "可用/一致"];
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
 // two decisions that produce one; every other decision deliberately leaves the cell empty.
 const CELL_CLASS = { agree: "ok", single_source: "warn" };
@@ -32,106 +36,41 @@ function cellBadge(decision) {
 // character that cannot occur in either half.
 const KEY_SEPARATOR = "\u0000";
 
-// Which document the toggle below belongs to: opening another paper starts from the default view again.
-let showAllFields = false;
-let toggleOwner = null;
+// ---------- columns, shared with the corpus table ----------
 
-export function renderResults(root) {
-  const data = state.dataset;
-  const slot = (name) => root.querySelector(`[data-slot="${name}"]`);
-  const download = slot("dataset-download");
-  const copy = slot("dataset-copy");
-  const hasData = Boolean(data && (data.sample_rows?.length || data.paper_row));
-  download.classList.toggle("hidden", !hasData);
-  copy.classList.toggle("hidden", !hasData);
-  if (hasData) download.href = `/api/documents/${state.current}/dataset.xlsx`;
-  if (toggleOwner !== state.current) {
-    toggleOwner = state.current;
-    showAllFields = false;
-  }
+// An identity column: a plain header, and its cell and clipboard value per row.
+export const column = (header, html, text) => ({ header, head: `<th>${escapeHtml(header)}</th>`, html, text });
 
-  slot("results-chips").innerHTML = "";
-  slot("results-head").innerHTML = "";
-  slot("results-rows").innerHTML = "";
-  slot("results-empty").classList.toggle("hidden", hasData);
-  if (!hasData) return;
-
-  const chosen = chosenFields(data.fields);
-  const fields = visibleFields(chosen, [data.paper_row, ...(data.sample_rows ?? [])], showAllFields);
-  slot("results-chips").append(
-    toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; renderResults(root); }),
-    fieldPicker(data.fields, () => renderResults(root)),
-  );
-  slot("results-head").append(headRow(LEADING, fields));
-  const quality = qualityIndex(data.quality_rows ?? []);
-  const paperSampleId = data.paper_row?.sample_id ?? "";
-  const rows = slot("results-rows");
-  rows.append(targetRow(data, fields, quality));
-  for (const row of data.sample_rows ?? []) rows.append(sampleRow(row, fields, quality, paperSampleId));
-
-  // The clipboard copy is built from the same `fields` and rows the renderer just used, so what lands in
-  // the spreadsheet is exactly what is on screen -- and never the badges or tooltips wrapped around it.
-  const values = [targetValues(data, fields), ...(data.sample_rows ?? []).map((row) => sampleValues(row, fields))];
-  copy.onclick = () => copyTable(tsvHeader(LEADING, fields), values);
+// A field column. `value(item)` is the committed value this row shows in it (or null), and `html(item, value)`
+// wraps it in a <td>; the clipboard gets `value(item)` alone.
+export function fieldColumn(field, value, html) {
+  // With a Chinese label the header reads label over the id it exports under. The unit is not repeated on
+  // screen: every decided cell carries it next to its value. The clipboard header does carry it, so the
+  // numbers stay readable once they leave the page.
+  const title = field.label || field.name;
+  const sub = field.label ? `<small>${escapeHtml(field.name)}</small>` : "";
+  return {
+    header: field.unit ? `${title} (${field.unit})` : title,
+    head: `<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`,
+    html: (item) => html(item, value(item)),
+    text: value,
+  };
 }
 
-
-function qualityIndex(rows) {
-  const index = new Map();
-  for (const row of rows) index.set(`${row.sample_id}${KEY_SEPARATOR}${row.field}`, row);
-  return index;
-}
-
-// `leading` are the identity columns each table brings of its own; the field columns are identical.
-export function headRow(leading, fields) {
+export function headRow(columns) {
   const tr = document.createElement("tr");
-  const cells = leading.map((label) => `<th>${escapeHtml(label)}</th>`);
-  for (const field of fields) {
-    // With a Chinese label the header reads label over the id it exports under. The unit is not repeated
-    // here: every decided cell carries it next to its value, and saying it twice only adds noise.
-    const title = field.label || field.name;
-    const second = field.label ? field.name : "";
-    const sub = second ? `<small>${escapeHtml(second)}</small>` : "";
-    cells.push(`<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`);
-  }
-  tr.innerHTML = cells.join("");
+  tr.innerHTML = columns.map((c) => c.head).join("");
   return tr;
 }
 
-function targetRow(data, fields, quality) {
+export function bodyRow(columns, item, className = "") {
   const tr = document.createElement("tr");
-  tr.className = "target-row";
-  const paper = data.paper_row ?? {};
-  const cells = fields.map((field) =>
-    field.scope === "target" ? cell(paper[field.name], quality, TARGET_ROW_ID, field) : "<td></td>",
-  );
-  tr.innerHTML = `<td class="mono">${escapeHtml(TARGET_LABEL)}</td><td></td><td></td><td></td>${cells.join("")}`;
-  bindCells(tr);
+  if (className) tr.className = className;
+  tr.innerHTML = columns.map((c) => c.html(item)).join("");
   return tr;
 }
 
-function sampleRow(row, fields, quality, paperSampleId) {
-  const tr = document.createElement("tr");
-  const isPaperRow = row.sample_id === paperSampleId;
-  if (isPaperRow) tr.className = "paper-row";
-  const marker = isPaperRow ? `<span class="paper-mark" title="被选作论文行的样品">★ 论文行</span>` : "";
-  const conditions = String(row.conditions ?? "");
-  // Target values are identical on every sample, so they stay on the target row alone.
-  const cells = fields.map((field) =>
-    field.scope === "target" ? "<td></td>" : cell(row[field.name], quality, row.sample_id, field),
-  );
-  tr.innerHTML =
-    `<td class="mono">${escapeHtml(row.sample_id ?? "")}${marker}</td>` +
-    `<td class="label" title="${escapeHtml(row.sample_label ?? "")}">${escapeHtml(row.sample_label ?? "")}</td>` +
-    `<td class="muted cond" title="${escapeHtml(conditions)}">${escapeHtml(conditions)}</td>` +
-    `<td class="mono">${escapeHtml(row.available_fields ?? 0)} / ${escapeHtml(row.agree_fields ?? 0)}</td>` +
-    cells.join("");
-  bindCells(tr);
-  return tr;
-}
-
-// How a committed value is written out: numbers through `fmt`, everything else as its own text. The
-// field is optional so the plain text is still available on its own (the clipboard copy wants it bare).
+// How a committed value is written out: numbers through `fmt`, everything else as its own text.
 const shownValue = (value) => (typeof value === "number" ? fmt(value) : String(value));
 
 // A value as the reader sees it in a cell: the number and the field's canonical unit, e.g. `125 nm`.
@@ -142,17 +81,118 @@ export function valueHtml(value, field) {
   return unit ? `${shown} <span class="unit">${escapeHtml(unit)}</span>` : shown;
 }
 
-function cell(value, quality, sampleId, field) {
+// A cell with no provenance behind it (the corpus table has no quality rows): the value, or a dash.
+export const plainCell = (value, field) =>
+  value == null ? `<td class="cell empty">—</td>` : `<td class="cell">${valueHtml(value, field)}</td>`;
+
+// ---------- the per-document table ----------
+
+// Which document the toggle below belongs to: opening another paper starts from the default view again.
+let showAllFields = false;
+let toggleOwner = null;
+
+export function renderResults(root) {
+  const data = state.dataset;
+  const slot = (name) => root.querySelector(`[data-slot="${name}"]`);
+  const download = slot("dataset-download");
+  const copy = slot("dataset-copy");
+  const empty = slot("results-empty");
+  if (toggleOwner !== state.current) {
+    toggleOwner = state.current;
+    showAllFields = false;
+  }
+  slot("results-chips").innerHTML = "";
+  slot("results-head").innerHTML = "";
+  slot("results-rows").innerHTML = "";
+
+  const samples = data?.sample_rows ?? [];
+  const paper = data?.paper_row ?? {};
+  const targetHasValue = (data?.fields ?? []).some((field) => field.scope === "target" && paper[field.name] != null);
+  const hasRows = Boolean(data) && (samples.length > 0 || targetHasValue);
+  download.classList.toggle("hidden", !hasRows);
+  copy.classList.toggle("hidden", !hasRows);
+  slot("results-table").classList.toggle("hidden", !hasRows);
+  // A processed paper without samples says why, beside whatever paper-level values it still has.
+  empty.textContent = data ? noSamplesReason() : "还没有结果表，处理完成后会出现在这里。";
+  empty.classList.toggle("hidden", Boolean(data) && samples.length > 0);
+  if (!hasRows) return;
+  download.href = `/api/documents/${state.current}/dataset.xlsx`;
+
+  const rerender = () => keepFocus(root, () => renderResults(root));
+  const chosen = chosenFields(data.fields);
+  const fields = visibleFields(chosen, [paper, ...samples], showAllFields);
+  slot("results-chips").append(
+    toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
+    fieldPicker(data.fields, rerender),
+  );
+  const columns = documentColumns(fields, qualityIndex(data.quality_rows ?? []), paper.sample_id ?? "");
+  const items = [{ kind: "target", row: paper }, ...samples.map((row) => ({ kind: "sample", row }))];
+  slot("results-head").append(headRow(columns));
+  const rows = slot("results-rows");
+  for (const item of items) {
+    const tr = bodyRow(columns, item, rowClass(item, paper.sample_id));
+    bindCells(tr);
+    rows.append(tr);
+  }
+  copy.onclick = () => copyTable(columns, items);
+}
+
+function rowClass(item, paperSampleId) {
+  if (item.kind === "target") return "target-row";
+  return item.row.sample_id === paperSampleId ? "paper-row" : "";
+}
+
+// Target values are the same for every sample, so they sit on the target row alone, and sample values on
+// the sample rows alone: a field column is filled only on the rows of its own scope.
+function documentColumns(fields, quality, paperSampleId) {
+  const isTarget = (item) => item.kind === "target";
+  // An identity column the target row leaves blank.
+  const sampleColumn = (header, className, text) =>
+    column(
+      header,
+      (item) => (isTarget(item) ? "<td></td>" : `<td class="${className}" title="${escapeHtml(text(item))}">${escapeHtml(text(item))}</td>`),
+      (item) => (isTarget(item) ? "" : text(item)),
+    );
+  const paperMark = `<span class="paper-mark" title="被选作论文行的样品">★ 论文行</span>`;
+  return [
+    column(
+      "样品",
+      (item) => isTarget(item)
+        ? `<td class="mono">${escapeHtml(TARGET_LABEL)}</td>`
+        : `<td class="mono">${escapeHtml(item.row.sample_id ?? "")}${item.row.sample_id === paperSampleId ? paperMark : ""}</td>`,
+      (item) => (isTarget(item) ? TARGET_LABEL : item.row.sample_id ?? ""),
+    ),
+    sampleColumn("标签", "label", (item) => String(item.row.sample_label ?? "")),
+    sampleColumn("条件", "muted cond", (item) => String(item.row.conditions ?? "")),
+    sampleColumn("可用/一致", "mono", (item) => `${item.row.available_fields ?? 0} / ${item.row.agree_fields ?? 0}`),
+    ...fields.map((field) => {
+      const ownScope = (item) => (field.scope === "target") === isTarget(item);
+      return fieldColumn(
+        field,
+        (item) => (ownScope(item) ? item.row[field.name] ?? null : null),
+        (item, value) => (ownScope(item) ? cell(value, quality, item, field) : "<td></td>"),
+      );
+    }),
+  ];
+}
+
+function qualityIndex(rows) {
+  const index = new Map();
+  for (const row of rows) index.set(`${row.sample_id}${KEY_SEPARATOR}${row.field}`, row);
+  return index;
+}
+
+function cell(value, quality, item, field) {
+  const sampleId = item.kind === "target" ? "target" : item.row.sample_id;
   const decision = quality.get(`${sampleId}${KEY_SEPARATOR}${field.name}`);
   const detail = decision?.detail ?? "";
-  // An empty cell is a refusal with a reason, not a gap: the reason is one hover away.
   // Refused, not missing: the reason is the cell's accessible name (so it does not need a hover) and the
   // cell is focusable, because clicking it jumps to the two lanes' records for this (sample, field).
   if (value == null) {
     const reason = detail || "流水线没有给出取值";
     return (
       `<td class="cell empty" tabindex="0" title="${escapeHtml(detail)}" aria-label="${escapeHtml(reason)}"` +
-      ` data-field="${escapeHtml(field.name)}" data-sample="${escapeHtml(sampleId === TARGET_ROW_ID ? TARGET_SID : sampleId)}">—</td>`
+      ` data-field="${escapeHtml(field.name)}" data-kind="${item.kind}" data-sample="${escapeHtml(item.row.sample_id ?? "")}">—</td>`
     );
   }
   const status = decision?.decision ?? "";
@@ -162,53 +202,29 @@ function cell(value, quality, sampleId, field) {
   // That belongs in the tooltip, not in a badge: next to a lane name it read as "MinerU 全系列".
   const hint = decision?.series ? `${detail}${detail ? "；" : ""}论文对整个系列只写了一次` : detail;
   return (
-    `<td class="cell ${CELL_CLASS[status] ?? ""}" title="${escapeHtml(hint)}" data-sources="${escapeHtml(sources)}">` +
+    `<td class="cell ${CELL_CLASS[status] ?? ""}" tabindex="0" title="${escapeHtml(hint)}" data-sources="${escapeHtml(sources)}">` +
     `${valueHtml(value, field)}<small class="${badge.cls}">${escapeHtml(badge.text)}</small></td>`
   );
 }
 
-// Clicking a value shows the blocks it was merged from, the same gesture the comparison table uses.
+// Clicking (or pressing Enter on) a value shows the blocks it was merged from, the same gesture the
+// comparison table uses; an empty cell jumps to the records that explain the refusal.
 function bindCells(tr) {
   for (const td of tr.querySelectorAll("td.cell[data-sources]")) {
-    td.addEventListener("click", () => {
+    onActivate(td, () => {
       for (const other of td.closest("tbody").querySelectorAll("td.selected")) other.classList.remove("selected");
       clearEvidence(samplesHost(td));
       td.classList.add("selected");
+      releaseFact();
       state.viewer?.highlight(td.dataset.sources.split("; ").filter(Boolean));
+      revealViewer();
     });
   }
   for (const td of tr.querySelectorAll("td.cell.empty[data-field]")) {
-    const jump = () => showEvidence(samplesHost(td), td.dataset.field, td.dataset.sample);
-    td.addEventListener("click", jump);
-    td.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      jump();
-    });
+    onActivate(td, () => showEvidence(samplesHost(td), td.dataset.field, td.dataset.sample, td.dataset.kind));
   }
 }
 
 // The records section of the document this table belongs to, not of whichever document rendered first.
 const samplesHost = (td) =>
   td.closest(".document")?.querySelector("details.samples") ?? document.querySelector("details.samples");
-
-// ---------- clipboard rows ----------
-//
-// The values behind the rendered rows, in the same column order: what a spreadsheet should receive once
-// the badges, markers and tooltips are stripped away.
-
-// Target values live on the target row alone, exactly as the rendered table places them.
-function targetValues(data, fields) {
-  const paper = data.paper_row ?? {};
-  return tsvRow(LEADING, [TARGET_LABEL], fields, (field) => (field.scope === "target" ? paper[field.name] : null));
-}
-
-function sampleValues(row, fields) {
-  const identity = [
-    row.sample_id ?? "",
-    row.sample_label ?? "",
-    row.conditions ?? "",
-    `${row.available_fields ?? 0} / ${row.agree_fields ?? 0}`,
-  ];
-  return tsvRow(LEADING, identity, fields, (field) => (field.scope === "target" ? null : row[field.name]));
-}
