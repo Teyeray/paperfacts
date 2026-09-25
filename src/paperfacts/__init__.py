@@ -27,5 +27,6 @@ Flat modules, in pipeline order:
 - ``workbook``    the Excel export of those rows; presentation only, in no cache key
 - ``keys``        the cache keys that name stored extractions and comparisons
 - ``workflow``    orchestration; ``cli``, ``report`` and ``web`` are thin layers over it
+- ``batch``       directory batches and offline re-export, each document through ``workflow``
 - ``stored``      what is stored for a document and whether it is still current (keys and parse)
 """

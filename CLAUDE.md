@@ -63,6 +63,8 @@ this file is the part that is easy to get wrong.
   with "Data format error" until the process restarts.
 - `workflow.run_document` is the single orchestration path; the CLI and the web job both call it. Business
   logic lives in `workflow.py` — `web/` only does the document library, background jobs and HTTP mapping.
+  Directory batches and offline re-export (`run_batch`, `discover_pdfs`, `export_document`) are `batch.py`,
+  which runs each document through `run_document`.
 - Errors: parsers raise `ParserError(backend, stage, detail)`. Adapters map unknown labels to `unknown`
   while keeping `raw_label`, and skip malformed boxes with a warning — never silently, never fatally.
 - Logging is the standard library, logger name = module name.

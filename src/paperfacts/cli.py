@@ -23,6 +23,7 @@ from typing import Annotated, NoReturn, assert_never
 
 import typer
 
+from paperfacts.batch import run_batch
 from paperfacts.config import EXTRACTION_MODES, Settings
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.fields import FIELD_SPECS
@@ -39,7 +40,6 @@ from paperfacts.workflow import (
     extract_document,
     load_artifact,
     parse_document,
-    run_batch,
     run_document,
 )
 

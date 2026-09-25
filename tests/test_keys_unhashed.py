@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from paperfacts import keys
 
-UNHASHED = {"workbook.py", "readings.py", "llm.py", "config.py", "cli.py", "workflow.py"}
+UNHASHED = {"workbook.py", "readings.py", "llm.py", "config.py", "cli.py", "workflow.py", "batch.py"}
 
 
 def _hashed_modules(monkeypatch) -> set[str]:

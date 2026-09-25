@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts.batch import export_document
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, LlmOfflineMiss
@@ -32,7 +33,6 @@ from paperfacts.workflow import (
     build_llm_client,
     build_parser,
     compare_document,
-    export_document,
     extract_document,
 )
 from support.extraction import make_artifact

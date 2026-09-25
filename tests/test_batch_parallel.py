@@ -15,11 +15,12 @@ import pytest
 from openpyxl import load_workbook
 from typer.testing import CliRunner
 
+from paperfacts.batch import run_batch
 from paperfacts.cli import app
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, ParserError
 from paperfacts.models import DocumentInput
-from paperfacts.workflow import run_batch, run_document
+from paperfacts.workflow import run_document
 from support.factories import make_blank_pdf
 from support.web import WAIT_TIMEOUT_S
 from test_workflow_run import install_fake_pipeline
@@ -49,7 +50,7 @@ def test_papers_run_side_by_side(monkeypatch, tmp_path: Path):
         barrier.wait(timeout=WAIT_TIMEOUT_S)
         return run_document(document, settings, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", overlapping)
+    monkeypatch.setattr("paperfacts.batch.run_document", overlapping)
     result = run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3)
 
     assert len(result.documents) == 3
@@ -67,7 +68,7 @@ def test_the_output_is_in_input_order_and_a_failed_paper_costs_only_its_own_row(
             raise ParserError("mineru", "run", "bad PDF")
         return run_document(document, settings, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", failing_b)
+    monkeypatch.setattr("paperfacts.batch.run_document", failing_b)
     serial = run_batch(tmp_path / "papers", settings, output=tmp_path / "serial.xlsx", jobs=1)
 
     # Now every paper waits for the next one to finish before it does, so they complete in reverse order.
@@ -83,7 +84,7 @@ def test_the_output_is_in_input_order_and_a_failed_paper_costs_only_its_own_row(
         finally:
             finished[name].set()
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", reversed_completion)
+    monkeypatch.setattr("paperfacts.batch.run_document", reversed_completion)
     parallel = run_batch(tmp_path / "papers", settings, output=tmp_path / "parallel.xlsx", jobs=4)
 
     assert [d.filename for d in parallel.documents] == ["a.pdf", "c.pdf", "d.pdf"]
@@ -105,7 +106,7 @@ def test_stage_reports_are_serialised_and_name_their_paper(monkeypatch, tmp_path
         on_stage("probe", "running", "")
         return run_document(document, settings, on_stage=on_stage, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", contending)
+    monkeypatch.setattr("paperfacts.batch.run_document", contending)
     calls: list[tuple[str, str]] = []
     guard = threading.Lock()
     inside = 0
@@ -148,7 +149,7 @@ def test_a_stopped_batch_stops_its_running_papers_at_the_next_stage(monkeypatch,
         assert stopping.wait(timeout=WAIT_TIMEOUT_S)
         return run_document(document, settings, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", one_breaks)
+    monkeypatch.setattr("paperfacts.batch.run_document", one_breaks)
     reports: list[tuple[str, str, str]] = []
 
     def on_stage(stage: str, status: str, detail: str) -> None:
@@ -185,7 +186,7 @@ def test_a_workbook_that_cannot_be_written_stops_a_parallel_batch(monkeypatch, t
     def fail_write(*args, **kwargs):
         raise PermissionError("workbook is locked")
 
-    monkeypatch.setattr("paperfacts.workflow.write_dataset", fail_write)
+    monkeypatch.setattr("paperfacts.batch.write_dataset", fail_write)
     with pytest.raises(PermissionError, match="locked"):
         run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3)
     # Every paper that was running has finished: none is left writing after the caller gave up.

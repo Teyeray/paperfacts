@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from paperfacts.batch import BatchResult
 from paperfacts.cli import app
 from paperfacts.config import Settings
 from paperfacts.errors import LlmOfflineMiss, ParserError
@@ -23,7 +24,6 @@ from paperfacts.llm import OFFLINE_MISSES, OfflineMiss
 from paperfacts.models import BACKENDS, Backend, DocumentInput, RawParseOutput
 from paperfacts.parsers import Parser
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import BatchResult
 from support.extraction import make_artifact, make_lane
 from support.factories import RawOutputFactory, make_block, paddle_page_entry
 from support.llm import FakeLlmClient

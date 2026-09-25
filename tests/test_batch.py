@@ -9,13 +9,14 @@ import pytest
 from openpyxl import load_workbook
 from typer.testing import CliRunner
 
+from paperfacts.batch import discover_pdfs, run_batch
 from paperfacts.cli import app
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, ParserError
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import discover_pdfs, run_batch, run_document
+from paperfacts.workflow import run_document
 from support.factories import make_blank_pdf
 from test_workflow_run import install_fake_pipeline
 
@@ -70,8 +71,8 @@ def test_a_failed_paper_is_recorded_and_remaining_papers_are_exported(monkeypatc
             raise ParserError("mineru", "run", "bad PDF")
         return run_document(document, settings, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", fake_run)
-    monkeypatch.setattr("paperfacts.workflow.write_dataset", capture_write)
+    monkeypatch.setattr("paperfacts.batch.run_document", fake_run)
+    monkeypatch.setattr("paperfacts.batch.write_dataset", capture_write)
     result = run_batch(source, Settings(data_root=tmp_path / "data"), output=output)
 
     assert len(result.documents) == len(result.failures) == 1
@@ -122,12 +123,12 @@ def test_offline_export_never_runs_parser_or_llm(monkeypatch, tmp_path):
     install_fake_pipeline(monkeypatch)
     document = DocumentInput.from_path(source)
     dataset = run_document(document, settings).dataset
-    monkeypatch.setattr("paperfacts.workflow.export_document", lambda doc, cfg: dataset)
+    monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg: dataset)
 
     def unexpected(*args, **kwargs):
         pytest.fail("offline export tried to call the pipeline")
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", unexpected)
+    monkeypatch.setattr("paperfacts.batch.run_document", unexpected)
     result = run_batch(source, settings, export_only=True)
     assert result.documents == (dataset,)
     assert result.excel_path.is_file()
@@ -138,12 +139,12 @@ def test_write_failure_propagates_instead_of_claiming_batch_success(monkeypatch,
     install_fake_pipeline(monkeypatch)
     settings = Settings(data_root=tmp_path / "data")
     dataset = run_document(DocumentInput.from_path(source), settings).dataset
-    monkeypatch.setattr("paperfacts.workflow.export_document", lambda doc, cfg: dataset)
+    monkeypatch.setattr("paperfacts.batch.export_document", lambda doc, cfg: dataset)
 
     def fail_write(*args, **kwargs):
         raise PermissionError("workbook is locked")
 
-    monkeypatch.setattr("paperfacts.workflow.write_dataset", fail_write)
+    monkeypatch.setattr("paperfacts.batch.write_dataset", fail_write)
     with pytest.raises(PermissionError, match="locked"):
         run_batch(source, settings, export_only=True)
 

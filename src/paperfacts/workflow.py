@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import Future, as_completed
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -29,7 +29,7 @@ from paperfacts.dataset import (
     incomplete_reason,
     write_dataset_json,
 )
-from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, PaperFactsError, ParserError
+from paperfacts.errors import Cancelled, LlmOfflineMiss, ParserError
 from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
@@ -343,7 +343,7 @@ def compare_document(
     incomplete_lanes = bool(lane_a.failed_questions or lane_b.failed_questions)
     if path.is_file() and not force and not incomplete_lanes:
         cached = ComparisonReport.read(path)
-        if _compared_these(cached, lane_a, lane_b):
+        if compared_these(cached, lane_a, lane_b):
             logger.info("comparison cache_hit doc=%s", document.document_id[:16])
             return cached
         logger.info("stored comparison of doc=%s compared other parses; comparing again", document.document_id[:16])
@@ -362,7 +362,7 @@ def compare_document(
     return report
 
 
-def _compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
+def compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
     """Whether ``report`` was built from lanes of the same parses as these. A hash missing on either side
     (a file from before it was recorded) is unknown, not a mismatch, so existing stores still read."""
     return all(
@@ -493,7 +493,7 @@ class PipelineResult:
     figures: FiguresView | None = None
 
 
-def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
+def store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
     """The web UI reads the consolidated table from disk, so every path that produces one writes it.
 
     The dataset carries the keys it was built under, which is what the JSON file is named after: an
@@ -504,7 +504,7 @@ def _store_dataset(layout: DataLayout, dataset: DocumentDataset) -> Path:
     return path
 
 
-def _ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
+def ignore_stage(stage: str, status: StageStatus, detail: str) -> None:
     pass
 
 
@@ -514,7 +514,7 @@ def run_document(
     *,
     force: bool = False,
     force_figures: bool = False,
-    on_stage: StageCallback = _ignore_stage,
+    on_stage: StageCallback = ignore_stage,
 ) -> PipelineResult:
     """Run both lanes and automatically export consolidated data. Expensive steps are cached.
 
@@ -600,7 +600,7 @@ def run_document(
         )
         on_stage("export", "done", f"{excel_path}; not kept as finished: {dataset.incomplete}")
     else:
-        dataset_json_path = _store_dataset(layout, dataset)
+        dataset_json_path = store_dataset(layout, dataset)
         on_stage("export", "done", str(excel_path))
     return PipelineResult(
         parse_reports=parse_reports,
@@ -713,218 +713,6 @@ def _lane_detail(lane: LaneExtraction) -> str:
         f"{len(lane.samples)} samples"
         + (f", {ungrounded} ungrounded" if ungrounded else "")
         + (f", {failed} question{'s' if failed > 1 else ''} unanswered (asked again next run)" if failed else "")
-    )
-
-
-# ---- Directory batches and offline re-export -------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class BatchResult:
-    documents: tuple[DocumentDataset, ...]
-    failures: tuple[dict[str, str], ...]
-    duplicate_count: int
-    excel_path: Path
-
-
-def discover_pdfs(source: Path) -> tuple[Path, ...]:
-    """Keep discovery stable across runs, including uppercase PDF suffixes and nested folders."""
-    if source.is_file():
-        paths = (source,) if source.suffix.lower() == ".pdf" else ()
-    elif source.is_dir():
-        paths = tuple(sorted(p for p in source.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"))
-    else:
-        raise FileNotFoundError(source)
-    if not paths:
-        raise ConfigError(f"no PDF files found in {source}")
-    return paths
-
-
-def export_document(document: DocumentInput, settings: Settings) -> DocumentDataset:
-    """Rebuild a workbook row from current cached extractions without starting a parser or an LLM."""
-    layout = DataLayout(settings.data_root)
-    key = extractor_key_for(settings)
-    report_path = layout.comparison_path(document.document_id, key, comparison_key())
-    if not report_path.is_file():
-        raise FileNotFoundError(f"no current comparison for {document.display_filename}; run `paperfacts run` first")
-    report = ComparisonReport.read(report_path)
-    lanes: dict[Backend, LaneExtraction] = {}
-    for backend in BACKENDS:
-        lane = read_lane(layout, document.document_id, backend, key)
-        if lane is None:
-            raise FileNotFoundError(f"no current {backend} extraction for {document.display_filename}")
-        lanes[backend] = lane
-    if not _compared_these(report, lanes[BACKEND_A], lanes[BACKEND_B]):
-        raise FileNotFoundError(f"the comparison of {document.display_filename} predates its parse; run it again")
-    # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
-    # serves the report beside the table, and the two must be the same verdicts.
-    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
-    reason = incomplete_reason(lanes, report)
-    if reason:
-        raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")
-    report.write(report_path)
-    dataset = consolidate_document(document, lanes, report)
-    # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
-    _store_dataset(layout, dataset)
-    return dataset
-
-
-def run_batch(
-    source: Path,
-    settings: Settings,
-    *,
-    output: Path | None = None,
-    force: bool = False,
-    force_figures: bool = False,
-    export_only: bool = False,
-    jobs: int = 1,
-    on_stage: StageCallback = _ignore_stage,
-) -> BatchResult:
-    """Process unique PDFs, ``jobs`` at a time, and checkpoint the workbook after every attempted document.
-
-    Completed parse/extraction caches make interruption resumable, while expected per-paper errors remain
-    visible in the workbook and never stop the other papers. Whatever order the papers finish in, the
-    workbook, the failures and the returned datasets are in input order, so a parallel run writes the table
-    a serial one would. ``on_stage`` is called under a lock, one call at a time, with each paper's stages
-    prefixed by that paper's ``i/n name`` so interleaved progress stays readable.
-
-    Parsing stays one paper per parser (the parse locks in :mod:`paperfacts.parsers`) and model requests
-    share one in-flight limit (:mod:`paperfacts.llm`), so ``jobs`` overlaps the model waits of several
-    papers without multiplying the load on the GPU or the endpoint.
-
-    When a parallel batch is stopped (Ctrl-C, or an error that is not one paper's own), no new paper starts
-    and the running ones stop at their next stage boundary, raising :class:`Cancelled` there; the stage in
-    progress finishes first, because a request already paid for is worth caching. Stopped papers are neither
-    rows nor failures: the next run picks them up from the caches.
-    """
-    paths = discover_pdfs(source)
-    output = output or DataLayout(settings.data_root).batch_dataset_path()
-    if output.suffix.lower() != ".xlsx":
-        raise ConfigError("Excel output must have the .xlsx extension")
-    if force and export_only:
-        raise ConfigError("--force cannot be used with offline export")
-    if jobs < 1:
-        raise ConfigError(f"--jobs must be at least 1, got {jobs}")
-
-    # Two locks, so a paper reporting progress never waits for another paper's workbook checkpoint.
-    progress_lock = threading.Lock()
-    results_lock = threading.Lock()
-    cancel = threading.Event()
-    # Keyed by input position, and read back sorted, so completion order never reaches the output.
-    datasets: dict[int, DocumentDataset] = {}
-    figure_rows: dict[int, tuple[Mapping[str, object], ...]] = {}
-    failures: dict[int, dict[str, str]] = {}
-
-    def report(stage: str, status: StageStatus, detail: str) -> None:
-        with progress_lock:
-            on_stage(stage, status, detail)
-
-    def report_stage(prefix: str) -> StageCallback:
-        def mark(stage: str, status: StageStatus, detail: str) -> None:
-            # A stage boundary: the one place a running paper can be stopped without abandoning a request.
-            if cancel.is_set():
-                raise Cancelled("the batch was stopped")
-            report(f"{prefix} {stage}", status, detail)
-
-        return mark
-
-    def settle(
-        index: int, prefix: str, outcome: DocumentDataset | dict[str, str], rows: Sequence[Mapping[str, object]] = ()
-    ) -> None:
-        if isinstance(outcome, DocumentDataset):
-            # Its rows are written, with the unanswered cells refused, but the paper is not finished.
-            report(prefix, "done", f"incomplete: {outcome.incomplete}" if outcome.incomplete else "")
-        else:
-            report(prefix, "failed", outcome["error"])
-        with results_lock:
-            if isinstance(outcome, DocumentDataset):
-                datasets[index], figure_rows[index] = outcome, tuple(rows)
-            else:
-                failures[index] = outcome
-            # Export failures are fatal: claiming progress without a writable output would be misleading.
-            # Written under the lock, so a checkpoint never overwrites a later one.
-            write_dataset(
-                [datasets[i] for i in sorted(datasets)],
-                output,
-                failures=[failures[i] for i in sorted(failures)],
-                figure_rows=[row for i in sorted(figure_rows) for row in figure_rows[i]],
-            )
-
-    def failure(document_id: str, path: Path, exc: Exception) -> dict[str, str]:
-        logger.exception("batch failed for %s", path.name)
-        return {"document_id": document_id, "filename": path.name, "error": str(exc)}
-
-    # Hashing comes first and runs serially, so which copy of a duplicated PDF is processed is decided by
-    # input order rather than by whichever thread hashed first.
-    queue: list[tuple[int, str, DocumentInput]] = []
-    seen: set[str] = set()
-    duplicates = 0
-    for index, path in enumerate(paths, 1):
-        prefix = f"{index}/{len(paths)} {path.name}"
-        try:
-            document = DocumentInput.from_path(path)
-        except (PaperFactsError, OSError, ValueError) as exc:
-            settle(index, prefix, failure("", path, exc))
-            continue
-        if document.document_id in seen:
-            duplicates += 1
-            report(prefix, "skipped", "duplicate PDF content")
-            continue
-        seen.add(document.document_id)
-        queue.append((index, prefix, document))
-
-    def process(index: int, prefix: str, document: DocumentInput) -> None:
-        if cancel.is_set():
-            return
-        report(prefix, "running", "")
-        try:
-            if export_only:
-                dataset = export_document(document, settings)
-                figures = shown_figures(document.document_id, document.display_filename, settings)
-            else:
-                result = run_document(
-                    document,
-                    settings,
-                    force=force,
-                    force_figures=force_figures,
-                    on_stage=report_stage(prefix),
-                )
-                dataset, figures = result.dataset, result.figures
-        except Cancelled:
-            report(prefix, "skipped", "stopped with the batch; its finished stages are cached")
-        except (PaperFactsError, OSError, ValueError) as exc:
-            settle(index, prefix, failure(document.document_id, document.pdf_path, exc))
-        else:
-            settle(index, prefix, dataset, figures.rows if figures is not None else ())
-
-    if jobs == 1 or len(queue) <= 1:
-        # On the calling thread, exactly as the serial loop always ran: Ctrl-C interrupts the paper at once.
-        for item in queue:
-            process(*item)
-    else:
-        pool = ContextThreadPoolExecutor(max_workers=min(jobs, len(queue)), thread_name_prefix="paperfacts-document")
-        futures: list[Future[None]] = []
-        try:
-            futures += [pool.submit(process, *item) for item in queue]
-            # Completion order, so an unexpected error (a workbook that cannot be written) surfaces at once
-            # instead of after every paper queued ahead of it.
-            for future in as_completed(futures):
-                future.result()
-        except BaseException:
-            cancel.set()
-            running = sum(1 for future in futures if future.running())
-            report("batch", "failed", f"stopping; waiting for {running} running papers to reach a stage boundary")
-            raise
-        finally:
-            # After an error nothing new starts, and the papers already running are waited for: returning
-            # while they still write the workbook would let a checkpoint land after the caller gave up on it,
-            # and the interpreter joins these threads at exit anyway.
-            pool.shutdown(wait=True, cancel_futures=True)
-    return BatchResult(
-        tuple(datasets[i] for i in sorted(datasets)),
-        tuple(failures[i] for i in sorted(failures)),
-        duplicates,
-        output,
     )
 
 
