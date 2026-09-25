@@ -478,6 +478,10 @@ class _HttpParser(Parser):
     """What the two HTTP parsers share: an owned (or injected) client, closed with the parser, and a bounded
     retry of transient failures around each request."""
 
+    # Whether a read timeout is worth sending again. Not when one request is the whole paper: the service is
+    # most likely still working on it, and a second copy would only queue behind the first on the GPU.
+    retry_read_timeout = True
+
     def __init__(
         self,
         base_url: str,
@@ -513,6 +517,8 @@ class _HttpParser(Parser):
                 response = self.client.post(url, timeout=self.timeout_s, **kwargs)
             except httpx.HTTPError as exc:
                 error = f"{what}: {type(exc).__name__}: {exc}"
+                if isinstance(exc, httpx.ReadTimeout) and not self.retry_read_timeout:
+                    raise ParserError(self.backend, "http", error) from exc
             else:
                 if response.status_code == 200:
                     return response
@@ -537,6 +543,7 @@ class _HttpParser(Parser):
 
 class MinerUHttpParser(_HttpParser):
     backend: Backend = "mineru"
+    retry_read_timeout = False  # one request is the whole paper, see _HttpParser
 
     def __init__(
         self,

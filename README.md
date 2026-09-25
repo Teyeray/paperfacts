@@ -431,7 +431,7 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `parsers.paddle_render_dpi` | DPI pages are rasterised at for PaddleOCR-VL. Default 200. The subprocess and HTTP paths must agree or their pixel coordinates are not comparable |
 | `parsers.paddle_vl_backend` / `paddle_vl_server_url` / `paddle_vl_model_name` | Hand PaddleOCR-VL's vision stage to an external server, as `dev_up.sh` does with MLX |
 | `parsers.subprocess_timeout_s` | Default 3600: a first subprocess run downloads weights |
-| `parsers.http_timeout_s` | Default 900. Per request; a timeout, a connection error or a 5xx is retried twice with a 5 s / 10 s backoff before the parse fails (PaddleOCR-VL retries the one page, MinerU the whole paper) |
+| `parsers.http_timeout_s` | Default 900. Per request; a timeout, a connection error or a 5xx is retried twice with a 5 s / 10 s backoff before the parse fails (PaddleOCR-VL retries the one page; MinerU re-sends the whole paper, but not after a read timeout, when the service is most likely still parsing it) |
 | `parsers.uv_bin` | The `uv` executable used to launch the runner scripts |
 | `server.host` / `server.port` | Defaults `127.0.0.1` and 8000 |
 | `server.max_upload_mb` | Default 200 |

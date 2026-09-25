@@ -350,6 +350,30 @@ def compare_document(
     return report
 
 
+def stored_comparison(
+    layout: DataLayout, document_id: str, extractor_key: str, comparison_key: str
+) -> ComparisonReport | None:
+    """The stored comparison under these keys, or None when there is none or it compared other parses.
+
+    For readers that hold no lanes (the web library): a report whose recorded artifact hashes differ from
+    the artifacts on disk would show citations into blocks the current parse does not have, and would keep
+    the document counted as compared, so "run all" would never redo it.
+    """
+    path = layout.comparison_path(document_id, extractor_key, comparison_key)
+    if not path.is_file():
+        return None
+    report = ComparisonReport.read(path)
+    for backend, recorded in (
+        (report.backend_a, report.artifact_sha256_a),
+        (report.backend_b, report.artifact_sha256_b),
+    ):
+        artifact_path = layout.artifact_path(document_id, backend)
+        if recorded is not None and artifact_path.is_file():
+            if ParsedArtifact.read(artifact_path).content_hash() != recorded:
+                return None
+    return report
+
+
 def _compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
     """Whether ``report`` was built from lanes of the same parses as these. A hash missing on either side
     (a file from before it was recorded) is unknown, not a mismatch, so existing stores still read."""

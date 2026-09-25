@@ -13,7 +13,13 @@ from __future__ import annotations
 import pytest
 
 from paperfacts import dataset
-from paperfacts.compare import ComparisonReport, compare_lanes, compare_values, condition_numbers
+from paperfacts.compare import (
+    ComparisonReport,
+    compare_lanes,
+    compare_values,
+    condition_numbers,
+    conditions_measure_differently,
+)
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_BY_NAME
 from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key
 from paperfacts.matching import SampleMatch, SampleMatching
@@ -776,6 +782,11 @@ def test_the_report_round_trips_through_disk(tmp_path):
 )
 def test_condition_numbers_are_ordered_signed_and_range_aware(condition, numbers):
     assert condition_numbers(condition) == numbers
+
+
+def test_the_same_numbers_in_another_order_are_the_same_condition_for_pairing():
+    assert not conditions_measure_differently("550 nm, 25 °C", "at 25 °C and 550 nm")
+    assert conditions_measure_differently("550 nm", "600 nm")
 
 
 def test_dataset_judges_conditions_by_the_same_definition_as_compare():

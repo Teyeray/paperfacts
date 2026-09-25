@@ -398,18 +398,19 @@ def conditions_measure_differently(condition_a: str | None, condition_b: str | N
     does the same number said differently ("at 550 nm" against "550 nm wavelength"). A condition with no
     number on either side carries nothing to contradict, so it never blocks a pair.
     """
-    numbers_a = condition_numbers(condition_a)
-    numbers_b = condition_numbers(condition_b)
+    # As a multiset: "550 nm, 25 °C" and "at 25 °C and 550 nm" name the same numbers in another order.
+    numbers_a = sorted(condition_numbers(condition_a))
+    numbers_b = sorted(condition_numbers(condition_b))
     return bool(numbers_a) and bool(numbers_b) and numbers_a != numbers_b
 
 
 def condition_numbers(condition: str | None) -> tuple[float, ...]:
     """The numbers a condition names, in order: "550 nm" -> (550,), "400-800 nm" -> (400, 800).
 
-    The one definition of a condition's identity: this module pairs values by it and ``dataset.py`` picks
-    and cross-checks conditions by it, so the two can never disagree about whether two conditions are the
-    same. In order, because "400-800 nm" and "800-400 nm" are written differently for a reason no rule
-    here can see, and treating them as one would be a guess. The text is de-LaTeXed first, since MinerU
+    The one definition of a condition's numbers: this module pairs values by it and ``dataset.py`` picks
+    and cross-checks conditions by it, so the two can never parse a condition differently. In order, so a
+    caller that cares (a configured preference "400-800") can match exactly; pairing across lanes compares
+    them as a multiset (:func:`conditions_measure_differently`). The text is de-LaTeXed first, since MinerU
     spells a table's numbers "4 0 0".
     """
     if not condition:

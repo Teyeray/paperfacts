@@ -325,7 +325,7 @@ def test_transport_level_failure_is_wrapped_in_a_parser_error(tmp_path: Path, do
     assert "ConnectError" in excinfo.value.detail
 
 
-def test_a_timeout_is_retried_and_the_parse_can_then_succeed(
+def test_a_connection_error_is_retried_and_the_parse_can_then_succeed(
     tmp_path: Path, document: DocumentInput, backoffs: list[float]
 ):
     calls = {"n": 0}
@@ -333,12 +333,27 @@ def test_a_timeout_is_retried_and_the_parse_can_then_succeed(
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         if calls["n"] == 1:
-            raise httpx.ReadTimeout("slow")
+            raise httpx.ConnectError("refused")
         return httpx.Response(200, json=mineru_response())
 
     MinerUHttpParser("http://svc", client=make_client(handler)).parse(document, tmp_path / "raw")
 
     assert calls["n"] == 2 and backoffs == [parsers.HTTP_RETRY_BACKOFF_S]
+
+
+def test_a_read_timeout_is_not_retried(tmp_path: Path, document: DocumentInput, backoffs: list[float]):
+    # One request is the whole paper: after a read timeout the service is most likely still parsing it, and
+    # a second copy would queue behind the first on the GPU.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ReadTimeout("slow")
+
+    with pytest.raises(ParserError, match="ReadTimeout"):
+        MinerUHttpParser("http://svc", client=make_client(handler)).parse(document, tmp_path / "raw")
+
+    assert calls["n"] == 1 and backoffs == []
 
 
 @pytest.mark.parametrize("body", [b"<html>gateway</html>", b"[1, 2]"])

@@ -126,12 +126,12 @@ WEB_PASSWORD="$(env_value PAPERFACTS_WEB_PASSWORD)"
 WEB_USERNAME="$(python3 -c 'import json;print(json.load(open("config.json"))["web"]["username"])')"
 # curl reads the credentials from a config on stdin (-K -), never from its argv: on a shared GPU host every
 # user can read every process's command line through ps. printf is a shell builtin, so it has no argv either.
-# Inside a quoted curl config value only backslash and double quote need escaping.
-CURL_USER="$WEB_USERNAME:$WEB_PASSWORD"
-CURL_USER="${CURL_USER//\\/\\\\}"
-CURL_USER="${CURL_USER//\"/\\\"}"
+# Inside a quoted curl config value only backslash and double quote need escaping; python does it (fed on
+# stdin, so again no argv), because bash's own ${x//pattern/replacement} treats backslashes differently
+# from one bash version to the next.
+CURL_CONFIG="$(printf '%s:%s' "$WEB_USERNAME" "$WEB_PASSWORD" | python3 -c 'import sys; s = sys.stdin.read(); print("user = \"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"", end="")')"
 curl_auth() {  # curl with the web credentials; takes curl's own arguments
-    printf 'user = "%s"\n' "$CURL_USER" | curl -K - "$@"
+    printf '%s\n' "$CURL_CONFIG" | curl -K - "$@"
 }
 
 # ---------------------------------------------------------------- re-run displaced documents

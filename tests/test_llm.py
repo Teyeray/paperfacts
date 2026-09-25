@@ -578,7 +578,8 @@ def test_a_reply_cut_off_at_max_tokens_is_an_error_and_is_not_cached(tmp_path: P
     cache_dir = tmp_path / "llm_cache"
     llm = make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": ', "length")), cache_dir=cache_dir)
 
-    with pytest.raises(LlmError, match="max_tokens"):
+    # A response error, so sample matching records a failed matching instead of failing the paper.
+    with pytest.raises(LlmResponseError, match="max_tokens"):
         llm.complete_json(system="S", user="U")
 
     assert not cache_dir.exists()
