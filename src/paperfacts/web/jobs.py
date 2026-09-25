@@ -28,7 +28,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from paperfacts.workflow import StageStatus
+from paperfacts.workflow import Stage, StageStatus
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +39,6 @@ MAX_TRACEBACK_CHARS = 2000
 # Finished jobs kept for the pollers and the library's busy markers. Status lives only in memory and the
 # files on disk are the persistent truth, so a bounded history loses nothing a reload cannot rebuild.
 MAX_FINISHED_JOBS = 200
-
-
-class Stage(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    status: StageStatus = "pending"
-    detail: str = ""
 
 
 class Job(BaseModel):

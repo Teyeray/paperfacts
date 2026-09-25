@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import CellValue, DatasetPayload, DocumentDataset, FieldColumn
-from paperfacts.keys import comparison_key, extractor_key_for
+from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
 from paperfacts.records import LaneExtraction
@@ -28,22 +28,16 @@ from paperfacts.storage import (
     DocumentIdentity,
     document_key,
     ensure_identity,
+    has_cached_parse,
     is_document_key,
+    is_runnable,
     mark_uploaded,
     read_identity,
-    write_bytes_atomic,
-)
-from paperfacts.web.jobs import Stage
-from paperfacts.workflow import (
-    has_cached_parse,
-    is_finished,
-    is_runnable,
-    read_lane,
-    stored_comparison,
     stored_document,
     stored_pdf,
-    stored_stages,
+    write_bytes_atomic,
 )
+from paperfacts.workflow import Stage, is_finished, read_lane, stored_comparison, stored_stages
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +103,7 @@ class Library:
         # The same key the pipeline writes under, or the browser looks for a file nothing ever wrote.
         self.extractor_key = extractor_key_for(settings)
         self.comparison_key = comparison_key()
+        self.figure_key = figure_key_for(settings)
         self._counts_cache: dict[Path, tuple[tuple[int, int], ComparisonCounts]] = {}
         self._counts_lock = threading.Lock()
 
@@ -142,18 +137,26 @@ class Library:
         itself is answered by :meth:`exists`, which is what every other route checks."""
         self._require_key(document_id)
         identity = self.identity(document_id)
-        stages = stored_stages(document_id, self.settings)
-        status = dict(stages)
+        stages = stored_stages(
+            self.layout,
+            document_id,
+            extractor_key=self.extractor_key,
+            comparison_key=self.comparison_key,
+            figure_key=self.figure_key,
+            figures_enabled=self.settings.figures_enabled,
+        )
+        status = {stage.name: stage.status for stage in stages}
         counts = self._counts(document_id)
+        pdf = stored_pdf(self.layout, document_id, identity)
         return DocumentSummary(
             document_id=document_id,
             name=identity.name if identity else document_id,
-            pdf_available=self.pdf_path(document_id) is not None,
-            runnable=self.runnable(document_id),
+            pdf_available=pdf is not None,
+            runnable=pdf is not None or has_cached_parse(self.layout, document_id),
             parsed={b: status[f"parse:{b}"] == "done" for b in BACKENDS},
             extracted={b: status[f"extract:{b}"] == "done" for b in BACKENDS},
             compared=counts is not None,
-            stages=tuple(Stage(name=name, status=value) for name, value in stages),
+            stages=stages,
             counts=counts,
             uploaded_at=identity.created_at if identity and identity.uploaded else None,
         )
@@ -277,8 +280,8 @@ class Library:
             raise FileNotFoundError("This document has no available PDF to render pages from")
         return render_page_cached(pdf, page, dpi=dpi, cache_dir=self.layout.page_cache_dir(document_id, dpi))
 
-    # Which PDF a document runs from and whether it can run at all are pipeline rules, kept in workflow.py
-    # so the web and a rerun cannot disagree; these are the library's names for them.
+    # Which PDF a document runs from and whether it can run at all are path rules, kept in storage.py so the
+    # web and a rerun cannot disagree; these are the library's names for them.
 
     def has_cached_parse(self, document_id: str) -> bool:
         self._require_key(document_id)
@@ -290,7 +293,9 @@ class Library:
 
     def finished(self, document_id: str) -> bool:
         self._require_key(document_id)
-        return is_finished(document_id, self.settings)
+        return is_finished(
+            self.layout, document_id, extractor_key=self.extractor_key, comparison_key=self.comparison_key
+        )
 
     def document(self, document_id: str) -> DocumentInput:
         self._require_key(document_id)

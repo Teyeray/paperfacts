@@ -14,14 +14,16 @@ from pathlib import Path
 import pytest
 from openpyxl import load_workbook
 
+import paperfacts.readings
 import paperfacts.workflow as workflow
 from paperfacts.config import Settings
 from paperfacts.errors import Cancelled, ConfigError, LlmError
 from paperfacts.figures import FigureReadings
 from paperfacts.keys import figure_key_for
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
+from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import read_document_figures, run_document, shown_figures
+from paperfacts.workflow import run_document
 from support.factories import make_block
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
 from test_workflow_run import install_fake_pipeline
@@ -349,13 +351,13 @@ def test_a_page_is_rendered_once_for_all_its_panels(monkeypatch, document: Docum
         blocks=tuple(blocks),
     ).write(DataLayout(settings.data_root).artifact_path(document.document_id, "mineru"))
     renders: list[int] = []
-    real = workflow.render_page
+    real = paperfacts.readings.render_page
 
     def counting(path, page, *, dpi):
         renders.append(page)
         return real(path, page, dpi=dpi)
 
-    monkeypatch.setattr(workflow, "render_page", counting)
+    monkeypatch.setattr("paperfacts.readings.render_page", counting)
 
     readings = read_document_figures(document, settings, FakeVisionClient(chart_answer()))
 
@@ -407,7 +409,7 @@ def test_a_stopped_figures_stage_asks_no_further_panel_and_stores_nothing(docume
         return chart_answer()
 
     client = FakeVisionClient(stop_after_the_first)
-    artifact = workflow._figure_artifact(document, settings)
+    artifact = figure_artifact(document, settings)
     # Three panels of one figure, asked one at a time.
     panels = tuple(
         make_block(page=0, order=i, type="figure", content=f"{i}.jpg", bbox=BOX, document_id=document.document_id)

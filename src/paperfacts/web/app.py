@@ -56,11 +56,12 @@ from paperfacts.keys import figure_key_for
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
+from paperfacts.readings import shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobBrief, JobManager, JobRunner
-from paperfacts.workflow import corpus_workbook, run_document, shown_figures, stage_names
+from paperfacts.workflow import corpus_workbook, run_document, stage_names
 
 logger = logging.getLogger(__name__)
 

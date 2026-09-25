@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from PIL import Image
+from pydantic import BaseModel, ConfigDict
 
 from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
@@ -29,18 +29,18 @@ from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
 from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
-from paperfacts.figures import FigureReadings, FiguresView, read_figures
-from paperfacts.figures import figure_rows as figure_rows_of
+from paperfacts.figures import FigureReadings, FiguresView
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for, figure_key_for
-from paperfacts.llm import LlmClient, OpenAICompatibleClient, VisionClient
+from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
+from paperfacts.llm import LlmClient, OpenAICompatibleClient
 from paperfacts.matching import match_samples
-from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
+from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.normalize import normalize_lane
 from paperfacts.parsers import MinerUHttpParser, PaddleHttpParser, Parser, SubprocessParser, default_runner_script
-from paperfacts.pdf import crop_region, png_bytes, read_geometry, render_page
+from paperfacts.pdf import read_geometry
+from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
-from paperfacts.storage import DataLayout, ensure_identity, read_identity, write_text_atomic
+from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
 from paperfacts.threads import ContextThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
@@ -403,141 +403,6 @@ def build_vision_client(settings: Settings) -> OpenAICompatibleClient:
     )
 
 
-def _figure_artifact(
-    document: DocumentInput, settings: Settings, parsed: Mapping[Backend, ParsedArtifact | None] | None = None
-) -> ParsedArtifact:
-    """Whose figure blocks are cropped: MinerU's, else PaddleOCR-VL's. Both parsers box the same chart, so
-    one is enough, and a fixed preference keeps the citations of a document stable run to run. An artifact
-    the caller already holds is used as is; otherwise it is read from disk."""
-    for backend in BACKENDS:
-        artifact = (parsed or {}).get(backend)
-        if artifact is not None:
-            return artifact
-        path = DataLayout(settings.data_root).artifact_path(document.document_id, backend)
-        if path.is_file():
-            return ParsedArtifact.read(path)
-    raise FileNotFoundError(f"no parse artifact for {document.display_filename}; run `paperfacts parse` first")
-
-
-def _stored_file(path: Path) -> FigureReadings | None:
-    """A stored readings file, or None when there is none or it will not load (it is then read again)."""
-    if not path.is_file():
-        return None
-    try:
-        return FigureReadings.read(path)
-    except (OSError, ValueError) as exc:
-        logger.warning("stored figure readings at %s are unreadable (%s); ignoring them", path, exc)
-        return None
-
-
-def _orphaned(readings: FigureReadings, artifact: ParsedArtifact | None) -> frozenset[str]:
-    """The figure blocks the readings cite that ``artifact`` does not have at the same place. Without an
-    artifact nothing can be checked, and nothing is claimed missing."""
-    if artifact is None:
-        return frozenset()
-    boxes = {block.source_id: block.bbox for block in artifact.blocks if block.type == "figure"}
-    cited = [(panel.source_id, None) for panel in readings.panels]
-    cited += [(reading.source_id, reading.bbox) for reading in readings.readings]
-    return frozenset(
-        source_id
-        for source_id, bbox in cited
-        if source_id not in boxes or (bbox is not None and boxes[source_id] != bbox)
-    )
-
-
-def shown_figures(document_id: str, filename: str, settings: Settings) -> FiguresView | None:
-    """The chart readings to show for a document, whether or not the stage is switched on.
-
-    Switching the stage off stops the asking, not the showing. When nothing is stored under the current
-    figure_key (the model, the prompt or the field table moved since), the newest older file stands in and
-    is marked stale rather than hiding readings that were paid for. Readings citing figure blocks the
-    current parse no longer has are marked too.
-    """
-    layout = DataLayout(settings.data_root)
-    current = layout.figures_path(document_id, figure_key_for(settings))
-    readings, stale = _stored_file(current), False
-    if readings is None and current.parent.is_dir():
-        older = sorted(
-            (path for path in current.parent.glob("*.json") if path != current),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        for path in older:
-            readings = _stored_file(path)
-            if readings is not None:
-                stale = True
-                break
-    if readings is None:
-        return None
-    artifact = None
-    if readings.backend is not None and layout.artifact_path(document_id, readings.backend).is_file():
-        artifact = ParsedArtifact.read(layout.artifact_path(document_id, readings.backend))
-    orphaned = _orphaned(readings, artifact)
-    return FiguresView(
-        document_id=readings.document_id,
-        figure_key=readings.figure_key,
-        model=readings.model,
-        stale=stale,
-        orphaned=tuple(sorted(orphaned)),
-        rows=figure_rows_of(readings, filename=filename, stale=stale, orphaned=orphaned),
-    )
-
-
-def read_document_figures(
-    document: DocumentInput,
-    settings: Settings,
-    client: VisionClient,
-    *,
-    force: bool = False,
-    artifact: ParsedArtifact | None = None,
-    stop: threading.Event | None = None,
-) -> FigureReadings:
-    """Read the charts of one document, or return the stored readings.
-
-    Stored readings are served only when complete and still citing figure blocks of the current parse at
-    the same place. Otherwise the charts are read again: answered panels replay from the LLM cache for free,
-    a panel whose cached answer was unusable is asked with the cache bypassed, and a failed request is simply
-    asked again. ``force`` re-asks every panel.
-    """
-    key = figure_key_for(settings)
-    path = DataLayout(settings.data_root).figures_path(document.document_id, key)
-    artifact = artifact or _figure_artifact(document, settings)
-    previous = None if force else _stored_file(path)
-    if (
-        previous is not None
-        and previous.complete
-        and previous.backend == artifact.backend
-        and not _orphaned(previous, artifact)
-    ):
-        logger.info("figures cache_hit doc=%s", document.document_id[:16])
-        return previous
-    if not document.pdf_path.is_file():
-        raise FileNotFoundError("PDF not available; figure reading crops the charts from it, re-upload to read them")
-
-    # Panels of one figure share a page; rendering it once per page rather than once per panel saves a
-    # 200-dpi render (and a turn at the PDFium lock) for every panel after the first.
-    pages: dict[int, Image.Image] = {}
-
-    def render(page: int, bbox: NormalizedBBox) -> bytes:
-        if page not in pages:
-            pages[page] = render_page(document.pdf_path, page, dpi=settings.figures_dpi)
-        return png_bytes(crop_region(pages[page], bbox, max_pixels=settings.figures_max_pixels))
-
-    readings = read_figures(
-        artifact,
-        render,
-        client,
-        figure_key=key,
-        max_per_document=settings.figures_max_per_document,
-        concurrency=settings.llm_concurrency,
-        refresh=force,
-        refresh_panels=previous.unreadable() if previous is not None else frozenset(),
-        stop=stop,
-    )
-    readings.write(path)
-    return readings
-
-
 def _figures_detail(readings: FigureReadings) -> str:
     counts: dict[str, int] = {}
     for panel in readings.panels:
@@ -564,7 +429,7 @@ def _read_figures_stage(
     a chart the vision model could not read must not cost the paper its extraction. It reports its outcome
     instead of calling ``on_stage`` itself, so every stage mark still comes from the calling thread."""
     try:
-        artifact = artifact or _figure_artifact(document, settings)
+        artifact = artifact or figure_artifact(document, settings)
         with build_vision_client(settings) as client:
             readings = read_document_figures(document, settings, client, force=force, artifact=artifact, stop=stop)
     except Cancelled:
@@ -589,6 +454,18 @@ def _figures_mark(status: StageStatus, detail: str, view: FiguresView | None) ->
 # ---- The whole pipeline, shared by the CLI and the web job ------------------------------------------------------
 
 StageStatus = Literal["pending", "running", "done", "failed", "skipped"]
+
+
+class Stage(BaseModel):
+    """One stage's progress, as a job reports it or as the files on disk show it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    status: StageStatus = "pending"
+    detail: str = ""
+
+
 # (stage, status, detail). Stage names are a public contract: the progress bar and the CLI both use them.
 StageCallback = Callable[[str, StageStatus, str], None]
 
@@ -1025,82 +902,41 @@ def run_batch(
     )
 
 
-# ---- Stored documents: what a rerun and the web library decide from what is on disk -------------------------
+# ---- Stored documents: how far each one got, read off the files the stages write ----------------------------
 
 
-def stored_pdf(layout: DataLayout, document_id: str) -> Path | None:
-    """The PDF a stored document is processed from. A web-uploaded source.pdf wins; a CLI-processed document
-    falls back to the original path recorded in its identity, which is only valid on the machine that ran it."""
-    uploaded = layout.source_pdf(document_id)
-    if uploaded.is_file():
-        return uploaded
-    identity = read_identity(layout, document_id)
-    if identity and identity.source_path and Path(identity.source_path).is_file():
-        return Path(identity.source_path)
-    return None
-
-
-def has_cached_parse(layout: DataLayout, document_id: str) -> bool:
-    """Whether both lanes' artifacts are on disk, so the pipeline can run without ever opening the PDF."""
-    return all(layout.artifact_path(document_id, backend).is_file() for backend in BACKENDS)
-
-
-def is_runnable(layout: DataLayout, document_id: str) -> bool:
-    """Whether :func:`run_document` can be asked to process this stored document at all.
-
-    A PDF is only needed for a real parse. A document parsed on another machine arrives with both artifacts
-    and no PDF, and extraction, comparison and export need nothing else.
-    """
-    return stored_pdf(layout, document_id) is not None or has_cached_parse(layout, document_id)
-
-
-def stored_document(layout: DataLayout, document_id: str) -> DocumentInput:
-    """The :class:`DocumentInput` that reprocesses a stored document. Raises ``FileNotFoundError`` when it
-    has no identity, or neither a PDF nor a parse of both lanes."""
-    identity = read_identity(layout, document_id)
-    if identity is None:
-        raise FileNotFoundError(
-            f"Document {document_id} has no identity.json: please re-upload or reprocess via the CLI"
-        )
-    pdf = stored_pdf(layout, document_id)
-    if pdf is None:
-        if not has_cached_parse(layout, document_id):
-            raise FileNotFoundError(
-                f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
-            )
-        # Both artifacts are stored, so nothing downstream opens the file. A path is carried anyway, pointing
-        # at where this document's PDF would live if it had one: the export names its workbook from
-        # ``display_name`` (set below), so no path has to be invented to name it.
-        pdf = layout.source_pdf(identity.sha256)
-    return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name)
-
-
-def stored_stages(document_id: str, settings: Settings) -> tuple[tuple[str, StageStatus], ...]:
+def stored_stages(
+    layout: DataLayout,
+    document_id: str,
+    *,
+    extractor_key: str,
+    comparison_key: str,
+    figure_key: str,
+    figures_enabled: bool,
+) -> tuple[Stage, ...]:
     """How far a stored document got, one entry per :func:`stage_names` stage, read off the file each stage
-    writes under the current keys. It is the progress to show when no running job describes the document."""
-    layout = DataLayout(settings.data_root)
-    extractor = extractor_key_for(settings)
-    comparison = comparison_key()
+    writes under these keys. It is the progress to show when no running job describes the document. The
+    keys are the caller's, so the library that lists documents and the one that reads them cannot disagree."""
 
     def done(path: Path) -> StageStatus:
         return "done" if path.is_file() else "pending"
 
-    figures = done(layout.figures_path(document_id, figure_key_for(settings)))
+    figures = done(layout.figures_path(document_id, figure_key))
     status: dict[str, StageStatus] = {
         **{f"parse:{b}": done(layout.artifact_path(document_id, b)) for b in BACKENDS},
         # Opt-in: switched off and never read is a skip, not work still to do.
-        "figures": figures if figures == "done" or settings.figures_enabled else "skipped",
-        **{f"extract:{b}": done(layout.extraction_path(document_id, b, extractor)) for b in BACKENDS},
-        "compare": done(layout.comparison_path(document_id, extractor, comparison)),
-        "export": done(layout.dataset_json_path(document_id, extractor, comparison)),
+        "figures": figures if figures == "done" or figures_enabled else "skipped",
+        **{f"extract:{b}": done(layout.extraction_path(document_id, b, extractor_key)) for b in BACKENDS},
+        "compare": done(layout.comparison_path(document_id, extractor_key, comparison_key)),
+        "export": done(layout.dataset_json_path(document_id, extractor_key, comparison_key)),
     }
-    return tuple((name, status[name]) for name in stage_names())
+    return tuple(Stage(name=name, status=status[name]) for name in stage_names())
 
 
-def is_finished(document_id: str, settings: Settings) -> bool:
-    """Whether a run under the current keys went all the way. The export is the last stage, so a document
-    whose comparison exists but whose export failed is still unfinished."""
-    return dict(stored_stages(document_id, settings))["export"] == "done"
+def is_finished(layout: DataLayout, document_id: str, *, extractor_key: str, comparison_key: str) -> bool:
+    """Whether a run under these keys went all the way. The export is the last stage (see
+    :func:`stored_stages`), so a document whose comparison exists but whose export failed is still unfinished."""
+    return layout.dataset_json_path(document_id, extractor_key, comparison_key).is_file()
 
 
 def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings) -> bytes:

@@ -55,7 +55,8 @@ this file is the part that is easy to get wrong.
   through its `from_*` factories and nowhere else.
 - Backend literals are `"mineru"` and `"paddleocr_vl"`. Source ids are `{backend}_p{page}_b{order}`, pages
   0-based.
-- All on-disk paths and atomic writes come from `storage.py`. A document's full sha256, display name and
+- All on-disk paths and atomic writes come from `storage.py`, and so do the path rules over a stored
+  document (`stored_pdf`, `is_runnable`, `stored_document`). A document's full sha256, display name and
   origin live only in `identity.json`, written the moment the directory is created.
 - **PDFium is not thread-safe.** Every pypdfium2 call goes through `pdf.py`, serialised behind its
   process-wide lock. Concurrent opens corrupt its global state, after which every subsequent open fails
@@ -115,6 +116,9 @@ this file is the part that is easy to get wrong.
   and their own web section; `dataset.py` must not import `figures.py`. A failure in it marks only its own
   stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
   tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
+- Where readings are stored and which are shown (`shown_figures`, `read_document_figures`) is `readings.py`,
+  not `figures.py`: `figures.py`'s source is hashed into `figure_key`, and moving storage code there would
+  rename every stored reading.
 - Vision requests go through `llm.complete_vision` on a `VisionClient`, never the extraction client;
   crops come from `pdf.render_region`.
 

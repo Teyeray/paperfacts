@@ -1,5 +1,5 @@
-"""Everything about the data directory: the single source of truth for paths, atomic writes, and the
-document's identity file.
+"""Everything about the data directory: the single source of truth for paths, atomic writes, the
+document's identity file, and which PDF a stored document runs from.
 
 Nowhere else builds a ``data/...`` path by hand. Directories are organised by document, so ``cd``-ing into
 one shows every intermediate state of one paper:
@@ -200,3 +200,59 @@ def mark_uploaded(layout: DataLayout, identity: DocumentIdentity, *, name: str) 
     if identity.uploaded:
         return identity
     return write_identity(layout, identity.model_copy(update={"uploaded": True, "name": name}))
+
+
+# ---- Stored documents: what a rerun and the web library decide from what is on disk ------------------------
+# Runtime imports of `models` below are local for the reason given at the top of this module.
+
+
+def stored_pdf(layout: DataLayout, document_id: str, identity: DocumentIdentity | None = None) -> Path | None:
+    """The PDF a stored document is processed from. A web-uploaded source.pdf wins; a CLI-processed document
+    falls back to the original path recorded in its identity, which is only valid on the machine that ran it.
+    A caller that already read the identity passes it, so one request reads ``identity.json`` once."""
+    uploaded = layout.source_pdf(document_id)
+    if uploaded.is_file():
+        return uploaded
+    identity = identity or read_identity(layout, document_id)
+    if identity and identity.source_path and Path(identity.source_path).is_file():
+        return Path(identity.source_path)
+    return None
+
+
+def has_cached_parse(layout: DataLayout, document_id: str) -> bool:
+    """Whether both lanes' artifacts are on disk, so the pipeline can run without ever opening the PDF."""
+    from paperfacts.models import BACKENDS
+
+    return all(layout.artifact_path(document_id, backend).is_file() for backend in BACKENDS)
+
+
+def is_runnable(layout: DataLayout, document_id: str) -> bool:
+    """Whether :func:`paperfacts.workflow.run_document` can be asked to process this stored document at all.
+
+    A PDF is only needed for a real parse. A document parsed on another machine arrives with both artifacts
+    and no PDF, and extraction, comparison and export need nothing else.
+    """
+    return stored_pdf(layout, document_id) is not None or has_cached_parse(layout, document_id)
+
+
+def stored_document(layout: DataLayout, document_id: str) -> DocumentInput:
+    """The :class:`DocumentInput` that reprocesses a stored document. Raises ``FileNotFoundError`` when it
+    has no identity, or neither a PDF nor a parse of both lanes."""
+    from paperfacts.models import DocumentInput
+
+    identity = read_identity(layout, document_id)
+    if identity is None:
+        raise FileNotFoundError(
+            f"Document {document_id} has no identity.json: please re-upload or reprocess via the CLI"
+        )
+    pdf = stored_pdf(layout, document_id, identity)
+    if pdf is None:
+        if not has_cached_parse(layout, document_id):
+            raise FileNotFoundError(
+                f"Document {document_id} has no available PDF (not a web upload, and the original path is gone)"
+            )
+        # Both artifacts are stored, so nothing downstream opens the file. A path is carried anyway, pointing
+        # at where this document's PDF would live if it had one: the export names its workbook from
+        # ``display_name`` (set below), so no path has to be invented to name it.
+        pdf = layout.source_pdf(identity.sha256)
+    return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name)

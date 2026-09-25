@@ -16,6 +16,7 @@ Flat modules, in pipeline order:
 - ``records``     the model's response schema, the stored records, and the cleaning between them
 - ``extract``     the document the model reads and the extraction itself
 - ``figures``     a vision model reads property-vs-condition charts; paper-level, never compared
+- ``readings``    the figures stage on disk: stored readings, the ones shown, reading a document anew
 - ``voting``      repeats collapsed within a pass, majority vote across passes
 - ``grounding``   the quoted text must occur in the block it cites
 - ``normalize``   text folding, number parsing, unit conversion
