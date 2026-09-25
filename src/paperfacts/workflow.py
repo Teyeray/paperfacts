@@ -323,7 +323,13 @@ def compare_document(
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
     matching = match_samples(lane_a, lane_b, client, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching)
-    report.write(path)
+    if matching.failed:
+        # A matching failure is a model that answered badly this time, not a verdict about the paper. Stored,
+        # it would be served on every later run and blank the paper's sample cells until --force; unstored,
+        # the next run asks again (the invalid answers were never cached, see llm.complete_validated).
+        logger.warning("sample matching failed for doc=%s; the comparison is not stored", document.document_id[:16])
+    else:
+        report.write(path)
     logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
     return report
 

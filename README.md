@@ -346,7 +346,7 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `max_in_flight` | How many model requests, text and vision, the whole process has on the wire at once. Default 8 |
 | `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
 | `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
-| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured |
+| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured, up to 120 s |
 | `retry_backoff_s` | Default 2.0 |
 
 `reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
@@ -610,6 +610,11 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Comparison (`comparison_key`) | the field tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
+
+Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
+costs one repair request and is never written, and an invalid answer already in the cache is asked again
+rather than replayed. A sample matching that failed (the model answered badly twice) is shown for that run
+but not stored, so the next run asks again instead of serving the failure until `--force`.
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
 serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own

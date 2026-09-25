@@ -325,6 +325,30 @@ def test_force_redoes_the_comparison_without_re_extracting(
     assert client.refreshes[-1] is True
 
 
+def test_a_failed_matching_is_reported_but_not_stored_so_the_next_run_asks_again(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    # Stored, a matching the model botched twice would blank the paper's sample cells on every later run.
+    good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
+    client = FakeLlmClient(
+        [extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), '{"pairs": 1}', '{"pairs": 2}', good]
+    )
+
+    failed = compare_document(document, settings, client)
+    path = DataLayout(settings.data_root).comparison_path(
+        document.document_id, failed.extractor_key, failed.comparison_key
+    )
+
+    assert failed.matching.failed
+    assert not path.is_file()
+
+    retried = compare_document(document, settings, client)
+
+    assert client.call_count == 5  # the lanes came from their cache; only matching was asked again
+    assert not retried.matching.failed
+    assert path.is_file()
+
+
 def test_the_report_path_carries_both_the_extractor_and_the_comparison_key(
     settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
 ):

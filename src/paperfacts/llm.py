@@ -8,6 +8,11 @@ the key changes with it.
 ``refresh=True`` skips reading the cache but still writes it -- that is how ``--force`` genuinely re-asks
 the model instead of replaying an answer.
 
+Only an answer the caller accepts is cached (``accept``; :func:`complete_validated` passes its schema check).
+A cached answer that fails the check is a miss and is asked again, and a fresh one that fails it is returned
+but never written: one bad reply must cost one repair, not become the answer of every later run. A reply cut
+off at ``max_tokens`` is never an answer and raises.
+
 Vision requests (:meth:`OpenAICompatibleClient.complete_vision`) carry one PNG as an OpenAI-style
 ``image_url`` content part. Their cache key hashes the request with the image replaced by its sha256: the
 same bytes on the wire are still the same key, but a megabyte of base64 never lands in the key material or
@@ -52,6 +57,13 @@ logger = logging.getLogger(__name__)
 
 # Which HTTP statuses are worth trying again: the ones that mean "later", never the ones that mean "wrong".
 RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504}
+
+# The longest ``Retry-After`` honoured. A server asking for an hour would park a worker thread for that hour;
+# a longer request is cut to this, and the attempt budget decides whether the call is given up.
+MAX_RETRY_AFTER_S = 120.0
+
+# Decides whether an answer's text is worth caching (and replaying from the cache).
+Accept = Callable[[str], bool]
 
 
 class InFlightLimit:
@@ -142,6 +154,7 @@ class LlmClient(Protocol):
         refresh: bool = False,
         cache_salt: str = "",
         reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
+        accept: Accept | None = None,
     ) -> LlmResult: ...
 
 
@@ -210,23 +223,27 @@ class OpenAICompatibleClient:
         refresh: bool = False,
         cache_salt: str = "",
         reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
+        accept: Accept | None = None,
     ) -> LlmResult:
+        """One JSON answer. ``accept`` gates the cache both ways: a cached answer it rejects is asked again,
+        a fresh one it rejects is returned to the caller (who repairs it) but not written."""
         payload = self.payload(system=system, user=user, reasoning_effort=reasoning_effort)
         key = self.cache_key(payload, cache_salt=cache_salt)
         if not refresh:
             cached = self._read_cache(key)
             if cached is not None:
-                return cached
+                if accept is None or accept(cached.text):
+                    return cached
+                logger.warning("llm cache entry %s fails validation; asking again", key[:16])
 
         data = self._post_with_retry(payload)
-        try:
-            text = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise LlmError(f"response has no choices[0].message.content: {str(data)[:300]}") from exc
-        if not text or not text.strip():
-            raise LlmError("the model returned empty content (usually max_tokens truncation in JSON mode)")
+        text = _content(data, "the model")
+        if data["choices"][0].get("finish_reason") == "length":
+            # Truncated JSON is not an answer; caching it would replay the torn reply on every later run.
+            raise LlmError("the model's reply was cut off at max_tokens")
         result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
-        self._write_cache(key, result)
+        if accept is None or accept(text):
+            self._write_cache(key, result)
         return result
 
     def payload(
@@ -267,12 +284,7 @@ class OpenAICompatibleClient:
             if cached is not None:
                 return cached
         data = self._post_with_retry(payload)
-        try:
-            text = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise LlmError(f"response has no choices[0].message.content: {str(data)[:300]}") from exc
-        if not text or not text.strip():
-            raise LlmError("the vision model returned empty content")
+        text = _content(data, "the vision model")
         if data["choices"][0].get("finish_reason") == "length":
             # A reply cut off at max_tokens is not an answer. Caching it would serve the same torn JSON to
             # every later run; raising leaves the panel to be asked again.
@@ -390,6 +402,20 @@ class OpenAICompatibleClient:
         write_text_atomic(path, payload)
 
 
+def _content(data: dict[str, Any], who: str) -> str:
+    """The reply text of a chat completion, or an :class:`LlmError` for anything that is not one."""
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise LlmError(f"response has no choices[0].message.content: {str(data)[:300]}") from exc
+    if not isinstance(text, str):
+        # Some providers answer with a list of content parts; that is not the JSON text this client asked for.
+        raise LlmError(f"{who} returned non-text content: {str(text)[:300]}")
+    if not text.strip():
+        raise LlmError(f"{who} returned empty content (usually max_tokens truncation in JSON mode)")
+    return text
+
+
 def _flat_usage(usage: Any) -> dict[str, int]:
     """The response's usage block as flat integers.
 
@@ -412,7 +438,8 @@ def _retry_after(response: httpx.Response) -> float | None:
     """Seconds the server asked us to wait, when it said so as a plain number.
 
     The HTTP-date form is rare in practice and the exponential backoff already errs long, so an
-    unparseable header is simply ignored rather than interpreted.
+    unparseable header is simply ignored rather than interpreted. A wait longer than
+    :data:`MAX_RETRY_AFTER_S` is capped there: a worker thread is not parked for an hour on a server's word.
     """
     value = response.headers.get("Retry-After")
     if value is None:
@@ -421,7 +448,7 @@ def _retry_after(response: httpx.Response) -> float | None:
         seconds = float(value)
     except ValueError:
         return None
-    return seconds if seconds > 0 else None
+    return min(seconds, MAX_RETRY_AFTER_S) if seconds > 0 else None
 
 
 def complete_validated[M: BaseModel](
@@ -440,9 +467,25 @@ def complete_validated[M: BaseModel](
     An invalid first answer is sent back with its validation error; only a second failure gives up. The
     caller supplies ``repair(previous_text, error)`` to build the follow-up prompt. Returns the parsed
     model, the raw text, and the summed token usage of both calls.
+
+    Both requests pass the schema as ``accept``, so only the answer that validated is cached, and an invalid
+    answer already in the cache (written before this rule) is asked again rather than replayed.
     """
+
+    def accept(text: str) -> bool:
+        try:
+            model_cls.model_validate_json(text)
+        except ValidationError:
+            return False
+        return True
+
     first = client.complete_json(
-        system=system, user=user, refresh=refresh, cache_salt=cache_salt, reasoning_effort=reasoning_effort
+        system=system,
+        user=user,
+        refresh=refresh,
+        cache_salt=cache_salt,
+        reasoning_effort=reasoning_effort,
+        accept=accept,
     )
     usage = dict(first.usage)
     try:
@@ -458,6 +501,7 @@ def complete_validated[M: BaseModel](
         refresh=refresh,
         cache_salt=cache_salt,
         reasoning_effort=reasoning_effort,
+        accept=accept,
     )
     for key, value in second.usage.items():
         usage[key] = usage.get(key, 0) + value
