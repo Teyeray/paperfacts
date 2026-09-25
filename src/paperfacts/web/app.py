@@ -118,7 +118,9 @@ def login_accepted(header: str | None, settings: Settings) -> bool:
 def create_app(settings: Settings | None = None, *, jobs: JobManager | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     library = Library(settings)
-    manager = jobs or JobManager(pipeline_runner(settings, library), stage_names())
+    manager = jobs or JobManager(
+        pipeline_runner(settings, library), stage_names(), workers=settings.max_parallel_documents
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -126,7 +128,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         # here, on the main thread, so a SIGTERM to the server takes the parser subprocesses with it.
         install_runner_cleanup()
         yield
-        manager.shutdown()  # stop accepting new jobs on shutdown; a job already running ends with the process
+        manager.shutdown()  # stop accepting new jobs on shutdown; jobs already running end with the process
 
     app = FastAPI(title="PaperFacts", version="0.1.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
     app.state.settings = settings

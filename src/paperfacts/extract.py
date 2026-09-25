@@ -25,6 +25,7 @@ piece of code that shapes it -- here, ``adapters.render_markdown`` and ``passage
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 from collections.abc import Mapping, Sequence
@@ -427,7 +428,10 @@ def _extract_passages(
         with ThreadPoolExecutor(
             max_workers=min(concurrency, len(questions)), thread_name_prefix="paperfacts-field"
         ) as pool:
-            answers = list(pool.map(ask, questions))
+            # One copy of the caller's context per question, made here on the calling thread: a worker
+            # starts with an empty context, and the web job's log attribution lives in this one.
+            contexts = [contextvars.copy_context() for _ in questions]
+            answers = list(pool.map(lambda context, question: context.run(ask, question), contexts, questions))
 
     harvests: list[FieldHarvest] = []
     raw_parts = [f"# inventory\n{inventory.raw_text}"]

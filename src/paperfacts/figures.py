@@ -27,6 +27,7 @@ tuned. This module's source is hashed into ``figure_key`` instead.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -742,7 +743,13 @@ def read_figures(
     with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
         futures = [
             pool.submit(
-                _read_panel, request, image, client, refresh=refresh or request.block.source_id in refresh_panels
+                # The caller's context comes along, and with it the web job these requests' logs belong to.
+                contextvars.copy_context().run,
+                _read_panel,
+                request,
+                image,
+                client,
+                refresh=refresh or request.block.source_id in refresh_panels,
             )
             for request, image in zip(requests, images, strict=True)
         ]

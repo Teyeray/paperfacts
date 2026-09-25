@@ -8,6 +8,7 @@ service (a GPU server), an empty one means the ``runners/`` script as a subproce
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 from collections.abc import Callable, Mapping
@@ -596,8 +597,15 @@ def run_document(
     if settings.figures_enabled:
         on_stage("figures", "running", "")
         artifact = next((parsed[backend] for backend in BACKENDS if parsed[backend] is not None), None)
+        # Every task handed to a pool runs in a copy of the caller's context, so whatever the caller keyed
+        # on it -- the web job its log records belong to -- follows the work onto the pool's thread.
         figures_future = figures_pool.submit(
-            _read_figures_stage, document, settings, force=force_figures, artifact=artifact
+            contextvars.copy_context().run,
+            _read_figures_stage,
+            document,
+            settings,
+            force=force_figures,
+            artifact=artifact,
         )
     else:
         figures = shown_figures(document.document_id, document.display_filename, settings)
@@ -648,7 +656,9 @@ def _extract_and_compare(
             on_stage(f"extract:{backend}", "running", "")
         with ThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
             futures: dict[Backend, Future[LaneExtraction]] = {
-                backend: pool.submit(extract_document, document, backend, settings, client, force=force)
+                backend: pool.submit(
+                    contextvars.copy_context().run, extract_document, document, backend, settings, client, force=force
+                )
                 for backend in BACKENDS
             }
             # Every lane's outcome is collected before any of them is acted on, so an exception nobody
