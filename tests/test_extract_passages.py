@@ -815,6 +815,10 @@ def test_both_modes_tell_the_model_to_copy_a_header_power_of_ten_into_the_unit(s
     # Guillén 2006 heads a column "ρ × 10^4 (Ω cm)"; both lanes stored its 6.8 as 6.8 Ω·cm. The code applies
     # the factor (normalize.split_scale_factor) only if the model copies it, and it must never apply it itself.
     assert '"ρ × 10^4 (Ω cm)"' in system
+    # Both examples carry the symbol, as the rule asks; a header without a factor gives the unit alone, which
+    # is all a unit converter recognises.
+    assert '"ρ (×10^-4 Ω·cm)"' in system
+    assert '"Thickness (nm)"' in system and 'just "nm"' in system
     assert "never apply the factor yourself" in system
 
 
