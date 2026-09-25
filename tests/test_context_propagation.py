@@ -20,6 +20,7 @@ from paperfacts.config import Settings
 from paperfacts.extract import extract_lane
 from paperfacts.figures import read_figures
 from paperfacts.models import DocumentInput
+from paperfacts.profile import default_profile
 from paperfacts.prompts import inventory_system_prompt
 from paperfacts.threads import ContextThreadPoolExecutor
 from support.extraction import lane_options, make_artifact
@@ -67,7 +68,7 @@ def test_the_field_questions_run_in_the_callers_context():
     answer = responder()
 
     def recording(system: str, user: str) -> str:
-        if system != inventory_system_prompt():
+        if system != inventory_system_prompt(default_profile()):
             seen.append(CALLER.get())
         return answer(system, user)
 

@@ -17,7 +17,8 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from paperfacts import extract, figures, matching, prompts
-from paperfacts.fields import FIELD_SPECS
+from paperfacts.config import Settings
+from paperfacts.profile import load_profile, profile_path
 from paperfacts.records import (
     ExtractionResponse,
     FieldResponse,
@@ -28,6 +29,8 @@ from paperfacts.records import (
 )
 
 SNAPSHOT = Path(__file__).with_name("snapshot.json")
+# The shipped TCO profile, from the built-in settings so the environment cannot change what is rendered.
+PROFILE = load_profile(profile_path(Settings()))
 
 # Fixed inputs: the prompts' own text is what is pinned, so the inputs only have to be stable.
 SAMPLE_LIST = "- id: S1 | label: ITO at 100 W | conditions: power=100 W\n- id: S2 | label: - | conditions: -"
@@ -75,19 +78,19 @@ def validation_error(model: type[BaseModel], answer: str) -> str:
 
 def snapshot() -> dict[str, str]:
     rendered = {
-        "extraction_system": prompts.extraction_system_prompt(),
+        "extraction_system": prompts.extraction_system_prompt(PROFILE),
         "extraction_user": prompts.extraction_user_prompt(MARKDOWN),
-        "inventory_system": prompts.inventory_system_prompt(),
+        "inventory_system": prompts.inventory_system_prompt(PROFILE),
         "inventory_user": prompts.inventory_user_prompt(MARKDOWN),
-        "field_system": prompts.field_system_prompt(),
-        "matching_system": prompts.matching_system_prompt(),
+        "field_system": prompts.field_system_prompt(PROFILE),
+        "matching_system": prompts.matching_system_prompt(PROFILE),
         "matching_user": prompts.matching_user_prompt("mineru", "- S1", "paddleocr_vl", "- S1"),
         "repair": prompts.repair_prompt("original question", "{bad json", "Expecting value"),
-        "field_table": prompts.render_field_table(),
+        "field_table": prompts.render_field_table(PROFILE.fields),
         "figures_system": figures.SYSTEM_PROMPT,
-        "figures_user": figures.user_prompt(CAPTION, tuple(spec for spec in FIELD_SPECS if spec.group == "film")),
+        "figures_user": figures.user_prompt(CAPTION, PROFILE.figure_fields, PROFILE.figures),
     }
-    for spec in FIELD_SPECS:
+    for spec in PROFILE.fields:
         rendered[f"field_user:{spec.name}"] = prompts.field_user_prompt(spec, SAMPLE_LIST, MARKDOWN)
     for name, (model, answer) in INVALID_ANSWERS.items():
         rendered[f"validation_error:{name}"] = validation_error(model, answer)

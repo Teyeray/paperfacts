@@ -527,7 +527,7 @@ def test_tuning_the_matching_prompt_does_not_invalidate_extractions(monkeypatch)
     stored per-lane extraction and re-pays the LLM for the expensive step to redo a cheap one.
     """
     before = extractor_key(ExtractionOptions("deepseek-chat", mode="document"))
-    monkeypatch.setattr("paperfacts.keys.matching_system_prompt", lambda: "something else")
+    monkeypatch.setattr("paperfacts.keys.matching_system_prompt", lambda profile: "something else")
 
     assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) == before
 
@@ -536,6 +536,6 @@ def test_tuning_the_matching_prompt_does_invalidate_comparisons(monkeypatch):
     from paperfacts.keys import comparison_key
 
     before = comparison_key()
-    monkeypatch.setattr("paperfacts.keys.matching_system_prompt", lambda: "something else")
+    monkeypatch.setattr("paperfacts.keys.matching_system_prompt", lambda profile: "something else")
 
     assert comparison_key() != before

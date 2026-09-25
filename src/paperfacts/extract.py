@@ -43,6 +43,7 @@ from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
 from paperfacts.normalize import drop_implausible
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
+from paperfacts.profile import default_profile
 from paperfacts.prompts import (
     extraction_system_prompt,
     extraction_user_prompt,
@@ -298,7 +299,7 @@ def _extract_whole_document(
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
     """Document mode: one question carrying the whole filtered paper."""
-    system = extraction_system_prompt()
+    system = extraction_system_prompt(default_profile())
     user = extraction_user_prompt(document.markdown)
     _check_context_budget(system, user, options)
     response, text, usage = complete_validated(
@@ -355,7 +356,7 @@ def _take_inventory(
     inventory entry the earlier run cached.
     """
     selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(options))
-    system = inventory_system_prompt()
+    system = inventory_system_prompt(default_profile())
     user = inventory_user_prompt(render_markdown(selection))
     _check_context_budget(system, user, options)
     response, raw_text, usage = complete_validated(
@@ -400,7 +401,7 @@ def _extract_passages(
     sample_list = _render_sample_list(inventory.response.samples)
     # What the inventory cited as describing the samples: the recipe paragraph every field question needs.
     sample_blocks = frozenset(source_id for sample in inventory.response.samples for source_id in sample.source_ids)
-    field_system = field_system_prompt()
+    field_system = field_system_prompt(default_profile())
 
     # Which fields get asked, and with which blocks, is decided here in FIELD_SPECS order and nowhere else.
     # Retrieval and the budget check stay on this thread, so the questions -- and the "never asked" reasons

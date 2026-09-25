@@ -32,7 +32,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
 
@@ -47,6 +47,7 @@ from paperfacts.normalize import convert_to_canonical
 # Keyword matching is passages.py's, so a caption names a field under exactly the rules a passage-mode
 # question uses to find it in the text.
 from paperfacts.passages import keyword_hits, searchable
+from paperfacts.profile import FigureSlots, default_profile
 from paperfacts.storage import write_text_atomic
 from paperfacts.text import normalize_text
 from paperfacts.threads import ContextThreadPoolExecutor
@@ -79,14 +80,14 @@ SYSTEM_PROMPT = "You read numeric data off charts in scientific papers. Answer w
 # ticks, and strict JSON. Added for the pipeline: the list of fields and a "field" per y axis, so the model
 # answers only for fields this table has and the code never guesses which axis is which property.
 USER_PROMPT = """\
-You are reading data off a chart from a scientific paper about thin films (e.g. sputtered transparent conductive oxides).
+You are reading data off a chart from a scientific paper about {subject}.
 The image may be one panel of a multi-panel figure. The figure caption is:
 <<<{caption}>>>
 
-Only these film properties are of interest (name: meaning, usual unit):
+Only these {property_noun} are of interest (name: meaning, usual unit):
 {fields}
 
-Step 1 - decide whether this chart is a "property-vs-condition" chart: a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name), with one discrete marker per sample.
+Step 1 - decide whether this chart is a "property-vs-condition" chart: {chart_definition}, with one discrete marker per sample.
 Spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are NOT property-vs-condition charts. If it is not one, or none of its y axes plots one of the properties listed above, output {{"chart_type": "not_property_vs_condition", "reason": "..."}} and nothing else.
 
 Step 2 - otherwise read the chart carefully:
@@ -94,7 +95,7 @@ Step 2 - otherwise read the chart carefully:
 - For each y axis, determine the scale from the tick labels: linear or logarithmic (ticks like 10^1, 10^2, 10^3 evenly spaced => log; interpolate logarithmically between them). Note axis breaks.
 - For each y axis, set "field" to the name of the listed property it plots, or null if it plots none of them. Report points only for series on an axis whose field is not null.
 - If there are several y axes (left/right, or several right axes), decide which axis each series belongs to (colour of axis and labels, arrows, legend) and read each series against ITS OWN axis.
-- Report y in the units printed on that axis INCLUDING any multiplier written in the axis title, exactly as the title writes it (e.g. axis "Sheet resistance [10^2 ohm/sq]" with a marker at the "25" gridline => y = 25, unit "10^2 ohm/sq"). When the multiplier is attached to the quantity symbol rather than to the unit, keep the quantity symbol and the brackets too (axis "ρ × 10^4 (Ω cm)" => unit "ρ × 10^4 (Ω cm)"): the two mean opposite things. Do not convert.
+- Report y in the units printed on that axis INCLUDING any multiplier written in the axis title, exactly as the title writes it (e.g. {axis_example}). When the multiplier is attached to the quantity symbol rather than to the unit, keep the quantity symbol and the brackets too (axis "ρ × 10^4 (Ω cm)" => unit "ρ × 10^4 (Ω cm)"): the two mean opposite things. Do not convert.
 - If the chart prints the numeric value next to a point, use the printed value.
 - Report x exactly as the tick label/category of that marker (e.g. 400, 1.5, "As-deposited", "ITO-RT"); if markers of one series are shifted slightly sideways to avoid overlap, still report the nominal x of the group.
   If a marker lies between labelled ticks, interpolate its x position instead of rounding to the nearest tick, and set "x_on_tick": false.
@@ -363,9 +364,11 @@ def select_panels(blocks: Sequence[SourceBlock], *, limit: int) -> tuple[PanelRe
     return tuple(chosen)
 
 
-def user_prompt(caption: str, fields: Sequence[FieldSpec]) -> str:
+def user_prompt(caption: str, fields: Sequence[FieldSpec], slots: FigureSlots) -> str:
+    """The question for one panel. ``str.format`` inserts the caption, the field list and the profile's chart
+    slots verbatim, never scanning them again, so braces in any of them reach the model as written."""
     listed = "\n".join(f"- {spec.name}: {spec.description} ({spec.canonical_unit})" for spec in fields)
-    return USER_PROMPT.format(caption=caption, fields=listed)
+    return USER_PROMPT.format(caption=caption, fields=listed, **asdict(slots))
 
 
 # ---- Parsing the answer ---------------------------------------------------------------------------------
@@ -640,7 +643,10 @@ def _read_panel(
         return FigurePanel(**base, status="error", detail=f"crop failed: {image}"[:500]), ()
     try:
         result = client.complete_vision(
-            system=SYSTEM_PROMPT, user=user_prompt(group.caption, request.fields), image_png=image, refresh=refresh
+            system=SYSTEM_PROMPT,
+            user=user_prompt(group.caption, request.fields, default_profile().figures),
+            image_png=image,
+            refresh=refresh,
         )
     except LlmOfflineMiss:
         # A replay miss is not this panel's failure but the run's: stored as an ``error`` panel it would

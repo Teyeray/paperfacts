@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.errors import LlmResponseError
 from paperfacts.llm import LlmClient, complete_validated
+from paperfacts.profile import default_profile
 from paperfacts.prompts import matching_system_prompt, matching_user_prompt, repair_prompt
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, sample_key
 
@@ -90,7 +91,7 @@ def match_samples(
         response, raw_text, usage = complete_validated(
             client,
             _MatchingResponse,
-            system=matching_system_prompt(),
+            system=matching_system_prompt(default_profile()),
             user=user,
             repair=lambda previous, error: repair_prompt(user, previous, error),
             refresh=refresh,

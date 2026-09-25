@@ -24,6 +24,7 @@ from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, ex
 from paperfacts.llm import OpenAICompatibleClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.parsers import SubprocessParser
+from paperfacts.profile import default_profile
 from paperfacts.prompts import inventory_system_prompt
 from paperfacts.records import FailedQuestion, LaneExtraction
 from paperfacts.storage import DataLayout
@@ -615,7 +616,7 @@ def test_a_lane_extracted_with_edited_settings_carries_the_key_the_reader_looks_
     make_artifact(blocks, document_id=document.document_id).write(layout.artifact_path(document.document_id, "mineru"))
 
     def respond(system: str, user: str) -> str:
-        if system == inventory_system_prompt():
+        if system == inventory_system_prompt(default_profile()):
             return json.dumps({"samples": [{"sample_id": "A"}]})
         return json.dumps({"values": []})
 

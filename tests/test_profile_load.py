@@ -76,17 +76,22 @@ def test_the_tco_retrieval_is_the_running_one(tco_profile):
     assert passages.CONDITION_UNIT.flags & re.IGNORECASE
 
 
-def test_every_tco_slot_is_text_the_prompts_already_send(tco_profile):
-    # A slot is a slice of today's prompt, so each one must occur in it verbatim; the snapshot proves the
-    # reassembly byte for byte once the prompts are rendered from the slots.
+def test_every_tco_slot_reaches_the_prompts(tco_profile):
+    # Every slot must be used by some template; the snapshot proves the reassembly byte for byte.
     sent = "\n".join(
-        (extraction_system_prompt(), inventory_system_prompt(), field_system_prompt(), matching_system_prompt())
+        (
+            extraction_system_prompt(tco_profile),
+            inventory_system_prompt(tco_profile),
+            field_system_prompt(tco_profile),
+            matching_system_prompt(tco_profile),
+        )
     )
     for slot in dataclasses.fields(PromptSlots):
         assert getattr(tco_profile.prompt, slot.name) in sent, slot.name
     assert tco_profile.figures is not None
+    chart = figures.user_prompt("caption", tco_profile.figure_fields, tco_profile.figures)
     for slot in dataclasses.fields(FigureSlots):
-        assert getattr(tco_profile.figures, slot.name) in figures.USER_PROMPT, slot.name
+        assert getattr(tco_profile.figures, slot.name) in chart, slot.name
 
 
 def test_the_tco_profile_declares_no_units_of_its_own(tco_profile):

@@ -58,9 +58,10 @@ RESERVED_FIELD_NAMES = frozenset(
 FIELD_WARNING_COUNT = 40
 MAX_FIELDS = 100
 MAX_SLOT_LENGTH = 2000
-# The markers a template fills in from computed values rather than from a slot.
+# The markers a template fills in from computed values rather than from a slot, and the one pattern every
+# marker matches: prompts.py renders with it, and a slot may not contain a marker it would fill.
 COMPUTED_MARKERS = ("sample_groups", "paper_groups", "condition_rules", "subset_scope", "fields")
-_MARKER = re.compile(r"\{([a-z_]+)\}")
+MARKER = re.compile(r"\{([a-z_]+)\}")
 Maturity = Literal["production", "example"]
 
 
@@ -184,6 +185,13 @@ def load_profile(path: Path) -> DomainProfile:
     """The profile in ``path``, validated. Read once per file for the life of the process, so a running server
     picks up an edit only when it restarts."""
     return _load_resolved(path.resolve())
+
+
+def default_profile() -> DomainProfile:
+    """The profile the built-in settings select, for code the profile is not passed to yet. The field table
+    those callers read still comes from ``config.json``'s built-in location too, so the two agree; this goes
+    once every caller receives the profile it runs under."""
+    return load_profile(profile_path(Settings()))
 
 
 @cache
@@ -361,7 +369,7 @@ def _text_record[T](cls: type[T], data: Any, where: str, *, slot: bool) -> T:
             raise ConfigError(f"{where}: {key} must be a non-empty string, got {value!r}")
         if slot and len(value) > MAX_SLOT_LENGTH:
             raise ConfigError(f"{where}: {key} has {len(value)} characters; at most {MAX_SLOT_LENGTH} are allowed")
-        found = [marker for marker in _MARKER.findall(value) if marker in markers] if slot else []
+        found = [marker for marker in MARKER.findall(value) if marker in markers] if slot else []
         if found:
             raise ConfigError(
                 f"{where}: {key} contains the template marker {{{found[0]}}}; slots are inserted verbatim"

@@ -39,6 +39,7 @@ from paperfacts.config import (
     Settings,
 )
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, CONDITION_KEYWORDS, FIELD_SPECS
+from paperfacts.profile import default_profile
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
@@ -246,7 +247,7 @@ def extractor_key(options: ExtractionOptions) -> str:
     material: dict[str, object] = {
         "model": options.model,
         "schema": extraction_schema_fingerprint(),
-        "extraction_system": extraction_system_prompt(),
+        "extraction_system": extraction_system_prompt(default_profile()),
         "code": extraction_code_fingerprint(),
     }
     # Pinned to "document" rather than to the configured default: whole-document mode sends exactly the
@@ -255,8 +256,8 @@ def extractor_key(options: ExtractionOptions) -> str:
     passage = options.mode != "document"
     if passage:
         material["mode"] = options.mode
-        material["inventory_system"] = inventory_system_prompt()
-        material["field_system"] = field_system_prompt()
+        material["inventory_system"] = inventory_system_prompt(default_profile())
+        material["field_system"] = field_system_prompt(default_profile())
         material["retrieval"] = retrieval_fingerprint()
     for option in dataclasses.fields(ExtractionOptions):
         if option.name in {"model", "mode"} or (option.metadata.get("passage_only") and not passage):
@@ -278,7 +279,7 @@ def comparison_key() -> str:
         "ambiguous_confidence": AMBIGUOUS_MATCH_CONFIDENCE,
         "normalization": normalization_fingerprint(),
         "code": comparison_code_fingerprint(),
-        "matching_system": matching_system_prompt(),
+        "matching_system": matching_system_prompt(default_profile()),
     }
     # Only present when a field declares categories: a table without any keeps the filenames it had before
     # the concept existed, the same way every other baseline stays out of the material.
