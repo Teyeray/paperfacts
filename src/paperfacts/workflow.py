@@ -23,7 +23,7 @@ from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
 from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
-from paperfacts.errors import ConfigError, PaperFactsError, ParserError
+from paperfacts.errors import Cancelled, ConfigError, PaperFactsError, ParserError
 from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
@@ -441,6 +441,7 @@ def read_document_figures(
     *,
     force: bool = False,
     artifact: ParsedArtifact | None = None,
+    stop: threading.Event | None = None,
 ) -> FigureReadings:
     """Read the charts of one document, or return the stored readings.
 
@@ -482,6 +483,7 @@ def read_document_figures(
         concurrency=settings.llm_concurrency,
         refresh=force,
         refresh_panels=previous.unreadable() if previous is not None else frozenset(),
+        stop=stop,
     )
     readings.write(path)
     return readings
@@ -502,7 +504,12 @@ def _figures_detail(readings: FigureReadings) -> str:
 
 
 def _read_figures_stage(
-    document: DocumentInput, settings: Settings, *, force: bool, artifact: ParsedArtifact | None
+    document: DocumentInput,
+    settings: Settings,
+    *,
+    force: bool,
+    artifact: ParsedArtifact | None,
+    stop: threading.Event | None = None,
 ) -> tuple[StageStatus, str]:
     """The figures stage's work, run beside the extraction lanes. Never raises: it is an opt-in extra, and
     a chart the vision model could not read must not cost the paper its extraction. It reports its outcome
@@ -510,7 +517,10 @@ def _read_figures_stage(
     try:
         artifact = artifact or _figure_artifact(document, settings)
         with build_vision_client(settings) as client:
-            readings = read_document_figures(document, settings, client, force=force, artifact=artifact)
+            readings = read_document_figures(document, settings, client, force=force, artifact=artifact, stop=stop)
+    except Cancelled as exc:
+        logger.info("figure reading stopped for %s: the rest of the paper failed", document.display_filename)
+        return "failed", str(exc)
     except Exception as exc:  # isolation is the point: any failure here is this stage's alone
         logger.exception("figure reading failed for %s", document.display_filename)
         return "failed", f"{type(exc).__name__}: {exc}"[:300]
@@ -592,14 +602,17 @@ def run_document(
         on_stage(f"parse:{backend}", "done", f"{parse_report.block_count} blocks{cached}")
 
     # The figures stage runs beside the two extraction lanes: it waits on a different model for minutes per
-    # chart and shares nothing with them but the parse. It is joined before export, whatever it did.
+    # chart and shares nothing with them but the parse. It is joined before this function returns, whatever
+    # happened: a caller that is told the paper is finished (the web queue frees the document then) must not
+    # have a thread still writing its readings. When the rest fails, `stop` keeps it from asking for more.
+    stop_figures = threading.Event()
     figures_pool = ContextThreadPoolExecutor(max_workers=1, thread_name_prefix="paperfacts-figures")
     figures_future: Future[tuple[StageStatus, str]] | None = None
     if settings.figures_enabled:
         on_stage("figures", "running", "")
         artifact = next((parsed[backend] for backend in BACKENDS if parsed[backend] is not None), None)
         figures_future = figures_pool.submit(
-            _read_figures_stage, document, settings, force=force_figures, artifact=artifact
+            _read_figures_stage, document, settings, force=force_figures, artifact=artifact, stop=stop_figures
         )
     else:
         figures = shown_figures(document.document_id, document.display_filename, settings)
@@ -610,9 +623,12 @@ def run_document(
             figures_status, figures_detail = figures_future.result()
             figures = shown_figures(document.document_id, document.display_filename, settings)
             on_stage("figures", figures_status, _figures_mark(figures_status, figures_detail, figures))
+    except BaseException:
+        # The paper has failed: its charts would be read for nothing. The panels already out finish.
+        stop_figures.set()
+        raise
     finally:
-        # A failed extraction must not wait minutes for the charts; the figures thread finishes on its own.
-        figures_pool.shutdown(wait=False)
+        figures_pool.shutdown(wait=True)
 
     on_stage("export", "running", "")
     dataset = consolidate_document(document, lanes, report)

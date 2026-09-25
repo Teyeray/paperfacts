@@ -106,7 +106,7 @@ def test_the_lanes_and_the_figures_stage_run_in_the_callers_context(monkeypatch,
         seen.append((backend, CALLER.get()))
         return fake_extract(document, backend, settings, client, force=force)
 
-    def recording_figures(document, settings, *, force, artifact):
+    def recording_figures(document, settings, *, force, artifact, stop):
         seen.append(("figures", CALLER.get()))
         return "done", ""
 
