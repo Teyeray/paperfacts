@@ -132,8 +132,9 @@ this file is the part that is easy to get wrong.
   review the JSON diff, and add the string to `INTENDED_VALUE_CHANGES` with the reason.
 - Coverage target ≥ 80% (`--cov=paperfacts`).
 - The frontend has no JS test runner; `tests/e2e/web_races.py` drives it in headless Chromium against a seeded
-  library with a stub job (`PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py`). Not collected
-  by pytest. A frontend change to routing, polling or layout should keep it passing.
+  library with a stub job (`PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py`, or
+  `PYTHONPATH=src uv run --with playwright pytest -m e2e`). A plain pytest run deselects the `e2e` marker, and
+  without Playwright it skips. A frontend change to routing, polling or layout should keep it passing.
 
 ## Web interface
 

@@ -831,9 +831,9 @@ uv run pytest                                              # unit tests; no mode
 uv run pytest --cov=paperfacts                             # coverage target is 80%
 uv run pytest --run-parser                                 # integration; needs both parser environments and their weights
 uv run ruff check src tests runners && uv run ruff format --check src tests runners
-# the web frontend in a real browser (navigation races, polling, layout, keyboard); not part of pytest
+# the web frontend in a real browser (navigation races, polling, layout, keyboard); deselected by default
 uv run --with playwright python -m playwright install chromium   # once
-PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py
+PYTHONPATH=src uv run --with playwright pytest -m e2e      # or: python tests/e2e/web_races.py [--only NAME]
 ```
 
 Line length is 120. Tests never touch a real model or a real LLM: parser output comes from recorded

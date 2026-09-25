@@ -5,7 +5,8 @@ headless Chromium against a real server on a seeded temporary library. Slow resp
 delaying chosen requests with Playwright route interception. Nothing calls a parser or a model: the job
 body is a stub that walks through the pipeline's stages.
 
-Not collected by pytest (the file name has no ``test_`` prefix). Run it with::
+Not collected by pytest itself (the file name has no ``test_`` prefix); ``test_e2e.py`` runs it under
+``pytest -m e2e``. Run it directly with::
 
     uv run --with playwright python -m playwright install chromium   # once
     PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py

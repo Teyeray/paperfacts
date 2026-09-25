@@ -136,7 +136,8 @@ export class PageViewer {
       if (!this.show[lane]) continue;
       for (const block of this.blocks[lane] ?? []) {
         if (block.page !== this.page) continue;
-        const rect = rectFor(block.bbox, width, height, `${LANE_CLASS[lane]}${this.highlighted.has(block.source_id) ? " hl" : ""}`);        rect.addEventListener("mouseenter", (event) => {
+        const rect = rectFor(block.bbox, width, height, `${LANE_CLASS[lane]}${this.highlighted.has(block.source_id) ? " hl" : ""}`);
+        rect.addEventListener("mouseenter", (event) => {
           tooltip = document.createElement("div");
           tooltip.className = "tooltip";
           tooltip.innerHTML = `<code>${escapeHtml(block.source_id)}</code> · ${escapeHtml(block.type)}<br>${escapeHtml(block.content.slice(0, 160))}`;
