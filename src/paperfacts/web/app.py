@@ -313,7 +313,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
 
         Same submission path as ``run_existing``, once per document in library order: a document
         already queued or running simply gets its existing job back, so pressing the button twice
-        costs nothing. Finished means exported under the current keys (:func:`workflow.is_finished`).
+        costs nothing. Finished means exported under the current keys (:func:`stored.is_finished`).
         """
         submitted: list[Job] = []
         skipped: list[SkippedDocument] = []

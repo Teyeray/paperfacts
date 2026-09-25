@@ -30,6 +30,10 @@ function laneNode(lane, data) {
   if (data.unattributed?.length) {
     box.append(sampleNode({ sample_id: UNATTRIBUTED_SID, label: "没能对应到任何样品", conditions: {}, fields: data.unattributed }, "unattributed"));
   }
+  if (data.failed_questions?.length) {
+    const fields = data.failed_questions.map((q) => q.field).join("、");
+    box.append(note(`${fields}：模型两次都没有给出有效回答，这些字段为空；下次运行会只重问这几个问题。`));
+  }
   if (data.invalid_source_ids?.length || data.dropped?.length) {
     box.append(note(`清洗记录：${data.invalid_source_ids.length} 个编造的 source_id 被剔除；${data.dropped.length} 个取值被丢弃`));
   }

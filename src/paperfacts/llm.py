@@ -295,12 +295,17 @@ class OpenAICompatibleClient:
 
         self._refuse_offline(key, "repair" if repair else "json", user)
         data = self._post_with_retry(payload)
-        text = _content(data, "the model")
-        if data["choices"][0].get("finish_reason") == "length":
+        try:
+            finish_reason = data["choices"][0].get("finish_reason")
+        except (KeyError, IndexError, TypeError, AttributeError):
+            finish_reason = None  # _content says what is wrong with the shape
+        if finish_reason == "length":
             # Truncated JSON is not an answer; caching it would replay the torn reply on every later run. A
             # response error, like an answer that failed validation twice: matching then records a failed
-            # matching for this run instead of failing the paper.
+            # matching for this run instead of failing the paper, and extraction a failed field question.
+            # Checked before the content, because a reply cut off before its first character is empty.
             raise LlmResponseError("the model's reply was cut off at max_tokens")
+        text = _content(data, "the model")
         result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
         if accept is None or accept(text):
             self._write_cache(key, result)

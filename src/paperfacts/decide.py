@@ -16,6 +16,11 @@ candidate list, each narrowing it or refusing:
    field's tolerance, and no pair across the lanes quoting conditions that measure differently. Never from
    the comparison report's statuses, which may be about a candidate an earlier step set aside.
 
+The report's statuses serve one purpose, as a review gate: a ``conflict`` or ``ambiguous`` comparison refuses
+the cell. Once narrowing has chosen conditions, a comparison wholly about candidates it set aside no longer
+counts: a conflict between the lanes' 400-1100 nm averages is about a measurement the cell does not state when
+their preferred 550 nm values agree. Any other troubled comparison still refuses.
+
 Conditions and source ids of a committed cell are derived from the final candidates, in one place.
 """
 
@@ -31,11 +36,13 @@ from paperfacts.fields import FieldSpec
 from paperfacts.models import BACKENDS, Backend
 from paperfacts.normalize import (
     clean_unit,
+    compound_value,
     convert_to_canonical,
     delatex,
     normalize_key,
     normalize_text,
     parse_number,
+    set_aside,
     text_key,
 )
 from paperfacts.records import FieldValue, spell_number_word
@@ -91,12 +98,16 @@ def decide(
     comparisons: Sequence[FieldComparison],
     *,
     blocked: str | None = None,
+    unanswered: bool = False,
     row_sources: frozenset[str] = frozenset(),
 ) -> Decision:
     """The cell for ``spec`` given every lane's candidates for it.
 
     ``blocked`` is why nothing on this sample may be committed (its sample match failed or is too weak), or
-    None. ``row_sources`` are the blocks the rest of the sample's row cites, for :func:`_one_condition`.
+    None. ``unanswered`` says some lane's question about this field got no valid answer: the other lane's value
+    would then pass as single_source, as if that lane had read the paper and found nothing, so the cell is
+    refused in both. ``row_sources`` are the blocks the rest of the sample's row cites, for
+    :func:`_one_condition`.
     """
 
     def reject(status: str, reason: str) -> Decision:
@@ -105,28 +116,35 @@ def decide(
         sources = joined(sorted({source for _, value in evidence for source in value.source_ids}))
         return Decision(None, status, conditions, sources, joined([reason, raw]))
 
+    if unanswered:
+        return reject("unanswered", "某一解析通道对该字段的提问未得到有效回答；下次运行会重新提问")
     if not evidence:
         return reject("missing", "未提取到该字段；留空，不填 0")
     if blocked:
         return reject("ambiguous", blocked)
-    if any(c.status in {"conflict", "ambiguous"} for c in comparisons):
-        status = "conflict" if any(c.status == "conflict" for c in comparisons) else "ambiguous"
+    trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
+    candidates = [_Candidate(backend, value, *_scalar(value, spec)) for backend, value in trusted]
+    # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
+    # let it take its own condition out of the running, so the scalar's condition would win although no rule
+    # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
+    narrowed = _narrow(spec, candidates, row_sources) if candidates else None
+    troubled = [c for c in comparisons if c.status in {"conflict", "ambiguous"}]
+    if narrowed is not None and len(narrowed[0]) < len(candidates):
+        # Fail closed: a comparison is ignored only when every side it has is a candidate narrowing set aside.
+        # One whose values match no candidate (a stale report, say) still refuses the cell.
+        aside = {_identity(c.value) for c in candidates} - {_identity(c.value) for c in narrowed[0]}
+        troubled = [c for c in troubled if not _only_about(c, aside)]
+    if troubled:
+        status = "conflict" if any(c.status == "conflict" for c in troubled) else "ambiguous"
         return reject(status, "双路比较存在冲突或歧义，需人工复核")
     if not comparisons:
         return reject("unreviewed", "比较报告没有覆盖该字段")
-    trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
     if not trusted:
         return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
     details: list[str] = []
     if len(trusted) != len(evidence):
         details.append("已排除未定位到原文或缺少有效引用的候选")
-    candidates = [_Candidate(backend, value, *_scalar(value, spec)) for backend, value in trusted]
     several = _several_conditions(candidates)
-
-    # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
-    # let it take its own condition out of the running, so the scalar's condition would win although no rule
-    # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
-    narrowed = _narrow(spec, candidates, row_sources)
     if narrowed is None:
         return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
     kept, reason = narrowed
@@ -179,6 +197,19 @@ def _commit(
         series=all(c.value.series for c in final),
         lanes=tuple(dict.fromkeys(c.backend for c in final)),
     )
+
+
+def _only_about(comparison: FieldComparison, aside: set[tuple[object, ...]]) -> bool:
+    """Whether a comparison is wholly about candidates narrowing set aside. One with no values at all is about
+    nothing known, so it is not."""
+    sides = [value for value in (comparison.a, comparison.b) if value is not None]
+    return bool(sides) and all(_identity(value) in aside for value in sides)
+
+
+def _identity(value: FieldValue) -> tuple[object, ...]:
+    """What identifies one extracted value between the lane and a comparison of it. Not the whole model: a
+    stored report may carry grounding verdicts older than the lane's re-derived ones."""
+    return (value.field, value.value_raw, value.unit_raw, value.condition, tuple(value.source_ids))
 
 
 # ---- Narrowing ---------------------------------------------------------------------------------------------
@@ -372,6 +403,19 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     approx = _APPROX.match(text)
     if approx:
         text = text[approx.end() :].strip()
+    notes: list[str] = []
+    if spelled != value.value_raw:
+        notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {spelled}")
+    if approx:
+        notes.append("原文为近似值，保留中心值")
+    # The comparison's reading (normalize_field): the same step sets aside what surrounds the value, so the cell
+    # and the report agree on "3 h 30 min at 400 °C".
+    bare, _, condition = set_aside(text)
+    compound = compound_value(spec, bare)
+    if compound is not None:
+        if condition:
+            notes.append(f"条件 {condition!r} 不计入数值")
+        return compound, joined([*notes, f"原文为复合时长 {bare!r}，合计 {compound:g} {spec.canonical_unit}"])
     parenthesised = _PARENTHESISED_UNCERTAINTY.fullmatch(text)
     if parenthesised:
         center, unit, uncertainty, again = parenthesised.group("center", "unit", "uncertainty", "again")
@@ -390,11 +434,7 @@ def _scalar(value: FieldValue, spec: FieldSpec) -> tuple[CellValue, str | None]:
     canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, value_text=match.group("center"))
     if canonical is None or not math.isfinite(canonical):
         return None, note or "单位无法转换为标准单位"
-    notes = [note or ""]
-    if spelled != value.value_raw:
-        notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {spelled}")
-    if approx:
-        notes.append("原文为近似值，保留中心值")
+    notes.insert(0, note or "")
     if match.group("uncertainty"):
         notes.append(f"原文不确定度 ±{match.group('uncertainty')} {value.unit_raw or ''}；保留中心值")
     return canonical, joined(notes) or None

@@ -17,6 +17,7 @@ downstream consumers — the raw observation is never discarded.
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -404,6 +405,12 @@ def conditions_measure_differently(condition_a: str | None, condition_b: str | N
     return bool(numbers_a) and bool(numbers_b) and numbers_a != numbers_b
 
 
+_REFERENCE = re.compile(
+    r"\b(?:fig(?:ure)?s?|tables?|eqs?|equations?|refs?|sections?)\.?\s*S?\d+[a-z]?(?:\s*(?:,|&|and)\s*(?:S\d+[a-z]?|\d+[a-z])\b)*",
+    re.IGNORECASE,
+)
+
+
 def condition_numbers(condition: str | None) -> tuple[float, ...]:
     """The numbers a condition names, in order: "550 nm" -> (550,), "400-800 nm" -> (400, 800).
 
@@ -415,7 +422,9 @@ def condition_numbers(condition: str | None) -> tuple[float, ...]:
     """
     if not condition:
         return ()
-    text = delatex(normalize_text(condition))
+    # "(films after annealing, Fig. 3c)": a figure, table or equation number is where the paper says it, not
+    # a number the measurement was taken at; counted, it made "average 400-1100 nm" miss the "400-1100" entry.
+    text = _REFERENCE.sub(" ", delatex(normalize_text(condition)))
     numbers: list[float] = []
     for match in NUMBER_RE.finditer(text):
         token = match.group()

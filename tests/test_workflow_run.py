@@ -24,7 +24,9 @@ from paperfacts.config import Settings
 from paperfacts.errors import Cancelled, ParserError
 from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
-from paperfacts.records import LaneExtraction
+from paperfacts.records import FailedQuestion, LaneExtraction
+from paperfacts.storage import DataLayout
+from paperfacts.stored import is_finished
 from paperfacts.workflow import ParseReport, run_document, stage_names
 from support.extraction import make_lane, make_sample
 from support.llm import FakeLlmClient
@@ -56,6 +58,8 @@ def install_fake_pipeline(
     cache_hit: bool = False,
     sample_count: int = 2,
     counts: ComparisonCounts | None = None,
+    matching: SampleMatching | None = None,
+    unanswered: str | None = None,
 ) -> PipelineSpy:
     spy = PipelineSpy()
     counts = counts or ComparisonCounts(agree=3, conflict=1, ambiguous=2, missing=4, total=10)
@@ -87,11 +91,16 @@ def install_fake_pipeline(
         time.sleep(0.05)
         with spy.lock:
             spy._in_flight -= 1
-        return make_lane(
+        lane = make_lane(
             backend=backend,
             document_id=document.document_id,
             samples=[make_sample(f"S{i}") for i in range(sample_count)],
         )
+        if unanswered and backend == "mineru":
+            lane = lane.model_copy(
+                update={"failed_questions": (FailedQuestion(field=unanswered, detail="cut off at max_tokens"),)}
+            )
+        return lane
 
     def fake_compare(
         document: DocumentInput,
@@ -110,7 +119,7 @@ def install_fake_pipeline(
             comparison_key="ba9876543210",
             backend_a="mineru",
             backend_b="paddleocr_vl",
-            matching=SampleMatching(),
+            matching=matching or SampleMatching(),
             counts=counts,
         )
 
@@ -199,6 +208,60 @@ def test_the_result_carries_every_intermediate_product(monkeypatch, document: Do
     assert result.dataset_json_path.is_file()
     assert result.dataset_json_path.name == f"{result.dataset.extractor_key}.{result.dataset.comparison_key}.json"
     assert result.dataset.document_id == document.document_id
+
+
+def test_a_run_whose_matching_failed_is_not_finished(monkeypatch, document: DocumentInput, settings: Settings):
+    # compare_document does not store a failed matching so the next run asks again. A stored dataset would
+    # count the paper as finished, and "run all" / `deploy.sh --rerun` would then never ask again.
+    install_fake_pipeline(monkeypatch, matching=SampleMatching(failed=True, failure="invalid JSON twice"))
+
+    marks, result = run(document, settings)
+
+    layout = DataLayout(settings.data_root)
+    keys = {"extractor_key": result.dataset.extractor_key, "comparison_key": result.dataset.comparison_key}
+    assert result.excel_path.is_file()  # the CLI run still gets its workbook
+    assert result.dataset_json_path is None
+    assert not layout.dataset_json_path(document.document_id, **keys).is_file()
+    assert is_finished(layout, document.document_id, **keys) is False
+    final = {stage: (status, detail) for stage, status, detail in marks}
+    assert final["compare"][0] == "failed" and "sample matching failed" in final["compare"][1]
+
+
+def test_a_run_that_is_not_kept_removes_the_previous_runs_table(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    # A forced re-run that fails its matching must not leave the earlier complete table standing: it would keep
+    # the paper finished, beside lanes that no longer produced it.
+    install_fake_pipeline(monkeypatch, matching=SampleMatching(failed=True, failure="invalid JSON twice"))
+    layout = DataLayout(settings.data_root)
+    stale = layout.dataset_json_path(document.document_id, "0123456789ab", "ba9876543210")
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}", encoding="utf-8")
+
+    run(document, settings, force=True)
+
+    assert not stale.exists()
+
+
+def test_a_run_with_an_unanswered_field_question_is_not_finished(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    install_fake_pipeline(monkeypatch)
+    fake_extract = workflow_module.extract_document
+
+    def incomplete(document, backend, settings, client, *, force: bool = False):
+        lane = fake_extract(document, backend, settings, client, force=force)
+        return lane.model_copy(update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off"),)})
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", incomplete)
+
+    marks, result = run(document, settings)
+
+    assert result.dataset_json_path is None
+    assert "no valid answer to mineru:thickness" in result.dataset.incomplete
+    final = {stage: (status, detail) for stage, status, detail in marks}
+    assert "1 question unanswered" in final["extract:mineru"][1]
+    assert "no valid answer" in final["compare"][1]
 
 
 def test_force_reaches_every_step(monkeypatch, document: DocumentInput, settings: Settings):

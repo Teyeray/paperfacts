@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.normalize import parse_number
+from paperfacts.fields import FIELD_BY_NAME
+from paperfacts.normalize import compound_value, parse_number
 from paperfacts.records import sample_key
 
 CORPUS = Path(__file__).parent / "fixtures" / "corpus"
@@ -30,6 +31,8 @@ INTENDED_VALUE_CHANGES = {
     "100 to 0": "a power ramp, a descending pair rather than a value",
     "$ \\sim $25 and 70": "two thicknesses joined by 'and'",
     "500 °C to 530 °C": "a range with a unit on each bound; the midpoint, not the first bound",
+    "∅32 mm × 40 mm": "two dimensions, each with its own unit; read as 32, the first was a guess",
+    "140 nm ATO/25 nm ITO": "a bilayer's two thicknesses; read as 140, the first was a guess",
 }
 
 
@@ -49,6 +52,14 @@ def test_the_changes_against_the_reference_are_only_the_intended_ones():
     changed = {row["value_raw"] for row in VALUES if not _same(row["reference"][0], row["expected"][0])}
 
     assert changed == set(INTENDED_VALUE_CHANGES)
+
+
+def test_no_corpus_string_is_read_as_a_compound_duration():
+    # normalize_field reads a compound duration before parse_number sees it, so the pins above do not cover
+    # it; none of the corpus strings is one, and a rule change that makes one so must be looked at.
+    compound = [row["value_raw"] for row in VALUES if compound_value(FIELD_BY_NAME[row["field"]], row["value_raw"])]
+
+    assert compound == []
 
 
 def test_every_corpus_sample_id_keys_as_recorded():

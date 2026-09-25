@@ -57,6 +57,82 @@ def test_an_unparseable_number_clears_value_and_unit_and_explains_why():
     assert normalized.normalization_note == "no number found"
 
 
+@pytest.mark.parametrize(
+    ("raw", "unit_raw", "expected"),
+    [
+        ("3 h 30 min", "h", 210.0),
+        ("3 h 30 min", None, 210.0),
+        ("2 hours and 15 minutes", None, 135.0),
+        ("1 min 30 s", "min", 1.5),
+        # A qualifier or a condition around it is set aside first, as for any number.
+        ("~3 h 30 min", "h", 210.0),
+        ("3 h 30 min at 400 °C", "h", 210.0),
+    ],
+)
+def test_a_compound_duration_is_one_value(raw, unit_raw, expected):
+    # Read as its first number, "3 h 30 min" became 180 min: a common annealing-time spelling, silently wrong.
+    normalized = normalize_field(make_field("annealing_time", raw, unit_raw=unit_raw), FIELD_BY_NAME["annealing_time"])
+
+    assert normalized.value == pytest.approx(expected)
+    assert normalized.unit == "min"
+    assert "compound" in normalized.normalization_note
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "30 min 3 h",
+        "30 min 20 min",
+        "3 h 30 nm",
+        "1 h 90 min",
+        "2 h 60 min",
+        # Nobody writes a sum with a fractional larger part: "0.5 h 30 min" restates 30 min.
+        "0.5 h 30 min",
+        "0.5 min 30 s",
+        "1.5 h 30 min",
+    ],
+)
+def test_only_a_descending_pair_of_one_quantity_is_a_compound(raw):
+    normalized = normalize_field(make_field("annealing_time", raw, unit_raw="min"), FIELD_BY_NAME["annealing_time"])
+
+    assert normalized.value is None
+
+
+@pytest.mark.parametrize(
+    ("field", "raw", "unit_raw"),
+    [
+        ("working_pressure", "0.5 Pa 3.75 mTorr", "Pa"),
+        ("working_pressure", "1 Torr 133 Pa", "Torr"),
+        ("target_substrate_distance", "10 cm 100 mm", "cm"),
+        ("inch", "2 in 50 mm", "in"),
+        ("thickness", "1 um 1000 nm", "um"),
+    ],
+)
+def test_a_value_restated_in_a_second_unit_is_never_added_up(field, raw, unit_raw):
+    # Only a duration is written as a sum of units; anywhere else a second unit restates the same value, and
+    # adding the two doubled it (0.5 Pa 3.75 mTorr read as 1.0 Pa).
+    assert normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value is None
+
+
+@pytest.mark.parametrize(
+    ("field", "raw", "unit_raw", "expected"),
+    [
+        ("annealing_temperature", "400 °C for 2 h", "°C", 400.0),
+        ("sputtering_time", "deposited for 10 min", "min", 10.0),
+        ("annealing_time", "annealed for 2 h", "h", 120.0),
+        ("annealing_time", "held for 30 min", "min", 30.0),
+        # The tail holds the field's own quantity and the value does not: the time is in the tail.
+        ("annealing_time", "400 °C for 2 h", "h", None),
+        ("sheet_resistance", "increase of 5 % after 1000 cycles", "Ω/sq", None),
+    ],
+)
+def test_a_condition_tail_is_set_aside_only_when_it_is_not_the_value(field, raw, unit_raw, expected):
+    # "400 °C for 2 h" on annealing_time read 400 h (24000 min) once "for" opened a condition.
+    value = normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value
+
+    assert value == (pytest.approx(expected) if expected is not None else None)
+
+
 def test_a_text_field_is_returned_untouched():
     # Text/composition comparison is computed on the fly in the comparison layer via normalize_key, rather
     # than caching a canonical text copy on the record (to avoid the two rule sets drifting apart).

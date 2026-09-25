@@ -35,7 +35,7 @@ from paperfacts.config import (
     DEFAULT_LLM_CONCURRENCY,
     EXTRACTION_MODES,
 )
-from paperfacts.errors import ContextBudgetError
+from paperfacts.errors import ContextBudgetError, LlmResponseError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import ExtractionOptions, extraction_schema_fingerprint, extractor_key
@@ -55,6 +55,7 @@ from paperfacts.prompts import (
 from paperfacts.records import (
     ExtractedRecords,
     ExtractionResponse,
+    FailedQuestion,
     FieldResponse,
     FieldValue,
     InventoryResponse,
@@ -217,6 +218,7 @@ def extract_lane(
     document = build_extraction_document(artifact) if mode == "document" else None
 
     results: list[ExtractedRecords] = []
+    failed: dict[str, FailedQuestion] = {}
     usage: dict[str, int] = {}
     raw_response = ""
 
@@ -246,7 +248,7 @@ def extract_lane(
                 document, client, options, refresh=refresh, cache_salt=cache_salt
             )
         else:
-            records, pass_usage, text = _extract_passages(
+            records, pass_usage, text, pass_failed = _extract_passages(
                 blocks,
                 client,
                 options,
@@ -255,6 +257,8 @@ def extract_lane(
                 refresh=refresh,
                 cache_salt=cache_salt,
             )
+            for question in pass_failed:
+                failed.setdefault(question.field, question)
         results.append(records)
         raw_response = raw_response or text
         _add_usage(usage, pass_usage)
@@ -275,6 +279,8 @@ def extract_lane(
         # empty without matching prose. The same condition that skips the sample-level questions below.
         no_tco_film=inventory is not None and _deposits_no_film(inventory.response),
         passes=passes,
+        # In FIELD_SPECS order, whichever pass failed first.
+        failed_questions=tuple(failed[spec.name] for spec in FIELD_SPECS if spec.name in failed),
         usage=usage,
         raw_response=raw_response,
     )
@@ -380,8 +386,14 @@ def _extract_passages(
     concurrency: int,
     refresh: bool,
     cache_salt: str,
-) -> tuple[ExtractedRecords, dict[str, int], str]:
-    """Passage mode, one pass: one question per field against the lane's single inventory."""
+) -> tuple[ExtractedRecords, dict[str, int], str, tuple[FailedQuestion, ...]]:
+    """Passage mode, one pass: one question per field against the lane's single inventory.
+
+    A field question the model answers badly twice (or cuts off) is returned as a :class:`FailedQuestion`
+    instead of failing the pass: at temperature 0 such an answer tends to repeat, and it must cost that field,
+    not every field of the paper. Any other error -- a transport failure, an exhausted retry budget -- still
+    propagates, so an outage fails the lane rather than emptying it.
+    """
     budget_chars = _budget_chars(options)
     usage: dict[str, int] = {}
 
@@ -416,19 +428,25 @@ def _extract_passages(
         _check_context_budget(field_system, field_user, options)
         questions.append((spec, tuple(candidates), field_user))
 
-    def ask(question: tuple[FieldSpec, tuple[SourceBlock, ...], str]) -> tuple[FieldHarvest, str, dict[str, int]]:
+    def ask(
+        question: tuple[FieldSpec, tuple[SourceBlock, ...], str],
+    ) -> tuple[FieldHarvest | FailedQuestion, str, dict[str, int]]:
         """One field question. Returns everything it produced; it shares no mutable state with its peers."""
         spec, candidates, field_user = question
-        response, text, field_usage = complete_validated(
-            client,
-            FieldResponse,
-            system=field_system,
-            user=field_user,
-            # The default argument binds this field's question; a bare closure would repair against the last.
-            repair=lambda previous, error, question=field_user: repair_prompt(question, previous, error),
-            refresh=refresh,
-            cache_salt=cache_salt,
-        )
+        try:
+            response, text, field_usage = complete_validated(
+                client,
+                FieldResponse,
+                system=field_system,
+                user=field_user,
+                # The default argument binds this field's question; a bare closure would repair against the last.
+                repair=lambda previous, error, question=field_user: repair_prompt(question, previous, error),
+                refresh=refresh,
+                cache_salt=cache_salt,
+            )
+        except LlmResponseError as exc:
+            logger.warning("no valid answer to the %s question; the next run asks it again: %s", spec.name, exc)
+            return FailedQuestion(field=spec.name, detail=str(exc)), "", {}
         harvest = FieldHarvest(
             spec=spec,
             values=tuple(response.values),
@@ -451,8 +469,13 @@ def _extract_passages(
             answers = list(pool.map(ask, questions))
 
     harvests: list[FieldHarvest] = []
+    failed: list[FailedQuestion] = []
     raw_parts = [f"# inventory\n{inventory.raw_text}"]
     for harvest, text, field_usage in answers:
+        if isinstance(harvest, FailedQuestion):
+            failed.append(harvest)
+            raw_parts.append(f"# {harvest.field}\n(no valid answer: {harvest.detail})")
+            continue
         harvests.append(harvest)
         raw_parts.append(f"# {harvest.spec.name}\n{text}")
         _add_usage(usage, field_usage)
@@ -463,7 +486,7 @@ def _extract_passages(
         inventory_ids=inventory.source_ids,
         dropped=dropped,
     )
-    return records, usage, "\n\n".join(raw_parts)
+    return records, usage, "\n\n".join(raw_parts), tuple(failed)
 
 
 def _deposits_no_film(inventory: InventoryResponse) -> bool:

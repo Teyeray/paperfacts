@@ -23,7 +23,13 @@ from pydantic import BaseModel, ConfigDict
 from paperfacts.adapters import convert, render_markdown
 from paperfacts.compare import ComparisonReport, compare_lanes
 from paperfacts.config import Settings
-from paperfacts.dataset import DocumentDataset, consolidate_document, write_dataset, write_dataset_json
+from paperfacts.dataset import (
+    DocumentDataset,
+    consolidate_document,
+    incomplete_reason,
+    write_dataset,
+    write_dataset_json,
+)
 from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, PaperFactsError, ParserError
 from paperfacts.extract import extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
@@ -287,7 +293,15 @@ def extract_document(
     artifact = load_artifact(document, backend, settings)
     if not force:
         cached = read_lane(layout, document.document_id, backend, key, artifact=artifact)
-        if cached is not None:
+        if cached is not None and cached.failed_questions:
+            # Only those questions reach the model again: their invalid answers were never cached.
+            logger.info(
+                "stored %s extraction of doc=%s has %d unanswered questions; asking again",
+                backend,
+                document.document_id[:16],
+                len(cached.failed_questions),
+            )
+        elif cached is not None:
             logger.info("extraction cache_hit backend=%s doc=%s", backend, document.document_id[:16])
             return cached
 
@@ -325,7 +339,9 @@ def compare_document(
     if lanes is None:
         lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
-    if path.is_file() and not force:
+    # A stored report is never of an incomplete lane (see below), so with one it would be of other lanes.
+    incomplete_lanes = bool(lane_a.failed_questions or lane_b.failed_questions)
+    if path.is_file() and not force and not incomplete_lanes:
         cached = ComparisonReport.read(path)
         if _compared_these(cached, lane_a, lane_b):
             logger.info("comparison cache_hit doc=%s", document.document_id[:16])
@@ -334,38 +350,15 @@ def compare_document(
 
     matching = match_samples(lane_a, lane_b, client, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching)
-    if matching.failed:
-        # A matching failure is a model that answered badly this time, not a verdict about the paper. Stored,
-        # it would be served on every later run and blank the paper's sample cells until --force; unstored,
-        # the next run asks again (the invalid answers were never cached, see llm.complete_validated).
-        logger.warning("sample matching failed for doc=%s; the comparison is not stored", document.document_id[:16])
+    reason = incomplete_reason(lanes, report)
+    if reason:
+        # An earlier run's report under these keys goes too: it came from other answers, and kept it would be
+        # served to a later run and keep the paper counted as compared.
+        logger.warning("%s for doc=%s; the comparison is not stored", reason, document.document_id[:16])
+        path.unlink(missing_ok=True)
     else:
         report.write(path)
     logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
-    return report
-
-
-def stored_comparison(
-    layout: DataLayout, document_id: str, extractor_key: str, comparison_key: str
-) -> ComparisonReport | None:
-    """The stored comparison under these keys, or None when there is none or it compared other parses.
-
-    For readers that hold no lanes (the web library): a report whose recorded artifact hashes differ from
-    the artifacts on disk would show citations into blocks the current parse does not have, and would keep
-    the document counted as compared, so "run all" would never redo it.
-    """
-    path = layout.comparison_path(document_id, extractor_key, comparison_key)
-    if not path.is_file():
-        return None
-    report = ComparisonReport.read(path)
-    for backend, recorded in (
-        (report.backend_a, report.artifact_sha256_a),
-        (report.backend_b, report.artifact_sha256_b),
-    ):
-        artifact_path = layout.artifact_path(document_id, backend)
-        if recorded is not None and artifact_path.is_file():
-            if ParsedArtifact.read(artifact_path).content_hash() != recorded:
-                return None
     return report
 
 
@@ -494,7 +487,8 @@ class PipelineResult:
     report: ComparisonReport
     dataset: DocumentDataset
     excel_path: Path
-    dataset_json_path: Path
+    # None when the run's result is not kept (dataset.incomplete says why): such a dataset is not stored.
+    dataset_json_path: Path | None
     # The chart readings shown with this paper, when there are any (see shown_figures).
     figures: FiguresView | None = None
 
@@ -596,8 +590,18 @@ def run_document(
     layout = DataLayout(settings.data_root)
     excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path, figure_rows=figures.rows if figures is not None else ())
-    dataset_json_path = _store_dataset(layout, dataset)
-    on_stage("export", "done", str(excel_path))
+    dataset_json_path: Path | None = None
+    if dataset.incomplete:
+        # The stored dataset is what marks a paper finished (stored.is_finished), so it is kept back for the
+        # same reasons as the comparison, and an earlier run's table under these keys is removed with it: left
+        # in place it would keep the paper finished. The workbook of this run is still written.
+        layout.dataset_json_path(document.document_id, dataset.extractor_key, dataset.comparison_key).unlink(
+            missing_ok=True
+        )
+        on_stage("export", "done", f"{excel_path}; not kept as finished: {dataset.incomplete}")
+    else:
+        dataset_json_path = _store_dataset(layout, dataset)
+        on_stage("export", "done", str(excel_path))
     return PipelineResult(
         parse_reports=parse_reports,
         lanes=lanes,
@@ -690,17 +694,26 @@ def _extract_and_compare(
         on_stage("compare", "running", "")
         report = compare_document(document, settings, client, force=force, lanes=lanes)
     counts = report.counts
-    on_stage(
-        "compare",
-        "done",
-        f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
+    detail = (
+        f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"
     )
+    reason = incomplete_reason(lanes, report)
+    if reason:
+        # Not a failure of the paper: the report was not stored and the next run asks again.
+        on_stage("compare", "failed", f"{detail}; {reason}, not stored")
+    else:
+        on_stage("compare", "done", detail)
     return lanes, report
 
 
 def _lane_detail(lane: LaneExtraction) -> str:
     ungrounded = len(lane.ungrounded())
-    return f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
+    failed = len(lane.failed_questions)
+    return (
+        f"{len(lane.samples)} samples"
+        + (f", {ungrounded} ungrounded" if ungrounded else "")
+        + (f", {failed} question{'s' if failed > 1 else ''} unanswered (asked again next run)" if failed else "")
+    )
 
 
 # ---- Directory batches and offline re-export -------------------------------------------------------
@@ -743,8 +756,13 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
         lanes[backend] = lane
     if not _compared_these(report, lanes[BACKEND_A], lanes[BACKEND_B]):
         raise FileNotFoundError(f"the comparison of {document.display_filename} predates its parse; run it again")
-    # Grounding is rechecked on read, so comparison must use those same refreshed values.
+    # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
+    # serves the report beside the table, and the two must be the same verdicts.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
+    reason = incomplete_reason(lanes, report)
+    if reason:
+        raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")
+    report.write(report_path)
     dataset = consolidate_document(document, lanes, report)
     # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
     _store_dataset(layout, dataset)
@@ -814,7 +832,8 @@ def run_batch(
         index: int, prefix: str, outcome: DocumentDataset | dict[str, str], rows: Sequence[Mapping[str, object]] = ()
     ) -> None:
         if isinstance(outcome, DocumentDataset):
-            report(prefix, "done", "")
+            # Its rows are written, with the unanswered cells refused, but the paper is not finished.
+            report(prefix, "done", f"incomplete: {outcome.incomplete}" if outcome.incomplete else "")
         else:
             report(prefix, "failed", outcome["error"])
         with results_lock:
@@ -907,43 +926,6 @@ def run_batch(
         duplicates,
         output,
     )
-
-
-# ---- Stored documents: how far each one got, read off the files the stages write ----------------------------
-
-
-def stored_stages(
-    layout: DataLayout,
-    document_id: str,
-    *,
-    extractor_key: str,
-    comparison_key: str,
-    figure_key: str,
-    figures_enabled: bool,
-) -> tuple[Stage, ...]:
-    """How far a stored document got, one entry per :func:`stage_names` stage, read off the file each stage
-    writes under these keys. It is the progress to show when no running job describes the document. The
-    keys are the caller's, so the library that lists documents and the one that reads them cannot disagree."""
-
-    def done(path: Path) -> StageStatus:
-        return "done" if path.is_file() else "pending"
-
-    figures = done(layout.figures_path(document_id, figure_key))
-    status: dict[str, StageStatus] = {
-        **{f"parse:{b}": done(layout.artifact_path(document_id, b)) for b in BACKENDS},
-        # Opt-in: switched off and never read is a skip, not work still to do.
-        "figures": figures if figures == "done" or figures_enabled else "skipped",
-        **{f"extract:{b}": done(layout.extraction_path(document_id, b, extractor_key)) for b in BACKENDS},
-        "compare": done(layout.comparison_path(document_id, extractor_key, comparison_key)),
-        "export": done(layout.dataset_json_path(document_id, extractor_key, comparison_key)),
-    }
-    return tuple(Stage(name=name, status=status[name]) for name in stage_names())
-
-
-def is_finished(layout: DataLayout, document_id: str, *, extractor_key: str, comparison_key: str) -> bool:
-    """Whether a run under these keys went all the way. The export is the last stage (see
-    :func:`stored_stages`), so a document whose comparison exists but whose export failed is still unfinished."""
-    return layout.dataset_json_path(document_id, extractor_key, comparison_key).is_file()
 
 
 def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings) -> bytes:

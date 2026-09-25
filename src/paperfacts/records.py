@@ -228,6 +228,19 @@ def sample_key(sample_id: str | None) -> str:
     return key
 
 
+class FailedQuestion(BaseModel):
+    """A field question the model gave no valid answer to (invalid twice, or cut off at max_tokens).
+
+    It costs that field in that lane, not the lane. Its invalid answers were never cached, so extracting the
+    lane again re-asks exactly this question while every other one replays from the LLM cache.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    field: str
+    detail: str
+
+
 class LaneExtraction(BaseModel):
     """Everything one parser lane yielded, with its provenance audit and its cost."""
 
@@ -254,6 +267,11 @@ class LaneExtraction(BaseModel):
         "sample-level question was asked; an empty lane for any other reason leaves it False",
     )
     passes: int = Field(default=1, ge=1, description="extraction passes that were merged into this result")
+    failed_questions: tuple[FailedQuestion, ...] = Field(
+        default=(),
+        description="field questions with no valid answer in some pass; while any is here the lane is incomplete: "
+        "it is extracted again on the next run and neither its comparison nor its table is stored",
+    )
     usage: dict[str, int] = Field(default_factory=dict)
     raw_response: str = Field(default="", description="the model's raw JSON, kept as evidence")
     artifact_sha256: str | None = Field(
