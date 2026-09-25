@@ -16,6 +16,7 @@ so the tests here watch "is the mapping right", not the business outcome:
 from __future__ import annotations
 
 import dataclasses
+import json
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -25,8 +26,9 @@ from fastapi.testclient import TestClient
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
+from paperfacts.errors import ConfigError
 from paperfacts.models import BACKENDS, Backend, ParsedArtifact
-from paperfacts.profile import DomainProfile
+from paperfacts.profile import DomainProfile, load_profile
 from paperfacts.records import LaneExtraction
 from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
@@ -34,7 +36,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_sample
 from support.factories import make_blank_pdf
-from support.profiles import SHIPPED_PROFILE_PATH
+from support.profiles import SHIPPED_PROFILE_PATH, profile_data
 from support.web import (
     DOC_KEY,
     RecordingRunner,
@@ -123,11 +125,16 @@ def parsed_both_lanes(library: Library) -> str:
 # ---- health / listing ---------------------------------------------------------------------
 
 
-def test_health_reports_the_model_that_will_be_used(client: TestClient):
+def test_health_reports_the_model_and_the_profile_that_will_be_used(client: TestClient, tco_profile: DomainProfile):
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "model": "fake-model"}
+    assert response.json() == {
+        "status": "ok",
+        "model": "fake-model",
+        "profile": "tco",
+        "profile_hash": tco_profile.content_hash[:12],
+    }
 
 
 def test_the_document_list_is_empty_before_anything_is_uploaded(client: TestClient):
@@ -678,3 +685,27 @@ def test_the_pipeline_fails_loudly_when_the_pdf_is_gone(monkeypatch, settings: S
     with pytest.raises(FileNotFoundError):
         pipeline_runner(settings, library.profile, library)(job, lambda stage, status, detail="": None)
     assert calls == []
+
+
+def test_the_pipeline_runner_refuses_a_job_once_the_profile_file_changed_on_disk(
+    monkeypatch, settings: Settings, tmp_path: Path, registered
+):
+    """load_profile is cached for the life of the process, so after an edit the server would keep running the
+    old profile under keys the edited file no longer names. The job is refused until a restart instead."""
+    path = tmp_path / "profiles" / "demo.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(profile_data(), ensure_ascii=False), encoding="utf-8")
+    profile = load_profile(path)
+    library = Library(settings, profile)
+    calls: list[object] = []
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: calls.append(args))
+    job = Job(job_id="job-1", document_id=registered, force=False, created_at="2026-01-01T00:00:00+00:00")
+    run = pipeline_runner(settings, profile, library)
+
+    run(job, lambda stage, status, detail="": None)
+    path.write_text(json.dumps(profile_data({"prompt.domain_subject": "edited"}), ensure_ascii=False), "utf-8")
+
+    with pytest.raises(ConfigError, match="profile changed on disk") as refused:
+        run(job, lambda stage, status, detail="": None)
+    assert "请重启服务器" in str(refused.value)
+    assert len(calls) == 1

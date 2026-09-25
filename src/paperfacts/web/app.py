@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -56,13 +57,13 @@ from paperfacts.errors import ConfigError
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.profile import DomainProfile, load_profile, profile_path
+from paperfacts.profile import DomainProfile, parse_profile
 from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobBrief, JobManager, JobRunner
-from paperfacts.workflow import corpus_workbook, run_document, stage_names
+from paperfacts.workflow import StageCallback, corpus_workbook, load_run_profile, run_document, stage_names
 
 logger = logging.getLogger(__name__)
 
@@ -132,11 +133,28 @@ def same_origin(request: Request) -> bool:
     return urlsplit(source).netloc in hosts - {None, ""}
 
 
+def profile_on_disk_hash(profile: DomainProfile) -> str:
+    """The content hash of the file ``profile`` was loaded from, as it is now. Read past load_profile's cache,
+    which keeps the value the server started with for the life of the process."""
+    try:
+        return parse_profile(json.loads(profile.source.read_text(encoding="utf-8")), profile.source).content_hash
+    except (OSError, ValueError, ConfigError) as exc:
+        return f"unreadable: {exc}"
+
+
 def pipeline_runner(settings: Settings, profile: DomainProfile, library: Library) -> JobRunner:
-    """Job body: hand the document to workflow.run_document; the stage callback is just mark."""
-    return lambda job, mark: run_document(
-        library.document(job.document_id), settings, profile, force=job.force, on_stage=mark
-    )
+    """Job body: hand the document to workflow.run_document; the stage callback is just mark.
+
+    The profile file is checked first: after an edit on disk the server would still run the old profile and
+    store its results under keys the edited file no longer names, so the job is refused until a restart."""
+
+    def run(job: Job, mark: StageCallback) -> None:
+        if profile_on_disk_hash(profile) != profile.content_hash:
+            logger.error("profile %s changed on disk (%s); restart the server", profile.name, profile.source)
+            raise ConfigError(f"领域配置 {profile.source.name} 在磁盘上已改动，请重启服务器 (profile changed on disk)")
+        run_document(library.document(job.document_id), settings, profile, force=job.force, on_stage=mark)
+
+    return run
 
 
 def login_accepted(header: str | None, settings: Settings) -> bool:
@@ -174,7 +192,8 @@ def create_app(
         # would pile up in one process-wide record that no job reports.
         raise ConfigError("offline replay is for `run` and `batch`; unset PAPERFACTS_LLM_OFFLINE / llm.offline")
     set_max_in_flight(settings.llm_max_in_flight)
-    profile = profile or load_profile(profile_path(settings))
+    profile = profile or load_run_profile(settings)
+    logger.info("serving profile %s (%s)", profile.name, profile.content_hash[:12])
     library = Library(settings, profile)
     manager = jobs or JobManager(
         pipeline_runner(settings, profile, library), stage_names(), workers=settings.max_parallel_documents
@@ -239,7 +258,12 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "model": settings.llm_model}
+        return {
+            "status": "ok",
+            "model": settings.llm_model,
+            "profile": profile.name,
+            "profile_hash": profile.content_hash[:12],
+        }
 
     @app.get("/api/documents")
     def list_documents() -> list[DocumentSummary]:

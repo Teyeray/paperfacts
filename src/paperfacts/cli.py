@@ -30,7 +30,7 @@ from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.profile import DomainProfile, load_profile, profile_path
+from paperfacts.profile import DomainProfile
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout, write_text_atomic
 from paperfacts.workflow import (
@@ -39,6 +39,7 @@ from paperfacts.workflow import (
     compare_document,
     extract_document,
     load_artifact,
+    load_run_profile,
     parse_document,
     run_document,
 )
@@ -197,7 +198,7 @@ def _settings(
 def _profile(settings: Settings) -> DomainProfile:
     """The profile this command runs under, loaded once here and passed to everything it calls."""
     try:
-        return load_profile(profile_path(settings))
+        return load_run_profile(settings)
     except ConfigError as exc:
         _fail("profile", exc)
 
@@ -499,7 +500,8 @@ def serve(
     port = port or settings.server_port
     typer.echo(
         f"PaperFacts UI -> http://{host}:{port}   "
-        f"(data_root={settings.data_root}, model={settings.llm_model}, profile={domain.name})"
+        f"(data_root={settings.data_root}, model={settings.llm_model}, "
+        f"profile={domain.name} {domain.content_hash[:12]})"
     )
     try:
         web_app = create_app(settings, profile=domain)
