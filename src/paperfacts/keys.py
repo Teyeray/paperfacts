@@ -284,17 +284,23 @@ def comparison_key(profile: DomainProfile) -> str:
 
 
 @cache
-def figure_field_fingerprint() -> str:
-    """The part of the field table figure reading uses: every FIGURE attribute of the fields a chart may be
-    read for -- which fields a caption can name (the keywords), what the model is told about them, and how a
-    reading is converted."""
-    table = [
-        {name: getattr(spec, name) for name in attributes_with(FieldRole.FIGURE)} for spec in figures.figure_fields()
-    ]
-    return content_fingerprint(_dumps(table))
+def figure_profile_fingerprint(profile: DomainProfile) -> str:
+    """The part of the profile figure reading uses: every FIGURE attribute of the fields a chart may be read
+    for (which fields a caption can name, what the model is told about them, how a reading is converted), the
+    chart prompt's slots, and the units the profile declares. A field no chart is read for is left out whole,
+    so editing it never renames a stored reading; an attribute at its dataclass default is left out as in
+    the other keys (``fields.py``, which declares the defaults, is hashed with the figure code)."""
+    material: dict[str, object] = {
+        "fields": [_field_material(spec, FieldRole.FIGURE) for spec in profile.figure_fields],
+        "slots": None if profile.figures is None else dataclasses.asdict(profile.figures),
+    }
+    if profile.units.declared:
+        material["units"] = profile.units.material()
+    return content_fingerprint(_dumps(material))
 
 
 def figure_key(
+    profile: DomainProfile,
     model: str,
     *,
     temperature: float = figures.TEMPERATURE,
@@ -303,12 +309,14 @@ def figure_key(
     max_pixels: int,
     max_per_document: int,
 ) -> str:
-    """Everything the stored figure readings depend on. A new key with no stored files behind it yet, so
-    nothing here is omitted at a baseline: every input is in the material from the start.
+    """Everything the stored figure readings depend on. Every setting is in the material whatever its value;
+    only the profile's part omits what is at its default (:func:`figure_profile_fingerprint`).
 
     ``dpi`` and ``max_pixels`` change the image the model is shown; ``max_per_document`` which charts are
-    read. ``figures.py`` holds the prompt, the selection and the conversion into readings; ``normalize.py``,
-    ``units.py`` and ``text.py`` the unit arithmetic; ``passages.py`` the keyword matching that selects a chart.
+    read. ``figures.py`` holds the prompt template, the selection and the conversion into readings;
+    ``normalize.py``, ``units.py`` and ``text.py`` the unit arithmetic; ``passages.py`` the keyword matching
+    that selects a chart; ``fields.py`` the attribute defaults the profile material leaves out and
+    ``profile.py`` which fields are figure-readable.
     """
     material = {
         "model": model,
@@ -317,17 +325,20 @@ def figure_key(
         "dpi": dpi,
         "max_pixels": max_pixels,
         "max_per_document": max_per_document,
-        "fields": figure_field_fingerprint(),
-        "code": source_fingerprint("figures.py", "normalize.py", "passages.py", "units.py", "text.py"),
+        "fields": figure_profile_fingerprint(profile),
+        "code": source_fingerprint(
+            "figures.py", "normalize.py", "passages.py", "units.py", "text.py", "fields.py", "profile.py"
+        ),
     }
     return content_fingerprint(_dumps(material))
 
 
-def figure_key_for(settings: Settings) -> str:
+def figure_key_for(settings: Settings, profile: DomainProfile) -> str:
     """The key a figures run with these settings writes. The stage's client is built from the same settings
     and the module's sampling constants (workflow.build_vision_client), so reader and writer agree by
     construction."""
     return figure_key(
+        profile,
         settings.figures_model,
         dpi=settings.figures_dpi,
         max_pixels=settings.figures_max_pixels,

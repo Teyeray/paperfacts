@@ -23,6 +23,7 @@ from paperfacts.web.documents import Library
 from paperfacts.web.jobs import JobManager
 from paperfacts.workflow import stage_names
 from support.factories import make_blank_pdf
+from support.profiles import shipped_profile
 from support.web import (
     DOC_KEY,
     DOC_SHA,
@@ -118,7 +119,7 @@ def test_the_dataset_is_returned_once_it_is_on_disk(client: TestClient, library:
 
 
 def seed_figures(library: Library, settings: Settings) -> None:
-    key = figure_key_for(settings)
+    key = figure_key_for(settings, shipped_profile())
     reading = FigureReading(
         source_id="mineru_p0_b9",
         page=0,

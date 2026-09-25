@@ -95,7 +95,8 @@ def main() -> None:
         raise SystemExit("decide.py no longer writes the missing-condition note")
     if SCIENTIFIC_TEST not in (SOURCE / "workbook.py").read_text(encoding="utf-8"):
         raise SystemExit("workbook.py no longer prints these fields in scientific notation")
-    readable = {spec.name for spec in figures.figure_fields()}
+    # The rule figures.figure_fields() applied before charts were selected by the profile: the numeric film fields.
+    readable = {entry["name"] for entry in config["fields"] if entry["group"] == "film" and entry["kind"] == "numeric"}
 
     fields = []
     for entry in config["fields"]:

@@ -26,7 +26,7 @@ def _hashed_modules(monkeypatch, profile) -> set[str]:
     keys.normalization_fingerprint.__wrapped__()
     keys.comparison_code_fingerprint.__wrapped__()
     keys.retrieval_fingerprint.__wrapped__(profile)
-    keys.figure_key("model", dpi=200, max_pixels=1, max_per_document=1)
+    keys.figure_key(profile, "model", dpi=200, max_pixels=1, max_per_document=1)
     return hashed
 
 

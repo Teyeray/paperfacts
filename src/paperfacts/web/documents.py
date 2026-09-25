@@ -109,7 +109,7 @@ class Library:
         profile = default_profile()
         self.extractor_key = extractor_key_for(settings, profile)
         self.comparison_key = comparison_key(profile)
-        self.figure_key = figure_key_for(settings)
+        self.figure_key = figure_key_for(settings, profile)
         self._counts_cache: dict[Path, tuple[tuple[tuple[int, int, int] | None, ...], ComparisonCounts | None]] = {}
         self._counts_lock = threading.Lock()
 

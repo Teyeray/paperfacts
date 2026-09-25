@@ -63,9 +63,11 @@ def test_the_name_based_special_cases_became_attributes(tco_profile):
     # Rule 8 of both extraction prompts, and decide.py's note when the wavelength is missing.
     assert where("condition_rule") == {"transmittance": "the wavelength or spectral range"}
     assert where("missing_condition_note_zh") == {"transmittance": "原文提取结果未注明透光率波长或波段"}
-    # figures.figure_fields(): the numeric film fields.
-    assert set(where("figure_readable")) == {spec.name for spec in figures.figure_fields()}
-    assert [spec.name for spec in tco_profile.figure_fields] == [spec.name for spec in figures.figure_fields()]
+    # The rule figures.figure_fields() applied before the profile said which fields a chart is read for:
+    # the numeric film fields, in table order.
+    film = [spec.name for spec in FIELD_SPECS if spec.group == "film" and spec.kind == "numeric"]
+    assert set(where("figure_readable")) == set(film)
+    assert [spec.name for spec in tco_profile.figure_fields] == film
     # The workbook's scientific number format.
     assert where("display_format") == {"resistance": "scientific", "resistivity": "scientific"}
 

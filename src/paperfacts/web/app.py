@@ -53,7 +53,6 @@ from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload
 from paperfacts.errors import ConfigError
-from paperfacts.keys import figure_key_for
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
@@ -392,7 +391,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         require_document(document_id)
         identity = library.identity(document_id)
         figures = shown_figures(document_id, identity.name if identity else document_id, settings)
-        return figures or FiguresView(document_id=document_id, figure_key=figure_key_for(settings), model="")
+        return figures or FiguresView(document_id=document_id, figure_key=library.figure_key, model="")
 
     @app.get("/api/documents/{document_id}/dataset.xlsx")
     def get_dataset_excel(document_id: str) -> FileResponse:

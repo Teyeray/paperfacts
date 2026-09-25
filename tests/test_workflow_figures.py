@@ -25,6 +25,7 @@ from paperfacts.readings import figure_artifact, read_document_figures, shown_fi
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import run_document
 from support.factories import make_block
+from support.profiles import shipped_profile
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
 from test_workflow_run import install_fake_pipeline
 
@@ -62,7 +63,9 @@ def store_artifact(document: DocumentInput, settings: Settings, backend: Backend
 
 
 def figures_file(document: DocumentInput, settings: Settings) -> Path:
-    return DataLayout(settings.data_root).figures_path(document.document_id, figure_key_for(settings))
+    return DataLayout(settings.data_root).figures_path(
+        document.document_id, figure_key_for(settings, shipped_profile())
+    )
 
 
 # ---- read_document_figures ---------------------------------------------------------------------------

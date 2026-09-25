@@ -21,6 +21,7 @@ from paperfacts.keys import figure_key_for
 from paperfacts.llm import VisionClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
 from paperfacts.pdf import crop_region, png_bytes, render_page
+from paperfacts.profile import DomainProfile, default_profile
 from paperfacts.storage import DataLayout
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,9 @@ def _orphaned(readings: FigureReadings, artifact: ParsedArtifact | None) -> froz
     )
 
 
-def shown_figures(document_id: str, filename: str, settings: Settings) -> FiguresView | None:
+def shown_figures(
+    document_id: str, filename: str, settings: Settings, profile: DomainProfile | None = None
+) -> FiguresView | None:
     """The chart readings to show for a document, whether or not the stage is switched on.
 
     Switching the stage off stops the asking, not the showing. When nothing is stored under the current
@@ -150,7 +153,7 @@ def shown_figures(document_id: str, filename: str, settings: Settings) -> Figure
     current parse no longer has are marked too.
     """
     layout = DataLayout(settings.data_root)
-    current = layout.figures_path(document_id, figure_key_for(settings))
+    current = layout.figures_path(document_id, figure_key_for(settings, profile or default_profile()))
     readings, stale = _stored_file(current), False
     if readings is None and current.parent.is_dir():
         older = sorted(
@@ -187,6 +190,7 @@ def read_document_figures(
     force: bool = False,
     artifact: ParsedArtifact | None = None,
     stop: threading.Event | None = None,
+    profile: DomainProfile | None = None,
 ) -> FigureReadings:
     """Read the charts of one document, or return the stored readings.
 
@@ -194,8 +198,11 @@ def read_document_figures(
     the same place. Otherwise the charts are read again: answered panels replay from the LLM cache for free,
     a panel whose cached answer was unusable is asked with the cache bypassed, and a failed request is simply
     asked again. ``force`` re-asks every panel.
+
+    ``profile`` falls back to the built-in one until every caller passes the profile it runs under.
     """
-    key = figure_key_for(settings)
+    profile = profile or default_profile()
+    key = figure_key_for(settings, profile)
     path = DataLayout(settings.data_root).figures_path(document.document_id, key)
     artifact = artifact or figure_artifact(document, settings)
     previous = None if force else _stored_file(path)
@@ -223,6 +230,7 @@ def read_document_figures(
         artifact,
         render,
         client,
+        profile,
         figure_key=key,
         max_per_document=settings.figures_max_per_document,
         concurrency=settings.llm_concurrency,

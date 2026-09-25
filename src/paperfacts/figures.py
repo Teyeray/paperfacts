@@ -39,7 +39,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperfacts.errors import Cancelled, LlmOfflineMiss
-from paperfacts.fields import FIELD_SPECS, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.llm import VisionClient
 from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
 from paperfacts.normalize import convert_to_canonical
@@ -47,10 +47,11 @@ from paperfacts.normalize import convert_to_canonical
 # Keyword matching is passages.py's, so a caption names a field under exactly the rules a passage-mode
 # question uses to find it in the text.
 from paperfacts.passages import keyword_hits, searchable
-from paperfacts.profile import FigureSlots, default_profile
+from paperfacts.profile import DomainProfile, FigureSlots
 from paperfacts.storage import write_text_atomic
 from paperfacts.text import normalize_text
 from paperfacts.threads import ContextThreadPoolExecutor
+from paperfacts.units import UnitRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -110,16 +111,6 @@ Output ONLY this JSON (strict JSON: no comments, no trailing text):
  "series": [{{"label": "legend text or quantity name", "y_axis": "left|right|right2", "marker": "..."}}],
  "points": [{{"series": "<label>", "x": <number or string>, "x_on_tick": true, "y": <number>, "y_error": <number or null>, "confidence": <0..1>}}]}}
 """
-
-
-def figure_fields() -> tuple[FieldSpec, ...]:
-    """The fields a chart may be read for: numeric film properties.
-
-    Only the ``film`` group, although process fields are sample-level too: a chart's y axis is what gets
-    read, and a y axis plots a property of the film. Letting "annealing temperature" select charts would
-    spend the per-paper budget on every spectrum whose caption says what the film was annealed at.
-    """
-    return tuple(spec for spec in FIELD_SPECS if spec.group == "film" and spec.kind == "numeric")
 
 
 # ---- Stored result -----------------------------------------------------------------------------------
@@ -346,11 +337,17 @@ class PanelRequest:
     fields: tuple[FieldSpec, ...]
 
 
-def select_panels(blocks: Sequence[SourceBlock], *, limit: int) -> tuple[PanelRequest, ...]:
-    """The panels worth a question, in document order, at most ``limit`` of them."""
+def select_panels(blocks: Sequence[SourceBlock], profile: DomainProfile, *, limit: int) -> tuple[PanelRequest, ...]:
+    """The panels worth a question, in document order, at most ``limit`` of them.
+
+    Only the profile's ``figure_readable`` fields select a chart. A chart's y axis is what gets read, so a
+    profile marks the properties a y axis plots, not the conditions a caption mentions: letting a process
+    field select charts would spend the per-paper budget on every spectrum whose caption says how the sample
+    was made.
+    """
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
-    specs = figure_fields()
+    specs = profile.figure_fields
     chosen: list[PanelRequest] = []
     for group in figure_groups(blocks):
         fields = group.fields(specs)
@@ -533,7 +530,9 @@ def _fold(text: str | None) -> str:
     return (text or "").strip().casefold()
 
 
-def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple[tuple[FigureReading, ...], int]:
+def readings_from_answer(
+    answer: dict[str, Any], request: PanelRequest, units: UnitRegistry
+) -> tuple[tuple[FigureReading, ...], int]:
     """Turn a chart answer into readings: only for the fields asked about, y converted, precision labelled.
 
     Also returns how many points could not be put on any axis at all -- as opposed to points on an axis
@@ -575,7 +574,7 @@ def readings_from_answer(answer: dict[str, Any], request: PanelRequest) -> tuple
         if spec is None:
             continue  # a field nobody asked about, or one this table does not have
         unit_raw = _axis_unit(axis.unit)
-        value, unit, note = convert_to_canonical(spec, point.y, unit_raw)
+        value, unit, note = convert_to_canonical(spec, point.y, unit_raw, units)
         notes = [note] if note else []
         if point.confidence is not None and point.confidence < LOW_CONFIDENCE:
             notes.append(f"model confidence {point.confidence:g}: likely a hidden or overlapping marker")
@@ -619,17 +618,18 @@ def _read_panel_unless_stopped(
     request: PanelRequest,
     image: bytes | Exception,
     client: VisionClient,
+    profile: DomainProfile,
     *,
     refresh: bool,
     stop: threading.Event | None,
 ) -> tuple[FigurePanel, tuple[FigureReading, ...]]:
     if stop is not None and stop.is_set():
         raise Cancelled("figure reading was stopped")
-    return _read_panel(request, image, client, refresh=refresh)
+    return _read_panel(request, image, client, profile, refresh=refresh)
 
 
 def _read_panel(
-    request: PanelRequest, image: bytes | Exception, client: VisionClient, *, refresh: bool
+    request: PanelRequest, image: bytes | Exception, client: VisionClient, profile: DomainProfile, *, refresh: bool
 ) -> tuple[FigurePanel, tuple[FigureReading, ...]]:
     block, group = request.block, request.group
     base = {
@@ -641,10 +641,12 @@ def _read_panel(
     }
     if isinstance(image, Exception):
         return FigurePanel(**base, status="error", detail=f"crop failed: {image}"[:500]), ()
+    # A panel is selected only for a figure_readable field, and the loader refuses such a field without slots.
+    assert profile.figures is not None
     try:
         result = client.complete_vision(
             system=SYSTEM_PROMPT,
-            user=user_prompt(group.caption, request.fields, default_profile().figures),
+            user=user_prompt(group.caption, request.fields, profile.figures),
             image_png=image,
             refresh=refresh,
         )
@@ -663,7 +665,7 @@ def _read_panel(
         reason = str(answer.get("reason") or "not a property-vs-condition chart")
         return FigurePanel(**base, status="not_chart", detail=reason[:500], usage=result.usage), ()
     try:
-        readings, unplaced = readings_from_answer(answer, request)
+        readings, unplaced = readings_from_answer(answer, request, profile.units)
     except (ValueError, TypeError) as exc:
         return FigurePanel(**base, status="unreadable", detail=str(exc)[:500], usage=result.usage), ()
     if unplaced and not readings:
@@ -686,6 +688,7 @@ def read_figures(
     artifact: ParsedArtifact,
     render: CropRenderer,
     client: VisionClient,
+    profile: DomainProfile,
     *,
     figure_key: str,
     max_per_document: int,
@@ -703,7 +706,7 @@ def read_figures(
     :class:`Cancelled` is raised when the ones already out have answered. Nothing is returned, so nothing
     partial is stored; the answers that did arrive are in the LLM cache.
     """
-    requests = select_panels(artifact.blocks, limit=max_per_document)
+    requests = select_panels(artifact.blocks, profile, limit=max_per_document)
     images = [_crop(render, request) for request in requests]
     with ContextThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="paperfacts-figure") as pool:
         futures = [
@@ -712,6 +715,7 @@ def read_figures(
                 request,
                 image,
                 client,
+                profile,
                 refresh=refresh or request.block.source_id in refresh_panels,
                 stop=stop,
             )

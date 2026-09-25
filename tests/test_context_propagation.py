@@ -83,7 +83,7 @@ def test_the_field_questions_run_in_the_callers_context():
     assert seen and set(seen) == {"job-1"}
 
 
-def test_the_chart_panels_run_in_the_callers_context():
+def test_the_chart_panels_run_in_the_callers_context(tco_profile):
     seen: list[str | None] = []
 
     def recording(user: str, image: bytes):
@@ -95,6 +95,7 @@ def test_the_chart_panels_run_in_the_callers_context():
         artifact(fig(0, 0), fig(0, 1), cap(0, 2, "Fig. 3 Sheet resistance")),
         lambda page, bbox: b"png",
         FakeVisionClient(recording),
+        tco_profile,
         figure_key="k",
         max_per_document=12,
         concurrency=2,
