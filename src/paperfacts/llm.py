@@ -107,11 +107,11 @@ def _at_least_one(limit: int) -> int:
 IN_FLIGHT = InFlightLimit(DEFAULT_LLM_MAX_IN_FLIGHT)
 
 
-def shared_in_flight(limit: int) -> InFlightLimit:
-    """The process-wide limit, set to ``limit``. Every client built from the settings goes through this, so
-    the one value in the settings is the one in force."""
+def set_max_in_flight(limit: int) -> None:
+    """Size the process-wide limit. Called once, where a process reads its settings (``create_app``, each
+    CLI command), not by every client built: a client built from other settings -- a test, a one-off
+    helper -- must not resize the limit under documents that are already running."""
     IN_FLIGHT.set_limit(limit)
-    return IN_FLIGHT
 
 
 @dataclass(frozen=True)

@@ -32,7 +32,7 @@ from paperfacts.figures import FigureReadings, FiguresView, read_figures
 from paperfacts.figures import figure_rows as figure_rows_of
 from paperfacts.grounding import block_adjacency, ground_lane
 from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
-from paperfacts.llm import LlmClient, OpenAICompatibleClient, VisionClient, shared_in_flight
+from paperfacts.llm import LlmClient, OpenAICompatibleClient, VisionClient
 from paperfacts.matching import match_samples
 from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
 from paperfacts.normalize import normalize_lane
@@ -223,7 +223,6 @@ def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
         reasoning_effort=settings.llm_reasoning_effort,
         retry_attempts=settings.llm_retry_attempts,
         retry_backoff_s=settings.llm_retry_backoff_s,
-        in_flight=shared_in_flight(settings.llm_max_in_flight),
     )
 
 
@@ -349,8 +348,6 @@ def build_vision_client(settings: Settings) -> OpenAICompatibleClient:
         reasoning_effort=None,
         retry_attempts=FIGURE_RETRY_ATTEMPTS,
         retry_backoff_s=settings.llm_retry_backoff_s,
-        # The same limit as the text client: both models are billed and rate-limited by one workspace.
-        in_flight=shared_in_flight(settings.llm_max_in_flight),
     )
 
 

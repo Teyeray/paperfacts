@@ -24,6 +24,7 @@ import typer
 from paperfacts.config import EXTRACTION_MODES, Settings
 from paperfacts.errors import PaperFactsError, ParserError
 from paperfacts.fields import FIELD_SPECS
+from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
@@ -152,7 +153,10 @@ def _settings(
         changes["extraction_passes"] = passes
     if mode is not None:
         changes["extraction_mode"] = mode.value
-    return dataclasses.replace(settings, **changes) if changes else settings
+    settings = dataclasses.replace(settings, **changes) if changes else settings
+    # Every command reads its settings here, once: the one place this process sizes the in-flight limit.
+    set_max_in_flight(settings.llm_max_in_flight)
+    return settings
 
 
 def _configure_logging(verbose: bool) -> None:

@@ -50,6 +50,7 @@ from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload, write_dataset
 from paperfacts.figures import FiguresView
+from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.records import LaneExtraction
@@ -117,6 +118,7 @@ def login_accepted(header: str | None, settings: Settings) -> bool:
 
 def create_app(settings: Settings | None = None, *, jobs: JobManager | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    set_max_in_flight(settings.llm_max_in_flight)
     library = Library(settings)
     manager = jobs or JobManager(
         pipeline_runner(settings, library), stage_names(), workers=settings.max_parallel_documents

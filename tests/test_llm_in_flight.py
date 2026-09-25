@@ -19,7 +19,7 @@ import httpx
 import pytest
 
 from paperfacts.errors import LlmError
-from paperfacts.llm import IN_FLIGHT, InFlightLimit, OpenAICompatibleClient, shared_in_flight
+from paperfacts.llm import IN_FLIGHT, InFlightLimit, OpenAICompatibleClient, set_max_in_flight
 from support.http import make_client
 from support.threads import submit_daemon
 from support.web import WAIT_TIMEOUT_S, wait_until
@@ -208,15 +208,34 @@ def test_a_limit_below_one_is_refused(bad: int):
         InFlightLimit(bad)
 
 
-def test_clients_built_from_the_settings_share_the_process_wide_limit():
+def test_clients_built_from_the_settings_share_the_process_wide_limit_without_resizing_it():
     from paperfacts.config import Settings
     from paperfacts.workflow import build_llm_client, build_vision_client
 
     previous = IN_FLIGHT.limit
+    settings = Settings(llm_api_key="sk-test", llm_max_in_flight=previous + 5)
+    with build_llm_client(settings) as text, build_vision_client(settings) as vision:
+        assert text.in_flight is vision.in_flight is IN_FLIGHT
+    assert IN_FLIGHT.limit == previous  # only an entry point sizes it
+
+
+def test_the_entry_points_size_the_limit_from_their_settings(monkeypatch, tmp_path: Path):
+    from typer.testing import CliRunner
+
+    from paperfacts.cli import app
+    from paperfacts.config import Settings
+    from paperfacts.web.app import create_app
+
+    previous = IN_FLIGHT.limit
     try:
-        settings = Settings(llm_api_key="sk-test", llm_max_in_flight=5)
-        with build_llm_client(settings) as text, build_vision_client(settings) as vision:
-            assert text.in_flight is vision.in_flight is IN_FLIGHT
+        create_app(Settings(data_root=tmp_path / "data", llm_max_in_flight=5))
         assert IN_FLIGHT.limit == 5
+
+        monkeypatch.setenv("PAPERFACTS_LLM_MAX_IN_FLIGHT", "6")
+        CliRunner().invoke(app, ["fields"])  # a command that reads no settings leaves it alone
+        assert IN_FLIGHT.limit == 5
+        (tmp_path / "papers").mkdir()
+        CliRunner().invoke(app, ["export", str(tmp_path / "papers"), "--data-root", str(tmp_path / "data")])
+        assert IN_FLIGHT.limit == 6
     finally:
-        shared_in_flight(previous)
+        set_max_in_flight(previous)
