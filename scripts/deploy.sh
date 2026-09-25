@@ -143,6 +143,7 @@ setting() {  # $1 = PAPERFACTS_* key, $2 = its config.json key: .env wins over c
 WEB_PASSWORD="$(env_value PAPERFACTS_WEB_PASSWORD)"
 [ -n "$WEB_PASSWORD" ] || die "PAPERFACTS_WEB_PASSWORD is empty in .env"
 WEB_USERNAME="$(setting PAPERFACTS_WEB_USERNAME web.username)"
+[ -n "$WEB_USERNAME" ] || WEB_USERNAME=paperfacts   # config.py's DEFAULT_WEB_USERNAME, its built-in layer
 # curl reads the credentials from a config on stdin (-K -), never from its argv: on a shared GPU host every
 # user can read every process's command line through ps. printf is a shell builtin, so it has no argv either.
 # Inside a quoted curl config value only backslash and double quote need escaping; python does it (fed on

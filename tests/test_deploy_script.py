@@ -84,3 +84,9 @@ def test_every_env_file_read_goes_through_the_dotenv_helper():
 
     assert by_hand == []
     assert 'WEB_USERNAME="$(setting PAPERFACTS_WEB_USERNAME web.username)"' in TEXT
+
+
+def test_the_web_user_falls_back_to_the_services_default():
+    # config.py serves as "paperfacts" when neither .env nor config.json names a user; an empty user here
+    # would answer every call with 401.
+    assert '[ -n "$WEB_USERNAME" ] || WEB_USERNAME=paperfacts' in TEXT

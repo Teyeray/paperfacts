@@ -646,7 +646,9 @@ artifact's blocks). After a re-parse, a stored lane, comparison or table of the 
 served, and the paper is not finished) and is derived again: source ids
 are positional, so the old citations would point at whatever block now has that ordinal. Re-deriving is
 free from the LLM cache whenever the rendered prompts are byte-identical. Files written before the hash was
-recorded have none and are read as before.
+recorded have none and are read as before -- which for a consolidated table means it is served even after a
+re-parse. Re-export once after upgrading (`paperfacts export data/docs`, offline and free) to record the
+hashes in every stored table.
 
 Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
 costs one repair request and is never written, and an invalid answer already in the cache is asked again
