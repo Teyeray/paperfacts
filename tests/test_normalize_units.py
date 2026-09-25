@@ -456,7 +456,7 @@ def test_a_header_factor_is_applied_by_the_convention_it_was_written_in(unit, ex
     [
         ("thickness", "d ×10^2 nm", 680.0),
         ("working_pressure", "P ×10^-1 Pa", 0.68),
-        ("sheet_resistance", "R_s × 10^-2 (Ω/sq)", 680.0),
+        ("sheet_resistance", "R_s × 10^2 (Ω/sq)", 0.068),
     ],
 )
 def test_the_header_convention_holds_for_every_field(field, unit, expected):
@@ -477,6 +477,9 @@ def test_the_header_convention_holds_for_every_field(field, unit, expected):
         "ρ (10^4) (Ω cm)",
         # On the quantity with no unit to say so.
         "ρ × 10^4",
+        # A negative power on the quantity: formally ρ × 10^-4, but usually meant as the unit's multiplier.
+        "Resistivity ×10^-4 (Ω cm)",
+        "R_s × 10^-2 (Ω/sq)",
     ],
 )
 def test_a_header_factor_whose_convention_cannot_be_told_is_refused(unit):

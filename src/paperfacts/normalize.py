@@ -636,6 +636,10 @@ def split_scale_factor(unit_raw: str, is_unit: Callable[[str], object]) -> tuple
     if not match.group("x"):
         return None, clean_unit(text)  # "ρ 10^4 Ω cm": nothing joins the symbol and the factor
     if tail[:1] in _OPENING and unit_of(tail):
+        if factor < 1:
+            # "ρ ×10^-4 (Ω cm)" formally says ρ was multiplied by 10^-4, but authors who write a negative power on
+            # the quantity usually mean the unit's multiplier; the two readings differ by 10^8, so neither is taken.
+            return None, clean_unit(text)
         return 1 / factor, unit_of(tail)  # "ρ × 10^4 (Ω cm)": ρ multiplied, the unit bracketed apart
     if tail and tail[0] not in _OPENING:
         return factor, unit_of(tail)  # "ρ × 10^-4 Ω·cm": the factor leads the unit written after it
