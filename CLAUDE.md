@@ -182,5 +182,9 @@ this file is the part that is easy to get wrong.
 ## Deployment
 
 `deploy/` targets a Linux GPU server. GPU ids are set per service by env var, default 0. Development
-happens on macOS, is pushed to GitHub, and pulled on the server — do not try to operate the server over
-ssh from here.
+happens on macOS and is pushed to GitHub; the server pulls it. The server may be operated over ssh
+(`ssh yangrm@ssh.yangruiming.org`, through a cloudflared tunnel that drops connections now and then):
+production runs from `~/Projects/paperfacts` under `systemctl --user` and is updated only with
+`scripts/deploy.sh`; experiments run in the `~/Projects/paperfacts-dev` worktree against its own copy of the
+data. Run anything longer than a minute there with `nohup`, and judge whether it ran from the files it
+writes, never from `pgrep -f`/`pkill -f`, whose pattern matches the ssh command's own shell.
