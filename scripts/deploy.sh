@@ -237,11 +237,15 @@ PY
             if [ "$((${done_count:-0} + ${failed_count:-0} + ${gone_count:-0}))" -ge "$total" ]; then
                 printf '\n'
                 rm -rf "$tmp"
+                # A job the service no longer holds has an unknown outcome (pruned after finishing, or the
+                # service restarted and dropped its queue); success cannot be claimed for it.
                 if [ "${gone_count:-0}" -gt 0 ]; then
                     warn "${gone_count} job(s) no longer held by the service (pruned after finishing, or it restarted) — check $LOCAL_URL/api/documents"
                 fi
                 if [ "${failed_count:-0}" -gt 0 ]; then
                     warn "${failed_count} job(s) failed — journalctl --user -u paperfacts.service -n 50"
+                fi
+                if [ "${failed_count:-0}" -gt 0 ] || [ "${gone_count:-0}" -gt 0 ]; then
                     return 1
                 fi
                 return 0

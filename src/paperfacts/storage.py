@@ -226,13 +226,14 @@ def has_cached_parse(layout: DataLayout, document_id: str) -> bool:
     return all(layout.artifact_path(document_id, backend).is_file() for backend in BACKENDS)
 
 
-def is_runnable(layout: DataLayout, document_id: str) -> bool:
+def is_runnable(layout: DataLayout, document_id: str, identity: DocumentIdentity | None = None) -> bool:
     """Whether :func:`paperfacts.workflow.run_document` can be asked to process this stored document at all.
 
     A PDF is only needed for a real parse. A document parsed on another machine arrives with both artifacts
-    and no PDF, and extraction, comparison and export need nothing else.
+    and no PDF, and extraction, comparison and export need nothing else. A caller that already read the
+    identity passes it, as with :func:`stored_pdf`.
     """
-    return stored_pdf(layout, document_id) is not None or has_cached_parse(layout, document_id)
+    return stored_pdf(layout, document_id, identity) is not None or has_cached_parse(layout, document_id)
 
 
 def stored_document(layout: DataLayout, document_id: str) -> DocumentInput:

@@ -154,7 +154,7 @@ class Library:
             document_id=document_id,
             name=identity.name if identity else document_id,
             pdf_available=pdf is not None,
-            runnable=pdf is not None or has_cached_parse(self.layout, document_id),
+            runnable=is_runnable(self.layout, document_id, identity),
             parsed={b: status[f"parse:{b}"] == "done" for b in BACKENDS},
             extracted={b: status[f"extract:{b}"] == "done" for b in BACKENDS},
             compared=counts is not None,

@@ -25,8 +25,11 @@ export async function loadLibrary() {
   clearTimeout(refreshTimer);
   refreshTimer = null;
   let docs;
+  let activeDocs;
   try {
-    docs = await api("/api/documents");
+    // Both lists are part of one refresh: a failed /api/jobs would otherwise read as "nothing is running",
+    // clear the busy markers and stop the timer mid-run.
+    [docs, activeDocs] = await Promise.all([api("/api/documents"), loadActiveDocs()]);
   } catch (error) {
     if (token !== refreshToken) return;
     refreshFailures += 1;
@@ -35,7 +38,6 @@ export async function loadLibrary() {
     refreshTimer = setTimeout(loadLibrary, Math.min(REFRESH_MS * 2 ** (refreshFailures - 1), MAX_REFRESH_BACKOFF_MS));
     return;
   }
-  const activeDocs = await loadActiveDocs();
   if (token !== refreshToken) return;
   refreshFailures = 0;
   state.docs = docs;
@@ -47,15 +49,8 @@ export async function loadLibrary() {
 // Which documents are busy right now. DocumentSummary knows nothing about jobs, so this is one
 // extra request for the whole list — never one per row, and without the jobs' logs.
 async function loadActiveDocs() {
-  try {
-    const jobs = await api("/api/jobs");
-    return new Set(jobs.filter(isActive).map((job) => job.document_id));
-  } catch (error) {
-    // The marker is a nicety; a failure here must not hide the library — but it must not vanish
-    // without trace either, or a broken /api/jobs looks like "nothing is running".
-    console.warn("读取任务列表失败：", error);
-    return new Set();
-  }
+  const jobs = await api("/api/jobs");
+  return new Set(jobs.filter(isActive).map((job) => job.document_id));
 }
 
 export function renderLibrary() {
