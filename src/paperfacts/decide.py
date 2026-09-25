@@ -187,8 +187,9 @@ def _commit(
     """Nothing refused the evidence: record the value, the conditions and blocks it rests on, and how."""
     conditions = joined([c.value.condition or "" for c in final])
     sources = joined(sorted({source for c in final for source in c.value.source_ids}))
-    if spec.name == "transmittance" and not conditions:
-        details.append("原文提取结果未注明透光率波长或波段")
+    if spec.condition_rule and not conditions:
+        # A field whose prompt demands a condition: a value without one is kept, but the reader is told.
+        details.append(spec.missing_condition_note_zh or f"原文提取结果未注明{spec.label or spec.name}的测量条件")
     details.append(f"采用 {chosen.backend}；抽取重复一致率 {chosen.value.agreement:g}；合并重复证据")
     return Decision(
         chosen.scalar,

@@ -426,7 +426,7 @@ def _extract_passages(
             # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
             # empty for any other reason -- it missed the sample text -- still gets every question, so one
             # missed inventory cannot cost the lane all its sample-level values.
-            dropped.append(f"{spec.name}: the paper deposits no TCO film of its own, so it was not asked about")
+            dropped.append(f"{spec.name}: the inventory found no in-scope sample, so it was not asked about")
             continue
         candidates = fit_budget(
             candidate_blocks(

@@ -358,7 +358,7 @@ def consolidate_document(
                 **{spec.name: target[spec.name].value if spec.name in target else None for spec in profile.fields},
             }
         )
-        selection = "未提取到可匹配样品；论文行仅保留唯一的靶材字段"
+        selection = "未提取到可匹配样品；论文行仅保留唯一的论文级字段"
     quality.append(
         MappingProxyType(
             {

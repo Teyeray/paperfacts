@@ -76,8 +76,15 @@ _FIGURE_COLUMNS = (
 
 
 def _worksheet(
-    workbook: Workbook, title: str, columns: Sequence[tuple[str, str]], rows: Sequence[Row], table_id: str
+    workbook: Workbook,
+    title: str,
+    columns: Sequence[tuple[str, str]],
+    rows: Sequence[Row],
+    table_id: str,
+    *,
+    scientific: frozenset[str] = frozenset(),
 ) -> Worksheet:
+    """``scientific`` names the columns whose numbers the profile displays as ``display_format: scientific``."""
     sheet = workbook.create_sheet(title)
     sheet.append([label for _, label in columns])
     for row in rows:
@@ -115,7 +122,7 @@ def _worksheet(
                 # PDF-derived strings are data even when their first character is '='.
                 cell.data_type = "s"
             elif isinstance(cell.value, (int, float)):
-                cell.number_format = "0.0000E+00" if key in {"resistance", "resistivity"} else "0.############"
+                cell.number_format = "0.0000E+00" if key in scientific else "0.############"
             cell.alignment = Alignment(vertical="top", wrap_text=True)
     if rows:
         table = Table(displayName=table_id, ref=sheet.dimensions)
@@ -143,8 +150,10 @@ def write_dataset(
     workbook = Workbook()
     workbook.remove(workbook.active)
     columns = data_columns(profile)
-    _worksheet(workbook, "论文数据", columns, [doc.paper_row for doc in unique], "Papers")
-    _worksheet(workbook, "样品数据", columns, [row for doc in unique for row in doc.sample_rows], "Samples")
+    scientific = frozenset(spec.name for spec in profile.fields if spec.display_format == "scientific")
+    _worksheet(workbook, "论文数据", columns, [doc.paper_row for doc in unique], "Papers", scientific=scientific)
+    samples = [row for doc in unique for row in doc.sample_rows]
+    _worksheet(workbook, "样品数据", columns, samples, "Samples", scientific=scientific)
     descriptions: list[Row] = [
         column.model_dump()
         | {

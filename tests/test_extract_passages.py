@@ -312,7 +312,10 @@ def test_a_paper_depositing_no_tco_film_is_asked_only_paper_level_fields():
 
     assert client.call_count == 1
     assert lane.samples == () and lane.unattributed == ()
-    assert any(entry.startswith(f"{ASKED_FIELD}: the paper deposits no TCO film") for entry in lane.dropped)
+    assert any(
+        entry == f"{ASKED_FIELD}: the inventory found no in-scope sample, so it was not asked about"
+        for entry in lane.dropped
+    )
     # the verdict travels as data, so the web page never has to match the audit text above
     assert lane.no_tco_film is True
 
