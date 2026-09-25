@@ -138,8 +138,8 @@ curl_auth() {  # curl with the web credentials; takes curl's own arguments
 # keys.py names every stored extraction/comparison after a fingerprint of the package's own source, so a
 # commit that touches the schema, the prompts or the comparison rules leaves each document's old artifacts
 # unreachable: the library then reports `compared: false` and /report answers 404 "No comparison report yet".
-# POST /api/documents/run-all queues exactly those documents (it skips the ones already compared) and returns
-# at once; the single job worker then re-parses from the parse cache and re-compares.
+# POST /api/documents/run-all queues exactly those documents (it skips the ones already exported under the
+# current keys) and returns at once; the job workers then re-parse from the parse cache and re-compare.
 rerun_pending_documents() {
     local tmp
     tmp="$(mktemp -d)"
@@ -171,48 +171,80 @@ PY
 
     if [ ! -s "$tmp/ids" ]; then
         rm -rf "$tmp"
-        ok "nothing to re-run: every document already has a comparison under these keys"
+        ok "nothing to re-run: every document is already exported under these keys"
         return 0
     fi
 
-    local total deadline done_count failed_count states
+    # /api/jobs lists every job the service holds, without stages, which is enough to count outcomes. The
+    # stage a running job is in comes from /api/jobs/{id}, asked only for the few that are running. The
+    # service prunes old finished jobs, and a restart forgets them all: a queued id no longer listed has
+    # finished (or will never run) as far as waiting goes, so it is counted as gone rather than waited on.
+    local total deadline done_count failed_count gone_count states running job_id
     total="$(wc -l <"$tmp/ids" | tr -d ' ')"
     deadline=$((SECONDS + RERUN_TIMEOUT))
     info "waiting for $total document(s), budget ${RERUN_TIMEOUT}s (the service finishes them with or without this script)"
     while [ "$SECONDS" -lt "$deadline" ]; do
         if curl_auth -sS --max-time 20 -A "$UA" "$LOCAL_URL/api/jobs" -o "$tmp/jobs.json" 2>/dev/null; then
-            IFS='|' read -r done_count failed_count states < <(python3 - "$tmp/jobs.json" "$tmp/ids" <<'PY'
+            running="$(python3 - "$tmp/jobs.json" "$tmp/ids" <<'PY'
 import json, sys
-ids = [line.strip() for line in open(sys.argv[2]) if line.strip()]
+ids = {line.strip() for line in open(sys.argv[2]) if line.strip()}
 try:
-    jobs = {job["job_id"]: job for job in json.load(open(sys.argv[1]))}
+    jobs = json.load(open(sys.argv[1]))
+except Exception:
+    jobs = []
+print(" ".join(job["job_id"] for job in jobs if job.get("job_id") in ids and job.get("status") == "running"))
+PY
+)"
+            rm -f "$tmp"/job.*.json
+            for job_id in $running; do  # hex ids, safe as file names
+                curl_auth -sS --max-time 20 -A "$UA" "$LOCAL_URL/api/jobs/$job_id" \
+                    -o "$tmp/job.$job_id.json" 2>/dev/null || true
+            done
+            IFS='|' read -r done_count failed_count gone_count states < <(python3 - "$tmp" <<'PY'
+import json, os, sys
+tmp = sys.argv[1]
+ids = [line.strip() for line in open(os.path.join(tmp, "ids")) if line.strip()]
+try:
+    jobs = {job["job_id"]: job for job in json.load(open(os.path.join(tmp, "jobs.json")))}
 except Exception:
     jobs = {}
-done = failed = 0
+done = failed = gone = 0
 parts = []
 for job_id in ids:
-    job = jobs.get(job_id) or {}
-    status = job.get("status", "unknown")
+    status = jobs[job_id].get("status", "unknown") if job_id in jobs else "gone"
     done += status == "done"
     failed += status == "failed"
-    stage = next((s for s in job.get("stages", []) if s.get("status") == "running"), None)
-    parts.append(f"{status}:{stage['name'] if stage else ''}")
-print(f"{done}|{failed}|{' '.join(parts)}")
+    gone += status == "gone"
+    stage = ""
+    if status == "running":
+        try:
+            stages = json.load(open(os.path.join(tmp, f"job.{job_id}.json"))).get("stages", [])
+            stage = next((s["name"] for s in stages if s.get("status") == "running"), "")
+        except Exception:
+            pass
+    parts.append(f"{status}:{stage}")
+print(f"{done}|{failed}|{gone}|{' '.join(parts)}")
 PY
 )
-            printf '\r     %s done, %s failed of %s  [%s]   ' \
-                "${done_count:-0}" "${failed_count:-0}" "$total" "${states:0:90}"
+            printf '\r     %s done, %s failed, %s gone of %s  [%s]   ' \
+                "${done_count:-0}" "${failed_count:-0}" "${gone_count:-0}" "$total" "${states:0:90}"
             if [ "${done_count:-0}" -ge "$total" ]; then
                 printf '\n'
                 rm -rf "$tmp"
                 ok "all $total document(s) re-ran under the new keys"
                 return 0
             fi
-            if [ "$((${done_count:-0} + ${failed_count:-0}))" -ge "$total" ]; then
+            if [ "$((${done_count:-0} + ${failed_count:-0} + ${gone_count:-0}))" -ge "$total" ]; then
                 printf '\n'
                 rm -rf "$tmp"
-                warn "${failed_count:-0} job(s) failed — journalctl --user -u paperfacts.service -n 50"
-                return 1
+                if [ "${gone_count:-0}" -gt 0 ]; then
+                    warn "${gone_count} job(s) no longer held by the service (pruned after finishing, or it restarted) — check $LOCAL_URL/api/documents"
+                fi
+                if [ "${failed_count:-0}" -gt 0 ]; then
+                    warn "${failed_count} job(s) failed — journalctl --user -u paperfacts.service -n 50"
+                    return 1
+                fi
+                return 0
             fi
         fi
         sleep 10
@@ -326,7 +358,7 @@ fi
 # ---------------------------------------------------------------- in-flight work
 # Jobs live only in the service's memory: a restart cancels everything queued and kills the
 # running job (its stage artifacts stay on disk, so a re-queue resumes from the cache). Only a job
-# queued or running is at stake. A document that is merely not compared -- never run, or failed for
+# queued or running is at stake. A document that is merely not exported -- never run, or failed for
 # good -- loses nothing to a restart and must not block a deploy.
 PENDING=""
 JOBS_JSON="$(curl_auth -sS --max-time 10 -A "$UA" "$LOCAL_URL/api/jobs" 2>/dev/null || true)"
@@ -338,10 +370,8 @@ try:
 except Exception:
     sys.exit(0)
 for job in jobs if isinstance(jobs, list) else []:
-    if job.get("status") in ("queued", "running"):
-        stage = next((s["name"] for s in job.get("stages", []) if s.get("status") == "running"), "")
-        line = "      - job %s doc %s %s %s" % (job.get("job_id"), job.get("document_id"), job["status"], stage)
-        print(line.rstrip())
+    if job.get("status") in ("queued", "running"):  # /api/jobs carries no stages; the status says enough here
+        print("      - job %s doc %s %s" % (job.get("job_id"), job.get("document_id"), job["status"]))
 ' 2>/dev/null || true)"
 fi
 
