@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
@@ -115,6 +115,9 @@ class DatasetPayload(BaseModel):
     filename: str = ""
     extractor_key: str = ""
     comparison_key: str = ""
+    # Per lane, the content hash of the parse the table was built from (see ParsedArtifact.content_hash): its
+    # cells cite blocks by position. A lane absent here is unknown (a file from before it was recorded).
+    artifact_sha256: dict[Backend, str] = {}
     fields: tuple[FieldColumn, ...] = ()
     paper_row: dict[str, CellValue] = {}
     sample_rows: tuple[dict[str, CellValue], ...] = ()
@@ -144,6 +147,7 @@ class DocumentDataset:
     quality_rows: tuple[Row, ...]
     extractor_key: str = ""
     comparison_key: str = ""
+    artifact_sha256: Mapping[Backend, str] = field(default_factory=dict)
 
     def to_payload(self) -> DatasetPayload:
         """The serialisable view the web UI and ``dataset.json`` share.
@@ -156,6 +160,7 @@ class DocumentDataset:
             filename=self.filename,
             extractor_key=self.extractor_key,
             comparison_key=self.comparison_key,
+            artifact_sha256=dict(self.artifact_sha256),
             fields=field_columns(),
             paper_row=dict(self.paper_row),
             sample_rows=tuple(dict(row) for row in self.sample_rows),
@@ -180,6 +185,7 @@ class DocumentDataset:
             quality_rows=tuple(MappingProxyType(dict(row)) for row in payload.quality_rows),
             extractor_key=payload.extractor_key,
             comparison_key=payload.comparison_key,
+            artifact_sha256=dict(payload.artifact_sha256),
         )
 
 
@@ -391,6 +397,14 @@ def consolidate_document(
         tuple(quality),
         report.extractor_key,
         report.comparison_key,
+        {
+            backend: sha
+            for backend, sha in (
+                (report.backend_a, report.artifact_sha256_a),
+                (report.backend_b, report.artifact_sha256_b),
+            )
+            if sha is not None
+        },
     )
 
 

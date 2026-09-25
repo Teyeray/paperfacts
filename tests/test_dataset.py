@@ -867,6 +867,18 @@ def test_from_payload_reverses_to_payload_exactly():
     assert restored.to_payload() == result.to_payload()
 
 
+def test_the_dataset_records_the_parses_it_came_from():
+    # Its cells cite blocks by position, so a reader must be able to tell a table of an earlier parse.
+    a = make_lane(samples=[make_sample("A")]).model_copy(update={"artifact_sha256": "a" * 64})
+    b = make_lane(backend="paddleocr_vl").model_copy(update={"artifact_sha256": "b" * 64})
+
+    result = dataset(a, b)
+    restored = DocumentDataset.from_payload(DatasetPayload.model_validate_json(result.to_payload().model_dump_json()))
+
+    assert result.artifact_sha256 == {"mineru": "a" * 64, "paddleocr_vl": "b" * 64}
+    assert restored == result
+
+
 def test_a_dataset_file_in_the_wrong_shape_fails_at_the_boundary():
     # Validation is pydantic's job where the JSON is parsed, so a bad file never travels on as a dict.
     with pytest.raises(ValidationError):
