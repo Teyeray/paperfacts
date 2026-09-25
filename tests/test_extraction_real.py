@@ -22,6 +22,7 @@ from paperfacts.adapters import convert, render_markdown
 from paperfacts.extract import extract_lane
 from paperfacts.models import DocumentGeometry, DocumentInput, PageGeometry, RawParseOutput
 from paperfacts.normalize import normalize_lane
+from support.extraction import lane_options
 from support.llm import FakeLlmClient
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "mineru_real_sample"
@@ -123,7 +124,7 @@ REAL_RESPONSE = json.dumps(
 def test_the_real_source_ids_all_exist_in_the_artifact(real_artifact):
     """The most important thing: the provenance id format matches the real artifact, and not one of them
     gets thrown out as invented."""
-    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document")
+    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document"))
 
     assert lane.invalid_source_ids == ()
     assert {ABSTRACT_ID, TABLE_ID, METHOD_ID} <= {block.source_id for block in real_artifact.blocks}
@@ -132,7 +133,7 @@ def test_the_real_source_ids_all_exist_in_the_artifact(real_artifact):
 def test_only_the_substrate_thickness_is_dropped_from_the_real_response(real_artifact):
     # The model filed the 3 mm fused-silica substrate as the film's thickness; the plausible range is what
     # catches it. Nothing else in a real answer may trip a cleaning rule.
-    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document")
+    lane = extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document"))
 
     assert len(lane.dropped) == 1
     # Converted before it is judged: 3 mm is 3e6 nm.
@@ -142,7 +143,7 @@ def test_only_the_substrate_thickness_is_dropped_from_the_real_response(real_art
 
 
 def test_the_resistivity_written_in_plain_decimal_normalizes(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
 
     field = lane.sample("this-work-225C").get("resistivity")
     assert field.value == pytest.approx(0.3)
@@ -152,7 +153,7 @@ def test_the_resistivity_written_in_plain_decimal_normalizes(real_artifact):
 def test_the_scientific_notation_from_the_real_table_cell_normalizes(real_artifact):
     # The table cell is written as $6 . 4 \times 1 0 ^ { - 3 }$; when the model copies it as the
     # superscript "6.4 × 10⁻³" it must be read as 0.0064, not 6.4.
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
 
     field = lane.sample("muto-200C").get("resistivity")
     assert field.value == pytest.approx(6.4e-3)
@@ -168,7 +169,7 @@ def test_a_latex_exponent_copied_verbatim_is_parsed(real_artifact):
     ``$`` / ``\\times`` / braces and rejoins the split-up digits first, so the exponent must parse
     correctly.
     """
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
 
     field = lane.sample("mientus-25C").get("resistivity")
     assert field.value == pytest.approx(4e-3)
@@ -224,7 +225,7 @@ def test_spaces_between_digits_are_only_merged_inside_latex():
 def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_artifact):
     # "40 × 10 cm" contains two numbers: the first is taken, with a note left so the reader knows the
     # value is incomplete.
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
 
     field = lane.target.get("inch")
     assert field.value == pytest.approx(40 / 2.54)
@@ -233,7 +234,7 @@ def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_
 
 
 def test_the_composition_text_is_kept_verbatim(real_artifact):
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
 
     field = lane.target.get("component")
     assert field.value_raw == "Sn/Ta target 95:5 wt.%"
@@ -243,7 +244,7 @@ def test_the_composition_text_is_kept_verbatim(real_artifact):
 def test_the_provenance_survives_all_the_way_to_the_normalized_lane(real_artifact):
     """Normalization only adds fields alongside; source_id must survive unchanged all the way through, or
     the value could never be traced back to a PDF page."""
-    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), mode="document"))
+    lane = normalize_lane(extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")))
 
     field = lane.sample("muto-200C").get("resistivity")
     assert field.source_ids == (TABLE_ID,)
@@ -257,7 +258,7 @@ def test_every_informative_block_of_the_real_paper_reaches_the_model(real_artifa
     tabulated are usually pages apart. Only page furniture is withheld."""
     client = FakeLlmClient([REAL_RESPONSE])
 
-    extract_lane(real_artifact, client, mode="document")
+    extract_lane(real_artifact, client, lane_options(client, mode="document"))
 
     prompt = client.users[0]
     assert f"<!-- source: {TABLE_ID} -->" in prompt
@@ -270,7 +271,7 @@ def test_page_furniture_is_withheld_from_the_model(real_artifact):
     """Running heads, page numbers and figure image paths cost context and invite bad citations."""
     client = FakeLlmClient([REAL_RESPONSE])
 
-    extract_lane(real_artifact, client, mode="document")
+    extract_lane(real_artifact, client, lane_options(client, mode="document"))
 
     prompt = client.users[0]
     furniture = [b for b in real_artifact.blocks if b.type in {"unknown", "figure"}]

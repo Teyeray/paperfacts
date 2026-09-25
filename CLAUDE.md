@@ -90,9 +90,10 @@ this file is the part that is easy to get wrong.
   (`grounding.py`), where the quoted text must occur in the block it cites. The first four drop the value
   with an audited reason; grounding only flags, never drops.
 - Cache keys live in `keys.py`. `extractor_key(options)` is the only extraction key: it hashes one frozen
-  `ExtractionOptions` (model, mode and every sampling/retrieval setting), which `extract_lane` and
-  `extractor_key_for(settings)` both build, so writer and reader cannot disagree -- never spell the settings
-  out a second time. It also hashes the field schema *minus* the verdict-only cells (tolerances, categories,
+  `ExtractionOptions` (model, mode and every sampling/retrieval setting). The workflow builds it once with
+  `ExtractionOptions.from_settings` and passes it into `extract_lane`, and readers use
+  `extractor_key_for(settings)`, so writer and reader cannot disagree -- never spell the settings out a
+  second time. It also hashes the field schema *minus* the verdict-only cells (tolerances, categories,
   condition preferences, display text), the prompts, and the source of the extraction modules (`extract.py`,
   `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`,
   `continuation.py`); passage mode adds its two prompts plus `retrieval_fingerprint` (the keywords,

@@ -24,7 +24,7 @@ from paperfacts.extract import extract_lane
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.keys import ExtractionOptions, extractor_key
 from paperfacts.prompts import field_system_prompt, inventory_system_prompt
-from support.extraction import make_artifact
+from support.extraction import lane_options, make_artifact
 from support.factories import make_block
 from support.llm import FakeLlmClient
 
@@ -117,10 +117,8 @@ def extract(
     return extract_lane(
         make_artifact(make_blocks(backend), backend=backend),
         client,
-        mode="passage",
-        passes=passes,
+        lane_options(client, mode="passage", passes=passes, inventory_reasoning_effort=inventory_reasoning_effort),
         concurrency=concurrency,
-        inventory_reasoning_effort=inventory_reasoning_effort,
     )
 
 
@@ -361,7 +359,7 @@ def test_a_paper_level_value_goes_to_the_target_even_when_it_names_a_sample():
     )
     client = FakeLlmClient(responder(inch=values_json({"sample_id": "A", "value_raw": "4", "unit_raw": "inch"})))
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert lane.target is not None
     assert [(field.field, field.value_raw) for field in lane.target.fields] == [("inch", "4")]
@@ -542,7 +540,7 @@ def test_an_unknown_mode_is_rejected_before_any_call_is_made():
     client = FakeLlmClient(responder())
 
     with pytest.raises(ValueError, match="unknown extraction mode"):
-        extract_lane(make_artifact(make_blocks()), client, mode="passages")  # type: ignore[arg-type]
+        extract_lane(make_artifact(make_blocks()), client, lane_options(client, mode="passages"))  # type: ignore[arg-type]
 
     assert client.call_count == 0
 
@@ -569,7 +567,7 @@ def test_the_same_value_quoted_twice_becomes_one_value_carrying_both_citations()
         )
     )
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     values = lane.samples[0].fields
     assert [value.value_raw for value in values] == ["12.5"]
@@ -590,7 +588,7 @@ def test_the_same_number_in_two_units_stays_two_values():
         )
     )
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert [value.unit_raw for value in lane.samples[0].fields] == ["ohm/sq", "kohm/sq"]
 
@@ -608,7 +606,7 @@ def test_a_paper_level_value_flagged_for_every_sample_is_not_stored_as_a_series_
     )
     blocks = (*make_blocks(), make_block(page=0, order=2, content="The target composition was ITO."))
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert lane.target.get("component").series is False
     assert all(sample.fields == () for sample in lane.samples)
@@ -668,7 +666,7 @@ def test_a_sample_listed_twice_under_one_id_is_kept_once_and_audited():
         )
     )
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert [sample.label for sample in lane.samples] == ["first"]
     assert any("repeats an id" in entry for entry in lane.dropped)
@@ -680,7 +678,7 @@ def test_a_sample_with_a_blank_id_is_dropped_with_a_reason():
     blocks = make_blocks()
     client = FakeLlmClient(responder(inventory=inventory_json([{"sample_id": "  ", "label": "nameless"}])))
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert lane.samples == ()
     assert any("no usable id" in entry for entry in lane.dropped)
@@ -892,7 +890,7 @@ def test_a_series_value_and_a_quote_naming_the_sample_become_one_sample_specific
     answer = values_json(*((series, specific) if series_first else (specific, series)))
     client = FakeLlmClient(responder(inventory=inventory_json(TWO_SAMPLES), sheet_resistance=answer))
 
-    lane = extract_lane(make_artifact(blocks, backend="mineru"), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks, backend="mineru"), client, lane_options(client, mode="passage"))
 
     sample_b = lane.sample("B")
     assert [(field.value_raw, field.series) for field in sample_b.fields] == [("12.5", False)]

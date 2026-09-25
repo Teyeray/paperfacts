@@ -32,13 +32,8 @@ from dataclasses import dataclass
 
 from paperfacts.adapters import render_markdown
 from paperfacts.config import (
-    DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONCURRENCY,
-    DEFAULT_LLM_CONTEXT_TOKENS,
-    DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     EXTRACTION_MODES,
-    ExtractionMode,
-    InventoryReasoningEffort,
 )
 from paperfacts.errors import ContextBudgetError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
@@ -172,48 +167,39 @@ def _add_usage(total: dict[str, int], part: Mapping[str, int]) -> None:
 def extract_lane(
     artifact: ParsedArtifact,
     client: LlmClient,
+    options: ExtractionOptions,
     *,
-    mode: ExtractionMode,
-    passes: int = 1,
-    context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
-    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
     concurrency: int = DEFAULT_LLM_CONCURRENCY,
-    inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     refresh: bool = False,
 ) -> LaneExtraction:
     """Extract one parser lane, whole-document or question by question.
 
+    ``options`` is everything that shapes a request, built once by the caller
+    (``ExtractionOptions.from_settings``); the key recorded on the lane is ``extractor_key(options)``, the
+    very key the caller stores the lane under and every reader looks it up by. The client sends the sampling
+    settings, so it must have been built from the same values; a mismatch is refused here rather than
+    stored under a key that does not describe the requests that produced it.
+
     ``concurrency`` only decides how many of passage mode's field questions wait on the network at once.
     Every request is the one the sequential loop would have sent, so it stays out of ``extractor_key``.
 
-    ``inventory_reasoning_effort`` overrides the client's effort for the inventory question alone -- the
-    one question that reasons for far longer than the field questions after it. ``INHERIT`` leaves the
-    request exactly as the client builds it, ``None`` sends that question with no such parameter at all,
-    a value sends that effort. It does change what is sent, so it is in ``extractor_key``. Both lanes get
-    the same value, so the disagreement signal stays a comparison of two identically-asked lanes.
-
-    Everything that shapes a request is gathered into one :class:`ExtractionOptions` here, read from the
-    client and the arguments, and that object alone both drives the questions and names the stored lane:
-    the key recorded on the lane is the one :func:`paperfacts.keys.extractor_key_for` computes from the
-    settings the client was built from.
+    ``options.inventory_reasoning_effort`` overrides the client's effort for the inventory question alone --
+    the one question that reasons for far longer than the field questions after it. ``INHERIT`` leaves the
+    request exactly as the client builds it, ``None`` sends that question with no such parameter at all, a
+    value sends that effort. Both lanes get the same value, so the disagreement signal stays a comparison of
+    two identically-asked lanes.
     """
-    if passes < 1:
-        raise ValueError(f"passes must be at least 1, got {passes}")
+    if options.passes < 1:
+        raise ValueError(f"passes must be at least 1, got {options.passes}")
     if concurrency < 1:
         raise ValueError(f"concurrency must be at least 1, got {concurrency}")
-    if mode not in EXTRACTION_MODES:
-        raise ValueError(f"unknown extraction mode: {mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
-    options = ExtractionOptions(
-        model=client.model,
-        mode=mode,
-        passes=passes,
-        temperature=client.temperature,
-        max_tokens=client.max_tokens,
-        reasoning_effort=client.reasoning_effort,
-        inventory_reasoning_effort=inventory_reasoning_effort,
-        candidate_limit=candidate_limit,
-        context_tokens=context_tokens,
-    )
+    if options.mode not in EXTRACTION_MODES:
+        raise ValueError(f"unknown extraction mode: {options.mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
+    sent = (client.model, client.temperature, client.max_tokens, client.reasoning_effort)
+    described = (options.model, options.temperature, options.max_tokens, options.reasoning_effort)
+    if sent != described:
+        raise ValueError(f"the client asks with {sent} but the extraction options describe {described}")
+    mode, passes = options.mode, options.passes
     blocks = informative_blocks(artifact.blocks)
     document = build_extraction_document(artifact) if mode == "document" else None
 

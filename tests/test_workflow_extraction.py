@@ -18,6 +18,7 @@ import pytest
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError
+from paperfacts.extract import extract_lane
 from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
 from paperfacts.llm import OpenAICompatibleClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput
@@ -392,7 +393,8 @@ def test_a_lane_extracted_with_edited_settings_carries_the_key_the_reader_looks_
             return json.dumps({"samples": [{"sample_id": "A"}]})
         return json.dumps({"values": []})
 
-    # The client the workflow builds from these settings (build_llm_client) asks with the same values.
+    # A stand-in for the client build_llm_client makes from these settings; the next test pins that the real
+    # one sends exactly these values, and extract_lane refuses a client that does not.
     client = FakeLlmClient(
         respond,
         model=settings.llm_model,
@@ -407,3 +409,22 @@ def test_a_lane_extracted_with_edited_settings_carries_the_key_the_reader_looks_
     stored = LaneExtraction.read(layout.extraction_path(document.document_id, "mineru", key))
     assert stored.extractor_key == key
     assert key != extractor_key(ExtractionOptions(settings.llm_model, mode="passage"))
+
+
+def test_the_client_built_from_settings_asks_with_the_options_built_from_them(tmp_path: Path):
+    # The writer's key comes from ExtractionOptions.from_settings, the requests from build_llm_client; if the
+    # two ever read a setting differently, the key would describe requests that were never sent.
+    settings = Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", **EDITED_OPTIONS)
+    options = ExtractionOptions.from_settings(settings)
+
+    with build_llm_client(settings) as client:
+        sent = (client.model, client.temperature, client.max_tokens, client.reasoning_effort)
+
+    assert sent == (options.model, options.temperature, options.max_tokens, options.reasoning_effort)
+
+
+def test_extract_lane_refuses_options_that_do_not_describe_the_client():
+    client = FakeLlmClient([], temperature=0.7)
+
+    with pytest.raises(ValueError, match="extraction options describe"):
+        extract_lane(make_artifact(), client, ExtractionOptions(client.model, mode="document"))

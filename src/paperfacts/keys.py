@@ -185,10 +185,11 @@ def comparison_code_fingerprint() -> str:
 class ExtractionOptions:
     """Every setting that decides what one lane's model is asked, in one value.
 
-    The writer (:func:`paperfacts.extract.extract_lane`) and every reader (:func:`extractor_key_for`) build
-    this same object and hash it through the one :func:`extractor_key`, so the key a lane is stored under and
-    the key it is looked up by cannot drift apart the way two hand-spelled argument lists did (one of them
-    once forgot ``context_tokens``). The defaults are the built-in baselines, which the key leaves out.
+    Built once from the settings (:meth:`from_settings`) and handed to
+    :func:`paperfacts.extract.extract_lane`, which records ``extractor_key(options)`` on the lane; every reader
+    computes the same key from the same settings (:func:`extractor_key_for`). Two hand-spelled argument
+    lists once disagreed about ``context_tokens``; one object cannot. The defaults are the built-in baselines,
+    which the key leaves out.
     """
 
     model: str
@@ -199,9 +200,11 @@ class ExtractionOptions:
     reasoning_effort: ReasoningEffort | None = DEFAULT_LLM_REASONING_EFFORT
     # Passage mode only: document mode never asks an inventory question, retrieves no blocks and trims
     # nothing to fit (it only refuses a paper too long for the window), so these change none of its requests.
-    inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT
-    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT
-    context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS
+    inventory_reasoning_effort: InventoryReasoningEffort = dataclasses.field(
+        default=DEFAULT_LLM_INVENTORY_REASONING_EFFORT, metadata={"passage_only": True}
+    )
+    candidate_limit: int = dataclasses.field(default=DEFAULT_CANDIDATE_LIMIT, metadata={"passage_only": True})
+    context_tokens: int = dataclasses.field(default=DEFAULT_LLM_CONTEXT_TOKENS, metadata={"passage_only": True})
 
     @classmethod
     def from_settings(cls, settings: Settings, model: str | None = None) -> ExtractionOptions:
@@ -216,9 +219,6 @@ class ExtractionOptions:
             candidate_limit=settings.candidate_limit,
             context_tokens=settings.llm_context_tokens,
         )
-
-
-_PASSAGE_ONLY_OPTIONS = frozenset({"inventory_reasoning_effort", "candidate_limit", "context_tokens"})
 
 
 def extractor_key(options: ExtractionOptions) -> str:
@@ -244,7 +244,7 @@ def extractor_key(options: ExtractionOptions) -> str:
         material["field_system"] = field_system_prompt()
         material["retrieval"] = retrieval_fingerprint()
     for option in dataclasses.fields(ExtractionOptions):
-        if option.name in {"model", "mode"} or (option.name in _PASSAGE_ONLY_OPTIONS and not passage):
+        if option.name in {"model", "mode"} or (option.metadata.get("passage_only") and not passage):
             continue
         value = getattr(options, option.name)
         if value != option.default:

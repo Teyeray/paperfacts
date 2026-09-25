@@ -31,7 +31,7 @@ from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
 from paperfacts.figures import FigureReadings, FiguresView, read_figures
 from paperfacts.figures import figure_rows as figure_rows_of
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import comparison_key, extractor_key_for, figure_key_for
+from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for, figure_key_for
 from paperfacts.llm import LlmClient, OpenAICompatibleClient, VisionClient
 from paperfacts.matching import match_samples
 from paperfacts.models import BACKENDS, Backend, DocumentInput, NormalizedBBox, ParsedArtifact
@@ -267,7 +267,8 @@ def extract_document(
     ``force`` bypasses both this cache and the LLM cache, and really re-asks.
     """
     layout = DataLayout(settings.data_root)
-    key = extractor_key_for(settings, client.model)
+    options = ExtractionOptions.from_settings(settings, client.model)
+    key = extractor_key(options)
     artifact = load_artifact(document, backend, settings)
     if not force:
         cached = read_lane(layout, document.document_id, backend, key, artifact=artifact)
@@ -275,17 +276,7 @@ def extract_document(
             logger.info("extraction cache_hit backend=%s doc=%s", backend, document.document_id[:16])
             return cached
 
-    lane = extract_lane(
-        artifact,
-        client,
-        mode=settings.extraction_mode,
-        passes=settings.extraction_passes,
-        context_tokens=settings.llm_context_tokens,
-        candidate_limit=settings.candidate_limit,
-        concurrency=settings.llm_concurrency,
-        inventory_reasoning_effort=settings.llm_inventory_reasoning_effort,
-        refresh=force,
-    )
+    lane = extract_lane(artifact, client, options, concurrency=settings.llm_concurrency, refresh=force)
     lane.write(layout.extraction_path(document.document_id, backend, key))
     return normalize_lane(lane)
 

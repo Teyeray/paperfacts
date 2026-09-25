@@ -154,17 +154,17 @@ def test_a_non_numeric_llm_timeout_fails_loudly():
 
 
 def test_the_llm_context_tokens_default_matches_the_extractor_default():
-    # Settings and extract_lane() must agree on the default context window, or a caller who never touches
-    # this setting still silently gets a different budget than extract_lane()'s own default.
-    import inspect
+    # Settings and ExtractionOptions must agree on the default context window, or a caller who never touches
+    # this setting still silently gets a different budget than the options' own default.
+    import dataclasses
 
     from paperfacts.config import DEFAULT_LLM_CONTEXT_TOKENS
-    from paperfacts.extract import extract_lane
+    from paperfacts.keys import ExtractionOptions
 
     settings = Settings.from_env({})
+    defaults = {option.name: option.default for option in dataclasses.fields(ExtractionOptions)}
 
-    assert settings.llm_context_tokens == DEFAULT_LLM_CONTEXT_TOKENS
-    assert inspect.signature(extract_lane).parameters["context_tokens"].default == DEFAULT_LLM_CONTEXT_TOKENS
+    assert settings.llm_context_tokens == DEFAULT_LLM_CONTEXT_TOKENS == defaults["context_tokens"]
 
 
 def test_the_llm_context_tokens_are_read_from_the_environment():
