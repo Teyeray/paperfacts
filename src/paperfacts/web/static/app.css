@@ -52,6 +52,11 @@ code, .mono { font-family: var(--font-mono); font-size: 12.5px; }
 button { font: inherit; color: inherit; cursor: pointer; }
 .hidden { display: none !important; }
 .muted { color: var(--ink-3); }
+/* Read by a screen reader, not drawn: the word behind a glyph or a colour. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip-link { position: absolute; left: 12px; top: -48px; z-index: 30; padding: 8px 12px; border-radius: var(--radius); background: var(--ink); color: var(--paper); text-decoration: none; }
+.skip-link:focus { top: 8px; }
+.content:focus { outline: none; }
 
 /* ---------- top bar ---------- */
 .topbar {
@@ -77,6 +82,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .rail { border-right: 1px solid var(--line); padding: 18px 16px; background: var(--paper-2); }
 .content { padding: 22px 28px 60px; min-width: 0; }
 @media (max-width: 960px) { .shell { grid-template-columns: minmax(0, 1fr); } .rail { border-right: 0; border-bottom: 1px solid var(--line); } }
+@media (max-width: 520px) { .content { padding: 16px 14px 48px; } .topbar { padding: 10px 14px; } }
 
 /* ---------- upload ---------- */
 .upload {
@@ -98,6 +104,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .ghost { background: none; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 3px 8px; color: var(--ink-3); }
 .ghost:hover { border-color: var(--line-strong); color: var(--ink); }
 
+/* The list folds away on a stacked layout (library.js opens it on wide screens, where the toggle is hidden). */
+.doc-list-wrap > summary { cursor: pointer; padding: 6px 4px; font-size: 12.5px; color: var(--ink-2); }
+@media (min-width: 961px) { .doc-list-wrap > summary { display: none; } }
 .doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .doc-list-empty { padding: 8px 10px; }
 .doc-item { display: block; width: 100%; text-align: left; background: none; border-radius: var(--radius); padding: 11px 12px; border: 1px solid transparent; }
@@ -105,11 +114,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .doc-item.active { background: var(--paper); border-color: var(--line-strong); box-shadow: inset 3px 0 0 var(--accent), var(--shadow); }
 .doc-item.active .name { color: var(--ink); }
-.doc-item .name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-item .name { display: block; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-item .sub { display: flex; gap: 8px; align-items: center; margin-top: 3px; font-size: 11.5px; color: var(--ink-3); }
 .dots { display: inline-flex; gap: 3px; }
+/* Fill and shape carry the state (done filled, running ringed, failed square, skipped dashed); the count
+   beside the dots and their accessible name carry it in words. */
 .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--line-strong); background: transparent; }
-.dot.on { background: var(--ok); border-color: var(--ok); }
+.dot.done { background: var(--ok); border-color: var(--ok); }
+.dot.running { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 40%, transparent); }
+.dot.failed { border-radius: 1px; background: var(--bad); border-color: var(--bad); }
+.dot.skipped { border-style: dashed; opacity: .6; }
+.dots-text { font-family: var(--font-mono); font-size: 11px; }
 /* Comparison tally: colour plus the count plus a word, never colour alone. */
 .tally { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 6px; font-size: 11px; color: var(--ink-2); }
 .tally-item { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
@@ -121,7 +136,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tally-item.zero { opacity: .5; }
 
 /* ---------- document header ---------- */
-.doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 20px; flex-wrap: wrap; }
+.doc-title { min-width: 0; flex: 1 1 320px; }
+.doc-title h1 { overflow-wrap: anywhere; }
 .doc-title h1 { font-family: var(--font-display); font-weight: 600; font-size: 26px; line-height: 1.2; margin: 0 0 4px; letter-spacing: -.005em; }
 .doc-id { color: var(--ink-3); font-size: 12px; }
 .doc-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
@@ -132,10 +149,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .stages { list-style: none; display: flex; gap: 6px; flex-wrap: wrap; margin: 18px 0 0; padding: 0; }
 .stage { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: var(--radius-pill); border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); background: var(--paper); }
-.stage .st { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
-.stage.done .st { background: var(--ok); }
-.stage.running .st { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
-.stage.failed .st { background: var(--bad); }
+/* The glyph (✓ … ✕ ○ –) and a hidden word carry the state; the colour only repeats it. */
+.stage .st { display: inline-block; min-width: 1em; text-align: center; font-size: 12px; line-height: 1; font-weight: 700; color: var(--ink-3); }
+.stage.done .st { color: var(--ok); }
+.stage.running .st { color: var(--accent); animation: pulse 1s ease-in-out infinite; }
+.stage.failed { border-color: var(--bad); }
+.stage.failed .st { color: var(--bad); }
+.stage.skipped { opacity: .7; }
 .stage .detail { color: var(--ink-3); }
 @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: .55; } }
 
@@ -159,8 +179,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .kpi.unattributed { border-left-color: var(--warn); }
 
 /* ---------- workbench: table + viewer ---------- */
-.workbench { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr); gap: 18px; align-items: start; }
-@media (max-width: 1240px) { .workbench { grid-template-columns: minmax(0, 1fr); } }
+/* The facts table beside the viewer only where both lane columns still fit next to each other; below that
+   the viewer moves under the table (and a click scrolls it into view), which keeps both lanes on screen. */
+.workbench { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(320px, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 1439px) { .workbench { grid-template-columns: minmax(0, 1fr); } }
 .facts-head, .samples-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.003em; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -195,7 +217,14 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .facts-table tr.selected { background: color-mix(in oklab, var(--accent) 12%, var(--paper)); box-shadow: inset 3px 0 0 var(--accent); }
 .facts-table td.val { font-family: var(--font-mono); font-size: 12px; min-width: 96px; }
 .facts-table td.val small { display: block; color: var(--ink-3); font-family: var(--font-body); white-space: normal; }
-.facts-table td.detail { color: var(--ink-3); font-size: 11.5px; min-width: 150px; max-width: 220px; }
+.facts-table td.detail { color: var(--ink-3); font-size: 11.5px; min-width: 120px; max-width: 200px; }
+/* 条件 and 说明 are model prose of any length: clamped to a few lines (the full text is the title), so they
+   cannot push the two lane columns out of view. */
+.facts-table td.cond { min-width: 90px; max-width: 150px; }
+.facts-table .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+.facts-table td.field b { overflow-wrap: anywhere; }
+.facts-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.status + small { display: block; font-size: 11px; color: var(--ink-3); }
 .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; white-space: nowrap; }
 .status::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--neutral); }
 .status.agree::before { background: var(--ok); }
@@ -243,7 +272,7 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .results-table td.cell.ok { box-shadow: inset 3px 0 0 var(--ok); color: var(--ok); }
 .results-table td.cell.warn { box-shadow: inset 3px 0 0 var(--warn); color: var(--warn); }
 .results-table td.cell.empty { color: var(--ink-3); cursor: pointer; }
-.results-table td.cell.empty:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.results-table td.cell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .results-table td.cell.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
 /* One line per sample: the id and label stay on one line, and the merged condition text is clipped with the
    full text one hover away, so a row's height comes from its values and not from the model's prose. */
@@ -263,7 +292,7 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .paper-mark { margin-left: 6px; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); white-space: nowrap; }
 
 /* ---------- page viewer ---------- */
-.viewer { position: sticky; top: 70px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.viewer { scroll-margin-top: 70px; position: sticky; top: 70px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .viewer-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--paper-2); font-size: 12px; flex-wrap: wrap; }
 .viewer-bar .pager { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
 .viewer-bar button { border: 1px solid var(--line-strong); background: var(--paper); border-radius: var(--radius-sm); padding: 2px 8px; }
@@ -291,7 +320,7 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .tooltip code { color: inherit; opacity: .8; }
 
 /* ---------- sample records ---------- */
-.samples { margin-top: var(--gap-section); }
+details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(--gap-section); }
 /* Closed by default: the results table above is the deliverable, and these per-lane records are the
    evidence trail behind it, which a reader opens when a cell needs explaining. */
 .samples > summary { cursor: pointer; list-style: none; }
@@ -343,8 +372,15 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .corpus-view .results-table td.mono small { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
 .intro h1 { font-family: var(--font-display); font-weight: 600; font-size: 32px; line-height: 1.2; margin: 0 0 10px; letter-spacing: -.01em; }
 .intro p { color: var(--ink-2); line-height: 1.7; }
-.toast { position: fixed; right: 20px; bottom: 20px; background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px; z-index: 10; max-width: 420px; }
+.toasts { position: fixed; right: 20px; bottom: 20px; z-index: 10; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: min(420px, calc(100vw - 40px)); }
+.toast { background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px; }
 .toast.error { background: var(--bad); color: #fff; }
+
+/* A link that names no document, or one that could not be read. */
+.missing-state { max-width: 620px; margin: 10vh auto 0; text-align: center; }
+.missing-state h1 { font-family: var(--font-display); font-weight: 600; font-size: 26px; margin: 0 0 10px; }
+.missing-state p { color: var(--ink-2); line-height: 1.7; overflow-wrap: anywhere; }
+.missing-actions { display: flex; gap: 16px; justify-content: center; }
 
 /* ---------- results table: sticky frame ----------
    Twenty field columns scroll horizontally inside .table-wrap (bounded at 70vh, so it scrolls

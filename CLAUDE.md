@@ -127,12 +127,29 @@ this file is the part that is easy to get wrong.
   `test_corpus_strings.py`; if it is intended, re-run `tests/fixtures/corpus/generate.py <data_root>`,
   review the JSON diff, and add the string to `INTENDED_VALUE_CHANGES` with the reason.
 - Coverage target ≥ 80% (`--cov=paperfacts`).
+- The frontend has no JS test runner; `tests/e2e/web_races.py` drives it in headless Chromium against a seeded
+  library with a stub job (`PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py`). Not collected
+  by pytest. A frontend change to routing, polling or layout should keep it passing.
 
 ## Web interface
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
   offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `table`, `fieldpicker`, `tsv`,
   `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
+- Async ownership: the router bumps `state.generation` on every navigation to another view. Every load, poll
+  and finish handler notes it before its first `await` and draws nothing once it has changed; do not add a
+  per-feature "is this still the current document" check instead. Polling retries with backoff and a loop is
+  owned by a token, so it cannot run twice.
+- Progress is the server's: `DocumentSummary.stages` (every `stage_names()` stage) and `runnable`. The
+  frontend never rebuilds a stage list of its own.
+- A results table is a list of columns `{header, head, html(item), text(item)}` (`table.js`); the rendered
+  rows and the clipboard copy are both built from that one list.
+- Controls that re-render their own table carry a `data-focus` key and the re-render goes through
+  `keepFocus`, so keyboard focus survives. Clickable rows and cells are focusable and act on Enter/Space.
+- The HTTP edge (`web/app.py`'s one middleware): Basic auth compared as UTF-8 bytes, a same-origin check
+  on every non-GET request, frame/nosniff headers on every response, and the upload's `Content-Length`
+  checked before its body is read. `/api/jobs` is briefs without logs; finished jobs are pruned to the
+  newest 200.
 - Background jobs run on `web.max_parallel_documents` workers, never two on the same document; a worker
   takes the oldest queued job whose document is free. A `Job` is a frozen value in a lock-guarded dict,
   replaced whole on every transition, so a poller never sees a half-applied state. Submitting the same

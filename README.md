@@ -177,6 +177,12 @@ With `PAPERFACTS_WEB_PASSWORD` set, every route, `/api` included, answers 401 un
 sends HTTP Basic credentials, so an open tunnel cannot upload PDFs or spend tokens. Unset, the app is
 open, which is what a laptop wants. Run it long-lived in tmux.
 
+Either way, a request that changes something (every POST) is refused with 403 when the browser says it
+came from another site (`Sec-Fetch-Site`, `Origin` or `Referer` naming another host; `X-Forwarded-Host`
+is honoured behind a proxy), so a page elsewhere cannot use a logged-in browser to queue work. Every
+response forbids framing and MIME sniffing. An upload carries one PDF and must declare a `Content-Length`
+within `server.max_upload_mb`; a larger one is refused before its body is read.
+
 ### How code reaches the server
 
 Development happens on the Mac, is committed and pushed to GitHub, and pulled on the server. **Do not try
@@ -191,7 +197,9 @@ restarts it there.
 「选择文件」, and processing starts on upload; 「忽略缓存，全部重跑」 next to the drop zone forces every
 stage to run again. Each library entry shows the paper's name and four badges: 一致 (both lanes agreed),
 冲突 (the lanes read different values), 不确定 (the pipeline could not decide) and 缺失 (only one lane
-found it). 「处理全部未完成」 queues every document that can run and is not already compared under the
+found it), plus one dot per pipeline stage with a done/total count. Several PDFs can be dropped or picked
+at once; each is uploaded as its own request. On a narrow screen the list folds into 「文档列表」.
+「处理全部未完成」 queues every document that can run and is not already finished (exported) under the
 current keys, one job each, in library order; a document already queued or running simply gets its
 existing job back, so pressing it twice costs nothing. Documents with neither a PDF nor a cached parse
 are skipped with a reason. Up to `web.max_parallel_documents` (default 3) documents run at once, started in
@@ -207,7 +215,7 @@ library.
 1. The header carries the display name, the document id, 「强制重跑」 and 「重新处理」.
 2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `figures` (读图, skipped unless
    switched on), `extract:mineru`, `extract:paddleocr_vl`, `compare`, `export`.
-3. KPI tiles: the AGREE / CONFLICT / AMBIGUOUS / MISSING counts.
+3. KPI tiles: the 一致 / 冲突 / 不确定 / 缺失 counts.
 4. 结果表（按样品） — the deliverable.
 5. 图中读数, only when the paper's charts were read; see [Reading figures](#reading-figures).
 6. 事实对照 and the page viewer beside it.
@@ -820,6 +828,9 @@ uv run pytest                                              # unit tests; no mode
 uv run pytest --cov=paperfacts                             # coverage target is 80%
 uv run pytest --run-parser                                 # integration; needs both parser environments and their weights
 uv run ruff check src tests runners && uv run ruff format --check src tests runners
+# the web frontend in a real browser (navigation races, polling, layout, keyboard); not part of pytest
+uv run --with playwright python -m playwright install chromium   # once
+PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py
 ```
 
 Line length is 120. Tests never touch a real model or a real LLM: parser output comes from recorded

@@ -3,60 +3,84 @@
 
 import { api } from "./api.js";
 import { escapeHtml, toast } from "./html.js";
-import { LANES, STAGE_LABEL, currentJob, isActive, state } from "./state.js";
+import { JOB_STATUS_LABEL, STAGE_LABEL, STAGE_STATUS, currentJob, isActive, isCurrent, state } from "./state.js";
 
 const POLL_MS = 1500;
+// A dropped request (a tunnel hiccup, a restarting server) is retried with a growing pause; only a run of
+// failures this long gives up, so one bad response cannot freeze the panel at "running".
+const MAX_RETRIES = 5;
+const MAX_BACKOFF_MS = 15000;
+// Each loop owns a token; stopping bumps it, so a tick already waiting on the network cannot schedule
+// another one afterwards and two loops can never run side by side.
+let pollToken = 0;
 let pollTimer = null;
 
-// Draw from the job snapshot (with each step's detail) when one exists; otherwise draw from whatever artifacts are on disk
+// The live job's stages (with each step's detail) when there is one, otherwise the server's reading of the
+// files on disk: the same stages in the same order either way.
 export function renderStages(list) {
   list.innerHTML = "";
-  const stages = currentJob()?.stages ?? summaryStages(state.summary);
+  const stages = currentJob()?.stages ?? state.summary?.stages ?? [];
   for (const stage of stages) {
     const li = document.createElement("li");
+    const status = STAGE_STATUS[stage.status] ?? { label: stage.status, glyph: "?" };
+    const name = STAGE_LABEL[stage.name] ?? stage.name;
     li.className = `stage ${stage.status}`;
-    li.innerHTML = `<span class="st"></span>${escapeHtml(STAGE_LABEL[stage.name] ?? stage.name)}${stage.detail ? ` <span class="detail">${escapeHtml(stage.detail)}</span>` : ""}`;
+    li.title = `${name}：${status.label}${stage.detail ? ` · ${stage.detail}` : ""}`;
+    li.innerHTML =
+      `<span class="st" aria-hidden="true">${status.glyph}</span>${escapeHtml(name)}` +
+      `<span class="visually-hidden">：${escapeHtml(status.label)}</span>` +
+      (stage.detail ? ` <span class="detail">${escapeHtml(stage.detail)}</span>` : "");
     list.append(li);
   }
-}
-
-function summaryStages(summary) {
-  const done = (ok) => (ok ? "done" : "pending");
-  return [
-    ...LANES.map((l) => ({ name: `parse:${l}`, status: done(summary.parsed[l]), detail: "" })),
-    ...LANES.map((l) => ({ name: `extract:${l}`, status: done(summary.extracted[l]), detail: "" })),
-    { name: "compare", status: done(summary.compared), detail: "" },
-  ];
 }
 
 export function renderJobLog(details, pre, statusSpan) {
   const job = currentJob();
   if (!job) { details.classList.add("hidden"); return; }
   details.classList.remove("hidden");
-  statusSpan.textContent = `${job.status}${job.error ? ` · ${job.error}` : ""}`;
-  pre.textContent = job.log.join("\n");
+  statusSpan.textContent = `${JOB_STATUS_LABEL[job.status] ?? job.status}${job.error ? ` · ${job.error}` : ""}`;
+  pre.textContent = (job.log ?? []).join("\n");
   if (isActive(job)) details.open = true;
 }
 
 export const submitRun = (documentId, force) => api(`/api/documents/${documentId}/run?force=${force}`, { method: "POST" });
 
-// Poll until the job ends: onUpdate(job) on every tick, onFinish(job) at the end. Switching documents automatically invalidates this polling loop.
-export function startPolling(jobId, { onUpdate, onFinish }) {
+// Poll until the job ends: onUpdate(job) on every tick, onFinish(job) at the end, onLost() when the job can
+// no longer be read (the server restarted and forgot it, or the network stayed down). A loop belongs to the
+// view that started it: once the router moves on, it stops without drawing anything.
+export function startPolling(jobId, { onUpdate, onFinish, onLost }) {
   stopPolling();
+  const token = pollToken;
+  const generation = state.generation;
+  const live = () => token === pollToken && isCurrent(generation);
+  let failures = 0;
+  const schedule = (ms) => { pollTimer = setTimeout(tick, ms); };
   const tick = async () => {
+    pollTimer = null;
     let job;
     try {
       job = await api(`/api/jobs/${jobId}`);
     } catch (error) {
-      toast(`读取任务失败：${error.message}`, true);
+      if (!live()) return;
+      failures += 1;
+      if (error.status === 404 || failures > MAX_RETRIES) {
+        stopPolling();
+        if (error.status !== 404) toast(`读取任务进度失败：${error.message}`, true);
+        onLost();
+        return;
+      }
+      schedule(Math.min(POLL_MS * 2 ** failures, MAX_BACKOFF_MS));
       return;
     }
-    if (job.document_id !== state.current) return;
+    if (!live()) return;
+    failures = 0;
+    if (job.document_id !== state.current) { stopPolling(); return; }
     state.job = job;
     if (isActive(job)) {
       onUpdate(job);
-      pollTimer = setTimeout(tick, POLL_MS);
+      schedule(POLL_MS);
     } else {
+      stopPolling();
       await onFinish(job);
     }
   };
@@ -64,6 +88,7 @@ export function startPolling(jobId, { onUpdate, onFinish }) {
 }
 
 export function stopPolling() {
+  pollToken += 1;
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
 }
