@@ -288,7 +288,7 @@ uv run paperfacts prompts --profile tco --field thickness          # what the mo
 | `overlay <pdf>` | Draw block boxes onto page images, to check provenance by eye. Needs `parse` |
 | `serve` | Serve the web interface |
 | `fields` | Print the profile's field table (`--profile` for another), so an edit can be checked at a glance |
-| `profiles` | List the profiles in `profiles/` with their maturity, paper/sample field counts, content hash prefix and title. `--check PATH` validates one file instead: it prints the profile's line and any warnings then `ok`, or the error and exits 1 |
+| `profiles` | List the profiles in `profiles/` with their maturity, paper/sample field counts, content hash prefix and title. `--check PATH` validates one file instead: it prints the profile's line and any warnings then `ok`, or every error it finds, one `error:` line each, and exits 1. The listing reads `profiles/` without `config.json`, so it works while that file is broken |
 | `prompts` | Print the rendered inventory, extraction, per-field and matching system prompts of a profile (`--profile`), exactly as the model gets them. `--field NAME` prints the per-field system prompt and that field's line of the question. No model is called |
 
 The flags worth knowing:
@@ -305,10 +305,13 @@ The flags worth knowing:
 - `--profile NAME_OR_PATH` on `run`, `batch`, `export`, `extract`, `compare` and `serve` runs the command
   under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
   after the profile, so a profile file given by path whose name is also a different `profiles/<name>.json` is
-  refused, and the name `paperfacts` (the pre-profile workbook) is reserved. `serve` reads its profile once:
+  refused unless the two files are byte-identical, and the name `paperfacts` (the pre-profile workbook) is
+  reserved. `serve` reads its profile once:
   `/api/health` reports its name and hash, `/api/profile` gives the page its title and copy (the header shows
-  the title, and the paper-level record is named the profile's way), and after the file is edited on disk every new job is refused
-  until the server is restarted. Run **one server per data root**: two servers under different profiles
+  the title, and the paper-level record is named the profile's way), and after any edit to the file on disk --
+  display text included, or a symlink pointed at another file -- every new job is refused until the server is
+  restarted; `/api/health`'s `profile_on_disk_changed` says so first. A file that cannot be read (deleted, or
+  caught mid-save) refuses the job with its own message. Run **one server per data root**: two servers under different profiles
   over the same `data_root` can parse the same document at the same time.
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
   `--jobs 1` is the old one-after-another run.
@@ -603,7 +606,11 @@ The twenty-three shipped fields are aimed at sputtered transparent-conductive-ox
 | `transmittance` | 透光率 | film | numeric | % |
 | `thickness` | 厚度 | film | numeric | nm |
 
-`transmittance` carries a `condition_hint` asking for the wavelength or spectral range; `density` and
+`transmittance` carries a `condition_hint` asking for the wavelength or spectral range, and a `condition_rule`
+that tells the model to always fill it. A field with a `condition_rule` must also give
+`missing_condition_note_zh`, the note a dataset cell whose value came without the condition gets
+(`原文提取结果未注明透光率波长或波段` for `transmittance`): the note is stored in the verdict, so it is profile text
+the comparison key covers, never generated from the display-only `label`; `density` and
 `transmittance` read a bare number as a percent or a fraction, and every other numeric field rejects a
 number with no unit rather than assuming one.
 
@@ -641,7 +648,9 @@ re-reads only them, since each costs minutes of a different model.
   the `figures` stage failed: the paper is still extracted, compared and exported. A request that failed,
   a reply cut off at the token limit (never cached) and an answer that could not be used are asked again
   on the next run -- the last with the cache bypassed -- while the answered panels replay from the LLM cache.
-- **Stored.** `figures/<figure_key>.json` per document. `figure_key` hashes the vision model and its
+- **Stored.** `figures/<profile>/<figure_key>.json` per document: two profiles with the same chart slots and
+  figure fields share a `figure_key`, and each keeps its own file. The TCO profile also reads the flat
+  `figures/<figure_key>.json` files stored before readings were kept per profile. `figure_key` hashes the vision model and its
   sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the film fields' descriptions,
   keywords and units, and the source of `figures.py`, `normalize.py` and `passages.py`. Stored readings are
   shown and exported even when the stage is switched off for a later run. With nothing under the current
@@ -763,7 +772,7 @@ data/
     ├── facts/<backend>.<extractor_key>.json          one lane's sample-level extraction
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated table the web UI reads
-    ├── figures/<figure_key>.json       values read off charts by the opt-in figures stage
+    ├── figures/<profile>/<figure_key>.json   values read off charts by the opt-in figures stage
     ├── exports/<profile>.xlsx          this paper's workbook, written automatically by `run`
     ├── overlays/<backend>/page_*.png   bbox overlays from `overlay`
     └── pages/<dpi>dpi/                 page renders for the web viewer

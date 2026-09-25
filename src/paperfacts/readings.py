@@ -129,6 +129,25 @@ class StoredReadings(FigureReadings):
     profile_fingerprint: str | None = None
 
 
+def stored_figures_path(layout: DataLayout, document_id: str, figure_key: str, profile: str) -> Path | None:
+    """The stored readings file of ``profile`` under ``figure_key``, if there is one: its own directory first,
+    then, for the TCO profile only, the flat file every reading was stored in before the directories."""
+    candidates = [layout.figures_path(document_id, figure_key, profile)]
+    if profile == LEGACY_PROFILE:
+        candidates.append(layout.legacy_figures_path(document_id, figure_key))
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def _older_files(layout: DataLayout, document_id: str, profile: str, current: frozenset[Path]) -> list[Path]:
+    """The profile's readings files under other keys, newest first: its own directory, plus the flat files
+    for the TCO profile."""
+    directories = [layout.figures_dir(document_id, profile)]
+    if profile == LEGACY_PROFILE:
+        directories.append(layout.legacy_figures_dir(document_id))
+    paths = [path for directory in directories if directory.is_dir() for path in directory.glob("*.json")]
+    return sorted((path for path in paths if path not in current), key=lambda path: path.stat().st_mtime, reverse=True)
+
+
 def _belongs(readings: StoredReadings, profile: DomainProfile) -> bool:
     return (readings.profile or LEGACY_PROFILE) == profile.name
 
@@ -142,6 +161,13 @@ def _stored_file(path: Path) -> StoredReadings | None:
     except (OSError, ValueError) as exc:
         logger.warning("stored figure readings at %s are unreadable (%s); ignoring them", path, exc)
         return None
+
+
+def _own_file(path: Path, profile: DomainProfile) -> StoredReadings | None:
+    """A stored file only if ``profile`` read it: a flat file of before the per-profile directories may have been
+    written by another profile sharing the figure_key."""
+    readings = _stored_file(path)
+    return readings if readings is not None and _belongs(readings, profile) else None
 
 
 def _orphaned(readings: FigureReadings, artifact: ParsedArtifact | None) -> frozenset[str]:
@@ -169,15 +195,14 @@ def shown_figures(document_id: str, filename: str, settings: Settings, profile: 
     not have are left out.
     """
     layout = DataLayout(settings.data_root)
-    current = layout.figures_path(document_id, figure_key_for(settings, profile))
-    readings, stale = _stored_file(current), False
-    if readings is None and current.parent.is_dir():
-        older = sorted(
-            (path for path in current.parent.glob("*.json") if path != current),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
+    key = figure_key_for(settings, profile)
+    current = stored_figures_path(layout, document_id, key, profile.name)
+    readings, stale = (None if current is None else _own_file(current, profile)), False
+    if readings is None:
+        keyed = frozenset(
+            {layout.figures_path(document_id, key, profile.name), layout.legacy_figures_path(document_id, key)}
         )
-        for path in older:
+        for path in _older_files(layout, document_id, profile.name, keyed):
             readings = _stored_file(path)
             if readings is not None and _belongs(readings, profile):
                 stale = True
@@ -220,9 +245,11 @@ def read_document_figures(
     asked again. ``force`` re-asks every panel.
     """
     key = figure_key_for(settings, profile)
-    path = DataLayout(settings.data_root).figures_path(document.document_id, key)
+    layout = DataLayout(settings.data_root)
+    path = layout.figures_path(document.document_id, key, profile.name)
     artifact = artifact or figure_artifact(document, settings)
-    previous = None if force else _stored_file(path)
+    stored = None if force else stored_figures_path(layout, document.document_id, key, profile.name)
+    previous = None if stored is None else _own_file(stored, profile)
     if (
         previous is not None
         and previous.complete

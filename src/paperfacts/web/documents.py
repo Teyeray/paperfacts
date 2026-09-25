@@ -151,6 +151,7 @@ class Library:
             extractor_key=self.extractor_key,
             comparison_key=self.comparison_key,
             figure_key=self.figure_key,
+            profile=self.profile.name,
             figures_enabled=self.settings.figures_enabled,
         )
         status = {stage.name: stage.status for stage in stages}

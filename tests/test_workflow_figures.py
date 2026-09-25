@@ -22,7 +22,7 @@ from paperfacts.errors import Cancelled, ConfigError, LlmError, LlmOfflineMiss
 from paperfacts.figures import FigureReadings
 from paperfacts.keys import figure_key_for, figure_profile_fingerprint
 from paperfacts.models import Backend, DocumentInput, NormalizedBBox, PageGeometry, ParsedArtifact
-from paperfacts.profile import DomainProfile
+from paperfacts.profile import DomainProfile, load_profile
 from paperfacts.readings import figure_artifact, read_document_figures, shown_figures
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import run_document
@@ -72,7 +72,7 @@ def store_artifact(document: DocumentInput, settings: Settings, backend: Backend
 
 def figures_file(document: DocumentInput, settings: Settings) -> Path:
     return DataLayout(settings.data_root).figures_path(
-        document.document_id, figure_key_for(settings, shipped_profile())
+        document.document_id, figure_key_for(settings, shipped_profile()), "tco"
     )
 
 
@@ -454,13 +454,71 @@ def test_a_file_from_before_profiles_is_the_tco_profiles_fallback_only(
     current = figures_file(document, settings)
     legacy = json.loads(current.read_text(encoding="utf-8"))
     del legacy["profile"], legacy["profile_fingerprint"]
-    (current.parent / "older0000000.json").write_text(json.dumps(legacy), encoding="utf-8")
+    flat = DataLayout(settings.data_root).legacy_figures_dir(document.document_id)
+    (flat / "older0000000.json").write_text(json.dumps(legacy), encoding="utf-8")
     current.unlink()
 
     view = shown_figures(document.document_id, "paper.pdf", settings, tco_profile)
 
     assert view is not None and view.stale and len(view.rows) == 2
     assert shown_figures(document.document_id, "paper.pdf", settings, make_profile()) is None
+
+
+def test_a_flat_file_under_the_current_key_is_tcos_current_readings_and_is_not_read_again(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    store_artifact(document, settings)
+    readings = read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+    current = figures_file(document, settings)
+    current.rename(DataLayout(settings.data_root).legacy_figures_path(document.document_id, current.stem))
+    client = FakeVisionClient(chart_answer())
+
+    view = shown_figures(document.document_id, "paper.pdf", settings, tco_profile)
+
+    assert view is not None and not view.stale and len(view.rows) == 2
+    assert read_document_figures(document, settings, tco_profile, client).readings == readings.readings
+    assert client.calls == []
+
+
+def test_a_flat_file_another_profile_wrote_is_not_tcos(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile
+):
+    # Before the per-profile directories, a profile sharing TCO's figure_key wrote the same flat file.
+    store_artifact(document, settings)
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+    current = figures_file(document, settings)
+    stored = json.loads(current.read_text(encoding="utf-8"))
+    flat = DataLayout(settings.data_root).legacy_figures_path(document.document_id, current.stem)
+    flat.write_text(json.dumps(stored | {"profile": "twin"}), encoding="utf-8")
+    current.unlink()
+    client = FakeVisionClient(chart_answer())
+
+    assert shown_figures(document.document_id, "paper.pdf", settings, tco_profile) is None
+    read_document_figures(document, settings, tco_profile, client)
+    assert len(client.calls) == 1
+
+
+def test_two_profiles_sharing_a_figure_key_keep_separate_files(
+    document: DocumentInput, settings: Settings, tco_profile: DomainProfile, tmp_path: Path
+):
+    # A copy of TCO under another name: identical figure slots and figure fields, so one figure_key.
+    twin_path = tmp_path / "twin.json"
+    twin_path.write_text(
+        tco_profile.source.read_text(encoding="utf-8").replace('"name": "tco"', '"name": "twin"'), encoding="utf-8"
+    )
+    twin = load_profile(twin_path)
+    assert figure_key_for(settings, twin) == figure_key_for(settings, tco_profile)
+    store_artifact(document, settings)
+    layout = DataLayout(settings.data_root)
+    key = figure_key_for(settings, tco_profile)
+
+    read_document_figures(document, settings, tco_profile, FakeVisionClient(chart_answer()))
+    read_document_figures(document, settings, twin, FakeVisionClient(chart_answer()))
+
+    tco_file = json.loads(layout.figures_path(document.document_id, key, "tco").read_text(encoding="utf-8"))
+    twin_file = json.loads(layout.figures_path(document.document_id, key, "twin").read_text(encoding="utf-8"))
+    assert (tco_file["profile"], twin_file["profile"]) == ("tco", "twin")
+    assert shown_figures(document.document_id, "paper.pdf", settings, twin) is not None
 
 
 def test_a_reading_of_a_field_the_profile_does_not_have_is_left_out(

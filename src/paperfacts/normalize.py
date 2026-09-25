@@ -165,9 +165,8 @@ def parse_number(raw: str, *, range_policy: RangePolicy = "midpoint") -> tuple[f
     if unglued != text:
         notes.append("digits of a formula or unit exponent ignored")
         text = unglued.strip()
-    value, reading = _read(text)
-    if range_policy == "reject" and any(note.endswith(_MIDPOINT) for note in reading):
-        # Only the spellings that read a whole range take a midpoint, so their note is what marks one.
+    value, reading, is_range = _read(text)
+    if range_policy == "reject" and is_range:
         refused = [
             f"{n.removesuffix(_MIDPOINT)} refused (range_policy 'reject')" if n.endswith(_MIDPOINT) else n
             for n in reading
@@ -206,7 +205,9 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
     return text, notes, ""
 
 
-_Reading = tuple[float | None, list[str]]
+# (value, notes, is_range): is_range is set by the spellings that read a whole range as its midpoint, which is
+# what range_policy 'reject' refuses.
+_Reading = tuple[float | None, list[str], bool]
 _MIDPOINT = " → midpoint"
 
 
@@ -219,7 +220,7 @@ def _read(text: str) -> _Reading:
 
 
 def _refuse(reason: str) -> _Reading:
-    return None, [reason]
+    return None, [reason], False
 
 
 def _ratio(text: str) -> _Reading | None:
@@ -236,7 +237,7 @@ def _parenthesised_mantissa(text: str) -> _Reading | None:
     if NUMBER_RE.search(text[match.end() :]):
         return _refuse("numbers outside the scientific notation; ambiguous")
     value = float(_plain(match.group("m"))) * 10 ** int(match.group("e"))
-    return value, ["uncertainty dropped"] if match.group("pm") else []
+    return value, ["uncertainty dropped"] if match.group("pm") else [], False
 
 
 def _leading_parenthesis(text: str) -> _Reading | None:
@@ -254,8 +255,8 @@ def _parenthesised_alternative(text: str) -> _Reading | None:
     rest = _PARENTHESES.sub(" ", text).strip()
     if "(" in rest or ")" in rest:
         return _refuse("unbalanced or nested parentheses; ambiguous")
-    value, reading = _read(rest)
-    return value, ["parenthesized alternative ignored", *reading]
+    value, reading, is_range = _read(rest)
+    return value, ["parenthesized alternative ignored", *reading], is_range
 
 
 def _scientific(text: str) -> _Reading | None:
@@ -269,20 +270,20 @@ def _scientific(text: str) -> _Reading | None:
     if len(matches) == 2:
         between = text[matches[0].end() : matches[1].start()].strip()
         if not NUMBER_RE.search(rest) and _PLUS_MINUS_SIGN.fullmatch(between):
-            return values[0], ["uncertainty dropped"]
+            return values[0], ["uncertainty dropped"], False
         if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
             low, high = values
             if low < high:
-                return (low + high) / 2, [f"range {low:g}-{high:g}{_MIDPOINT}"]
+                return (low + high) / 2, [f"range {low:g}-{high:g}{_MIDPOINT}"], True
             return _refuse("descending range in scientific notation; ambiguous")
     if len(matches) > 1 or NUMBER_RE.search(rest):
         return _refuse("numbers outside the scientific notation; ambiguous")
-    return values[0], []
+    return values[0], [], False
 
 
 def _uncertainty(text: str) -> _Reading | None:
     match = _PLUS_MINUS.match(text)
-    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"])
+    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"], False)
 
 
 def _range(text: str) -> _Reading | None:
@@ -300,7 +301,7 @@ def _range(text: str) -> _Reading | None:
         return _refuse("descending range, or an exponent without its caret; ambiguous")
     unit = second or first
     notes = [f"trailing unit {unit!r} in value ignored"] if unit else []
-    return (low + high) / 2, [*notes, f"range {low:g}-{high:g}{_MIDPOINT}"]
+    return (low + high) / 2, [*notes, f"range {low:g}-{high:g}{_MIDPOINT}"], True
 
 
 def _first_number(text: str) -> _Reading:
@@ -312,7 +313,7 @@ def _first_number(text: str) -> _Reading:
     if not numbers:
         return _refuse("no number found")
     if len(numbers) == 1:
-        return float(_plain(numbers[0])), []
+        return float(_plain(numbers[0])), [], False
     if _JOINED.search(text):
         return _refuse("a range among other numbers; ambiguous")
     if _CONJOINED.search(text):
@@ -323,7 +324,7 @@ def _first_number(text: str) -> _Reading:
         return _refuse("numbers separated by ',', ';' or ':'; ambiguous")
     if _OWN_UNIT.match(gaps[0]):
         return _refuse("a number with its own unit followed by another number; ambiguous")
-    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"]
+    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"], False
 
 
 # Tried in order; the first to claim the text decides. The ratio and parenthesis checks come first because

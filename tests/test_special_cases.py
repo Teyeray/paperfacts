@@ -1,20 +1,23 @@
 """The former field-name special cases, now profile attributes: any profile's field gets them by declaring them."""
 
+import pytest
 from openpyxl import load_workbook
 
 from paperfacts.compare import FieldComparison
 from paperfacts.dataset import DocumentDataset
 from paperfacts.decide import decide
+from paperfacts.errors import ConfigError
 from paperfacts.records import FieldValue
 from paperfacts.workbook import write_dataset
 from support.extraction import make_lane
 from support.profiles import make_profile
 from test_dataset import dataset
 
-_RULE = {
+_RULE_ONLY = {
     "fields.1.condition_hint": "annealing state, e.g. 'as-deposited'",
     "fields.1.condition_rule": "the annealing state",
 }
+_RULE = {**_RULE_ONLY, "fields.1.missing_condition_note_zh": "未注明退火状态"}
 
 
 def _single(name, *, condition=None, raw="120", unit="nm"):
@@ -27,31 +30,22 @@ def _decide(spec, evidence, units):
     return decide(spec, evidence, [comparison], units=units)
 
 
-def test_a_field_with_a_condition_rule_and_no_note_gets_the_generic_note():
-    profile = make_profile({**_RULE, "fields.1.label": "涂层厚度"})
-    spec = profile.by_name["coating_thickness"]
-
-    result = _decide(spec, _single("coating_thickness"), profile.units)
-
-    assert result.value == 120
-    assert "原文提取结果未注明涂层厚度的测量条件" in result.detail
+def test_a_condition_rule_without_its_note_is_refused():
+    # The note is stored in the cell's detail, so it must come from the profile's verdict text, which
+    # comparison_key covers -- never be made up from the label, which no key covers.
+    with pytest.raises(ConfigError, match="field 'coating_thickness': condition_rule needs missing_condition_note_zh"):
+        make_profile(_RULE_ONLY)
 
 
-def test_the_generic_note_falls_back_to_the_field_name_without_a_label():
-    profile = make_profile(_RULE)
+def test_the_profile_note_is_the_cell_note_and_a_label_edit_does_not_change_it():
+    notes = []
+    for label in ("涂层厚度", "膜厚"):
+        profile = make_profile({**_RULE, "fields.1.label": label})
+        notes.append(_decide(profile.by_name["coating_thickness"], _single("coating_thickness"), profile.units).detail)
 
-    result = _decide(profile.by_name["coating_thickness"], _single("coating_thickness"), profile.units)
-
-    assert "原文提取结果未注明coating_thickness的测量条件" in result.detail
-
-
-def test_a_custom_note_replaces_the_generic_one():
-    profile = make_profile({**_RULE, "fields.1.missing_condition_note_zh": "未注明退火状态"})
-
-    result = _decide(profile.by_name["coating_thickness"], _single("coating_thickness"), profile.units)
-
-    assert "未注明退火状态" in result.detail
-    assert "测量条件" not in result.detail
+    assert "未注明退火状态" in notes[0]
+    assert notes[0] == notes[1]
+    assert "涂层厚度" not in notes[0]
 
 
 def test_no_note_when_the_condition_is_stated_or_the_field_has_no_rule():
@@ -88,6 +82,21 @@ def test_display_format_scientific_formats_that_fields_cells(tmp_path):
         columns = {cell.value: cell.column for cell in sheet[1]}
         assert sheet.cell(2, columns["coating_thickness"]).number_format == "0.0000E+00"
         assert sheet.cell(2, columns["precursor_purity"]).number_format == "0.############"
+
+
+def test_the_tco_workbook_shows_exactly_resistance_and_resistivity_in_scientific_format(tmp_path, tco_profile):
+    numeric = [spec.name for spec in tco_profile.fields if spec.kind == "numeric"]
+    row = {"document_id": "d", "filename": "p.pdf", "sample_id": "S"} | dict.fromkeys(numeric, 1.5)
+    output = tmp_path / "dataset.xlsx"
+
+    write_dataset([DocumentDataset("d", "p.pdf", row, (row,), (), "ek", "ck")], output, tco_profile)
+
+    for title in ("论文数据", "样品数据"):
+        sheet = load_workbook(output)[title]
+        scientific = {
+            header.value for header, cell in zip(sheet[1], sheet[2], strict=True) if "E+00" in cell.number_format
+        }
+        assert scientific == {"resistance", "resistivity"}
 
 
 def test_a_paper_row_without_samples_names_the_paper_level_fields_generically():

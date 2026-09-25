@@ -19,7 +19,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import cache, cached_property
 from pathlib import Path
@@ -187,19 +187,33 @@ def load_profile(path: Path) -> DomainProfile:
     return _load_resolved(path.resolve())
 
 
+# sha256 of the bytes each loaded file was parsed from, by resolved path. Beside the profile rather than in it:
+# the bytes include the display text, which content_hash and every key leave out on purpose.
+_FILE_SHA256: dict[Path, str] = {}
+
+
+def loaded_file_sha256(profile: DomainProfile) -> str | None:
+    """The sha256 of the file bytes ``profile`` was parsed from; None for a profile not loaded from a file."""
+    return _FILE_SHA256.get(profile.source)
+
+
 @cache
 def _load_resolved(path: Path) -> DomainProfile:
     if not path.is_file():
         raise ConfigError(f"no profile at {path}")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
     except OSError as exc:
         # An unreadable file (permissions, a directory race) is a configuration problem naming the file, like a
         # missing one, not a traceback from the first stage that needed the profile.
         raise ConfigError(f"cannot read the profile at {path}: {exc}") from exc
+    try:
+        data = json.loads(raw.decode("utf-8"))
     except ValueError as exc:
         raise ConfigError(f"{path} is not valid JSON: {exc}") from exc
-    return parse_profile(data, path)
+    profile = parse_profile(data, path)
+    _FILE_SHA256[path] = hashlib.sha256(raw).hexdigest()
+    return profile
 
 
 _TOP_KEYS = (
@@ -217,40 +231,64 @@ _TOP_KEYS = (
     "ui",
     "fields",
 )
+_REQUIRED_KEYS = ("format", "name", "groups", "prompt", "retrieval", "fields")
 
 
 def parse_profile(data: Any, source: Path) -> DomainProfile:
-    """A profile from its parsed JSON. ``source`` names it in errors, and its stem must be the profile's name."""
+    """A profile from its parsed JSON. ``source`` names it in errors, and its stem must be the profile's name.
+
+    Every section is checked even after one fails, and each field on its own, so one ConfigError names every
+    problem, one per line: an author fixing a file by hand should not learn about them one run at a time."""
     where = str(source)
     if not isinstance(data, Mapping):
         raise ConfigError(f"{where} must hold a JSON object, got {type(data).__name__}")
-    _refuse_unknown(data, _TOP_KEYS, where)
-    for key in ("format", "name", "groups", "prompt", "retrieval", "fields"):
-        if key not in data:
-            raise ConfigError(f"{where}: missing key {key!r}")
-    if data["format"] != PROFILE_FORMAT:
-        raise ConfigError(f"{where}: format must be {PROFILE_FORMAT}, got {data['format']!r}")
-    name = data["name"]
-    if not isinstance(name, str) or not IDENTIFIER.match(name):
-        raise ConfigError(f"{where}: name must match {IDENTIFIER.pattern}, got {name!r}")
-    if name != source.stem:
-        raise ConfigError(f"{where}: name {name!r} must equal the file name {source.stem!r}")
+    errors: list[str] = []
+
+    def checked[T](step: Callable[[], T]) -> T | None:
+        try:
+            return step()
+        except ConfigError as exc:
+            errors.append(str(exc))
+            return None
+
+    checked(lambda: _refuse_unknown(data, _TOP_KEYS, where))
+    errors += [f"{where}: missing key {key!r}" for key in _REQUIRED_KEYS if key not in data]
+    if "format" in data and data["format"] != PROFILE_FORMAT:
+        errors.append(f"{where}: format must be {PROFILE_FORMAT}, got {data['format']!r}")
+    name = data.get("name")
+    if "name" in data and (not isinstance(name, str) or not IDENTIFIER.fullmatch(name)):
+        errors.append(f"{where}: name must match {IDENTIFIER.pattern}, got {name!r}")
+    elif "name" in data and name != source.stem:
+        errors.append(f"{where}: name {name!r} must equal the file name {source.stem!r}")
     maturity = data.get("maturity", "example")
     if maturity not in get_args(Maturity):
-        raise ConfigError(f"{where}: maturity must be one of {', '.join(get_args(Maturity))}, got {maturity!r}")
+        errors.append(f"{where}: maturity must be one of {', '.join(get_args(Maturity))}, got {maturity!r}")
 
-    groups = _groups(data["groups"], where)
-    units = load_units(data.get("units", {}), where)
-    fields = _fields(data["fields"], {group.name: group.level for group in groups}, units, where)
-    prompt = _text_record(PromptSlots, data["prompt"], f"{where}: prompt", slot=True)
-    _check_prompt_keys(prompt, f"{where}: prompt")
+    groups = checked(lambda: _groups(data["groups"], where)) if "groups" in data else None
+    units = checked(lambda: load_units(data.get("units", {}), where))
+    fields = None
+    if groups is not None and "fields" in data:
+        levels = {group.name: group.level for group in groups}
+        fields = checked(lambda: _fields(data["fields"], levels, units, where, errors))
+    prompt = None
+    if "prompt" in data:
+        prompt = checked(lambda: _text_record(PromptSlots, data["prompt"], f"{where}: prompt", slot=True))
+    if prompt is not None:
+        checked(lambda: _check_prompt_keys(prompt, f"{where}: prompt"))
     figures = None
     if data.get("figures") is not None:
-        figures = _text_record(FigureSlots, data["figures"], f"{where}: figures", slot=True)
-    if any(spec.figure_readable for spec in fields) != (figures is not None):
-        raise ConfigError(f"{where}: figures must be given exactly when some field is figure_readable")
-    retrieval = _retrieval(data["retrieval"], f"{where}: retrieval")
-    ui = _text_record(UiCopy, data.get("ui", {}), f"{where}: ui", slot=False)
+        figures = checked(lambda: _text_record(FigureSlots, data["figures"], f"{where}: figures", slot=True))
+    if fields is not None and any(spec.figure_readable for spec in fields) != (data.get("figures") is not None):
+        errors.append(f"{where}: figures must be given exactly when some field is figure_readable")
+    retrieval = checked(lambda: _retrieval(data["retrieval"], f"{where}: retrieval")) if "retrieval" in data else None
+    ui = checked(lambda: _text_record(UiCopy, data.get("ui", {}), f"{where}: ui", slot=False))
+    title_zh = checked(lambda: _display_text(data, "title_zh", name, where))
+    description_zh = checked(lambda: _display_text(data, "description_zh", "", where))
+    if errors:
+        raise ConfigError("\n".join(errors))
+    # Every step above succeeded, so none of these is None; the asserts only tell the type checker so.
+    assert groups is not None and units is not None and fields is not None and prompt is not None
+    assert retrieval is not None and ui is not None and title_zh is not None and description_zh is not None
 
     material = {
         "groups": [[group.name, group.level] for group in groups],
@@ -262,9 +300,9 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     }
     return DomainProfile(
         name=name,
-        title_zh=_display_text(data, "title_zh", name, where),
+        title_zh=title_zh,
         maturity=maturity,
-        description_zh=_display_text(data, "description_zh", "", where),
+        description_zh=description_zh,
         groups=groups,
         fields=fields,
         prompt=prompt,
@@ -301,7 +339,7 @@ def _groups(entries: Any, where: str) -> tuple[GroupSpec, ...]:
             raise ConfigError(f"{at} must be an object, got {type(entry).__name__}")
         _refuse_unknown(entry, valid, at)
         name, level, label = entry.get("name"), entry.get("level"), entry.get("label_zh", "")
-        if not isinstance(name, str) or not IDENTIFIER.match(name):
+        if not isinstance(name, str) or not IDENTIFIER.fullmatch(name):
             raise ConfigError(f"{at}: name must match {IDENTIFIER.pattern}, got {name!r}")
         if level not in get_args(FieldLevel):
             raise ConfigError(f"{at}: level must be one of {', '.join(get_args(FieldLevel))}, got {level!r}")
@@ -315,7 +353,11 @@ def _groups(entries: Any, where: str) -> tuple[GroupSpec, ...]:
     return tuple(groups)
 
 
-def _fields(entries: Any, levels: Mapping[str, FieldLevel], units: UnitRegistry, where: str) -> tuple[FieldSpec, ...]:
+def _fields(
+    entries: Any, levels: Mapping[str, FieldLevel], units: UnitRegistry | None, where: str, errors: list[str]
+) -> tuple[FieldSpec, ...] | None:
+    """The field table, or None when some entry is invalid; each invalid entry adds its own line to ``errors``.
+    Without ``units`` (their section failed) canonical units are not checked against them."""
     if not isinstance(entries, list):
         raise ConfigError(f"{where}: fields must be a list, got {type(entries).__name__}")
     if len(entries) > MAX_FIELDS:
@@ -327,23 +369,39 @@ def _fields(entries: Any, levels: Mapping[str, FieldLevel], units: UnitRegistry,
             len(entries),
         )
     specs: list[FieldSpec] = []
+    failed = False
     for index, entry in enumerate(entries):
-        spec = field_spec(entry, index, where, levels)
-        at = f"{where}: field {spec.name!r}"
-        if not IDENTIFIER.match(spec.name):
-            raise ConfigError(f"{at}: name must match {IDENTIFIER.pattern}")
-        if spec.name in RESERVED_FIELD_NAMES:
-            raise ConfigError(
-                f"{at}: the name is reserved; reserved names are {', '.join(sorted(RESERVED_FIELD_NAMES))}"
-            )
+        try:
+            spec = _field(entry, index, levels, units, where)
+        except ConfigError as exc:
+            errors.append(str(exc))
+            failed = True
+            continue
         if any(other.name == spec.name for other in specs):
-            raise ConfigError(f"{where}: fields has more than one entry named {spec.name!r}")
-        if spec.kind == "numeric" and spec.canonical_unit is not None:
-            units.check(spec.canonical_unit, at)
+            errors.append(f"{where}: fields has more than one entry named {spec.name!r}")
+            failed = True
         specs.append(spec)
-    if not any(spec.is_sample_level for spec in specs):
+    if not any(spec.is_sample_level for spec in specs) and not failed:
         raise ConfigError(f"{where}: fields needs at least one field in a group with level 'sample'")
-    return tuple(specs)
+    return None if failed else tuple(specs)
+
+
+def _field(
+    entry: Any, index: int, levels: Mapping[str, FieldLevel], units: UnitRegistry | None, where: str
+) -> FieldSpec:
+    spec = field_spec(entry, index, where, levels)
+    at = f"{where}: field {spec.name!r}"
+    if not IDENTIFIER.fullmatch(spec.name):
+        raise ConfigError(f"{at}: name must match {IDENTIFIER.pattern}")
+    if spec.name in RESERVED_FIELD_NAMES:
+        raise ConfigError(f"{at}: the name is reserved; reserved names are {', '.join(sorted(RESERVED_FIELD_NAMES))}")
+    if spec.condition_rule is not None and spec.missing_condition_note_zh is None:
+        # The note is what a dataset cell without the condition says. Built from the label instead, it would be
+        # display text stored inside a verdict, which no key covers.
+        raise ConfigError(f"{at}: condition_rule needs missing_condition_note_zh, the note a cell without it gets")
+    if spec.kind == "numeric" and spec.canonical_unit is not None and units is not None:
+        units.check(spec.canonical_unit, at)
+    return spec
 
 
 def _text_record[T](cls: type[T], data: Any, where: str, *, slot: bool) -> T:
@@ -378,7 +436,7 @@ def _check_prompt_keys(prompt: PromptSlots, where: str) -> None:
     """The two JSON keys the model is told to emit must be plain identifiers, distinct, and not "samples"."""
     for key in ("paper_key", "no_samples_key"):
         value = getattr(prompt, key)
-        if not IDENTIFIER.match(value):
+        if not IDENTIFIER.fullmatch(value):
             raise ConfigError(f"{where}: {key} must match {IDENTIFIER.pattern}, got {value!r}")
         if value == "samples":
             raise ConfigError(f"{where}: {key} cannot be 'samples', which the answer already uses")

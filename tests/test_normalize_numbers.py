@@ -8,9 +8,14 @@ reading must leave a note** (so it's traceable in provenance), and **an unreadab
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
-from paperfacts.normalize import parse_number
+from paperfacts.normalize import normalize_field, parse_number
+from paperfacts.units import BUILTIN_UNITS
+from support.extraction import make_field
+from support.profiles import shipped_profile
 
 # ---- Scientific notation ---------------------------------------------------------------------
 
@@ -101,6 +106,26 @@ def test_a_range_under_reject_gives_no_scalar_and_says_why(raw):
     assert value is None
     assert "refused (range_policy 'reject')" in note
     assert "midpoint" not in note
+
+
+@pytest.mark.parametrize("policy", ["reject", "midpoint"])
+def test_number_words_under_either_range_policy(policy):
+    # "two to three" is words containing numbers, never read as a range (records.spell_number_word), so no
+    # policy gives it a value; a single number word is one value, which reject has no reason to refuse.
+    spec = dataclasses.replace(shipped_profile().by_name["thickness"], range_policy=policy)
+
+    words_range = normalize_field(make_field("thickness", "two to three", unit_raw="nm"), spec, BUILTIN_UNITS)
+    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, BUILTIN_UNITS)
+
+    assert words_range.value is None
+    assert "midpoint" not in (words_range.normalization_note or "")
+    assert one_word.value == 2.0
+
+
+def test_a_range_behind_a_parenthesised_alternative_is_refused_under_reject():
+    value, note = parse_number("10-20 (30)", range_policy="reject")
+
+    assert value is None and "refused (range_policy 'reject')" in note
 
 
 def test_reject_leaves_everything_that_is_not_a_range_alone():

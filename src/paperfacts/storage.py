@@ -15,7 +15,7 @@ one shows every intermediate state of one paper:
     ├── facts/<backend>.<extractor_key>.json           one lane's extraction, the model's own wording
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated per-sample table, for the web UI
-    ├── figures/<figure_key>.json                  values a vision model read off charts (opt-in stage)
+    ├── figures/<profile>/<figure_key>.json        values a vision model read off charts (opt-in stage)
     ├── overlays/<backend>/page_000.png                bbox overlays
     └── pages/<dpi>dpi/page_000.png                    page renders for the web viewer
 
@@ -95,8 +95,20 @@ class DataLayout:
     def comparison_path(self, document_id: str, extractor_key: str, comparison_key: str) -> Path:
         return self.doc_dir(document_id) / "comparisons" / f"{extractor_key}.{comparison_key}.json"
 
-    def figures_path(self, document_id: str, figure_key: str) -> Path:
-        return self.doc_dir(document_id) / "figures" / f"{figure_key}.json"
+    def figures_path(self, document_id: str, figure_key: str, profile: str) -> Path:
+        # Per profile: two profiles with the same chart slots and figure fields share a figure_key, and one file
+        # would be re-tagged by whichever wrote it last.
+        return self.figures_dir(document_id, profile) / f"{figure_key}.json"
+
+    def figures_dir(self, document_id: str, profile: str) -> Path:
+        return self.legacy_figures_dir(document_id) / profile
+
+    def legacy_figures_dir(self, document_id: str) -> Path:
+        """Where readings were stored before they were kept per profile, all of them under the TCO profile."""
+        return self.doc_dir(document_id) / "figures"
+
+    def legacy_figures_path(self, document_id: str, figure_key: str) -> Path:
+        return self.legacy_figures_dir(document_id) / f"{figure_key}.json"
 
     def overlay_dir(self, document_id: str, backend: Backend) -> Path:
         return self.doc_dir(document_id) / "overlays" / backend

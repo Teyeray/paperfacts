@@ -380,6 +380,14 @@ else
     ok "tests green"
 fi
 
+# ---------------------------------------------------------------- configuration preflight
+# Run even with --skip-tests: a config.json the service cannot read would take it down at the restart, and
+# the suite never reads this checkout's own config.json and .env the way the service does.
+info "preflight: the service's settings load"
+.venv/bin/python -c "from paperfacts.config import Settings; Settings.from_env()" \
+    || die "config.json or .env does not load (error above); the service was not restarted"
+ok "settings load"
+
 # ---------------------------------------------------------------- in-flight work
 # Jobs live only in the service's memory: a restart cancels everything queued and kills the
 # running job (its stage artifacts stay on disk, so a re-queue resumes from the cache). Only a job

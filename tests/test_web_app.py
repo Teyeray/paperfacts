@@ -135,6 +135,7 @@ def test_health_reports_the_model_and_the_profile_that_will_be_used(client: Test
         "model": "fake-model",
         "profile": "tco",
         "profile_hash": tco_profile.content_hash[:12],
+        "profile_on_disk_changed": False,
     }
 
 
@@ -769,3 +770,88 @@ def test_the_pipeline_runner_refuses_a_job_once_the_profile_file_changed_on_disk
         run(job, lambda stage, status, detail="": None)
     assert "请重启服务器" in str(refused.value)
     assert len(calls) == 1
+
+
+def _demo_file(path: Path, changes: dict | None = None) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(profile_data(changes), ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _job(document_id: str) -> Job:
+    return Job(job_id="job-1", document_id=document_id, force=False, created_at="2026-01-01T00:00:00+00:00")
+
+
+def _no_mark(stage: str, status: str, detail: str = "") -> None:
+    pass
+
+
+def test_a_display_only_edit_is_refused_too(monkeypatch, settings: Settings, tmp_path: Path, registered):
+    """The content hash leaves display text out, but the server keeps showing the text it started with: every
+    byte of the file counts."""
+    path = _demo_file(tmp_path / "profiles" / "demo.json")
+    profile = load_profile(path)
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: None)
+    run = pipeline_runner(settings, profile, Library(settings, profile))
+    _demo_file(path, {"title_zh": "改过的标题"})
+
+    assert load_profile(path) is profile  # the process still holds the text it started with
+    with pytest.raises(ConfigError, match="profile changed on disk"):
+        run(_job(registered), _no_mark)
+
+
+@pytest.mark.parametrize("damage", ["delete", "unreadable"])
+def test_a_profile_file_that_cannot_be_read_refuses_the_job_with_its_own_message(
+    monkeypatch, settings: Settings, tmp_path: Path, registered, damage: str
+):
+    path = _demo_file(tmp_path / "profiles" / "demo.json")
+    profile = load_profile(path)
+    calls: list[object] = []
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: calls.append(args))
+    run = pipeline_runner(settings, profile, Library(settings, profile))
+    if damage == "delete":
+        path.unlink()
+    else:
+
+        def refuse(self, *args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "read_bytes", refuse)
+
+    with pytest.raises(ConfigError, match="cannot read the profile file") as refused:
+        run(_job(registered), _no_mark)
+    assert "无法读取领域配置文件" in str(refused.value)
+    assert "changed on disk" not in str(refused.value)
+    assert calls == []
+
+
+def test_a_retargeted_symlink_is_noticed(monkeypatch, settings: Settings, tmp_path: Path, registered):
+    first = _demo_file(tmp_path / "v1" / "demo.json")
+    second = _demo_file(tmp_path / "v2" / "demo.json", {"prompt.domain_subject": "edited"})
+    link = tmp_path / "demo.json"
+    link.symlink_to(first)
+    linked = dataclasses.replace(settings, profile=str(link))
+    profile = load_profile(link)
+    monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: None)
+    run = pipeline_runner(linked, profile, Library(linked, profile))
+    run(_job(registered), _no_mark)
+
+    link.unlink()
+    link.symlink_to(second)
+
+    with pytest.raises(ConfigError, match="profile changed on disk"):
+        run(_job(registered), _no_mark)
+
+
+def test_health_says_when_the_profile_file_changed_on_disk(settings: Settings, tmp_path: Path):
+    path = _demo_file(tmp_path / "profiles" / "demo.json")
+    profile = load_profile(path)
+    client = TestClient(create_app(settings, profile=profile, jobs=JobManager(RecordingRunner(), stage_names())))
+
+    before = client.get("/api/health").json()["profile_on_disk_changed"]
+    _demo_file(path, {"description_zh": "只改了说明"})
+    after = client.get("/api/health").json()["profile_on_disk_changed"]
+    path.unlink()
+    gone = client.get("/api/health").json()["profile_on_disk_changed"]
+
+    assert (before, after, gone) == (False, True, True)

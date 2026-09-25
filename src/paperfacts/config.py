@@ -225,9 +225,13 @@ def load_config(path: Path) -> ConfigDocument:
         if key in data:
             # Loud rather than ignored: a table left here looks live while every run reads the profile's, so an
             # edit to it would silently do nothing.
+            # Imported here: profile.py imports this module. Its rule, so a profile given as a path is named as one.
+            from paperfacts.profile import profile_path
+
             profile = data["profile"] if isinstance(data.get("profile"), str) else "<name>"
             raise ConfigError(
-                f"{path}: {key} moved to profiles/{profile}.json; delete {key!r} from {path} and edit it there"
+                f"{path}: {key} moved to {profile_path(Settings(profile=profile))}; delete {key!r} from {path} and "
+                "edit it there"
             )
     return ConfigDocument(data=data, path=path)
 
