@@ -22,7 +22,7 @@ import pytest
 from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
 from paperfacts.fields import FIELD_SPECS
-from paperfacts.keys import extractor_key
+from paperfacts.keys import ExtractionOptions, extractor_key
 from paperfacts.prompts import field_system_prompt, inventory_system_prompt
 from support.extraction import make_artifact
 from support.factories import make_block
@@ -518,8 +518,10 @@ def test_the_inventory_effort_is_stored_in_the_extractor_key():
 
     lane = extract(client, inventory_reasoning_effort="none")
 
-    assert lane.extractor_key == extractor_key(client.model, mode="passage", inventory_reasoning_effort="none")
-    assert lane.extractor_key != extractor_key(client.model, mode="passage")
+    assert lane.extractor_key == extractor_key(
+        ExtractionOptions(client.model, mode="passage", inventory_reasoning_effort="none")
+    )
+    assert lane.extractor_key != extractor_key(ExtractionOptions(client.model, mode="passage"))
 
 
 # ---- the mode itself ------------------------------------------------------------------------------
@@ -532,8 +534,8 @@ def test_passage_mode_stores_a_different_extractor_key_than_document_mode():
 
     lane = extract(client)
 
-    assert lane.extractor_key == extractor_key(client.model, mode="passage")
-    assert lane.extractor_key != extractor_key(client.model, mode="document")
+    assert lane.extractor_key == extractor_key(ExtractionOptions(client.model, mode="passage"))
+    assert lane.extractor_key != extractor_key(ExtractionOptions(client.model, mode="document"))
 
 
 def test_an_unknown_mode_is_rejected_before_any_call_is_made():

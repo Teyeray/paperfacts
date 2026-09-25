@@ -43,7 +43,7 @@ from paperfacts.config import (
 from paperfacts.errors import ContextBudgetError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import extractor_key, schema_fingerprint
+from paperfacts.keys import ExtractionOptions, extractor_key, schema_fingerprint
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
 from paperfacts.normalize import drop_implausible, normalize_key
@@ -169,6 +169,11 @@ def extract_lane(
     request exactly as the client builds it, ``None`` sends that question with no such parameter at all,
     a value sends that effort. It does change what is sent, so it is in ``extractor_key``. Both lanes get
     the same value, so the disagreement signal stays a comparison of two identically-asked lanes.
+
+    Everything that shapes a request is gathered into one :class:`ExtractionOptions` here, read from the
+    client and the arguments, and that object alone both drives the questions and names the stored lane:
+    the key recorded on the lane is the one :func:`paperfacts.keys.extractor_key_for` computes from the
+    settings the client was built from.
     """
     if passes < 1:
         raise ValueError(f"passes must be at least 1, got {passes}")
@@ -176,6 +181,17 @@ def extract_lane(
         raise ValueError(f"concurrency must be at least 1, got {concurrency}")
     if mode not in EXTRACTION_MODES:
         raise ValueError(f"unknown extraction mode: {mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
+    options = ExtractionOptions(
+        model=client.model,
+        mode=mode,
+        passes=passes,
+        temperature=client.temperature,
+        max_tokens=client.max_tokens,
+        reasoning_effort=client.reasoning_effort,
+        inventory_reasoning_effort=inventory_reasoning_effort,
+        candidate_limit=candidate_limit,
+        context_tokens=context_tokens,
+    )
     blocks = informative_blocks(artifact.blocks)
     document = build_extraction_document(artifact) if mode == "document" else None
 
@@ -194,14 +210,7 @@ def extract_lane(
     inventory = (
         None
         if document is not None
-        else _take_inventory(
-            blocks,
-            client,
-            backend=artifact.backend,
-            context_tokens=context_tokens,
-            inventory_reasoning_effort=inventory_reasoning_effort,
-            refresh=refresh,
-        )
+        else _take_inventory(blocks, client, options, backend=artifact.backend, refresh=refresh)
     )
     if inventory is not None:
         # One call, counted once: charging it to every pass would misreport what the lane cost.
@@ -213,15 +222,14 @@ def extract_lane(
         cache_salt = "" if index == 0 else f"pass-{index}"
         if inventory is None:
             records, pass_usage, text = _extract_whole_document(
-                document, client, context_tokens=context_tokens, refresh=refresh, cache_salt=cache_salt
+                document, client, options, refresh=refresh, cache_salt=cache_salt
             )
         else:
             records, pass_usage, text = _extract_passages(
                 blocks,
                 client,
+                options,
                 inventory=inventory,
-                context_tokens=context_tokens,
-                candidate_limit=candidate_limit,
                 concurrency=concurrency,
                 refresh=refresh,
                 cache_salt=cache_salt,
@@ -234,16 +242,7 @@ def extract_lane(
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,
-        extractor_key=extractor_key(
-            client.model,
-            passes=passes,
-            mode=mode,
-            temperature=client.temperature,
-            max_tokens=client.max_tokens,
-            reasoning_effort=client.reasoning_effort,
-            inventory_reasoning_effort=inventory_reasoning_effort,
-            candidate_limit=candidate_limit,
-        ),
+        extractor_key=extractor_key(options),
         model=client.model,
         schema_version=schema_fingerprint(),
         target=records.target,
@@ -263,15 +262,15 @@ def extract_lane(
 def _extract_whole_document(
     document: ExtractionDocument,
     client: LlmClient,
+    options: ExtractionOptions,
     *,
-    context_tokens: int,
     refresh: bool,
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
     """Document mode: one question carrying the whole filtered paper."""
     system = extraction_system_prompt()
     user = extraction_user_prompt(document.markdown)
-    _check_context_budget(system, user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+    _check_context_budget(system, user, options)
     response, text, usage = complete_validated(
         client,
         ExtractionResponse,
@@ -307,18 +306,17 @@ class SampleInventory:
     source_ids: frozenset[str]
 
 
-def _budget_chars(client: LlmClient, context_tokens: int) -> int:
+def _budget_chars(options: ExtractionOptions) -> int:
     """How much rendered markdown one question may carry, once the reply and the prompt are paid for."""
-    return int(max(context_tokens - client.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
+    return int(max(options.context_tokens - options.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
 
 
 def _take_inventory(
     blocks: Sequence[SourceBlock],
     client: LlmClient,
+    options: ExtractionOptions,
     *,
     backend: Backend,
-    context_tokens: int,
-    inventory_reasoning_effort: InventoryReasoningEffort,
     refresh: bool,
 ) -> SampleInventory:
     """Ask which samples exist -- once per lane.
@@ -326,10 +324,10 @@ def _take_inventory(
     The salt is empty, the salt pass 0 would have used, so a lane re-run with more passes still hits the
     inventory entry the earlier run cached.
     """
-    selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(client, context_tokens))
+    selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(options))
     system = inventory_system_prompt()
     user = inventory_user_prompt(render_markdown(selection))
-    _check_context_budget(system, user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+    _check_context_budget(system, user, options)
     response, raw_text, usage = complete_validated(
         client,
         InventoryResponse,
@@ -338,7 +336,7 @@ def _take_inventory(
         repair=lambda previous, error: repair_prompt(user, previous, error),
         refresh=refresh,
         cache_salt="",
-        reasoning_effort=inventory_reasoning_effort,
+        reasoning_effort=options.inventory_reasoning_effort,
     )
     logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(response.samples), len(selection))
     return SampleInventory(
@@ -352,16 +350,15 @@ def _take_inventory(
 def _extract_passages(
     blocks: Sequence[SourceBlock],
     client: LlmClient,
+    options: ExtractionOptions,
     *,
     inventory: SampleInventory,
-    context_tokens: int,
-    candidate_limit: int,
     concurrency: int,
     refresh: bool,
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
     """Passage mode, one pass: one question per field against the lane's single inventory."""
-    budget_chars = _budget_chars(client, context_tokens)
+    budget_chars = _budget_chars(options)
     usage: dict[str, int] = {}
 
     sample_list = _render_sample_list(inventory.response.samples)
@@ -383,7 +380,7 @@ def _extract_passages(
             dropped.append(f"{spec.name}: the paper deposits no TCO film of its own, so it was not asked about")
             continue
         candidates = fit_budget(
-            candidate_blocks(spec, blocks, limit=candidate_limit, sample_blocks=sample_blocks),
+            candidate_blocks(spec, blocks, limit=options.candidate_limit, sample_blocks=sample_blocks),
             budget_chars=budget_chars,
         )
         if not candidates:
@@ -392,7 +389,7 @@ def _extract_passages(
             dropped.append(f"{spec.name}: no block in this lane mentions it, so it was not asked about")
             continue
         field_user = field_user_prompt(spec, sample_list, render_markdown(candidates))
-        _check_context_budget(field_system, field_user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+        _check_context_budget(field_system, field_user, options)
         questions.append((spec, tuple(candidates), field_user))
 
     def ask(question: tuple[FieldSpec, tuple[SourceBlock, ...], str]) -> tuple[FieldHarvest, str, dict[str, int]]:
@@ -589,8 +586,9 @@ def passage_records(
     )
 
 
-def _check_context_budget(system: str, user: str, *, context_tokens: int, reply_tokens: int) -> None:
+def _check_context_budget(system: str, user: str, options: ExtractionOptions) -> None:
     """Fail before spending money when the prompt cannot fit, instead of letting the API truncate it."""
+    context_tokens, reply_tokens = options.context_tokens, options.max_tokens
     estimate = int((len(system) + len(user)) / CHARS_PER_TOKEN) + 1
     budget = context_tokens - reply_tokens
     if estimate > budget:

@@ -22,7 +22,7 @@ import pytest
 
 from paperfacts.compare import ComparisonCounts
 from paperfacts.config import Settings
-from paperfacts.keys import extractor_key
+from paperfacts.keys import ExtractionOptions, extractor_key
 from paperfacts.models import BACKENDS, DocumentInput
 from paperfacts.storage import write_text_atomic
 from paperfacts.web.documents import Library
@@ -248,7 +248,9 @@ def test_an_extraction_from_another_model_does_not_count_as_extracted(library: L
     If switching models still showed "already extracted", the user would be judging the old
     model's results without knowing it.
     """
-    seed_extraction(library, "mineru", extractor_key=extractor_key("some-other-model"))
+    seed_extraction(
+        library, "mineru", extractor_key=extractor_key(ExtractionOptions("some-other-model", mode="document"))
+    )
 
     assert library.summary(DOC_KEY).extracted["mineru"] is False
     assert library.extraction(DOC_KEY, "mineru") is None

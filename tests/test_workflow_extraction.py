@@ -9,6 +9,7 @@ that leaks through is invisible in behaviour and only shows up on the bill. The 
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -17,10 +18,12 @@ import pytest
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError
-from paperfacts.keys import comparison_key, extractor_key
+from paperfacts.keys import ExtractionOptions, comparison_key, extractor_key, extractor_key_for
 from paperfacts.llm import OpenAICompatibleClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.parsers import SubprocessParser
+from paperfacts.prompts import inventory_system_prompt
+from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import BACKEND_A, BACKEND_B, build_llm_client, build_parser, compare_document, extract_document
 from support.extraction import make_artifact
@@ -157,7 +160,7 @@ def test_extract_document_calls_the_model_once_and_writes_the_result(
 
     assert client.call_count == 1
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, "mineru", extractor_key(client.model, mode="document")
+        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
     )
     assert path.is_file()
     assert lane.sample("A") is not None
@@ -177,7 +180,7 @@ def test_the_returned_lane_is_normalized_but_the_file_on_disk_is_not(
 
     lane = extract_document(document, "mineru", settings, client)
     path = DataLayout(settings.data_root).extraction_path(
-        document.document_id, "mineru", extractor_key(client.model, mode="document")
+        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
     )
     on_disk = LaneExtraction.read(path)
 
@@ -219,7 +222,7 @@ def test_each_backend_has_its_own_cache_entry(settings: Settings, document: Docu
     extract_document(document, "paddleocr_vl", settings, client)
 
     layout = DataLayout(settings.data_root)
-    key = extractor_key(client.model, mode="document")
+    key = extractor_key(ExtractionOptions(client.model, mode="document"))
     assert layout.extraction_path(document.document_id, "mineru", key).is_file()
     assert layout.extraction_path(document.document_id, "paddleocr_vl", key).is_file()
     assert client.call_count == 2
@@ -268,7 +271,7 @@ def test_compare_document_extracts_both_lanes_then_matches_and_writes_the_report
 
     assert client.call_count == 2
     path = DataLayout(settings.data_root).comparison_path(
-        document.document_id, extractor_key(client.model, mode="document"), comparison_key()
+        document.document_id, extractor_key(ExtractionOptions(client.model, mode="document")), comparison_key()
     )
     assert path.is_file()
     assert report.backend_a == BACKEND_A and report.backend_b == BACKEND_B
@@ -350,3 +353,57 @@ def test_the_two_lane_assumption_is_stated_explicitly():
     # M2's comparison is strictly two lanes head to head; adding a third parser needs compare_lanes
     # redesigned.
     assert (BACKEND_A, BACKEND_B) == BACKENDS
+
+
+# ---- The key a lane is stored under is the key it is looked up by ------------------------------------
+
+# Every option that reaches ExtractionOptions moved off its baseline, so an option one path forgot shows up
+# as two different keys. context_tokens is the one that once went missing from the writer's key.
+EDITED_OPTIONS = {
+    "extraction_mode": "passage",
+    "extraction_passes": 2,
+    "llm_temperature": 0.3,
+    "llm_max_tokens": 30_000,
+    "llm_reasoning_effort": "low",
+    "llm_inventory_reasoning_effort": "none",
+    "candidate_limit": 5,
+    "llm_context_tokens": 150_000,
+}
+
+
+def test_from_settings_reads_every_extraction_option(tmp_path: Path):
+    options = ExtractionOptions.from_settings(Settings(repo_root=tmp_path, llm_model="edited", **EDITED_OPTIONS))
+
+    for option in dataclasses.fields(ExtractionOptions):
+        if option.name != "mode":
+            assert getattr(options, option.name) != option.default, option.name
+
+
+def test_a_lane_extracted_with_edited_settings_carries_the_key_the_reader_looks_up(
+    tmp_path: Path, document: DocumentInput
+):
+    settings = Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test", **EDITED_OPTIONS)
+    layout = DataLayout(settings.data_root)
+    blocks = (make_block(page=0, order=0, document_id=document.document_id, content="Sample A at 100 sccm"),)
+    make_artifact(blocks, document_id=document.document_id).write(layout.artifact_path(document.document_id, "mineru"))
+
+    def respond(system: str, user: str) -> str:
+        if system == inventory_system_prompt():
+            return json.dumps({"samples": [{"sample_id": "A"}]})
+        return json.dumps({"values": []})
+
+    # The client the workflow builds from these settings (build_llm_client) asks with the same values.
+    client = FakeLlmClient(
+        respond,
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+        reasoning_effort=settings.llm_reasoning_effort,
+    )
+
+    extract_document(document, "mineru", settings, client)
+
+    key = extractor_key_for(settings)
+    stored = LaneExtraction.read(layout.extraction_path(document.document_id, "mineru", key))
+    assert stored.extractor_key == key
+    assert key != extractor_key(ExtractionOptions(settings.llm_model, mode="passage"))

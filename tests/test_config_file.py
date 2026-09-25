@@ -466,7 +466,7 @@ def test_a_label_changes_neither_cache_key(monkeypatch):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
         for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
             cached.cache_clear()
-        return keys.extractor_key("a-model"), keys.comparison_key()
+        return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
 
     try:
         assert keys_for(plain) == keys_for(labelled)
@@ -502,7 +502,7 @@ def test_a_chinese_description_changes_neither_cache_key(monkeypatch):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
         for cached in (keys.schema_fingerprint, keys.category_fingerprint, keys.retrieval_fingerprint):
             cached.cache_clear()
-        return keys.extractor_key("a-model"), keys.comparison_key()
+        return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
 
     try:
         assert keys_for(plain) == keys_for(described)
@@ -776,7 +776,11 @@ def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(monkeypatch
     def keys_for(specs):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
         keys.schema_fingerprint.cache_clear()
-        return keys.schema_fingerprint(), keys.extractor_key("a-model"), keys.comparison_key()
+        return (
+            keys.schema_fingerprint(),
+            keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")),
+            keys.comparison_key(),
+        )
 
     try:
         schema, extraction, comparison = keys_for(plain)
@@ -816,7 +820,7 @@ def test_a_condition_preference_moves_only_the_comparison_key(monkeypatch):
         monkeypatch.setattr(keys, "FIELD_SPECS", specs)
         for cached in (keys.schema_fingerprint, keys.preference_fingerprint):
             cached.cache_clear()
-        return keys.extractor_key("a-model"), keys.comparison_key()
+        return keys.extractor_key(keys.ExtractionOptions("a-model", mode="document")), keys.comparison_key()
 
     try:
         (extraction, comparison), (extraction_after, comparison_after) = keys_for(plain), keys_for(preferring)

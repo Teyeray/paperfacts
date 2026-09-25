@@ -18,7 +18,7 @@ from paperfacts.adapters import render_markdown
 from paperfacts.config import INHERIT
 from paperfacts.errors import ContextBudgetError, LlmResponseError
 from paperfacts.extract import extract_lane
-from paperfacts.keys import FINGERPRINT_LENGTH, extractor_key, schema_fingerprint
+from paperfacts.keys import FINGERPRINT_LENGTH, ExtractionOptions, extractor_key, schema_fingerprint
 from paperfacts.llm import LlmResult
 from support.extraction import make_artifact
 from support.factories import make_block
@@ -29,25 +29,35 @@ from support.llm import FakeLlmClient
 
 def test_extractor_key_is_stable_for_the_same_inputs():
     # An unstable key means re-calling the LLM on every run -- the cache would be worthless.
-    assert extractor_key("deepseek-chat") == extractor_key("deepseek-chat")
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) == extractor_key(
+        ExtractionOptions("deepseek-chat", mode="document")
+    )
 
 
 def test_extractor_key_changes_with_the_model():
     # A different model is a different extractor; old results must not be reused under it.
-    assert extractor_key("deepseek-chat") != extractor_key("gpt-4o")
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) != extractor_key(
+        ExtractionOptions("gpt-4o", mode="document")
+    )
 
 
 def test_extractor_key_is_unaffected_by_the_default_number_of_passes():
     # passes=1 is the default before self-consistency voting existed; keys written back then must still
     # resolve, so the default must produce the exact same key as omitting the argument.
-    assert extractor_key("deepseek-chat") == extractor_key("deepseek-chat", passes=1)
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) == extractor_key(
+        ExtractionOptions("deepseek-chat", passes=1, mode="document")
+    )
 
 
 def test_extractor_key_changes_when_the_number_of_passes_is_not_one():
     # Voting across passes changes both the cost and the result, so it must invalidate whatever was
     # cached under a different pass count.
-    assert extractor_key("deepseek-chat") != extractor_key("deepseek-chat", passes=3)
-    assert extractor_key("deepseek-chat", passes=2) != extractor_key("deepseek-chat", passes=3)
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) != extractor_key(
+        ExtractionOptions("deepseek-chat", passes=3, mode="document")
+    )
+    assert extractor_key(ExtractionOptions("deepseek-chat", passes=2, mode="document")) != extractor_key(
+        ExtractionOptions("deepseek-chat", passes=3, mode="document")
+    )
 
 
 def test_extractor_key_changes_when_the_cleaning_fingerprint_changes(monkeypatch):
@@ -56,9 +66,9 @@ def test_extractor_key_changes_when_the_cleaning_fingerprint_changes(monkeypatch
     # Re-deriving records is free (the model's answer is itself cached by payload), so this cache miss
     # costs nothing but a bit of local computation.
     monkeypatch.setattr("paperfacts.keys.extraction_code_fingerprint", lambda: "aaaaaaaaaaaa")
-    before = extractor_key("deepseek-chat")
+    before = extractor_key(ExtractionOptions("deepseek-chat", mode="document"))
     monkeypatch.setattr("paperfacts.keys.extraction_code_fingerprint", lambda: "bbbbbbbbbbbb")
-    after = extractor_key("deepseek-chat")
+    after = extractor_key(ExtractionOptions("deepseek-chat", mode="document"))
 
     assert before != after
 
@@ -67,58 +77,62 @@ def test_a_document_mode_key_ignores_everything_only_passage_mode_depends_on(mon
     # Whole-document mode sends exactly the request it always sent, so its key must not move when the
     # retrieval rules or the passage prompts change -- otherwise tuning a keyword would rename the stored
     # facts of runs that never used retrieval at all.
-    before_document = extractor_key("deepseek-chat", mode="document")
-    before_passage = extractor_key("deepseek-chat", mode="passage")
+    before_document = extractor_key(ExtractionOptions("deepseek-chat", mode="document"))
+    before_passage = extractor_key(ExtractionOptions("deepseek-chat", mode="passage"))
     monkeypatch.setattr("paperfacts.keys.retrieval_fingerprint", lambda: "ffffffffffff")
 
-    assert extractor_key("deepseek-chat", mode="document") == before_document
-    assert extractor_key("deepseek-chat", mode="passage") != before_passage
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) == before_document
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="passage")) != before_passage
 
 
 def test_extractor_key_is_unaffected_by_the_baseline_reasoning_effort():
     # None is the baseline: the parameter is left out of the request, exactly as before it existed, so a
     # checkout that never touched the setting keeps the filenames it already has.
-    assert extractor_key("deepseek-chat") == extractor_key("deepseek-chat", reasoning_effort=None)
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) == extractor_key(
+        ExtractionOptions("deepseek-chat", reasoning_effort=None, mode="document")
+    )
 
 
 def test_extractor_key_changes_with_the_reasoning_effort():
     # How much the model thinks before answering changes the answer, so it changes the stored extraction.
-    assert extractor_key("deepseek-chat") != extractor_key("deepseek-chat", reasoning_effort="none")
-    assert extractor_key("deepseek-chat", reasoning_effort="low") != extractor_key(
-        "deepseek-chat", reasoning_effort="high"
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) != extractor_key(
+        ExtractionOptions("deepseek-chat", reasoning_effort="none", mode="document")
+    )
+    assert extractor_key(ExtractionOptions("deepseek-chat", reasoning_effort="low", mode="document")) != extractor_key(
+        ExtractionOptions("deepseek-chat", reasoning_effort="high", mode="document")
     )
 
 
 def test_extractor_key_ignores_the_inventory_effort_at_its_baseline():
-    assert extractor_key("deepseek-chat", mode="passage") == extractor_key(
-        "deepseek-chat", mode="passage", inventory_reasoning_effort=INHERIT
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="passage")) == extractor_key(
+        ExtractionOptions("deepseek-chat", mode="passage", inventory_reasoning_effort=INHERIT)
     )
 
 
 def test_extractor_key_changes_when_the_inventory_question_omits_the_parameter():
     # "omit no parameter at all" is a different request from "inherit whatever the client sends", so it
     # cannot quietly reuse the baseline's stored extractions.
-    assert extractor_key("deepseek-chat", mode="passage") != extractor_key(
-        "deepseek-chat", mode="passage", inventory_reasoning_effort=None
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="passage")) != extractor_key(
+        ExtractionOptions("deepseek-chat", mode="passage", inventory_reasoning_effort=None)
     )
 
 
 def test_extractor_key_changes_with_the_inventory_effort_in_passage_mode():
-    assert extractor_key("deepseek-chat", mode="passage") != extractor_key(
-        "deepseek-chat", mode="passage", inventory_reasoning_effort="none"
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="passage")) != extractor_key(
+        ExtractionOptions("deepseek-chat", mode="passage", inventory_reasoning_effort="none")
     )
 
 
 def test_extractor_key_ignores_the_inventory_effort_in_document_mode():
     # Document mode never asks an inventory question, so the setting changes nothing it sends and must
     # not rename its stored facts.
-    assert extractor_key("deepseek-chat", mode="document") == extractor_key(
-        "deepseek-chat", mode="document", inventory_reasoning_effort="none"
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) == extractor_key(
+        ExtractionOptions("deepseek-chat", mode="document", inventory_reasoning_effort="none")
     )
 
 
 def test_extractor_key_is_short_enough_to_live_in_a_filename():
-    key = extractor_key("deepseek-chat")
+    key = extractor_key(ExtractionOptions("deepseek-chat", mode="document"))
 
     assert len(key) == FINGERPRINT_LENGTH == 12
     assert key.isalnum()
@@ -191,7 +205,7 @@ def test_the_lane_records_the_extractor_key_and_the_schema_fingerprint():
 
     lane = extract_lane(make_artifact(), client, mode="document")
 
-    assert lane.extractor_key == extractor_key("some-model", mode="document")
+    assert lane.extractor_key == extractor_key(ExtractionOptions("some-model", mode="document"))
     assert lane.schema_version == schema_fingerprint()
 
 
@@ -486,10 +500,10 @@ def test_tuning_the_matching_prompt_does_not_invalidate_extractions(monkeypatch)
     Mixing it into ``extractor_key`` would mean that fixing a sample-pairing edge case discards every
     stored per-lane extraction and re-pays the LLM for the expensive step to redo a cheap one.
     """
-    before = extractor_key("deepseek-chat")
+    before = extractor_key(ExtractionOptions("deepseek-chat", mode="document"))
     monkeypatch.setattr("paperfacts.keys.matching_system_prompt", lambda: "something else")
 
-    assert extractor_key("deepseek-chat") == before
+    assert extractor_key(ExtractionOptions("deepseek-chat", mode="document")) == before
 
 
 def test_tuning_the_matching_prompt_does_invalidate_comparisons(monkeypatch):
