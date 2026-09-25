@@ -337,7 +337,8 @@ def compare_document(
     if matching.failed:
         # A matching failure is a model that answered badly this time, not a verdict about the paper. Stored,
         # it would be served on every later run and blank the paper's sample cells until --force; unstored,
-        # the next run asks again (the invalid answers were never cached, see llm.complete_validated).
+        # the next run asks again (invalid answers are cached only as rejected, which an online run asks
+        # again; see llm.complete_validated).
         logger.warning("sample matching failed for doc=%s; the comparison is not stored", document.document_id[:16])
     else:
         report.write(path)

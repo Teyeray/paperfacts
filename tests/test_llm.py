@@ -594,24 +594,33 @@ def test_content_that_is_not_text_is_an_llm_error():
         llm.complete_json(system="S", user="U")
 
 
-def test_an_answer_the_caller_rejects_is_returned_but_not_cached(tmp_path: Path):
+def _entry(cache_dir: Path, key: str) -> dict:
+    return json.loads((cache_dir / f"{key}.json").read_text(encoding="utf-8"))
+
+
+def test_an_answer_the_caller_rejects_is_returned_and_stored_only_as_rejected(tmp_path: Path):
     cache_dir = tmp_path / "llm_cache"
-    llm = make_llm(cache_dir=cache_dir)
+    requests: list[httpx.Request] = []
+    llm = make_llm(
+        lambda request: requests.append(request) or httpx.Response(200, json=chat_response()), cache_dir=cache_dir
+    )
 
     result = llm.complete_json(system="S", user="U", accept=lambda text: False)
+    llm.complete_json(system="S", user="U", accept=lambda text: False)
 
     assert result.text == '{"samples": []}'
-    assert not cache_dir.exists()
+    assert _entry(cache_dir, cache_key_of(llm, "S", "U"))["rejected"] is True
+    assert len(requests) == 2  # online, a rejected entry is never the answer
 
 
-def test_two_invalid_answers_leave_nothing_behind_so_the_next_run_can_succeed(tmp_path: Path):
+def test_two_invalid_answers_leave_no_answer_behind_so_the_next_run_can_succeed(tmp_path: Path):
     # The review's scenario: one question answered badly twice used to be cached both times, so every later
-    # run replayed the failure until --force re-asked the whole paper.
+    # run replayed the failure until --force re-asked the whole paper. Now both are kept only as rejected.
     cache_dir = tmp_path / "llm_cache"
     bad = make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": "no"}')), cache_dir=cache_dir)
     with pytest.raises(LlmResponseError):
         _validated(bad)
-    assert not cache_dir.exists()
+    assert all(json.loads(path.read_text(encoding="utf-8"))["rejected"] for path in cache_dir.iterdir())
 
     good_requests: list[httpx.Request] = []
 
@@ -623,21 +632,123 @@ def test_two_invalid_answers_leave_nothing_behind_so_the_next_run_can_succeed(tm
 
     assert parsed.ok == 1
     assert len(good_requests) == 1
-    assert [path.name for path in cache_dir.iterdir()] == [f"{cache_key_of(bad, 'S', 'U')}.json"]
+    answer = _entry(cache_dir, cache_key_of(bad, "S", "U"))
+    assert answer["text"] == '{"ok": 1}' and "rejected" not in answer
 
 
-def test_the_repair_answer_that_validated_is_the_one_cached(tmp_path: Path):
-    cache_dir = tmp_path / "llm_cache"
+def _repaired_online(cache_dir: Path) -> tuple[list[dict], _Answer]:
+    """One question whose first answer fails validation and whose repair succeeds; the bodies sent."""
+    bodies: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        user = json.loads(request.content)["messages"][1]["content"]
-        return httpx.Response(200, json=_chat('{"ok": 2}' if user.startswith("fix") else "{}"))
+        body = json.loads(request.content)
+        bodies.append(body)
+        repair = body["messages"][1]["content"].startswith("fix")
+        return httpx.Response(200, json=_chat('{"ok": 2}' if repair else "{}"))
 
     parsed, _, _ = _validated(make_llm(handler, cache_dir=cache_dir))
+    return bodies, parsed
 
-    assert parsed.ok == 2
-    entries = [json.loads(path.read_text(encoding="utf-8"))["text"] for path in cache_dir.iterdir()]
-    assert entries == ['{"ok": 2}']
+
+def test_the_repair_answer_that_validated_is_the_one_cached_as_the_answer(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+
+    bodies, parsed = _repaired_online(cache_dir)
+
+    assert parsed.ok == 2 and len(bodies) == 2
+    entries = [json.loads(path.read_text(encoding="utf-8")) for path in cache_dir.iterdir()]
+    by_text = {entry["text"]: entry for entry in entries}
+    assert by_text["{}"]["rejected"] is True
+    assert "rejected" not in by_text['{"ok": 2}']
+
+
+def test_offline_replay_takes_the_repair_path_with_zero_requests(tmp_path: Path):
+    """The critic's hole: without the rejected first answer, every question that needed a repair missed."""
+    cache_dir = tmp_path / "llm_cache"
+    online_bodies, online = _repaired_online(cache_dir)
+    sent: list[httpx.Request] = []
+    replay = _offline(make_llm(lambda request: sent.append(request) or httpx.Response(500), cache_dir=cache_dir))
+    replayed_payloads: list[dict] = []
+    key_of = replay.cache_key
+
+    def recording_key(payload: dict, **kwargs) -> str:
+        replayed_payloads.append(payload)
+        return key_of(payload, **kwargs)
+
+    replay.cache_key = recording_key  # type: ignore[method-assign]
+
+    parsed, text, _ = _validated(replay)
+
+    assert parsed == online and text == '{"ok": 2}'
+    assert sent == [] and replay.misses.snapshot() == ()
+    # The repair request is rebuilt from the replayed rejection and pydantic's error: the same bytes.
+    assert replayed_payloads == online_bodies
+
+
+def test_offline_replay_of_a_question_that_failed_twice_fails_the_same_way(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    with pytest.raises(LlmResponseError):
+        _validated(make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": "no"}')), cache_dir=cache_dir))
+    replay = _offline(make_llm(lambda request: httpx.Response(500), cache_dir=cache_dir))
+
+    with pytest.raises(LlmResponseError):
+        _validated(replay)
+
+    assert replay.misses.snapshot() == ()
+
+
+def test_a_truncated_reply_is_still_a_miss_offline(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    with pytest.raises(LlmResponseError):
+        make_llm(
+            lambda request: httpx.Response(200, json=_chat('{"ok": ', "length")), cache_dir=cache_dir
+        ).complete_json(system="S", user="U")
+
+    with pytest.raises(LlmOfflineMiss):
+        _offline(make_llm(cache_dir=cache_dir)).complete_json(system="S", user="U")
+
+
+def test_a_forced_answer_that_fails_never_replaces_the_accepted_one(tmp_path: Path):
+    # The accepted entry is what the next online run replays, so it is what an offline replay must serve.
+    cache_dir = tmp_path / "llm_cache"
+    make_llm(lambda request: httpx.Response(200, json=_chat('{"ok": 1}')), cache_dir=cache_dir).complete_json(
+        system="S", user="U", accept=lambda text: True
+    )
+    forced = make_llm(lambda request: httpx.Response(200, json=_chat("{}")), cache_dir=cache_dir)
+
+    forced.complete_json(system="S", user="U", refresh=True, accept=lambda text: text != "{}")
+
+    assert _entry(cache_dir, cache_key_of(forced, "S", "U"))["text"] == '{"ok": 1}'
+
+
+def test_an_entry_written_before_the_marker_is_an_accepted_answer(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    requests: list[httpx.Request] = []
+    llm = make_llm(lambda request: requests.append(request) or httpx.Response(500), cache_dir=cache_dir)
+    cache_dir.mkdir(parents=True)
+    legacy = {"model": "deepseek-chat", "text": '{"ok": 5}', "usage": {"total_tokens": 9}}
+    (cache_dir / f"{cache_key_of(llm, 'S', 'U')}.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+    parsed, _, usage = _validated(llm)
+
+    assert parsed.ok == 5 and usage == {"total_tokens": 9}
+    assert requests == []
+
+
+def test_an_entry_stored_as_rejected_is_asked_again_online_even_if_it_now_validates(tmp_path: Path):
+    cache_dir = tmp_path / "llm_cache"
+    requests: list[httpx.Request] = []
+    llm = make_llm(
+        lambda request: requests.append(request) or httpx.Response(200, json=_chat('{"ok": 4}')), cache_dir=cache_dir
+    )
+    cache_dir.mkdir(parents=True)
+    entry = cache_dir / f"{cache_key_of(llm, 'S', 'U')}.json"
+    entry.write_text(json.dumps({"text": '{"ok": 1}', "usage": {}, "rejected": True}), encoding="utf-8")
+
+    parsed, _, _ = _validated(llm)
+
+    assert parsed.ok == 4 and len(requests) == 1
+    assert "rejected" not in json.loads(entry.read_text(encoding="utf-8"))
 
 
 def test_an_invalid_answer_already_in_the_cache_is_asked_again_not_replayed(tmp_path: Path):

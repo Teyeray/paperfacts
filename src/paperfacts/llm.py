@@ -8,10 +8,14 @@ the key changes with it.
 ``refresh=True`` skips reading the cache but still writes it -- that is how ``--force`` genuinely re-asks
 the model instead of replaying an answer.
 
-Only an answer the caller accepts is cached (``accept``; :func:`complete_validated` passes its schema check).
-A cached answer that fails the check is a miss and is asked again, and a fresh one that fails it is returned
-but never written: one bad reply must cost one repair, not become the answer of every later run. A reply cut
-off at ``max_tokens`` is never an answer and raises.
+Only an answer the caller accepts is cached as an answer (``accept``; :func:`complete_validated` passes its
+schema check). A fresh one that fails it is returned to the caller, who repairs it, and written marked
+``"rejected": true``: an online run treats a rejected or failing entry as a miss and asks again, so one bad
+reply costs one repair rather than becoming the answer of every later run. Offline replay serves the rejected
+entry instead, which is what reaches the repair request -- itself cached, since its payload carries the
+rejected text and the validation error byte for byte. An entry without the marker (every entry written before
+it existed) is an accepted answer. A reply cut off at ``max_tokens`` is never an answer, raises, and is never
+written.
 
 Vision requests (:meth:`OpenAICompatibleClient.complete_vision`) carry one PNG as an OpenAI-style
 ``image_url`` content part. Their cache key hashes the request with the image replaced by its sha256: the
@@ -271,14 +275,17 @@ class OpenAICompatibleClient:
         reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
         accept: Accept | None = None,
     ) -> LlmResult:
-        """One JSON answer. ``accept`` gates the cache both ways: a cached answer it rejects is asked again,
-        a fresh one it rejects is returned to the caller (who repairs it) but not written."""
+        """One JSON answer. ``accept`` gates the cache both ways: online, a cached answer it rejects (or one
+        stored as rejected) is asked again; a fresh one it rejects is returned to the caller (who repairs it)
+        and stored as rejected. Offline, whatever the cache holds is served, so replay takes the path the
+        recorded run took: a rejected first answer, then the cached repair."""
         payload = self.payload(system=system, user=user, reasoning_effort=reasoning_effort)
         key = self.cache_key(payload, cache_salt=cache_salt)
         if not refresh:
-            cached = self._read_cache(key)
-            if cached is not None:
-                if accept is None or accept(cached.text):
+            entry = self._read_cache(key)
+            if entry is not None:
+                cached, rejected = entry
+                if self.offline or (not rejected and (accept is None or accept(cached.text))):
                     return cached
                 logger.warning("llm cache entry %s fails validation; asking again", key[:16])
 
@@ -293,7 +300,15 @@ class OpenAICompatibleClient:
         result = LlmResult(text=text, usage=_flat_usage(data.get("usage")), cached=False)
         if accept is None or accept(text):
             self._write_cache(key, result)
+        elif not self._holds_accepted(key, accept):
+            # Kept for replay only. Never over an accepted answer (a --force that went wrong): that answer
+            # is what the next online run replays, so it is what offline replay must reproduce too.
+            self._write_cache(key, result, rejected=True)
         return result
+
+    def _holds_accepted(self, key: str, accept: Accept) -> bool:
+        entry = self._read_cache(key)
+        return entry is not None and not entry[1] and accept(entry[0].text)
 
     def _refuse_offline(self, key: str, kind: Literal["json", "vision"], user: str) -> None:
         if self.offline:
@@ -337,9 +352,9 @@ class OpenAICompatibleClient:
         payload = self.vision_payload(system=system, user=user, image_png=image_png)
         key = self.vision_cache_key(payload, image_png)
         if not refresh:
-            cached = self._read_cache(key)
-            if cached is not None:
-                return cached
+            entry = self._read_cache(key)
+            if entry is not None:
+                return entry[0]
         self._refuse_offline(key, "vision", user)
         data = self._post_with_retry(payload)
         text = _content(data, "the vision model")
@@ -437,24 +452,28 @@ class OpenAICompatibleClient:
     def _cache_path(self, key: str) -> Path | None:
         return None if self.cache_dir is None else self.cache_dir / f"{key}.json"
 
-    def _read_cache(self, key: str) -> LlmResult | None:
+    def _read_cache(self, key: str) -> tuple[LlmResult, bool] | None:
+        """The cached reply and whether it was stored as rejected."""
         path = self._cache_path(key)
         if path is None or not path.is_file():
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return LlmResult(text=data["text"], usage=dict(data.get("usage") or {}), cached=True)
+            result = LlmResult(text=data["text"], usage=dict(data.get("usage") or {}), cached=True)
+            return result, data.get("rejected") is True
         except (ValueError, KeyError, TypeError):
             logger.warning("llm cache entry unreadable, ignoring: %s", path)
             return None
 
-    def _write_cache(self, key: str, result: LlmResult) -> None:
+    def _write_cache(self, key: str, result: LlmResult, *, rejected: bool = False) -> None:
         path = self._cache_path(key)
         if path is None:
             return
-        payload = json.dumps(
-            {"model": self.model, "text": result.text, "usage": result.usage}, ensure_ascii=False, indent=2
-        )
+        entry: dict[str, Any] = {"model": self.model, "text": result.text, "usage": result.usage}
+        if rejected:
+            # Only when set: an accepted entry keeps exactly the shape every existing entry has.
+            entry["rejected"] = True
+        payload = json.dumps(entry, ensure_ascii=False, indent=2)
         # Atomic like every other on-disk write: a crash mid-write must not leave a torn entry. The
         # reader would tolerate one, but never creating it is cheaper than healing it.
         write_text_atomic(path, payload)
@@ -526,8 +545,9 @@ def complete_validated[M: BaseModel](
     caller supplies ``repair(previous_text, error)`` to build the follow-up prompt. Returns the parsed
     model, the raw text, and the summed token usage of both calls.
 
-    Both requests pass the schema as ``accept``, so only the answer that validated is cached, and an invalid
-    answer already in the cache (written before this rule) is asked again rather than replayed.
+    Both requests pass the schema as ``accept``, so only the answer that validated is cached as an answer; an
+    invalid one is stored as rejected, which an online run asks again and an offline replay serves, so the
+    repair request -- built from that text and pydantic's error, and so byte-identical -- replays too.
     """
 
     def accept(text: str) -> bool:
