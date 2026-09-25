@@ -712,7 +712,11 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
 | `non_scalar` | A range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
 
-Approximate values and measurements with ± uncertainty keep their centre value and carry a note. A value
+Approximate values and measurements with ± uncertainty keep their centre value and carry a note, including
+`(4.5 ± 0.2) × 10⁻⁴`. A spelling with no single safe reading is refused and compared as ambiguous rather
+than guessed: a ratio such as `1:4`, a pair that does not ascend (`10-4` is as likely 10⁻⁴ without its
+caret as a range), a range whose exponent is written once (`1.2-1.5 × 10⁻³`), or scientific notation with
+other numbers beside it. A value
 the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to
 2500 nm" — is kept and shown as **unattributed** rather than attached to a plausible neighbour. When both
 lanes hold the same unplaced value it is paired and compared like any other; a value only one lane could

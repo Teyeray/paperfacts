@@ -127,17 +127,32 @@ def text_key(spec: FieldSpec, raw: str | None) -> str:
 # Returns ``(value, note)``: None when parsing fails, with the note saying why, so "why couldn't the two
 # lanes be compared" stays traceable.
 
-_NUM = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
+_UNSIGNED = r"(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
+_NUM = rf"[-+]?{_UNSIGNED}"
+# A mantissa may carry a sign only at the very start of the value: anywhere else a "-" in front of it is
+# the dash of a range ("1.2-1.5 × 10^-3"), and reading it as a minus sign turns a range into a negative number.
+_MANTISSA_NUM = rf"(?:^[-+])?{_UNSIGNED}"
 # Scientific notation matches three explicit spellings only ("2108" must never be read as 2x10^8):
 #   1.2 x 10^-4 / 1.2x10^-4 / 1.2 x 10-4  (an explicit "x 10" survives OCR losing the superscript)
 #   10^-4                                  (no mantissa, so the "^" is mandatory)
 #   1.2e-4 / 1.2E-4
 _SCI = re.compile(
-    rf"(?P<m>{_NUM})\s*x\s*10\s*\^?\s*(?P<e>[-+]?\d+)"
+    rf"(?P<m>{_MANTISSA_NUM})\s*x\s*10\s*\^?\s*(?P<e>[-+]?\d+)"
     rf"|10\s*\^\s*(?P<e1>[-+]?\d+)"
-    rf"|(?P<e2m>{_NUM})[eE](?P<e2>[-+]?\d+)"
+    rf"|(?P<e2m>{_MANTISSA_NUM})[eE](?P<e2>[-+]?\d+)"
 )
+_PLUS_MINUS_SIGN = re.compile(r"\+/-|±|\+-")
+_RANGE_SEPARATOR = re.compile(r"-|to|~")
 _RANGE = re.compile(rf"^(?P<a>{_NUM})\s*(?:-|to|~)\s*(?P<b>{_NUM})$")
+# "(4.5 ± 0.2) × 10^-4": the parenthesis holds the mantissa and its uncertainty, the exponent applies to both.
+_MANTISSA = re.compile(
+    rf"^\(\s*(?P<m>{_NUM})\s*(?:(?P<pm>\+/-|±|\+-)\s*{_UNSIGNED}\s*)?\)\s*x\s*10\s*\^?\s*(?P<e>[-+]?\d+)"
+)
+_PARENTHESES = re.compile(r"\([^()]*\)")
+_CARET_PARENS = re.compile(r"\^\s*\(\s*([-+]?\d+)\s*\)")
+_RATIO = re.compile(r"\d\s*:\s*\d")
+# Two numbers joined by a dash or tilde: a range, wherever it sits in the text.
+_JOINED = re.compile(r"\d\s*[-~]\s*[\d.]")
 # A unit token at the very end of a value: letters, Ω, μ, % with optional "." or "/" inside ("vol.%").
 # A digit, "-" or "x" anywhere disqualifies it, so "1.2 x 10^-4" and "40 x 10 cm" can never be stripped.
 _TRAILING_UNIT = re.compile(r"[a-zA-ZΩμ%]+(?:[./][a-zA-ZΩμ%]+)*$")
@@ -145,7 +160,6 @@ _PLUS_MINUS = re.compile(rf"^(?P<a>{_NUM})\s*(?:\+/-|±|\+-)\s*{_NUM}")
 NUMBER_RE = re.compile(_NUM)
 """Every plain number in a piece of text. Public because the comparison layer reads the numbers out of a
 measurement condition ("550 nm") and must use the same notion of "a number" this module parses with."""
-# Multi-character qualifiers first, or "<=" is swallowed by the lone "<" in the character class.
 _QUALIFIERS = re.compile(
     r"^(?P<q>>=|<=|approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅≥≤<>])\s*", re.IGNORECASE
 )
@@ -203,63 +217,164 @@ def delatex(text: str) -> str:
 
 
 def parse_number(raw: str) -> tuple[float | None, str | None]:
-    text = delatex(normalize_text(raw))
-    notes: list[str] = []
+    """``(value, note)``: the number ``raw`` spells, or None with the reason it was refused.
 
+    A qualifier ("~", ">", "about") is dropped and recorded first; what is left must then match one of the
+    spellings in :data:`_SPELLINGS`, tried in order. Each spelling either claims the text -- with a value, or
+    with a refusal -- or passes it on. A refusal is always better than a guess: the comparison turns None
+    into AMBIGUOUS, while a wrong number is indistinguishable from a real measurement.
+    """
+    # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
+    text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw))).strip()
+    notes: list[str] = []
     match = _QUALIFIERS.match(text)
     if match:
         notes.append(f"qualifier '{match.group('q')}' dropped")
         text = text[match.end() :].strip()
+    value, reading = _read(text)
+    return value, _join([*notes, *reading])
 
-    # A parenthesised alternative ("12 (60)"): take the value outside the parentheses.
-    if "(" in text:
-        notes.append("parenthesized alternative ignored")
-        text = re.sub(r"\([^)]*\)", " ", text).strip()
 
-    sci = _SCI.search(text)
-    if sci:
-        if sci.group("e2") is not None:
-            value = float(_plain(sci.group("e2m"))) * 10 ** int(sci.group("e2"))
-        elif sci.group("e1") is not None:
-            value = 10 ** int(sci.group("e1"))
-        else:
-            value = float(_plain(sci.group("m"))) * 10 ** int(sci.group("e"))
-        return float(value), _join(notes)
+_Reading = tuple[float | None, list[str]]
 
-    pm = _PLUS_MINUS.match(text)
-    if pm:
-        notes.append("uncertainty dropped")
-        return float(_plain(pm.group("a"))), _join(notes)
 
-    rng = _RANGE.match(text)
-    if rng:
-        a, b = float(_plain(rng.group("a"))), float(_plain(rng.group("b")))
-        # Only a < b is a range; "10-4" is probably 10^-4 that lost its superscript and falls through.
-        if a < b:
-            notes.append(f"range {a:g}-{b:g} → midpoint")
-            return (a + b) / 2, _join(notes)
+def _read(text: str) -> _Reading:
+    for spelling in _SPELLINGS:
+        reading = spelling(text)
+        if reading is not None:
+            return reading
+    raise AssertionError("the last spelling always answers")  # pragma: no cover
 
-    # "15.6 to 16.3 nm": the trailing unit made the anchored range match fail. Strip exactly one trailing
-    # unit token and try again; the token restrictions above keep the scientific-notation and
-    # multi-number spellings on their existing paths.
-    stripped = _TRAILING_UNIT.sub("", text, count=1).rstrip()
-    if stripped != text:
-        rng = _RANGE.match(stripped)
-        if rng:
-            a, b = float(_plain(rng.group("a"))), float(_plain(rng.group("b")))
-            if a < b:
-                token = text[len(stripped) :].strip()
-                notes.append(f"trailing unit {token!r} in value ignored")
-                notes.append(f"range {a:g}-{b:g} → midpoint")
-                return (a + b) / 2, _join(notes)
 
+def _refuse(reason: str) -> _Reading:
+    return None, [reason]
+
+
+def _ratio(text: str) -> _Reading | None:
+    """ "1:4", "Ar:O2 = 9:1": a ratio is two numbers, and reading its first as the value (then a bare 1 as a
+    fraction, 100 %) is exactly the silent wrong answer this parser exists to prevent."""
+    return _refuse("ratio notation a:b is not a single number") if _RATIO.search(text) else None
+
+
+def _parenthesised_mantissa(text: str) -> _Reading | None:
+    """ "(4.5 ± 0.2) × 10^-4": the parenthesis holds the mantissa, so it cannot be discarded as an alternative."""
+    match = _MANTISSA.match(text)
+    if match is None:
+        return None
+    if NUMBER_RE.search(text[match.end() :]):
+        return _refuse("numbers outside the scientific notation; ambiguous")
+    value = float(_plain(match.group("m"))) * 10 ** int(match.group("e"))
+    return value, ["uncertainty dropped"] if match.group("pm") else []
+
+
+def _leading_parenthesis(text: str) -> _Reading | None:
+    """A parenthesis before any number is no alternative to a value outside it; there is nothing to prefer."""
+    opening = text.find("(")
+    if opening < 0 or NUMBER_RE.search(text[:opening]):
+        return None
+    return _refuse("parenthesis before the value; ambiguous")
+
+
+def _parenthesised_alternative(text: str) -> _Reading | None:
+    """ "12 (60)": an alternative value under other conditions; the primary one is outside the parentheses."""
+    if "(" not in text and ")" not in text:
+        return None
+    rest = _PARENTHESES.sub(" ", text).strip()
+    if "(" in rest or ")" in rest:
+        return _refuse("unbalanced or nested parentheses; ambiguous")
+    value, reading = _read(rest)
+    return value, ["parenthesized alternative ignored", *reading]
+
+
+def _scientific(text: str) -> _Reading | None:
+    """Scientific notation, alone or as a range or uncertainty of two. Any other number beside it -- the
+    lower bound of "1.2-1.5 × 10^-3", whose exponent may or may not apply to it -- is refused."""
+    matches = list(_SCI.finditer(text))
+    if not matches:
+        return None
+    values = [_sci_value(match) for match in matches]
+    rest = _cut(text, matches)
+    if len(matches) == 2:
+        between = text[matches[0].end() : matches[1].start()].strip()
+        if not NUMBER_RE.search(rest) and _PLUS_MINUS_SIGN.fullmatch(between):
+            return values[0], ["uncertainty dropped"]
+        if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
+            low, high = values
+            if low < high:
+                return (low + high) / 2, [f"range {low:g}-{high:g} → midpoint"]
+            return _refuse("descending range in scientific notation; ambiguous")
+    if len(matches) > 1 or NUMBER_RE.search(rest):
+        return _refuse("numbers outside the scientific notation; ambiguous")
+    return values[0], []
+
+
+def _uncertainty(text: str) -> _Reading | None:
+    match = _PLUS_MINUS.match(text)
+    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"])
+
+
+def _range(text: str) -> _Reading | None:
+    """ "10-20", "15.6 to 16.3 nm": the midpoint. A pair that does not ascend is refused: "10-4" is as likely
+    10^-4 that lost its caret, and "300-200" is no range anybody writes."""
+    notes: list[str] = []
+    match = _RANGE.match(text)
+    if match is None:
+        # The trailing unit ("15.6 to 16.3 nm") made the anchored match fail. Strip exactly one unit token;
+        # its character restrictions keep the scientific and multi-number spellings out of this path.
+        stripped = _TRAILING_UNIT.sub("", text, count=1).rstrip()
+        match = _RANGE.match(stripped) if stripped != text else None
+        if match is None:
+            return None
+        notes.append(f"trailing unit {text[len(stripped) :].strip()!r} in value ignored")
+    low, high = float(_plain(match.group("a"))), float(_plain(match.group("b")))
+    if low >= high:
+        return _refuse("descending range, or an exponent without its caret; ambiguous")
+    return (low + high) / 2, [*notes, f"range {low:g}-{high:g} → midpoint"]
+
+
+def _first_number(text: str) -> _Reading:
+    """The fallback: one number is the value. Several separated by words or spaces ("550 nm at 80%", "40 x
+    10 cm") keep the first with a note; a range buried among other numbers has no first value to keep."""
     numbers = NUMBER_RE.findall(text)
     if not numbers:
-        notes.append("no number found")
-        return None, _join(notes)
-    if len(numbers) > 1:
-        notes.append(f"{len(numbers)} numbers found, first used")
-    return float(_plain(numbers[0])), _join(notes)
+        return _refuse("no number found")
+    if len(numbers) == 1:
+        return float(_plain(numbers[0])), []
+    if _JOINED.search(text):
+        return _refuse("a range among other numbers; ambiguous")
+    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"]
+
+
+# Tried in order; the first to claim the text decides. The ratio and parenthesis checks come first because
+# they change what the rest of the text means.
+_SPELLINGS: tuple[Callable[[str], _Reading | None], ...] = (
+    _ratio,
+    _parenthesised_mantissa,
+    _leading_parenthesis,
+    _parenthesised_alternative,
+    _scientific,
+    _uncertainty,
+    _range,
+    _first_number,
+)
+
+
+def _sci_value(match: re.Match[str]) -> float:
+    if match.group("e2") is not None:
+        return float(_plain(match.group("e2m"))) * 10 ** int(match.group("e2"))
+    if match.group("e1") is not None:
+        return float(10 ** int(match.group("e1")))
+    return float(_plain(match.group("m"))) * 10 ** int(match.group("e"))
+
+
+def _cut(text: str, matches: list[re.Match[str]]) -> str:
+    """``text`` with every match removed."""
+    kept, start = [], 0
+    for match in matches:
+        kept.append(text[start : match.start()])
+        start = match.end()
+    kept.append(text[start:])
+    return " ".join(kept)
 
 
 def _plain(token: str) -> str:
