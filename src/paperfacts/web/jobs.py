@@ -88,6 +88,9 @@ class JobManager:
         clicking "reprocess" shouldn't pay for the LLM call twice); a new job only starts when
         upgrading from "use cache" to "force rerun", and then only after the running one has finished."""
         with self._lock:
+            if self._closed:
+                # Refused before anything is recorded: a job nobody will ever run would show "queued" forever.
+                raise RuntimeError("the job manager has shut down")
             for job in self._jobs.values():
                 if job.document_id == document_id and job.status in ACTIVE and job.force >= force:
                     return job
@@ -170,9 +173,17 @@ class JobManager:
                 return
             try:
                 self._run(job)
-            finally:
+            except BaseException:
+                # This worker is leaving (KeyboardInterrupt, SystemExit): a job it would have picked up next --
+                # a forced rerun of this very document -- gets a turn of its own rather than no worker at all.
                 with self._lock:
                     self._busy.discard(job.document_id)
+                    closed = self._closed
+                if not closed:
+                    self._executor.submit(self._work)
+                raise
+            with self._lock:
+                self._busy.discard(job.document_id)
 
     def _take(self) -> Job | None:
         """Under the lock: the oldest queued job whose document no worker holds, now marked running.
@@ -229,7 +240,8 @@ _CURRENT_JOB: contextvars.ContextVar[str | None] = contextvars.ContextVar("paper
 # with several workers the first job to finish must not lower it under the others.
 _level_lock = threading.Lock()
 _level_holders = 0
-_saved_level = logging.NOTSET
+# The level to put back, or None when the level was already INFO or lower and nothing was changed.
+_saved_level: int | None = None
 
 
 def _raise_package_level() -> None:
@@ -237,18 +249,21 @@ def _raise_package_level() -> None:
     package = logging.getLogger(PACKAGE_LOGGER)
     with _level_lock:
         if _level_holders == 0:
-            _saved_level = package.level
+            _saved_level = None
             if not package.isEnabledFor(logging.INFO):
+                _saved_level = package.level
                 package.setLevel(logging.INFO)
         _level_holders += 1
 
 
 def _restore_package_level() -> None:
     global _level_holders
+    package = logging.getLogger(PACKAGE_LOGGER)
     with _level_lock:
         _level_holders -= 1
-        if _level_holders == 0:
-            logging.getLogger(PACKAGE_LOGGER).setLevel(_saved_level)
+        # Only undo what was done here: a level somebody else set while the jobs ran is theirs to keep.
+        if _level_holders == 0 and _saved_level is not None and package.level == logging.INFO:
+            package.setLevel(_saved_level)
 
 
 class _JobLogHandler(logging.Handler):

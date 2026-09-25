@@ -219,3 +219,37 @@ def test_shutdown_drops_queued_jobs_and_lets_running_ones_finish():
 def test_a_manager_needs_at_least_one_worker(workers: int):
     with pytest.raises(ValueError, match="at least one worker"):
         JobManager(RecordingRunner(), STAGES, workers=workers)
+
+
+def test_a_submission_after_shutdown_is_refused_and_leaves_no_job_behind():
+    manager = JobManager(RecordingRunner(), STAGES, workers=2)
+    manager.shutdown()
+
+    with pytest.raises(RuntimeError, match="shut down"):
+        manager.submit("doc-1")
+    assert manager.all_jobs() == []
+
+
+def test_a_worker_leaving_on_an_interrupt_still_hands_on_the_rerun_queued_behind_it():
+    """The forced rerun was passed over while the first run held its document; the worker that held it
+    leaves on KeyboardInterrupt instead of looking at the queue again, so it must hand the job a turn."""
+    release = threading.Event()
+
+    def body(job: Job, mark) -> None:
+        if job.document_id == "doc-1" and not job.force:
+            assert release.wait(timeout=WAIT_TIMEOUT_S)
+            raise KeyboardInterrupt
+
+    manager = JobManager(RecordingRunner(body=body), STAGES, workers=2)
+    first = manager.submit("doc-1")
+    wait_until(lambda: manager.get(first.job_id).status == "running", what="the first run to start")
+    forced = manager.submit("doc-1", force=True)
+    # Another document through the second worker: its turn has looked at the rerun and passed it over.
+    other = manager.submit("doc-2")
+    wait_for_status(manager, other.job_id, "done")
+    assert manager.get(forced.job_id).status == "queued"
+
+    release.set()
+
+    assert wait_for_status(manager, first.job_id, "failed").error == "interrupted"
+    assert wait_for_status(manager, forced.job_id, "done", "failed").status == "done"

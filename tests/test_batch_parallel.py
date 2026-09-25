@@ -97,22 +97,29 @@ def test_stage_reports_are_serialised_and_name_their_paper(monkeypatch, tmp_path
     make_papers(tmp_path / "papers", 3)
     install_fake_pipeline(monkeypatch)
     calls: list[tuple[str, str]] = []
-    inside = 0
-    overlapped = False
     guard = threading.Lock()
+    inside = 0
+    first = True
+    overlapped = threading.Event()
 
     def on_stage(stage: str, status: str, detail: str) -> None:
-        nonlocal inside, overlapped
+        nonlocal inside, first
         with guard:
             inside += 1
-            overlapped = overlapped or inside > 1
+            if inside > 1:
+                overlapped.set()
+            hold, first = first, False
+        if hold:
+            # The first report lingers while the other papers start. Unserialised, one of their reports
+            # arrives during it; serialised, they queue behind it and the wait simply runs out.
+            overlapped.wait(timeout=0.5)
         calls.append((stage, status))
         with guard:
             inside -= 1
 
     run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3, on_stage=on_stage)
 
-    assert not overlapped
+    assert not overlapped.is_set()
     for name in ("a.pdf", "b.pdf", "c.pdf"):
         own = [stage for stage, _ in calls if name in stage]
         assert own[0].endswith(name)  # the paper's own "running" line comes first
@@ -143,6 +150,8 @@ def test_a_workbook_that_cannot_be_written_stops_a_parallel_batch(monkeypatch, t
     monkeypatch.setattr("paperfacts.workflow.write_dataset", fail_write)
     with pytest.raises(PermissionError, match="locked"):
         run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3)
+    # Every paper that was running has finished: none is left writing after the caller gave up.
+    assert not [thread for thread in threading.enumerate() if thread.name.startswith("paperfacts-document")]
 
 
 def test_jobs_below_one_is_refused(tmp_path: Path):

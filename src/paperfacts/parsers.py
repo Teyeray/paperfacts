@@ -168,7 +168,10 @@ def _exclusive(key: str, backend: Backend, document: DocumentInput) -> Iterator[
     if not lock.acquire(blocking=False):
         # Said once, so a job log explains a parse stage that sits at "running" while another paper parses.
         logger.info(
-            "waiting for the %s parser: another document is being parsed (doc=%s)", backend, document.document_id[:16]
+            "%s waits for parse lock %r: another document is being parsed (doc=%s)",
+            backend,
+            key,
+            document.document_id[:16],
         )
         lock.acquire()
     try:

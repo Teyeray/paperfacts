@@ -287,7 +287,9 @@ failed.**
 
 With `--jobs` above 1 the papers overlap, but the workbook, the failure list and the summary are in input
 order, so the table is the one a serial run writes; each progress line is prefixed with its paper
-(`[3/28 x.pdf parse:mineru] done ...`). Three things keep parallel papers from multiplying the load:
+(`[3/28 x.pdf parse:mineru] done ...`). Stopping one (Ctrl-C, or a workbook that cannot be written) starts
+no new paper but lets the ones already running finish, so expect it to take up to one paper's time; the
+caches make the next run resume where this one stopped. Three things keep parallel papers from multiplying the load:
 
 - **Parsing is one paper per parser at a time.** The server has one GPU, and two papers sent to the same
   parser service only compete for its memory; MinerU and PaddleOCR-VL may parse two different papers side

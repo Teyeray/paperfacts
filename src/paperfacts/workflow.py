@@ -859,8 +859,10 @@ def run_batch(
             for future in as_completed(futures):
                 future.result()
         finally:
-            # After an error nothing new starts; papers already running finish on their own.
-            pool.shutdown(wait=False, cancel_futures=True)
+            # After an error nothing new starts, and the papers already running are waited for: returning
+            # while they still write the workbook would let a checkpoint land after the caller gave up on it,
+            # and the interpreter joins these threads at exit anyway.
+            pool.shutdown(wait=True, cancel_futures=True)
     return BatchResult(
         tuple(datasets[i] for i in sorted(datasets)),
         tuple(failures[i] for i in sorted(failures)),

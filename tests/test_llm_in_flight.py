@@ -5,21 +5,23 @@ pools; the endpoint's rate limit sees only the product. These tests pin the thre
 shared limit safe: it is never exceeded, a cache hit never waits for it, and a slot is held for the HTTP call
 alone -- never across a backoff or a wait on another future, which is what keeps the nesting deadlock-free.
 
-Timing is staged with events and a polled counter, never with sleeps; every wait has a timeout so a
-regression fails instead of hanging.
+Timing is staged with events and a polled counter, never with sleeps. Every call that could wait on the
+limit runs on a daemon thread (support.threads) behind a timed wait, so a leaked slot fails the test instead
+of hanging the suite.
 """
 
 from __future__ import annotations
 
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
 import pytest
 
+from paperfacts.errors import LlmError
 from paperfacts.llm import IN_FLIGHT, InFlightLimit, OpenAICompatibleClient, shared_in_flight
 from support.http import make_client
+from support.threads import submit_daemon
 from support.web import WAIT_TIMEOUT_S, wait_until
 
 BASE_URL = "https://api.example.com/v1"
@@ -73,13 +75,12 @@ def test_the_number_of_requests_on_the_wire_never_exceeds_the_limit():
     endpoint = GatedEndpoint()
     limit = InFlightLimit(3)
     llm = client_for(endpoint, limit)
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futures = [pool.submit(llm.complete_json, system="S", user=f"question {i}") for i in range(10)]
-        # Three are let in and then everybody else queues on the limit, not on the endpoint.
-        wait_until(lambda: endpoint.active == 3, what="three requests to reach the endpoint")
-        endpoint.release.set()
-        for future in futures:
-            future.result(timeout=WAIT_TIMEOUT_S)
+    futures = [submit_daemon(llm.complete_json, system="S", user=f"question {i}") for i in range(10)]
+    # Three are let in and then everybody else queues on the limit, not on the endpoint.
+    wait_until(lambda: endpoint.active == 3, what="three requests to reach the endpoint")
+    endpoint.release.set()
+    for future in futures:
+        future.result(timeout=WAIT_TIMEOUT_S)
 
     assert endpoint.served == 10
     assert endpoint.peak == 3
@@ -89,13 +90,12 @@ def test_text_and_vision_requests_share_one_limit():
     endpoint = GatedEndpoint()
     limit = InFlightLimit(2)
     text, vision = client_for(endpoint, limit), client_for(endpoint, limit)
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = [pool.submit(text.complete_json, system="S", user=f"q{i}") for i in range(3)]
-        futures += [pool.submit(vision.complete_vision, system="S", user=f"chart {i}", image_png=PNG) for i in range(3)]
-        wait_until(lambda: endpoint.active == 2, what="two requests to reach the endpoint")
-        endpoint.release.set()
-        for future in futures:
-            future.result(timeout=WAIT_TIMEOUT_S)
+    futures = [submit_daemon(text.complete_json, system="S", user=f"q{i}") for i in range(3)]
+    futures += [submit_daemon(vision.complete_vision, system="S", user=f"chart {i}", image_png=PNG) for i in range(3)]
+    wait_until(lambda: endpoint.active == 2, what="two requests to reach the endpoint")
+    endpoint.release.set()
+    for future in futures:
+        future.result(timeout=WAIT_TIMEOUT_S)
 
     assert endpoint.peak == 2
 
@@ -110,15 +110,14 @@ def test_a_cache_hit_does_not_wait_for_a_slot(tmp_path: Path):
     llm.complete_json(system="S", user="already answered")  # now on disk
     endpoint.release.clear()
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        live = pool.submit(llm.complete_json, system="S", user="a new question")
-        wait_until(lambda: endpoint.active == 1, what="the live request to take the only slot")
-        try:
-            # Answered while the only slot is still taken: had it queued, this would time out.
-            cached = pool.submit(llm.complete_json, system="S", user="already answered").result(timeout=WAIT_TIMEOUT_S)
-        finally:
-            endpoint.release.set()
-        live.result(timeout=WAIT_TIMEOUT_S)
+    live = submit_daemon(llm.complete_json, system="S", user="a new question")
+    wait_until(lambda: endpoint.active == 1, what="the live request to take the only slot")
+    try:
+        # Answered while the only slot is still taken: had it queued, this would time out.
+        cached = submit_daemon(llm.complete_json, system="S", user="already answered").result(timeout=WAIT_TIMEOUT_S)
+    finally:
+        endpoint.release.set()
+    live.result(timeout=WAIT_TIMEOUT_S)
 
     assert cached.cached is True
     assert endpoint.served == 2  # the first answer and the live one; the replay never reached the endpoint
@@ -140,10 +139,8 @@ def test_a_backoff_sleeps_without_holding_a_slot():
     def sleep(seconds: float) -> None:
         # Another request must get the slot while this one backs off. Run it on its own thread with a
         # timeout, so a regression (the slot still held) fails here instead of deadlocking the test.
-        worker = threading.Thread(target=lambda: other.complete_json(system="S", user="meanwhile"))
-        worker.start()
-        worker.join(timeout=WAIT_TIMEOUT_S)
-        during_backoff.append(not worker.is_alive())
+        meanwhile = submit_daemon(other.complete_json, system="S", user="meanwhile")
+        during_backoff.append(meanwhile.result(timeout=WAIT_TIMEOUT_S).cached is False)
 
     llm = client_for(throttled_once, limit, sleep=sleep)
     llm.complete_json(system="S", user="throttled")
@@ -158,20 +155,19 @@ def test_nested_pools_that_wait_on_each_other_finish_under_a_limit_of_one():
     limit = InFlightLimit(1)
     llm = client_for(lambda request: httpx.Response(200, json=chat_response()), limit)
 
+    # Every level is a thread per task that its parent blocks on, as the pools are in production.
     def lane(document: int, lane_id: int) -> int:
-        with ThreadPoolExecutor(max_workers=4) as questions:
-            futures = [
-                questions.submit(llm.complete_json, system="S", user=f"d{document} l{lane_id} f{field}")
-                for field in range(4)
-            ]
-            return sum(1 for future in futures if future.result(timeout=WAIT_TIMEOUT_S))
+        futures = [
+            submit_daemon(llm.complete_json, system="S", user=f"d{document} l{lane_id} f{field}") for field in range(4)
+        ]
+        return sum(1 for future in futures if future.result(timeout=WAIT_TIMEOUT_S))
 
     def document(index: int) -> int:
-        with ThreadPoolExecutor(max_workers=2) as lanes:
-            return sum(lanes.map(lambda lane_id: lane(index, lane_id), range(2)))
+        lanes = [submit_daemon(lane, index, lane_id) for lane_id in range(2)]
+        return sum(future.result(timeout=WAIT_TIMEOUT_S) for future in lanes)
 
-    with ThreadPoolExecutor(max_workers=3) as documents:
-        answered = list(documents.map(document, range(3), timeout=WAIT_TIMEOUT_S))
+    documents = [submit_daemon(document, index) for index in range(3)]
+    answered = [future.result(timeout=WAIT_TIMEOUT_S) for future in documents]
 
     assert answered == [8, 8, 8]
 
@@ -180,14 +176,30 @@ def test_a_raised_limit_lets_waiting_requests_through_at_once():
     endpoint = GatedEndpoint()
     limit = InFlightLimit(1)
     llm = client_for(endpoint, limit)
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [pool.submit(llm.complete_json, system="S", user=f"q{i}") for i in range(3)]
-        wait_until(lambda: endpoint.active == 1, what="the first request")
-        limit.set_limit(3)
-        wait_until(lambda: endpoint.active == 3, what="the queued requests to be let in")
-        endpoint.release.set()
-        for future in futures:
-            future.result(timeout=WAIT_TIMEOUT_S)
+    futures = [submit_daemon(llm.complete_json, system="S", user=f"q{i}") for i in range(3)]
+    wait_until(lambda: endpoint.active == 1, what="the first request")
+    limit.set_limit(3)
+    wait_until(lambda: endpoint.active == 3, what="the queued requests to be let in")
+    endpoint.release.set()
+    for future in futures:
+        future.result(timeout=WAIT_TIMEOUT_S)
+
+
+def test_a_failed_request_gives_its_slot_back():
+    limit = InFlightLimit(1)
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with pytest.raises(LlmError):
+        client_for(unreachable, limit).complete_json(system="S", user="lost")
+    # With the slot leaked, the next request would wait forever for it.
+    answered = submit_daemon(
+        client_for(lambda request: httpx.Response(200, json=chat_response()), limit).complete_json,
+        system="S",
+        user="next",
+    )
+    assert answered.result(timeout=WAIT_TIMEOUT_S).cached is False
 
 
 @pytest.mark.parametrize("bad", [0, -1])
