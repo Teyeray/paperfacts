@@ -370,7 +370,8 @@ def export(
 ) -> None:
     """Re-export current cached results to Excel, without parser or LLM calls."""
     _configure_logging(verbose)
-    _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True)
+    # One paper at a time: an export only reads the caches, so parallel papers would buy nothing.
+    _batch_summary(source, _settings(data_root, passes, mode), output, force=False, export_only=True, jobs=1)
 
 
 @app.command()

@@ -8,6 +8,7 @@ at once, and "each paper waits for the one after it" makes the last paper finish
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -96,35 +97,72 @@ def test_the_output_is_in_input_order_and_a_failed_paper_costs_only_its_own_row(
 def test_stage_reports_are_serialised_and_name_their_paper(monkeypatch, tmp_path: Path):
     make_papers(tmp_path / "papers", 3)
     install_fake_pipeline(monkeypatch)
+    # All three papers are released at once and report straight away, so their first reports contend.
+    start_together = threading.Barrier(3)
+
+    def contending(document: DocumentInput, settings: Settings, *, on_stage, **kwargs):
+        start_together.wait(timeout=WAIT_TIMEOUT_S)
+        on_stage("probe", "running", "")
+        return run_document(document, settings, on_stage=on_stage, **kwargs)
+
+    monkeypatch.setattr("paperfacts.workflow.run_document", contending)
     calls: list[tuple[str, str]] = []
     guard = threading.Lock()
     inside = 0
-    first = True
-    overlapped = threading.Event()
+    overlapped = False
 
     def on_stage(stage: str, status: str, detail: str) -> None:
-        nonlocal inside, first
+        nonlocal inside, overlapped
         with guard:
             inside += 1
-            if inside > 1:
-                overlapped.set()
-            hold, first = first, False
-        if hold:
-            # The first report lingers while the other papers start. Unserialised, one of their reports
-            # arrives during it; serialised, they queue behind it and the wait simply runs out.
-            overlapped.wait(timeout=0.5)
+            overlapped = overlapped or inside > 1
+        # Hand the interpreter to the other threads while inside: an unserialised report gets in here.
+        for _ in range(50):
+            time.sleep(0)
         calls.append((stage, status))
         with guard:
             inside -= 1
 
     run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3, on_stage=on_stage)
 
-    assert not overlapped.is_set()
+    assert not overlapped
     for name in ("a.pdf", "b.pdf", "c.pdf"):
         own = [stage for stage, _ in calls if name in stage]
         assert own[0].endswith(name)  # the paper's own "running" line comes first
         assert any(stage.endswith(f"{name} compare") for stage in own)
         assert any(stage.endswith(f"{name} parse:mineru") for stage in own)
+
+
+def test_a_stopped_batch_stops_its_running_papers_at_the_next_stage(monkeypatch, tmp_path: Path):
+    """Ctrl-C and an unexpected error take the same path: nothing new starts, the running papers stop at
+    their next stage boundary, and the caller hears how many it is waiting for."""
+    make_papers(tmp_path / "papers", 3)
+    spy = install_fake_pipeline(monkeypatch)
+    all_started = threading.Barrier(3)
+    stopping = threading.Event()
+
+    def one_breaks(document: DocumentInput, settings: Settings, **kwargs):
+        all_started.wait(timeout=WAIT_TIMEOUT_S)
+        if document.pdf_path.name == "c.pdf":
+            raise RuntimeError("not a paper's own failure")
+        assert stopping.wait(timeout=WAIT_TIMEOUT_S)
+        return run_document(document, settings, **kwargs)
+
+    monkeypatch.setattr("paperfacts.workflow.run_document", one_breaks)
+    reports: list[tuple[str, str, str]] = []
+
+    def on_stage(stage: str, status: str, detail: str) -> None:
+        reports.append((stage, status, detail))
+        if stage == "batch":
+            stopping.set()
+
+    with pytest.raises(RuntimeError, match="own failure"):
+        run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3, on_stage=on_stage)
+
+    assert ("batch", "failed", "stopping; waiting for 2 running papers to reach a stage boundary") in reports
+    stopped = sorted(stage for stage, status, _ in reports if status == "skipped")
+    assert stopped == ["1/3 a.pdf", "2/3 b.pdf"]
+    assert spy.parse == []  # both stopped at their first boundary, before any work
 
 
 def test_the_first_copy_of_a_duplicate_is_the_one_processed(monkeypatch, tmp_path: Path):
@@ -177,3 +215,19 @@ def test_the_cli_takes_jobs_from_the_flag_or_the_parallel_documents_setting(
     CliRunner().invoke(app, ["batch", str(paper.parent), "--data-root", str(tmp_path / "data"), *flags])
 
     assert captured == [expected]
+
+
+def test_export_reads_the_caches_one_paper_at_a_time(monkeypatch, tmp_path: Path):
+    (paper,) = make_papers(tmp_path / "papers", 1)
+    captured: list[int] = []
+
+    def fake_run_batch(source: Path, settings: Settings, **kwargs):
+        captured.append(kwargs["jobs"])
+        raise ParserError("mineru", "run", "stop here")
+
+    monkeypatch.setattr("paperfacts.cli.run_batch", fake_run_batch)
+    monkeypatch.setenv("PAPERFACTS_MAX_PARALLEL_DOCUMENTS", "4")
+
+    CliRunner().invoke(app, ["export", str(paper.parent), "--data-root", str(tmp_path / "data")])
+
+    assert captured == [1]

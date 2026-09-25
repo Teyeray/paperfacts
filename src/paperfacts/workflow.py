@@ -769,6 +769,11 @@ def run_batch(
     Parsing stays one paper per parser (the parse locks in :mod:`paperfacts.parsers`) and model requests
     share one in-flight limit (:mod:`paperfacts.llm`), so ``jobs`` overlaps the model waits of several
     papers without multiplying the load on the GPU or the endpoint.
+
+    When a parallel batch is stopped (Ctrl-C, or an error that is not one paper's own), no new paper starts
+    and the running ones stop at their next stage boundary, raising :class:`Cancelled` there; the stage in
+    progress finishes first, because a request already paid for is worth caching. Stopped papers are neither
+    rows nor failures: the next run picks them up from the caches.
     """
     paths = discover_pdfs(source)
     output = output or DataLayout(settings.data_root).batch_dataset_path()
@@ -779,15 +784,27 @@ def run_batch(
     if jobs < 1:
         raise ConfigError(f"--jobs must be at least 1, got {jobs}")
 
-    lock = threading.Lock()
+    # Two locks, so a paper reporting progress never waits for another paper's workbook checkpoint.
+    progress_lock = threading.Lock()
+    results_lock = threading.Lock()
+    cancel = threading.Event()
     # Keyed by input position, and read back sorted, so completion order never reaches the output.
     datasets: dict[int, DocumentDataset] = {}
     figure_rows: dict[int, tuple[Mapping[str, object], ...]] = {}
     failures: dict[int, dict[str, str]] = {}
 
     def report(stage: str, status: StageStatus, detail: str) -> None:
-        with lock:
+        with progress_lock:
             on_stage(stage, status, detail)
+
+    def report_stage(prefix: str) -> StageCallback:
+        def mark(stage: str, status: StageStatus, detail: str) -> None:
+            # A stage boundary: the one place a running paper can be stopped without abandoning a request.
+            if cancel.is_set():
+                raise Cancelled("the batch was stopped")
+            report(f"{prefix} {stage}", status, detail)
+
+        return mark
 
     def settle(
         index: int, prefix: str, outcome: DocumentDataset | dict[str, str], rows: Sequence[Mapping[str, object]] = ()
@@ -796,7 +813,7 @@ def run_batch(
             report(prefix, "done", "")
         else:
             report(prefix, "failed", outcome["error"])
-        with lock:
+        with results_lock:
             if isinstance(outcome, DocumentDataset):
                 datasets[index], figure_rows[index] = outcome, tuple(rows)
             else:
@@ -834,6 +851,8 @@ def run_batch(
         queue.append((index, prefix, document))
 
     def process(index: int, prefix: str, document: DocumentInput) -> None:
+        if cancel.is_set():
+            return
         report(prefix, "running", "")
         try:
             if export_only:
@@ -845,9 +864,11 @@ def run_batch(
                     settings,
                     force=force,
                     force_figures=force_figures,
-                    on_stage=lambda stage, status, detail: report(f"{prefix} {stage}", status, detail),
+                    on_stage=report_stage(prefix),
                 )
                 dataset, figures = result.dataset, result.figures
+        except Cancelled:
+            report(prefix, "skipped", "stopped with the batch; its finished stages are cached")
         except (PaperFactsError, OSError, ValueError) as exc:
             settle(index, prefix, failure(document.document_id, document.pdf_path, exc))
         else:
@@ -859,12 +880,18 @@ def run_batch(
             process(*item)
     else:
         pool = ContextThreadPoolExecutor(max_workers=min(jobs, len(queue)), thread_name_prefix="paperfacts-document")
+        futures: list[Future[None]] = []
         try:
-            futures = [pool.submit(process, *item) for item in queue]
+            futures += [pool.submit(process, *item) for item in queue]
             # Completion order, so an unexpected error (a workbook that cannot be written) surfaces at once
             # instead of after every paper queued ahead of it.
             for future in as_completed(futures):
                 future.result()
+        except BaseException:
+            cancel.set()
+            running = sum(1 for future in futures if future.running())
+            report("batch", "failed", f"stopping; waiting for {running} running papers to reach a stage boundary")
+            raise
         finally:
             # After an error nothing new starts, and the papers already running are waited for: returning
             # while they still write the workbook would let a checkpoint land after the caller gave up on it,
