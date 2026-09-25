@@ -12,6 +12,7 @@ without asking the model again.
 
 from __future__ import annotations
 
+import itertools
 import re
 import unicodedata
 from collections.abc import Callable
@@ -177,6 +178,13 @@ _NAMED = re.compile(r"^[^=]*=\s*")
 _LATEX_COMMAND = re.compile(r"\\[A-Za-z]+")
 # "25 and 70": two values, not a value and a remark.
 _CONJOINED = re.compile(r"\d\s*\S*\s+(?:and|or)\s+\d", re.IGNORECASE)
+# "30, 40", "550 nm: 85%": numbers listed or labelled one by another, looked for only between two numbers,
+# so the comma of a thousands separator ("1,200"), which is part of its number, is never one.
+_LIST_SEPARATOR = re.compile(r"[,;:]")
+# A number followed by a unit of its own and then another number ("140 nm ATO/25 nm", "3 h 30 min"): a
+# second quantity stands beside the first, and which one is the value is not the parser's to guess. A lone
+# "x" is the multiplication sign of "40 x 10 cm", not a unit.
+_OWN_UNIT = re.compile(rf"^\s*(?!x\b){_UNIT_TOKEN}")
 # A measurement condition stated after the value ("550 nm at 80%", "1.2 × 10^-4 at 300 K"): its numbers
 # describe when the value was measured, not the value.
 _CONDITION = re.compile(r"\s+(?:at|@)\s+(?=.*\d).*$", re.IGNORECASE)
@@ -386,8 +394,10 @@ def _range(text: str) -> _Reading | None:
 
 
 def _first_number(text: str) -> _Reading:
-    """The fallback: one number is the value. Several separated by words or spaces ("550 nm at 80%", "40 x
-    10 cm") keep the first with a note; a range buried among other numbers has no first value to keep."""
+    """The fallback: one number is the value. Several separated only by spaces or a multiplication sign ("300
+    500", "40 x 10 cm") keep the first with a note. A range buried among other numbers, a list ("30, 40"), and a
+    number carrying its own unit before another ("550 nm: 85%", "140 nm ATO/25 nm ITO") have no first value
+    worth keeping: each is a second quantity beside the first, and they are refused."""
     numbers = NUMBER_RE.findall(text)
     if not numbers:
         return _refuse("no number found")
@@ -397,6 +407,12 @@ def _first_number(text: str) -> _Reading:
         return _refuse("a range among other numbers; ambiguous")
     if _CONJOINED.search(text):
         return _refuse("two values joined by 'and' or 'or'; ambiguous")
+    spans = list(NUMBER_RE.finditer(text))
+    gaps = [text[a.end() : b.start()] for a, b in itertools.pairwise(spans)]
+    if any(_LIST_SEPARATOR.search(gap) for gap in gaps):
+        return _refuse("numbers separated by ',', ';' or ':'; ambiguous")
+    if _OWN_UNIT.match(gaps[0]):
+        return _refuse("a number with its own unit followed by another number; ambiguous")
     return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"]
 
 
@@ -625,6 +641,29 @@ def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | Non
 # ---- Applying it to a lane ----------------------------------------------------------------------------------
 
 
+# "3 h 30 min", "2 hours and 15 minutes", "1 min 30 s": one quantity written in two units, larger first.
+_COMPOUND = re.compile(
+    rf"^(?P<a>{_UNSIGNED})\s*(?P<ua>[a-zA-Z]+)\s*(?:and\s+)?(?P<b>{_UNSIGNED})\s*(?P<ub>[a-zA-Z]+)$", re.IGNORECASE
+)
+
+
+def _compound(spec: FieldSpec, text: str) -> tuple[float, str] | None:
+    """``(canonical value, note)`` for a value spelled in two units of the field's own quantity, largest
+    first; None for anything else. Both units carry their own factor, so the model's ``unit_raw`` -- which
+    can only name one of them -- plays no part. parse_number cannot do this: it never sees the unit table."""
+    if spec.canonical_unit is None:
+        return None
+    match = _COMPOUND.match(normalize_text(text).strip())
+    if match is None:
+        return None
+    convert = CONVERTERS[spec.canonical_unit]
+    big, small = convert(match.group("ua")), convert(match.group("ub"))
+    if big is None or small is None or big <= small:
+        return None
+    value = float(_plain(match.group("a"))) * big + float(_plain(match.group("b"))) * small
+    return value, f"compound {text.strip()!r} read as {value:g} {spec.canonical_unit}"
+
+
 def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
@@ -632,6 +671,11 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
     word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    compound = _compound(spec, spelled)
+    if compound is not None:
+        value, note = compound
+        note = "; ".join(n for n in (word_note, note) if n)
+        return field.model_copy(update={"value": value, "unit": spec.canonical_unit, "normalization_note": note})
     number, parse_note = parse_number(spelled)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})

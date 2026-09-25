@@ -30,6 +30,8 @@ INTENDED_VALUE_CHANGES = {
     "100 to 0": "a power ramp, a descending pair rather than a value",
     "$ \\sim $25 and 70": "two thicknesses joined by 'and'",
     "500 °C to 530 °C": "a range with a unit on each bound; the midpoint, not the first bound",
+    "∅32 mm × 40 mm": "two dimensions, each with its own unit; read as 32, the first was a guess",
+    "140 nm ATO/25 nm ITO": "a bilayer's two thicknesses; read as 140, the first was a guess",
 }
 
 

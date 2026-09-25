@@ -57,6 +57,31 @@ def test_an_unparseable_number_clears_value_and_unit_and_explains_why():
     assert normalized.normalization_note == "no number found"
 
 
+@pytest.mark.parametrize(
+    ("raw", "unit_raw", "expected"),
+    [
+        ("3 h 30 min", "h", 210.0),
+        ("3 h 30 min", None, 210.0),
+        ("2 hours and 15 minutes", None, 135.0),
+        ("1 min 30 s", "min", 1.5),
+    ],
+)
+def test_a_compound_duration_is_one_value(raw, unit_raw, expected):
+    # Read as its first number, "3 h 30 min" became 180 min: a common annealing-time spelling, silently wrong.
+    normalized = normalize_field(make_field("annealing_time", raw, unit_raw=unit_raw), FIELD_BY_NAME["annealing_time"])
+
+    assert normalized.value == pytest.approx(expected)
+    assert normalized.unit == "min"
+    assert "compound" in normalized.normalization_note
+
+
+@pytest.mark.parametrize("raw", ["30 min 3 h", "30 min 20 min", "3 h 30 nm"])
+def test_only_a_descending_pair_of_one_quantity_is_a_compound(raw):
+    normalized = normalize_field(make_field("annealing_time", raw, unit_raw="min"), FIELD_BY_NAME["annealing_time"])
+
+    assert normalized.value is None
+
+
 def test_a_text_field_is_returned_untouched():
     # Text/composition comparison is computed on the fly in the comparison layer via normalize_key, rather
     # than caching a canonical text copy on the record (to avoid the two rule sets drifting apart).
