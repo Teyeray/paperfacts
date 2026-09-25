@@ -249,6 +249,19 @@ def test_an_unknown_unit_refuses_to_guess(field, unit):
     assert "unknown unit" in note and unit in note
 
 
+@pytest.mark.parametrize(("unit", "expected"), [("Pa Ar", 1.1), ("Pa (Ar)", 1.1), ("mTorr O2", 0.1466542)])
+def test_a_gas_named_after_the_unit_is_set_aside(unit, expected):
+    value, unit_out, note = convert("working_pressure", 1.1, unit)
+
+    assert value == pytest.approx(expected) and unit_out == "Pa"
+    assert "gas name" in note
+
+
+@pytest.mark.parametrize("unit", ["Ar", "sccm Ar"])
+def test_a_gas_name_does_not_make_an_unknown_unit_known(unit):
+    assert convert("working_pressure", 1.1, unit)[:2] == (None, None)
+
+
 def test_a_field_without_a_canonical_unit_returns_the_value_untouched():
     # component is a chemical-composition text field with no convertible unit; that must not cause the
     # value to be discarded.

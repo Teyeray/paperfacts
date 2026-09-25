@@ -687,8 +687,20 @@ def convert_to_canonical(
         return canonical_value, canonical_unit, _join([n for n in (scale_note, note) if n])
     factor = CONVERTERS[canonical](unit)
     if factor is None:
+        # "1.1 Pa Ar", "3 mTorr (O2)": a pressure or flow named with the gas it belongs to. The gas says whose
+        # quantity it is, not what unit, so the unit is read without it -- only when the rest is a known unit.
+        gasless = _GAS_SUFFIX.sub("", unit)
+        if gasless != unit and gasless:
+            factor = CONVERTERS[canonical](gasless)
+            if factor is not None:
+                note = f"gas name in the unit ({unit[len(gasless) :].strip('()')}) set aside"
+                return value * factor, canonical, _join([n for n in (scale_note, note) if n])
         return None, None, f"unknown unit {unit_raw!r} for {canonical}"
     return value * factor, canonical, scale_note
+
+
+# A gas species written after a unit, bracketed or not (units are compared with their spaces removed).
+_GAS_SUFFIX = re.compile(r"\(?(?:Ar|O2|N2|H2|He|Kr|Xe|air)\)?$")
 
 
 def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | None, str | None]:

@@ -778,6 +778,15 @@ def test_the_report_round_trips_through_disk(tmp_path):
         ("$4 0 0 ^ { \\circ } \\mathrm { C }$", (400.0,)),
         ("", ()),
         (None, ()),
+        # Where the paper shows it is not what it was measured at.
+        ("average transmittance, 400–1100 nm (films after annealing, Fig. 3c)", (400.0, 1100.0)),
+        ("550 nm (Table 2)", (550.0,)),
+        ("Figs. 3a and S4, at 300 °C", (300.0,)),
+        ("see Eq. 5", ()),
+        # A bare number after a reference is the next number, not another reference.
+        ("Figure S2b, 400-800 nm", (400.0, 800.0)),
+        ("Fig. 2, 550 nm", (550.0,)),
+        ("annealed for 30 sec 2 times", (30.0, 2.0)),
     ],
 )
 def test_condition_numbers_are_ordered_signed_and_range_aware(condition, numbers):
