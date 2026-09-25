@@ -230,6 +230,7 @@ def build_llm_client(settings: Settings) -> OpenAICompatibleClient:
         reasoning_effort=settings.llm_reasoning_effort,
         retry_attempts=settings.llm_retry_attempts,
         retry_backoff_s=settings.llm_retry_backoff_s,
+        offline=settings.llm_offline,
     )
 
 
@@ -400,6 +401,7 @@ def build_vision_client(settings: Settings) -> OpenAICompatibleClient:
         reasoning_effort=None,
         retry_attempts=FIGURE_RETRY_ATTEMPTS,
         retry_backoff_s=settings.llm_retry_backoff_s,
+        offline=settings.llm_offline,
     )
 
 

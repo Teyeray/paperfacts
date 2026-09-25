@@ -50,7 +50,7 @@ from paperfacts.config import (
     Inherit,
     ReasoningEffort,
 )
-from paperfacts.errors import LlmError, LlmResponseError
+from paperfacts.errors import LlmError, LlmOfflineMiss, LlmResponseError
 from paperfacts.storage import write_text_atomic
 
 logger = logging.getLogger(__name__)
@@ -191,6 +191,7 @@ class OpenAICompatibleClient:
         retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
         sleep: Callable[[float], None] = time.sleep,
         in_flight: InFlightLimit = IN_FLIGHT,
+        offline: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -205,6 +206,9 @@ class OpenAICompatibleClient:
         self.retry_backoff_s = retry_backoff_s
         self._sleep = sleep  # injectable so tests do not actually sleep
         self.in_flight = in_flight
+        # Replay only: a request the cache cannot answer raises instead of reaching the endpoint. This is how
+        # a refactor proves it re-derives the corpus for free -- any miss is a changed request, named in the log.
+        self.offline = offline
 
     def close(self) -> None:
         self.client.close()
@@ -236,6 +240,7 @@ class OpenAICompatibleClient:
                     return cached
                 logger.warning("llm cache entry %s fails validation; asking again", key[:16])
 
+        self._refuse_offline(key, user)
         data = self._post_with_retry(payload)
         text = _content(data, "the model")
         if data["choices"][0].get("finish_reason") == "length":
@@ -247,6 +252,12 @@ class OpenAICompatibleClient:
         if accept is None or accept(text):
             self._write_cache(key, result)
         return result
+
+    def _refuse_offline(self, key: str, user: str) -> None:
+        if self.offline:
+            # One grep-able line per miss, with the start of the question, so a changed prompt can be found.
+            logger.warning("llm offline miss key=%s user=%r", key[:16], user[:120])
+            raise LlmOfflineMiss(f"offline: no cached answer for request {key[:16]}")
 
     def payload(
         self, *, system: str, user: str, reasoning_effort: ReasoningEffort | Inherit | None = INHERIT
@@ -285,6 +296,7 @@ class OpenAICompatibleClient:
             cached = self._read_cache(key)
             if cached is not None:
                 return cached
+        self._refuse_offline(key, user)
         data = self._post_with_retry(payload)
         text = _content(data, "the vision model")
         if data["choices"][0].get("finish_reason") == "length":
