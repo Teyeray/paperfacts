@@ -149,6 +149,34 @@ def default_runner_script(repo_root: Path, backend: Backend) -> Path:
     return repo_root / RUNNER_SCRIPTS[backend]
 
 
+# ---- Parse locks ---------------------------------------------------------------------------------------
+#
+# Documents run in parallel, parsing does not: a parser service has one GPU, and two papers sent to it at
+# once only compete for its memory. So one run per lock at a time, a lock per backend -- MinerU and
+# PaddleOCR-VL are separate services and may parse two different papers side by side. A cache hit never
+# takes a lock, and neither does the adaptation after the run.
+
+SUBPROCESS_LOCK_KEY = "runner"
+_parse_locks: dict[str, threading.Lock] = {}
+_parse_locks_guard = threading.Lock()
+
+
+@contextmanager
+def _exclusive(key: str, backend: Backend, document: DocumentInput) -> Iterator[None]:
+    with _parse_locks_guard:
+        lock = _parse_locks.setdefault(key, threading.Lock())
+    if not lock.acquire(blocking=False):
+        # Said once, so a job log explains a parse stage that sits at "running" while another paper parses.
+        logger.info(
+            "waiting for the %s parser: another document is being parsed (doc=%s)", backend, document.document_id[:16]
+        )
+        lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 # ---- Template -----------------------------------------------------------------------------------------
 
 
@@ -192,7 +220,8 @@ class Parser:
         with _active_lock:
             _active_staging.add(staging)
         try:
-            meta = self._produce(document, staging)
+            with _exclusive(self.lock_key, self.backend, document):
+                meta = self._produce(document, staging)
             if meta is not None:
                 write_meta(staging, meta)
             try:
@@ -218,6 +247,11 @@ class Parser:
             output.meta.source.parsed_page_count,
         )
         return output
+
+    @property
+    def lock_key(self) -> str:
+        """Which parse lock this parser's runs take (see :func:`_exclusive`): one per backend by default."""
+        return self.backend
 
     def _check_ready(self) -> None:
         """Optional pre-flight; raise :class:`ParserError` on failure."""
@@ -248,6 +282,12 @@ class SubprocessParser(Parser):
         self.extra_args = tuple(extra_args)
         self.env = dict(env) if env else None
         self.timeout_s = timeout_s
+
+    @property
+    def lock_key(self) -> str:
+        """Both runners share one lock: each loads its whole model set into this machine's memory, and two
+        of them at once do not fit in a laptop's -- the reason ``--backend both`` has always been serial."""
+        return SUBPROCESS_LOCK_KEY
 
     def command(self, document: DocumentInput, out_dir: Path) -> list[str]:
         return [
