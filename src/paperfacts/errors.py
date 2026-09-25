@@ -38,6 +38,10 @@ class LlmResponseError(LlmError):
     """The model failed twice to produce JSON matching the required schema."""
 
 
+class LlmOfflineMiss(LlmError):
+    """``llm.offline`` is on and the request has no cached answer: nothing was sent."""
+
+
 class ContextBudgetError(PaperFactsError):
     """The paper does not fit in the model's context window."""
 

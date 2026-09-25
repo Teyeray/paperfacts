@@ -27,7 +27,8 @@
     "reasoning_effort": null,
     "inventory_reasoning_effort": null,
     "retry_attempts": 4,
-    "retry_backoff_s": 2.0
+    "retry_backoff_s": 2.0,
+    "offline": false
   },
   "extraction": {
     "mode": "passage",

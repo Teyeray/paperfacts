@@ -362,6 +362,7 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
 | `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured, up to 120 s |
 | `retry_backoff_s` | Default 2.0 |
+| `offline` | `true` answers every model request from the LLM cache and fails on a miss instead of sending it; each miss is logged as `llm offline miss`. For proving that a refactor re-derives the corpus for free. Default `false` |
 
 `reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
 OpenAI-shaped `reasoning_effort` parameter. `null` omits the parameter entirely, which is the shipped
@@ -473,7 +474,7 @@ points at its own services without editing the shared file:
 `PAPERFACTS_LLM_TIMEOUT_S`, `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`,
 `PAPERFACTS_LLM_MAX_TOKENS`, `PAPERFACTS_LLM_REASONING_EFFORT`,
 `PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`, `PAPERFACTS_LLM_MAX_IN_FLIGHT`,
-`PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_EXTRACTION_MODE`,
+`PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_LLM_OFFLINE`, `PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_WEB_MAX_PARALLEL_DOCUMENTS`,

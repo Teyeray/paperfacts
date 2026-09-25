@@ -1058,3 +1058,19 @@ def test_a_canonical_unit_with_no_converter_names_the_field_and_the_file():
 
     with pytest.raises(ConfigError, match=r"config\.json: field 'thickness': canonical_unit 'furlong'"):
         check_canonical_units((spec,), Path("config.json"))
+
+
+def test_offline_replay_is_off_by_default_and_the_environment_can_turn_it_on(tmp_path: Path):
+    path = write_config(tmp_path / "config.json")
+
+    assert Settings.from_env(env_for(path)).llm_offline is False
+    assert Settings.from_env(env_for(path, PAPERFACTS_LLM_OFFLINE="true")).llm_offline is True
+
+
+def test_offline_replay_moves_no_cache_key(tmp_path: Path):
+    # It decides whether a request is sent, never what is asked, so stored results keep their names.
+    path = write_config(tmp_path / "config.json")
+    online = Settings.from_env(env_for(path))
+    offline = Settings.from_env(env_for(path, PAPERFACTS_LLM_OFFLINE="1"))
+
+    assert keys.extractor_key_for(online) == keys.extractor_key_for(offline)

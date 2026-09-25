@@ -287,6 +287,9 @@ class Settings:
     llm_max_in_flight: int = DEFAULT_LLM_MAX_IN_FLIGHT
     llm_retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
     llm_retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S
+    # Replay only: every model request must be answered from the LLM cache or fail. Not part of any key:
+    # it changes whether a request is sent, never what is asked.
+    llm_offline: bool = False
     # Extract each lane this many times and keep what a majority of passes agree on. Costs one LLM call
     # per pass, so it stays at 1 unless a run explicitly asks for more.
     extraction_passes: int = 1
@@ -376,6 +379,7 @@ class Settings:
                 number("LLM_RETRY_ATTEMPTS", file.get("llm.retry_attempts", int), int), "llm.retry_attempts", file.path
             ),
             llm_retry_backoff_s=number("LLM_RETRY_BACKOFF_S", file.get("llm.retry_backoff_s", float), float),
+            llm_offline=_parse_bool("LLM_OFFLINE", get("LLM_OFFLINE"), file.get("llm.offline", bool)),
             extraction_passes=_positive(
                 number("EXTRACTION_PASSES", file.get("extraction.passes", int), int), "extraction.passes", file.path
             ),

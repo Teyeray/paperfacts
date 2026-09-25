@@ -11,6 +11,7 @@ sends the same bad request four times instead of one.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import httpx
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 
 from paperfacts.config import DEFAULT_RETRY_ATTEMPTS as RETRY_ATTEMPTS
 from paperfacts.config import DEFAULT_RETRY_BACKOFF_S as RETRY_BACKOFF_S
-from paperfacts.errors import LlmError, LlmResponseError
+from paperfacts.errors import LlmError, LlmOfflineMiss, LlmResponseError
 from paperfacts.llm import MAX_RETRY_AFTER_S, OpenAICompatibleClient, complete_validated
 from support.http import make_client, recording_client
 
@@ -737,3 +738,52 @@ def test_a_vision_reply_cut_off_at_max_tokens_is_an_error_and_is_not_cached(tmp_
     with pytest.raises(LlmError, match="cut off"):
         llm.complete_vision(system="s", user="u", image_png=PNG)
     assert list(tmp_path.iterdir()) == []
+
+
+# ---- Offline replay ------------------------------------------------------------------
+
+
+def _offline(llm: OpenAICompatibleClient) -> OpenAICompatibleClient:
+    llm.offline = True
+    return llm
+
+
+def test_offline_answers_from_the_cache_without_a_request(tmp_path: Path):
+    calls = []
+    online = make_llm(
+        lambda request: calls.append(request) or httpx.Response(200, json=chat_response()), cache_dir=tmp_path
+    )
+    online.complete_json(system="s", user="u")
+    replay = _offline(make_llm(lambda request: calls.append(request) or httpx.Response(500), cache_dir=tmp_path))
+
+    result = replay.complete_json(system="s", user="u")
+
+    assert result.cached and len(calls) == 1
+
+
+def test_offline_refuses_a_request_the_cache_cannot_answer(tmp_path: Path, caplog):
+    calls = []
+    replay = _offline(
+        make_llm(lambda request: calls.append(request) or httpx.Response(200, json=chat_response()), cache_dir=tmp_path)
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paperfacts.llm"), pytest.raises(LlmOfflineMiss):
+        replay.complete_json(system="s", user="a changed question")
+
+    assert calls == []
+    assert any(
+        "llm offline miss" in record.getMessage() and "a changed question" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_offline_refuses_a_forced_refresh_too(tmp_path: Path):
+    make_llm(cache_dir=tmp_path).complete_json(system="s", user="u")
+
+    with pytest.raises(LlmOfflineMiss):
+        _offline(make_llm(cache_dir=tmp_path)).complete_json(system="s", user="u", refresh=True)
+
+
+def test_offline_refuses_an_uncached_vision_request(tmp_path: Path):
+    with pytest.raises(LlmOfflineMiss):
+        _offline(make_llm(cache_dir=tmp_path)).complete_vision(system="s", user="u", image_png=b"\x89PNG")
