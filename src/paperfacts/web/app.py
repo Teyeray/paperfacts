@@ -5,7 +5,7 @@ Endpoints (all under ``/api``, JSON)::
 
     GET  /api/health
     GET  /api/documents                            document list (stage reached, counts)
-    GET  /api/dataset                              corpus results table (one paper_row per document)
+    GET  /api/dataset                              corpus results table (paper_row + every sample row per document)
     GET  /api/dataset.xlsx                         the whole library as one Excel workbook
     POST /api/documents  (multipart file, ?force)  upload a PDF and queue it -> {document, job}
     POST /api/documents/run-all?force=             queue every unfinished document (or all, with

@@ -53,7 +53,8 @@ class DocumentSummary(BaseModel):
 
 
 class CorpusRow(BaseModel):
-    """One paper on the home view's library-wide table: its selected sample row and how many it had."""
+    """One paper on the home view's library-wide table: its selected sample row, and every sample row so
+    the table can expand the paper in place without a request per document."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -61,6 +62,7 @@ class CorpusRow(BaseModel):
     name: str
     paper_row: dict[str, CellValue]
     sample_count: int
+    sample_rows: tuple[dict[str, CellValue], ...] = ()
 
 
 class CorpusPayload(BaseModel):
@@ -167,6 +169,7 @@ class Library:
                     name=summary.name,
                     paper_row=dataset.paper_row,
                     sample_count=len(dataset.sample_rows),
+                    sample_rows=dataset.sample_rows,
                 )
             )
         return CorpusPayload(fields=fields, rows=tuple(rows))
