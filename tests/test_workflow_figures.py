@@ -378,7 +378,7 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
         figures_started.set()
         assert stop.wait(timeout=5.0), "the failed paper never told the figures stage to stop"
         finished.append("figures stopped")
-        return "failed", "stopped"
+        return "skipped", "stopped: the rest of the paper failed"
 
     def failing_extraction(document, settings, *, force, on_stage):
         assert figures_started.wait(timeout=5.0)
@@ -386,11 +386,15 @@ def test_a_failed_extraction_stops_the_charts_and_waits_for_them_before_returnin
 
     monkeypatch.setattr("paperfacts.workflow._read_figures_stage", stoppable_figures)
     monkeypatch.setattr("paperfacts.workflow._extract_and_compare", failing_extraction)
+    marks: list[tuple[str, str, str]] = []
 
     with pytest.raises(LlmError):
-        run_document(document, settings)
+        run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
 
     assert finished == ["figures stopped"]  # joined, not left running
+    # Its own terminal mark, so the job layer does not stamp it with the extraction's error.
+    stopped = ("figures", "skipped", "stopped: the rest of the paper failed")
+    assert [m for m in marks if m[0] == "figures"][-1] == stopped
     assert not [t for t in threading.enumerate() if t.name.startswith("paperfacts-figures")]
 
 

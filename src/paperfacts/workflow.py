@@ -549,9 +549,11 @@ def _read_figures_stage(
         artifact = artifact or _figure_artifact(document, settings)
         with build_vision_client(settings) as client:
             readings = read_document_figures(document, settings, client, force=force, artifact=artifact, stop=stop)
-    except Cancelled as exc:
+    except Cancelled:
+        # Not this stage's failure: it was told to stop because another stage failed. The panels it had
+        # read are cached, so the next run picks them up.
         logger.info("figure reading stopped for %s: the rest of the paper failed", document.display_filename)
-        return "failed", str(exc)
+        return "skipped", "stopped: the rest of the paper failed"
     except Exception as exc:  # isolation is the point: any failure here is this stage's alone
         logger.exception("figure reading failed for %s", document.display_filename)
         return "failed", f"{type(exc).__name__}: {exc}"[:300]
@@ -641,6 +643,8 @@ def run_document(
                     for backend in BACKENDS
                 },
                 "parse",
+                on_stage=on_stage,
+                describe=lambda outcome: _parse_detail(outcome[1]),
             )
     for backend in BACKENDS:
         if backend not in outcomes:
@@ -648,8 +652,7 @@ def run_document(
             outcomes[backend] = parse_document(document, backend, settings, force=force)
         parsed[backend], parse_report = outcomes[backend]
         parse_reports[backend] = parse_report
-        cached = " (cached)" if parse_report.cache_hit else ""
-        on_stage(f"parse:{backend}", "done", f"{parse_report.block_count} blocks{cached}")
+        on_stage(f"parse:{backend}", "done", _parse_detail(parse_report))
 
     # The figures stage runs beside the two extraction lanes: it waits on a different model for minutes per
     # chart and shares nothing with them but the parse. It is joined before this function returns, whatever
@@ -674,8 +677,14 @@ def run_document(
             figures = shown_figures(document.document_id, document.display_filename, settings)
             on_stage("figures", figures_status, _figures_mark(figures_status, figures_detail, figures))
     except BaseException:
-        # The paper has failed: its charts would be read for nothing. The panels already out finish.
+        # The paper has failed: its charts would be read for nothing. The panels already out finish, and the
+        # stage is then marked with its own outcome -- left "running", the job layer would mark it failed
+        # with the error of a stage it had nothing to do with.
         stop_figures.set()
+        figures_pool.shutdown(wait=True)
+        if figures_future is not None and figures_future.done() and figures_future.exception() is None:
+            status, detail = figures_future.result()
+            _mark_quietly(on_stage, "figures", status, detail)
         raise
     finally:
         figures_pool.shutdown(wait=True)
@@ -698,12 +707,35 @@ def run_document(
     )
 
 
-def _every_lane[T](futures: Mapping[Backend, Future[T]], what: str) -> dict[Backend, T]:
+def _parse_detail(report: ParseReport) -> str:
+    return f"{report.block_count} blocks" + (" (cached)" if report.cache_hit else "")
+
+
+def _mark_quietly(on_stage: StageCallback, stage: str, status: StageStatus, detail: str) -> None:
+    """A stage mark made while a failure is already on its way out. The callback may raise (a stopped batch
+    raises Cancelled from it); that must not replace the failure being reported."""
+    try:
+        on_stage(stage, status, detail)
+    except Exception:
+        logger.debug("stage mark %s=%s not delivered while failing", stage, status, exc_info=True)
+
+
+def _every_lane[T](
+    futures: Mapping[Backend, Future[T]],
+    what: str,
+    *,
+    on_stage: StageCallback | None = None,
+    describe: Callable[[T], str] = lambda result: "",
+) -> dict[Backend, T]:
     """Both lanes' results, in BACKENDS order, or the first lane's failure.
 
     Every lane's outcome is collected before any of them is acted on, so an exception nobody asked for is
     logged rather than dropped by the garbage collector. A BaseException (a KeyboardInterrupt, say) still
     propagates straight out; leaving the caller's pool then waits for the other lane.
+
+    With ``on_stage``, a failure first marks each lane ``{what}:{backend}`` with its own outcome: done (as
+    ``describe`` puts it) or failed with its own error. Otherwise both stay "running", and the job layer marks
+    every running stage failed with the first lane's error, a lane that succeeded included.
     """
     results: dict[Backend, T] = {}
     failures: list[tuple[Backend, Exception]] = []
@@ -712,6 +744,14 @@ def _every_lane[T](futures: Mapping[Backend, Future[T]], what: str) -> dict[Back
             results[backend] = futures[backend].result()
         except Exception as exc:
             failures.append((backend, exc))
+    if failures and on_stage is not None:
+        errors = dict(failures)
+        for backend in BACKENDS:
+            if backend in errors:
+                error = errors[backend]
+                _mark_quietly(on_stage, f"{what}:{backend}", "failed", f"{type(error).__name__}: {error}")
+            else:
+                _mark_quietly(on_stage, f"{what}:{backend}", "done", describe(results[backend]))
     if failures:
         # In BACKENDS order, so the first lane's failure wins; the rest are explanations.
         for backend, exc in failures[1:]:
@@ -741,12 +781,10 @@ def _extract_and_compare(
                 backend: pool.submit(extract_document, document, backend, settings, client, force=force)
                 for backend in BACKENDS
             }
-            extracted = _every_lane(futures, "extraction")
+            extracted = _every_lane(futures, "extract", on_stage=on_stage, describe=_lane_detail)
             for backend, lane in extracted.items():
                 lanes[backend] = lane
-                ungrounded = len(lane.ungrounded())
-                detail = f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
-                on_stage(f"extract:{backend}", "done", detail)
+                on_stage(f"extract:{backend}", "done", _lane_detail(lane))
         on_stage("compare", "running", "")
         report = compare_document(document, settings, client, force=force, lanes=lanes)
     counts = report.counts
@@ -756,6 +794,11 @@ def _extract_and_compare(
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}",
     )
     return lanes, report
+
+
+def _lane_detail(lane: LaneExtraction) -> str:
+    ungrounded = len(lane.ungrounded())
+    return f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
 
 
 # ---- Directory batches and offline re-export -------------------------------------------------------
