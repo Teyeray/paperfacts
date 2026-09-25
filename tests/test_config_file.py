@@ -24,7 +24,9 @@ from paperfacts.config import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONCURRENCY,
     DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
+    DEFAULT_LLM_MAX_IN_FLIGHT,
     DEFAULT_LLM_REASONING_EFFORT,
+    DEFAULT_MAX_PARALLEL_DOCUMENTS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_OVERLAY_DPI,
     DEFAULT_RETRY_ATTEMPTS,
@@ -618,6 +620,8 @@ def test_the_shipped_configuration_mirrors_the_built_in_baselines():
     assert data["llm"]["inventory_reasoning_effort"] is None
     assert DEFAULT_LLM_INVENTORY_REASONING_EFFORT is INHERIT
     assert data["llm"]["concurrency"] == DEFAULT_LLM_CONCURRENCY
+    assert data["llm"]["max_in_flight"] == DEFAULT_LLM_MAX_IN_FLIGHT
+    assert data["web"]["max_parallel_documents"] == DEFAULT_MAX_PARALLEL_DOCUMENTS
     assert data["llm"]["retry_attempts"] == DEFAULT_RETRY_ATTEMPTS
     assert data["llm"]["retry_backoff_s"] == DEFAULT_RETRY_BACKOFF_S
     assert data["extraction"]["candidate_limit"] == DEFAULT_CANDIDATE_LIMIT
@@ -684,6 +688,34 @@ def test_a_non_integer_concurrency_still_names_the_key(tmp_path: Path):
     path = write_config(tmp_path / "config.json", {"llm.concurrency": "four"})
 
     with pytest.raises(ConfigError, match=r"llm\.concurrency must be int"):
+        Settings.from_env(env_for(path))
+
+
+# ---- llm.max_in_flight and web.max_parallel_documents: scheduling knobs, validated like counts ----
+
+
+@pytest.mark.parametrize(
+    ("dotted", "variable", "attribute"),
+    [
+        ("llm.max_in_flight", "LLM_MAX_IN_FLIGHT", "llm_max_in_flight"),
+        ("web.max_parallel_documents", "MAX_PARALLEL_DOCUMENTS", "max_parallel_documents"),
+    ],
+)
+def test_a_parallelism_limit_comes_from_the_file_and_the_environment_wins(
+    tmp_path: Path, dotted: str, variable: str, attribute: str
+):
+    path = write_config(tmp_path / "config.json", {dotted: 5})
+
+    assert getattr(Settings.from_env(env_for(path)), attribute) == 5
+    assert getattr(Settings.from_env(env_for(path, **{f"{ENV_PREFIX}{variable}": "2"})), attribute) == 2
+
+
+@pytest.mark.parametrize("dotted", ["llm.max_in_flight", "web.max_parallel_documents"])
+def test_a_parallelism_limit_below_one_names_the_key(tmp_path: Path, dotted: str):
+    # Zero would not mean "unlimited": every request, or every job, would wait forever.
+    path = write_config(tmp_path / "config.json", {dotted: 0})
+
+    with pytest.raises(ConfigError, match=rf"{re.escape(dotted)} must be at least 1"):
         Settings.from_env(env_for(path))
 
 

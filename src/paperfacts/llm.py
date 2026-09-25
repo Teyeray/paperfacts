@@ -12,6 +12,9 @@ Vision requests (:meth:`OpenAICompatibleClient.complete_vision`) carry one PNG a
 ``image_url`` content part. Their cache key hashes the request with the image replaced by its sha256: the
 same bytes on the wire are still the same key, but a megabyte of base64 never lands in the key material or
 in the cache entry.
+
+Every request that reaches the network first takes a slot from :data:`IN_FLIGHT`, one limit shared by every
+client in the process (see :class:`InFlightLimit`). A cache hit never touches it.
 """
 
 from __future__ import annotations
@@ -20,8 +23,10 @@ import base64
 import hashlib
 import json
 import logging
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, Self
@@ -30,6 +35,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from paperfacts.config import (
+    DEFAULT_LLM_MAX_IN_FLIGHT,
     DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_RETRY_ATTEMPTS,
@@ -46,6 +52,66 @@ logger = logging.getLogger(__name__)
 
 # Which HTTP statuses are worth trying again: the ones that mean "later", never the ones that mean "wrong".
 RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504}
+
+
+class InFlightLimit:
+    """At most ``limit`` model requests on the wire at once, across every client that shares this object.
+
+    The pools nest -- documents, then the two lanes and the figures stage, then one lane's field questions --
+    and each level's own limit multiplies with the others; only a limit taken around the request itself
+    bounds the product. A slot is held for exactly one HTTP call and never while waiting on anything else
+    (another future, a retry's backoff), so no thread can hold a slot that some other slot-holder waits for,
+    and the nesting cannot deadlock.
+
+    A condition over a counter rather than a ``Semaphore``: the limit comes from the settings, which are read
+    after this module has made the shared object, and a semaphore's size cannot change once it exists.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = _at_least_one(limit)
+        self._active = 0
+        self._changed = threading.Condition()
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    def set_limit(self, limit: int) -> None:
+        """A raised limit wakes the waiters at once; a lowered one lets the requests already out finish."""
+        with self._changed:
+            self._limit = _at_least_one(limit)
+            self._changed.notify_all()
+
+    @contextmanager
+    def slot(self) -> Iterator[None]:
+        with self._changed:
+            while self._active >= self._limit:
+                self._changed.wait()
+            self._active += 1
+        try:
+            yield
+        finally:
+            with self._changed:
+                self._active -= 1
+                self._changed.notify()
+
+
+def _at_least_one(limit: int) -> int:
+    if limit < 1:
+        raise ValueError(f"an in-flight limit must be at least 1, got {limit}")
+    return limit
+
+
+# The process-wide limit. Module-level because the thing it protects -- the endpoint's rate limit -- is
+# shared by every client this process builds, whichever document, lane or stage built it.
+IN_FLIGHT = InFlightLimit(DEFAULT_LLM_MAX_IN_FLIGHT)
+
+
+def shared_in_flight(limit: int) -> InFlightLimit:
+    """The process-wide limit, set to ``limit``. Every client built from the settings goes through this, so
+    the one value in the settings is the one in force."""
+    IN_FLIGHT.set_limit(limit)
+    return IN_FLIGHT
 
 
 @dataclass(frozen=True)
@@ -111,6 +177,7 @@ class OpenAICompatibleClient:
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
         retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
         sleep: Callable[[float], None] = time.sleep,
+        in_flight: InFlightLimit = IN_FLIGHT,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -124,6 +191,7 @@ class OpenAICompatibleClient:
         self.retry_attempts = retry_attempts
         self.retry_backoff_s = retry_backoff_s
         self._sleep = sleep  # injectable so tests do not actually sleep
+        self.in_flight = in_flight
 
     def close(self) -> None:
         self.client.close()
@@ -269,7 +337,10 @@ class OpenAICompatibleClient:
             error: LlmError
             retry_after: float | None = None
             try:
-                response = self.client.post(url, json=payload, headers=headers, timeout=self.timeout_s)
+                # The slot covers the call alone: a backoff below sleeps without one, so a request waiting
+                # out a 429 never keeps another from going out.
+                with self.in_flight.slot():
+                    response = self.client.post(url, json=payload, headers=headers, timeout=self.timeout_s)
             except httpx.HTTPError as exc:
                 error = LlmError(f"{type(exc).__name__}: {exc}")
             else:

@@ -303,6 +303,7 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `temperature` | Default 0.0 |
 | `max_tokens` | Completion budget, hidden reasoning included. Default 65536 |
 | `concurrency` | How many of one lane's field questions are in flight at once. Default 4 |
+| `max_in_flight` | How many model requests, text and vision, the whole process has on the wire at once. Default 8 |
 | `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
 | `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
 | `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured |
@@ -331,6 +332,15 @@ passage mode only, since document mode never asks the question.
 it stays out of both cache keys: raising or lowering it never re-extracts and never re-compares. The two
 lanes always run as a pair, so at most twice this many requests are open. Set it to 1 to send every
 question strictly one after another.
+
+`max_in_flight` is the ceiling over everything else: every lane of every document running at once, the
+figures stage and the sample matching all take a slot before a request goes out and give it back when the
+answer arrives. A cache hit takes none, so a resumed run replays at disk speed. The slot covers the HTTP call
+only, never a retry's backoff, so a request waiting out a 429 does not hold up the others. 8 is two
+documents' worth of lanes at the default `concurrency`; it is a guess at what one Model Studio workspace
+serves without answering 429, kept low because a throttled request costs a retry out of a fixed budget
+while a queued one costs only time. The limit is per process: the web server and a `batch` run at the same
+time each have their own. Like `concurrency`, it is in neither cache key.
 
 ### `extraction`
 
@@ -384,6 +394,7 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `server.max_upload_mb` | Default 200 |
 | `server.page_dpi.default` / `.min` / `.max` | Page renders for the viewer. Defaults 110, 50, 220 |
 | `web.username` | HTTP Basic username. Default `paperfacts`. The password is never here |
+| `web.max_parallel_documents` | Documents processed at once, by the web job queue and by `batch` (unless `--jobs` says otherwise). Default 3 |
 | `overlay.dpi` | Default 150 |
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
 | `condition_keywords` | The words that mark a measurement condition worth recording |
@@ -400,11 +411,11 @@ points at its own services without editing the shared file:
 `PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`,
 `PAPERFACTS_LLM_TIMEOUT_S`, `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`,
 `PAPERFACTS_LLM_MAX_TOKENS`, `PAPERFACTS_LLM_REASONING_EFFORT`,
-`PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`,
+`PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`, `PAPERFACTS_LLM_MAX_IN_FLIGHT`,
 `PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
-`PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`,
+`PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_MAX_PARALLEL_DOCUMENTS`,
 `PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
 `PAPERFACTS_FIGURES_MAX_PER_DOCUMENT`, `PAPERFACTS_FIGURES_DPI`, `PAPERFACTS_FIGURES_MAX_PIXELS`,
 `PAPERFACTS_FIGURES_TIMEOUT_S`.
