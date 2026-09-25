@@ -16,12 +16,13 @@ from __future__ import annotations
 import dataclasses
 import math
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from functools import cache
 from typing import Any
 
 from paperfacts.errors import ConfigError
-from paperfacts.text import clean_unit
+from paperfacts.text import clean_unit, normalize_text
 
 # ---- Built-in converters ---------------------------------------------------------------------------------
 # One recogniser per canonical unit, each handling only certain conversions. An unrecognised unit is never
@@ -170,7 +171,8 @@ class DeclaredUnit:
     # (:func:`paperfacts.text.clean_unit`) and case-folded unless the unit is case-sensitive.
     aliases: tuple[tuple[str, float, float], ...]
     case_sensitive: bool = False
-    # A retrieval pattern the author wrote; None derives one from the aliases.
+    # The pattern that finds this unit in running text: the author's, or the one the loader derives from the
+    # spellings as written (:func:`derive_retrieval`), since the cleaned ones above have lost their spaces.
     retrieval: str | None = None
     extends_builtin: bool = False
 
@@ -188,8 +190,39 @@ class UnitRegistry:
         return canonical in self.known()
 
     def has_retrieval(self, canonical: str) -> bool:
-        # A declared unit always has a pattern: its own, or the one its aliases derive.
-        return canonical in BUILTIN_RETRIEVAL or any(unit.canonical == canonical for unit in self.declared)
+        return self.retrieval(canonical) is not None
+
+    def convert(self, canonical: str, unit: str) -> tuple[float, float] | None:
+        """``(factor, offset)`` taking a value quoted in ``unit`` to ``canonical`` as ``value * factor + offset``,
+        or None when nothing here reads that spelling.
+
+        A built-in unit's own converter is asked first, so an extension can add spellings to it but never change
+        how one it already reads converts."""
+        builtin = BUILTIN_CONVERTERS.get(canonical)
+        factor = None if builtin is None else builtin(unit)
+        if factor is not None:
+            return factor, 0.0
+        for declared in self.declared:
+            if declared.canonical == canonical:
+                key = fold_spelling(unit, declared.case_sensitive)
+                for spelling, alias_factor, offset in declared.aliases:
+                    if spelling == key:
+                        return alias_factor, offset
+        return None
+
+    def retrieval(self, canonical: str) -> re.Pattern[str] | None:
+        """The pattern that finds a number in ``canonical`` in :func:`paperfacts.passages.searchable` text.
+
+        A built-in unit nothing extends keeps its own pattern object; an extension is searched beside it."""
+        patterns = [unit.retrieval for unit in self.declared if unit.canonical == canonical and unit.retrieval]
+        builtin = BUILTIN_RETRIEVAL.get(canonical)
+        if not patterns:
+            return builtin
+        if builtin is not None:
+            patterns.insert(0, builtin.pattern)
+        if len(patterns) == 1:
+            return _compiled(patterns[0])
+        return _compiled("|".join(f"(?:{pattern})" for pattern in patterns))
 
     def check(self, canonical: str, where: str) -> None:
         """Refuse a canonical unit nothing converts into, or one retrieval cannot find in running text."""
@@ -203,6 +236,29 @@ class UnitRegistry:
     def material(self) -> list[dict[str, Any]]:
         """What the declared units contribute to a fingerprint: nothing when a profile declares none."""
         return [dataclasses.asdict(unit) for unit in self.declared]
+
+
+# The registry of a profile that declares no unit: exactly the built-ins.
+BUILTIN_UNITS = UnitRegistry()
+
+
+@cache
+def _compiled(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern)
+
+
+def derive_retrieval(spellings: Iterable[str]) -> str:
+    """A retrieval pattern for spellings as an author wrote them.
+
+    Each spelling must follow a digit, is folded the way :func:`paperfacts.passages.searchable` folds text, has
+    its runs of spaces made optional (papers write "mAh g-1" and "mAhg-1" alike), and is closed by a word
+    boundary when it ends in a letter or digit, so "V" does not match the start of "Vis"."""
+    alternatives = []
+    for spelling in spellings:
+        folded = normalize_text(spelling).lower()
+        boundary = r"\b" if folded[-1:].isalnum() else ""
+        alternatives.append(r"\s*".join(re.escape(part) for part in folded.split(" ")) + boundary)
+    return rf"\d\s*(?:{'|'.join(alternatives)})"
 
 
 def compile_pattern(pattern: Any, where: str, flags: int = 0) -> re.Pattern[str]:
@@ -274,7 +330,9 @@ def _declared_unit(canonical: str, entry: Any, where: str) -> DeclaredUnit:
         raise ConfigError(f"{where}: aliases must list {canonical!r} itself with factor 1 and no offset")
 
     retrieval = entry.get("retrieval")
-    if retrieval is not None:
+    if retrieval is None:
+        retrieval = derive_retrieval(table)
+    else:
         compile_pattern(retrieval, f"{where}: retrieval")
     return DeclaredUnit(
         canonical=canonical,

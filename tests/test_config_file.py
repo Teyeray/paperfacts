@@ -1074,12 +1074,8 @@ def test_the_shipped_settings_pass_every_range_check(tmp_path: Path):
 
 
 def test_a_canonical_unit_with_no_converter_names_the_field_and_the_file():
-    from paperfacts.normalize import check_canonical_units
-
-    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"canonical_unit": "furlong"}]}))[0]
-
     with pytest.raises(ConfigError, match=r"config\.json: field 'thickness': canonical_unit 'furlong'"):
-        check_canonical_units((spec,), Path("config.json"))
+        load_field_specs(document({"fields": [MINIMAL_FIELD | {"canonical_unit": "furlong"}]}))
 
 
 def test_offline_replay_is_off_by_default_and_the_environment_can_turn_it_on(tmp_path: Path):

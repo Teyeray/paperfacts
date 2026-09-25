@@ -33,14 +33,16 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
+from functools import cache
 from typing import Literal
 
 from paperfacts.config import DEFAULT_CANDIDATE_LIMIT
 from paperfacts.continuation import continuation_partners
 from paperfacts.fields import CONDITION_KEYWORDS, FieldSpec
 from paperfacts.models import SourceBlock
+from paperfacts.profile import RetrievalSpec
 from paperfacts.text import delatex, normalize_text
-from paperfacts.units import BUILTIN_RETRIEVAL
+from paperfacts.units import BUILTIN_UNITS, UnitRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,10 @@ CONDITION_UNIT = re.compile(
     r"\d\s*(?:sccm|W\b|°C|℃|K\b|Pa\b|mtorr|torr|mbar|kv\b|ma\b|rpm|min\b|h\b|s\b|(?:vol|at)\.?\s*%)",
     re.IGNORECASE,
 )
+# The shipped profile's retrieval, for callers that do not pass their profile's. The pattern is written in this
+# module rather than read from profiles/tco.json so that retrieval_fingerprint, which hashes this source and the
+# keywords, still covers every byte the inventory selection depends on.
+DEFAULT_RETRIEVAL = RetrievalSpec(condition_keywords=CONDITION_KEYWORDS, condition_unit_pattern=CONDITION_UNIT.pattern)
 
 # Compiled on first use and kept: the keyword tables are small and fixed at import time.
 _PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
@@ -99,47 +105,59 @@ def keyword_hits(keywords: Sequence[str], text: str) -> int:
     return sum(1 for keyword in keywords if _pattern(keyword).search(squeezed))
 
 
-def inventory_blocks(blocks: Sequence[SourceBlock]) -> list[SourceBlock]:
+def inventory_blocks(blocks: Sequence[SourceBlock], retrieval: RetrievalSpec = DEFAULT_RETRIEVAL) -> list[SourceBlock]:
     """The blocks that could name a sample or the conditions that distinguish one.
 
     Section titles come along because they are nearly free and tell the model which part of the paper it is
     reading; tables and captions because samples are usually enumerated there; prose only when it mentions a
     deposition condition. Document order is preserved, so the model sees the paper's own narrative.
     """
-    chosen = {index for index, block in enumerate(blocks) if _is_inventory_block(block)}
+    condition_unit = _condition_unit(retrieval.condition_unit_pattern)
+    chosen = {
+        index
+        for index, block in enumerate(blocks)
+        if _is_inventory_block(block, condition_unit, retrieval.condition_keywords)
+    }
     chosen |= continuation_partners(chosen, blocks)
     logger.debug("inventory blocks %d/%d", len(chosen), len(blocks))
     return [blocks[index] for index in sorted(chosen)]
 
 
-def _is_inventory_block(block: SourceBlock) -> bool:
+@cache
+def _condition_unit(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def _is_inventory_block(block: SourceBlock, condition_unit: re.Pattern[str], keywords: Sequence[str]) -> bool:
     if block.type in DENSE_TYPES or block.type == "title":
         return True
     text = searchable(block)
-    if CONDITION_UNIT.search(text):
+    if condition_unit.search(text):
         return True
     # A condition word alone is not enough: "the deposition process" appears in every discussion paragraph.
     # Paired with a number it is almost always the sentence that states how a sample was made.
     if not any(character.isdigit() for character in text):
         return False
-    return keyword_hits(CONDITION_KEYWORDS, text) > 0
+    return keyword_hits(keywords, text) > 0
 
 
 def candidate_blocks(
     spec: FieldSpec,
     blocks: Sequence[SourceBlock],
     *,
+    units: UnitRegistry = BUILTIN_UNITS,
     limit: int = DEFAULT_CANDIDATE_LIMIT,
     sample_blocks: frozenset[str] = frozenset(),
 ) -> list[SourceBlock]:
     """The blocks that could hold a value of ``spec``, returned in document order.
 
     Every block naming the field comes along; the blocks that only carry its unit are capped by ``limit``,
-    which is what keeps a paper full of percentages from putting every caption into every question.
+    which is what keeps a paper full of percentages from putting every caption into every question. ``units``
+    says how that unit is written in running text.
     """
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
-    unit = BUILTIN_RETRIEVAL.get(spec.canonical_unit or "")
+    unit = None if spec.canonical_unit is None else units.retrieval(spec.canonical_unit)
     named: set[int] = set()
     unit_only: list[tuple[bool, int]] = []
     for index, block in enumerate(blocks):
