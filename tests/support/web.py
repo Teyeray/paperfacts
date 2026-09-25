@@ -16,6 +16,7 @@ see it", not get papered over by a second, hand-written path living in the test.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -181,6 +182,26 @@ def seed_report(
     )
     report.write(library.layout.comparison_path(document_sha, key, cmp_key))
     return report
+
+
+def seed_dataset(library: Library, document_id: str, payload: dict) -> Path:
+    """Write the consolidated table under the library's current keys, the way the export stage does."""
+    path = library.layout.dataset_json_path(document_id, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def corpus_payload(document_id: str, *, name: str = "paper.pdf", samples: int = 2) -> dict:
+    """A dataset payload shaped like ``DatasetPayload``, trimmed to what the corpus reads."""
+    return {
+        "document_id": document_id,
+        "filename": name,
+        "fields": [{"name": "thickness", "label": "厚度", "unit": "nm", "scope": "sample", "description": "膜厚"}],
+        "paper_row": {"sample_id": "S1", "available_fields": 1, "agree_fields": 1, "thickness": 300},
+        "sample_rows": [{"sample_id": f"S{i}", "thickness": 300} for i in range(1, samples + 1)],
+        "quality_rows": [],
+    }
 
 
 def seed_cli_document(library: Library, pdf: Path, *, document_sha: str = DOC_SHA) -> DocumentIdentity:
