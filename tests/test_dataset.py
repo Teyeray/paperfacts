@@ -496,8 +496,9 @@ def test_without_a_row_sharing_condition_the_fields_preference_picks_the_cell():
     assert row["source_ids"] == "mineru_p4_b3; paddleocr_vl_p4_b3"
 
 
-def test_a_preference_matching_two_conditions_in_one_lane_moves_on_to_the_next():
-    # Both name 400 and 800 and neither is a peak; the tie is not settled by the first entry, so 550 decides.
+def test_a_preference_entry_matching_two_states_in_one_lane_ends_the_search():
+    # Both are 400-800 averages, of two states of the film. Moving on to 550 would commit a third measurement
+    # whose state nobody chose, so the cell is refused instead.
     fields = [
         value("transmittance", "91.9", "%", condition="average 400-800 nm, as deposited"),
         value("transmittance", "90.5", "%", condition="average 400-800 nm, after bending"),
@@ -506,7 +507,66 @@ def test_a_preference_matching_two_conditions_in_one_lane_moves_on_to_the_next()
 
     result = paired(fields, [])
 
-    assert result.paper_row["transmittance"] == 92.2
+    assert result.paper_row["transmittance"] is None
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def test_two_states_at_the_preferred_wavelength_are_not_bypassed_by_a_later_entry():
+    # The review's N14: 550 nm as-deposited and annealed tie; 400-1100 must not be committed instead.
+    fields = [
+        value("transmittance", "85", "%", condition="550 nm, as-deposited"),
+        value("transmittance", "88", "%", condition="550 nm, annealed"),
+        value("transmittance", "82", "%", condition="average 400-1100 nm"),
+    ]
+
+    result = paired(fields, [])
+
+    assert result.paper_row["transmittance"] is None
+
+
+def test_a_bound_at_one_state_does_not_hand_the_cell_to_the_other_state():
+    # The review's N1c: "<100 nm" as-deposited and 95 nm annealed in one lane, 98 nm as-deposited in the other.
+    # Setting the bound aside would let 95 (annealed) win and lane B's as-deposited 98 vouch for it.
+    a = [
+        value("thickness", "<100", "nm", condition="as-deposited"),
+        value("thickness", "95", "nm", condition="after annealing"),
+    ]
+    b = [value("thickness", "98", "nm", condition="as-deposited", backend="paddleocr_vl")]
+
+    result = paired(a, b)
+
+    assert result.paper_row["thickness"] is None
+    assert decision(result, "thickness")["decision"] != "agree"
+
+
+def test_a_bound_beside_another_quantity_never_makes_that_quantity_the_value():
+    # The review's T6: ">95 %" relative density next to a 99.99 % purity must not commit 99.99 as the density.
+    result = dataset(
+        make_lane(
+            target=TargetRecord(
+                fields=(
+                    value("density", ">95", "%", condition="relative density"),
+                    value("density", "99.99", "%", condition="purity"),
+                )
+            )
+        )
+    )
+
+    assert result.paper_row["density"] is None
+
+
+def test_the_other_lanes_condition_free_value_still_counts_against_the_chosen_one():
+    # The review's N4e: lane B's 70 % has no condition; the preference picks lane A's 400-800 value. Lane B must
+    # not be dropped silently -- its contradicting value keeps the cell from committing as settled.
+    a = [
+        value("transmittance", "85", "%", condition="average 400-800 nm"),
+        value("transmittance", "88", "%", condition="550 nm"),
+    ]
+    b = [value("transmittance", "70", "%", backend="paddleocr_vl")]
+
+    result = paired(a, b)
+
+    assert result.paper_row["transmittance"] is None
 
 
 def test_inside_one_preference_entry_an_average_beats_a_peak():

@@ -754,10 +754,13 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
 | `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
 
-Two things are not refusals. A bound or range beside a scalar (`>80 %` next to `80.6 %`) is set aside with a
-note and the scalar decides the cell -- but only after the condition is chosen: a bound at the condition the
-row's block or `condition_preference` picks is the answer there, and the cell is `non_scalar` rather than
-filled with a scalar from a less preferred condition. And several condition texts in one lane that all give
+Two things are not refusals. A bound or range beside a scalar under the chosen condition (`>80 %` next to
+`80.6 %`) is set aside with a note and the scalar decides the cell. The condition is chosen over every
+candidate, bounds included, and a bound is never set aside to make room for another condition: a bound at the
+condition the row's block or `condition_preference` picks makes the cell `non_scalar`, and when nothing picks
+a condition the cell stays `multiple_conditions` rather than letting the scalar's condition win by default. A
+preference entry that matches two states of the film in one lane (550 nm as-deposited and annealed) ends the
+search rather than falling through to a later entry. And several condition texts in one lane that all give
 the very same number ("100 nm, by TEM cross-section", "100 nm, not reduced by the forming gas") are one
 measurement, committed with the texts joined -- unless the conditions name different numbers: 85 % at 450 nm
 and 85 % at 600 nm stay two measurements, and so do 100 nm as-deposited and 104 nm after annealing.

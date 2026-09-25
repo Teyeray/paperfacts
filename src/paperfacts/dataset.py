@@ -1,9 +1,9 @@
 """Conservative, one-value-per-field datasets and an atomic Excel export.
 
-The paper table selects a complete sample row. It must never manufacture a sample by
-combining the best measurement of each field from different experimental conditions. "Different
-conditions" is judged within a lane: the two lanes paraphrase the same condition differently, so
-comparing their wording across lanes would refuse values the comparison report already agreed on.
+The paper table selects a complete sample row. It must never manufacture a sample by combining the best
+measurement of each field from different experimental conditions. Which value a cell holds -- and whether it
+holds one at all -- is decided per cell by :mod:`paperfacts.decide`; this module gathers each cell's evidence,
+assembles the rows and writes the workbook.
 """
 
 from __future__ import annotations

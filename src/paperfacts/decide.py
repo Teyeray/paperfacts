@@ -27,7 +27,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from paperfacts.compare import FieldComparison, condition_numbers, conditions_measure_differently
-from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.models import BACKENDS, Backend
 from paperfacts.normalize import (
     clean_unit,
@@ -114,8 +114,6 @@ def decide(
         return reject(status, "双路比较存在冲突或歧义，需人工复核")
     if not comparisons:
         return reject("unreviewed", "比较报告没有覆盖该字段")
-    if any(c.match_confidence is not None and c.match_confidence < AMBIGUOUS_MATCH_CONFIDENCE for c in comparisons):
-        return reject("ambiguous", "样品匹配置信度低于阈值")
     trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
     if not trusted:
         return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
@@ -125,20 +123,16 @@ def decide(
     candidates = [_Candidate(backend, value, *_scalar(value, spec)) for backend, value in trusted]
     several = _several_conditions(candidates)
 
+    # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
+    # let it take its own condition out of the running, so the scalar's condition would win although no rule
+    # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
     narrowed = _narrow(spec, candidates, row_sources)
-    aside: list[_Candidate] = []
-    if narrowed is None:
-        # Nothing picks among all the candidates: set the non-scalars aside and try again on the rest.
-        aside = [c for c in candidates if c.scalar is None]
-        if aside and len(aside) < len(candidates):
-            narrowed = _narrow(spec, [c for c in candidates if c.scalar is not None], row_sources)
     if narrowed is None:
         return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
     kept, reason = narrowed
     if reason:
         details.append(f"该样品有多种测量条件；{reason}")
-    if not aside:
-        aside = [c for c in kept if c.scalar is None]
+    aside = [c for c in kept if c.scalar is None]
     final = [c for c in kept if c.scalar is not None]
     if not final:
         return reject("non_scalar", aside[0].note or "无法生成唯一标量")
@@ -252,37 +246,51 @@ def _one_condition(
        exactly the entry's numbers, so "average 400–800 nm" and "from 400 to 800 nm" both match "400-800".
        When an entry matches several conditions in one lane, the one that says average / avg / mean / AVT is
        taken: "average 400-1100 nm" is the measurement a reader compares across papers, a peak or a minimum
-       over the same range is not. A peak, a minimum or an unlabelled range never wins this way. If no
-       average settles it, the next entry is tried.
+       over the same range is not. A peak, a minimum or an unlabelled range never wins this way. An entry
+       that still matches two conditions in one lane (550 nm as-deposited and 550 nm annealed) ends the
+       search: the next entry would pick a third measurement whose state nobody chose.
 
     Once a rule chooses, every lane is held to it: a lane keeps only its values the rule picks, so a lane
     quoting a different condition cannot vouch for the one chosen. A rule that picks two conditions in one
     lane, two different conditions across the lanes, or nothing in any, settles nothing and the next is
     tried.
     """
-    rules: list[tuple[str, Callable[[FieldValue], bool]]] = [
-        ("采用与本行其他字段引用同一原文块的条件", lambda value: bool(row_sources.intersection(value.source_ids)))
-    ]
+    kept, _ = _held_to(candidates, lambda value: bool(row_sources.intersection(value.source_ids)))
+    if kept:
+        return kept, "采用与本行其他字段引用同一原文块的条件"
     for entry in spec.condition_preference:
+        numbers = condition_numbers(entry)
 
-        def matches(value: FieldValue, numbers: tuple[float, ...] = condition_numbers(entry)) -> bool:
+        def matches(value: FieldValue, numbers: tuple[float, ...] = numbers) -> bool:
             return condition_numbers(value.condition) == numbers
 
-        def averaged(value: FieldValue, matches: Callable[[FieldValue], bool] = matches) -> bool:
-            return matches(value) and bool(_AVERAGE_WORDS.search(value.condition or ""))
-
-        rules.append((f"按字段配置的优先条件 {entry} 选取", matches))
-        rules.append((f"按字段配置的优先条件 {entry} 选取，取平均值", averaged))
-    for reason, picks in rules:
-        kept = _held_to(candidates, picks)
+        kept, tied = _held_to(candidates, matches)
         if kept:
-            return kept, reason
+            return kept, f"按字段配置的优先条件 {entry} 选取"
+        if not tied:
+            continue
+        kept, _ = _held_to(candidates, lambda value, matches=matches: matches(value) and _is_average(value))
+        if kept:
+            return kept, f"按字段配置的优先条件 {entry} 选取，取平均值"
+        # The entry matched several states and no average settled them; a later entry would choose a third
+        # measurement whose state nobody picked.
+        return None
     return None
 
 
-def _held_to(candidates: Sequence[_Candidate], picks: Callable[[FieldValue], bool]) -> list[_Candidate] | None:
+def _is_average(value: FieldValue) -> bool:
+    return bool(_AVERAGE_WORDS.search(value.condition or ""))
+
+
+def _held_to(
+    candidates: Sequence[_Candidate], picks: Callable[[FieldValue], bool]
+) -> tuple[list[_Candidate] | None, bool]:
     """Each lane's candidates ``picks`` keeps, when every lane keeps one condition and the lanes keep the same
-    one; otherwise None.
+    one; otherwise None. The flag says whether the rule failed on a tie (one lane kept two conditions)
+    rather than on picking nothing.
+
+    A lane the rule picks nothing from is not silently dropped: its values whose condition names no number
+    (or has none) stay in, so the tolerance check can still find that they contradict the chosen value.
 
     A rule is judged per lane (rule 1 looks at each lane's own blocks), so each lane can pick one condition
     and still not the other lane's: "85 % @ 550 nm" in one and "85.2 % @ 400-800 nm" in the other are two
@@ -298,13 +306,18 @@ def _held_to(candidates: Sequence[_Candidate], picks: Callable[[FieldValue], boo
             if candidate.backend == backend and picks(candidate.value):
                 groups.setdefault(normalize_key(candidate.value.condition), []).append(candidate)
         if len(groups) > 1:
-            return None
+            return None, True
         for group in groups.values():
             chosen[backend] = group[0].value.condition
             kept += group
     if len(chosen) == 2 and conditions_measure_differently(*chosen.values()):
-        return None
-    return kept or None
+        return None, False
+    if not kept:
+        return None, False
+    for backend in BACKENDS:
+        if backend not in chosen:
+            kept += [c for c in candidates if c.backend == backend and not condition_numbers(c.value.condition)]
+    return kept, False
 
 
 # ---- Agreement ---------------------------------------------------------------------------------------------

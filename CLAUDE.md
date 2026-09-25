@@ -82,7 +82,10 @@ this file is the part that is easy to get wrong.
   pairing, both modes' `records.clean_samples`); never by `normalize_key`, which deletes Greek letters and
   folds a case-distinguished suffix. The two exceptions are explicit, never inferred: a paper with exactly
   one sample owns every unplaced value, and a value the model flags `applies_to_all_samples` (the paper states it for the whole series) is written onto
-  every sample with `series=True`.
+  every sample with `series=True`. A value stated for a named subset ("all films deposited at 100 °C") is
+  placed by the model, once per sample id of that subset, and only when the excerpts or the sample list say
+  exactly which samples form it; otherwise it stays unplaced (passage mode) or is left out (document mode,
+  which has nowhere to keep an unplaced sample-level value). Code never infers a subset.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
 - Five guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
