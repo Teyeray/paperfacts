@@ -17,13 +17,12 @@ import itertools
 import re
 from collections.abc import Callable
 from functools import cache
-from pathlib import Path
 
-from paperfacts.errors import ConfigError
-from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FIELDS_SOURCE, FieldSpec
+from paperfacts.fields import FIELD_BY_NAME, FieldSpec
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
 from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS
+from paperfacts.units import BUILTIN_UNITS, UnitRegistry
 
 # ---- Closed category sets --------------------------------------------------------------------------------
 # A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
@@ -352,25 +351,9 @@ def _join(notes: list[str]) -> str | None:
 
 
 # ---- Units -----------------------------------------------------------------------------------------------
-# The converters are paperfacts.units' built-ins. What a bare number means is decided by
+# The converters are a paperfacts.units registry's: the built-ins plus what a profile declares. Every canonical
+# unit was checked against it when the field table was loaded. What a bare number means is decided by
 # ``FieldSpec.bare_number``, never by field name here.
-
-
-def check_canonical_units(specs: tuple[FieldSpec, ...], source: Path) -> None:
-    """Refuse a field whose canonical unit nothing here can convert into, naming the field and the file.
-
-    Checked at import rather than as a KeyError buried in normalisation, field by field. It lives here and
-    not in fields.py because the converters do, and fields.py cannot import this module.
-    """
-    for spec in specs:
-        if spec.canonical_unit and spec.canonical_unit not in CONVERTERS:
-            raise ConfigError(
-                f"{source}: field {spec.name!r}: canonical_unit {spec.canonical_unit!r} has no converter; "
-                f"known units are {', '.join(CONVERTERS)}"
-            )
-
-
-check_canonical_units(FIELD_SPECS, FIELDS_SOURCE)
 
 
 # A power-of-ten factor in a transcribed table header: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm", "ρ × 10^4"
@@ -439,10 +422,17 @@ def has_scale_factor(text: str) -> bool:
 
 
 def convert_to_canonical(
-    spec: FieldSpec, value: float, unit_raw: str | None, *, value_text: str | None = None
+    spec: FieldSpec,
+    value: float,
+    unit_raw: str | None,
+    units: UnitRegistry = BUILTIN_UNITS,
+    *,
+    value_text: str | None = None,
 ) -> tuple[float | None, str | None, str | None]:
     """``(canonical value, canonical unit, note)``; the value is None when conversion fails.
 
+    The value is multiplied by any scale factor in the header first, then converted as ``value * factor +
+    offset``: the header's power of ten counts in the unit it was written in, before a temperature is shifted.
     ``value_text`` is the raw text ``value`` was parsed from. It is only consulted to detect a power of ten
     written twice, once in the value and once in the unit, which no reading can resolve.
     """
@@ -451,7 +441,11 @@ def convert_to_canonical(
         return value, None, None
     if unit_raw is None:
         return _bare_number(spec, value)
-    scale, unit = split_scale_factor(unit_raw, CONVERTERS[canonical])
+
+    def convert(unit: str) -> tuple[float, float] | None:
+        return units.convert(canonical, unit)
+
+    scale, unit = split_scale_factor(unit_raw, convert)
     if scale is None:
         return (
             None,
@@ -467,18 +461,25 @@ def convert_to_canonical(
     if not unit:
         canonical_value, canonical_unit, note = _bare_number(spec, value)
         return canonical_value, canonical_unit, _join([n for n in (scale_note, note) if n])
-    factor = CONVERTERS[canonical](unit)
-    if factor is None:
+    conversion = convert(unit)
+    if conversion is None:
         # "1.1 Pa Ar", "3 mTorr (O2)": a pressure or flow named with the gas it belongs to. The gas says whose
         # quantity it is, not what unit, so the unit is read without it -- only when the rest is a known unit.
         gasless = _GAS_SUFFIX.sub("", unit)
         if gasless != unit and gasless:
-            factor = CONVERTERS[canonical](gasless)
-            if factor is not None:
+            conversion = convert(gasless)
+            if conversion is not None:
+                factor, offset = conversion
                 note = f"gas name in the unit ({unit[len(gasless) :].strip('()')}) set aside"
-                return value * factor, canonical, _join([n for n in (scale_note, note) if n])
+                return _apply(value, factor, offset), canonical, _join([n for n in (scale_note, note) if n])
         return None, None, f"unknown unit {unit_raw!r} for {canonical}"
-    return value * factor, canonical, scale_note
+    factor, offset = conversion
+    return _apply(value, factor, offset), canonical, scale_note
+
+
+def _apply(value: float, factor: float, offset: float) -> float:
+    # A zero offset is not added at all: -0.0 + 0.0 is 0.0, and a factor-only unit keeps the bits it always gave.
+    return value * factor + offset if offset else value * factor
 
 
 # A gas species written after a unit, bracketed or not (units are compared with their spaces removed).
@@ -537,15 +538,15 @@ def compound_value(spec: FieldSpec, text: str) -> float | None:
     return float(_plain(match.group("a"))) * big + part
 
 
-def _names_unit_of(spec: FieldSpec, text: str) -> bool:
+def _names_unit_of(spec: FieldSpec, text: str, units: UnitRegistry) -> bool:
     """Whether ``text`` names a unit of the field's own quantity ("2 h" for a time, "°C" for a temperature)."""
-    if spec.canonical_unit is None:
+    canonical = spec.canonical_unit
+    if canonical is None:
         return False
-    convert = CONVERTERS[spec.canonical_unit]
-    return any(convert(word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
+    return any(units.convert(canonical, word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
 
 
-def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
+def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry = BUILTIN_UNITS) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
         return field
@@ -553,7 +554,7 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     spelled = spell_number_word(field.value_raw, field.unit_raw)
     word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
     bare, context_notes, condition = set_aside(spelled)
-    if condition and _names_unit_of(spec, condition) and not _names_unit_of(spec, bare):
+    if condition and _names_unit_of(spec, condition, units) and not _names_unit_of(spec, bare, units):
         # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
         note = f"the condition {condition!r} holds this field's quantity and the value does not; ambiguous"
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
@@ -565,7 +566,7 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     number, parse_note = parse_number(spelled)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
-    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, value_text=spelled)
+    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=spelled)
     note = "; ".join(n for n in (word_note, parse_note, unit_note) if n) or None
     return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 

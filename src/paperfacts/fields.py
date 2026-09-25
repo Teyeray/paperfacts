@@ -31,11 +31,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
-from pathlib import Path
 from typing import Any, Literal, get_args
 
 from paperfacts.config import ConfigDocument, configuration
 from paperfacts.errors import ConfigError
+from paperfacts.units import BUILTIN_UNITS
 
 # Whether a field belongs to the paper as a whole or to each of its samples. A profile declares it per group.
 FieldLevel = Literal["paper", "sample"]
@@ -311,6 +311,10 @@ def load_field_specs(document: ConfigDocument) -> tuple[FieldSpec, ...]:
     duplicates = sorted({spec.name for spec in specs if sum(s.name == spec.name for s in specs) > 1})
     if duplicates:
         raise ConfigError(f"{document.path}: fields has more than one entry named {', '.join(duplicates)}")
+    for spec in specs:
+        if spec.canonical_unit:
+            # Refused here, naming the field, rather than as an unknown unit on every value it is asked for.
+            BUILTIN_UNITS.check(spec.canonical_unit, f"{document.path}: field {spec.name!r}")
     return specs
 
 
@@ -324,8 +328,6 @@ def load_condition_keywords(document: ConfigDocument) -> tuple[str, ...]:
 _CONFIG = configuration()
 
 FIELD_SPECS: tuple[FieldSpec, ...] = load_field_specs(_CONFIG)
-# Where the table came from, for errors raised about it elsewhere (normalize.py checks the units).
-FIELDS_SOURCE: Path = _CONFIG.path
 
 # Words that mark a block as describing how a sample was made, used to choose what the sample inventory
 # question is shown. Deliberately about the process, not about measured results: the inventory question is
