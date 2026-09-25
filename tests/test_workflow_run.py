@@ -24,7 +24,7 @@ from paperfacts.config import Settings
 from paperfacts.errors import Cancelled, ParserError
 from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
-from paperfacts.records import LaneExtraction
+from paperfacts.records import FailedQuestion, LaneExtraction
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import ParseReport, is_finished, run_document, stage_names
 from support.extraction import make_lane, make_sample
@@ -218,6 +218,26 @@ def test_a_run_whose_matching_failed_is_not_finished(monkeypatch, document: Docu
     assert is_finished(layout, document.document_id, **keys) is False
     final = {stage: (status, detail) for stage, status, detail in marks}
     assert final["compare"][0] == "failed" and "sample matching failed" in final["compare"][1]
+
+
+def test_a_run_with_an_unanswered_field_question_is_not_finished(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    install_fake_pipeline(monkeypatch)
+    fake_extract = workflow_module.extract_document
+
+    def incomplete(document, backend, settings, client, *, force: bool = False):
+        lane = fake_extract(document, backend, settings, client, force=force)
+        return lane.model_copy(update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off"),)})
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", incomplete)
+
+    marks, result = run(document, settings)
+
+    assert result.dataset_json_path is None
+    final = {stage: (status, detail) for stage, status, detail in marks}
+    assert "1 question unanswered" in final["extract:mineru"][1]
+    assert "no valid answer" in final["compare"][1]
 
 
 def test_force_reaches_every_step(monkeypatch, document: DocumentInput, settings: Settings):

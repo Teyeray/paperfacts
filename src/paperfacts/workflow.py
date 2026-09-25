@@ -292,7 +292,15 @@ def extract_document(
     artifact = load_artifact(document, backend, settings)
     if not force:
         cached = read_lane(layout, document.document_id, backend, key, artifact=artifact)
-        if cached is not None:
+        if cached is not None and cached.failed_questions:
+            # Only those questions reach the model again: their invalid answers were never cached.
+            logger.info(
+                "stored %s extraction of doc=%s has %d unanswered questions; asking again",
+                backend,
+                document.document_id[:16],
+                len(cached.failed_questions),
+            )
+        elif cached is not None:
             logger.info("extraction cache_hit backend=%s doc=%s", backend, document.document_id[:16])
             return cached
 
@@ -339,15 +347,27 @@ def compare_document(
 
     matching = match_samples(lane_a, lane_b, client, refresh=force)
     report = compare_lanes(lane_a, lane_b, matching)
-    if matching.failed:
-        # A matching failure is a model that answered badly this time, not a verdict about the paper. Stored,
-        # it would be served on every later run and blank the paper's sample cells until --force; unstored,
-        # the next run asks again (the invalid answers were never cached, see llm.complete_validated).
-        logger.warning("sample matching failed for doc=%s; the comparison is not stored", document.document_id[:16])
+    reason = _not_kept(lanes, report)
+    if reason:
+        logger.warning("%s for doc=%s; the comparison is not stored", reason, document.document_id[:16])
     else:
         report.write(path)
     logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
     return report
+
+
+def _not_kept(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> str:
+    """Why this run's comparison and consolidated table must not be stored, or "" when they may be.
+
+    Each reason is a model that answered badly this time, not a verdict about the paper. Stored, the result
+    would be served on every later run -- and the stored table marks the paper finished (is_finished), so
+    "run all" would never retry it; unstored, the next run asks again, and only the failed request reaches
+    the model, since invalid answers are never cached (llm.complete_validated).
+    """
+    if report.matching.failed:
+        return "sample matching failed"
+    unanswered = [f"{backend}:{q.field}" for backend, lane in lanes.items() for q in lane.failed_questions]
+    return f"no valid answer to {', '.join(unanswered)}" if unanswered else ""
 
 
 def stored_comparison(
@@ -535,7 +555,7 @@ class PipelineResult:
     report: ComparisonReport
     dataset: DocumentDataset
     excel_path: Path
-    # None when sample matching failed: such a dataset is not stored (see run_document).
+    # None when the run's result is not kept (see _not_kept): such a dataset is not stored.
     dataset_json_path: Path | None
     # The chart readings shown with this paper, when there are any (see shown_figures).
     figures: FiguresView | None = None
@@ -639,11 +659,11 @@ def run_document(
     excel_path = layout.dataset_path(document.document_id)
     write_dataset([dataset], excel_path, figure_rows=figures.rows if figures is not None else ())
     dataset_json_path: Path | None = None
-    if report.matching.failed:
-        # The stored dataset is what marks a paper finished (is_finished). Built on a matching the model
-        # botched, it would keep "run all" and `deploy.sh --rerun` from ever asking again, the very retry
-        # that not storing the comparison is for. The workbook of this run is still written.
-        on_stage("export", "done", f"{excel_path}; not kept as finished: sample matching failed")
+    reason = _not_kept(lanes, report)
+    if reason:
+        # The stored dataset is what marks a paper finished (is_finished), so it is kept back for the same
+        # reasons as the comparison. The workbook of this run is still written.
+        on_stage("export", "done", f"{excel_path}; not kept as finished: {reason}")
     else:
         dataset_json_path = _store_dataset(layout, dataset)
         on_stage("export", "done", str(excel_path))
@@ -742,9 +762,10 @@ def _extract_and_compare(
     detail = (
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"
     )
-    if report.matching.failed:
+    reason = _not_kept(lanes, report)
+    if reason:
         # Not a failure of the paper: the report was not stored and the next run asks again.
-        on_stage("compare", "failed", f"{detail}; sample matching failed, not stored")
+        on_stage("compare", "failed", f"{detail}; {reason}, not stored")
     else:
         on_stage("compare", "done", detail)
     return lanes, report
@@ -752,7 +773,12 @@ def _extract_and_compare(
 
 def _lane_detail(lane: LaneExtraction) -> str:
     ungrounded = len(lane.ungrounded())
-    return f"{len(lane.samples)} samples" + (f", {ungrounded} ungrounded" if ungrounded else "")
+    failed = len(lane.failed_questions)
+    return (
+        f"{len(lane.samples)} samples"
+        + (f", {ungrounded} ungrounded" if ungrounded else "")
+        + (f", {failed} question{'s' if failed > 1 else ''} unanswered (asked again next run)" if failed else "")
+    )
 
 
 # ---- Directory batches and offline re-export -------------------------------------------------------

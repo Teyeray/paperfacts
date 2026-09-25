@@ -653,6 +653,12 @@ but not stored, so the next run asks again instead of serving the failure until 
 run's consolidated table (`datasets/…json`, only `dataset.xlsx` is written): the stored table is what marks
 a paper finished, so 「处理全部未完成」 and `deploy.sh --rerun` pick the paper up again.
 
+The same holds for one field question in passage mode that gets no valid answer (invalid twice, or cut off):
+it costs that field, not the lane. The lane is stored with the question in `failed_questions` and its other
+fields intact; the comparison and table of that run are not stored, and the next run extracts the lane again,
+which re-asks only that question (every other answer replays from the cache). The inventory question and
+transport failures still fail the lane.
+
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
 serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own
 answers are cached by request payload, **a code-only change re-derives records for free** as long as the

@@ -24,7 +24,7 @@ from paperfacts.llm import OpenAICompatibleClient
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.parsers import SubprocessParser
 from paperfacts.prompts import inventory_system_prompt
-from paperfacts.records import LaneExtraction
+from paperfacts.records import FailedQuestion, LaneExtraction
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import BACKEND_A, BACKEND_B, build_llm_client, build_parser, compare_document, extract_document
 from support.extraction import make_artifact
@@ -401,6 +401,46 @@ def test_force_redoes_the_comparison_without_re_extracting(
     # Only one extra matching call; both extractions went through their on-disk cache.
     assert client.call_count == calls_after_first + 1
     assert client.refreshes[-1] is True
+
+
+def test_a_stored_lane_with_an_unanswered_question_is_extracted_again(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    # Its invalid answers were never cached, so extracting again re-asks only that question; every other
+    # request replays from the LLM cache (this fake has none, so it simply answers twice).
+    client = FakeLlmClient([extraction_json(), extraction_json()])
+    extract_document(document, "mineru", settings, client)
+    path = DataLayout(settings.data_root).extraction_path(
+        document.document_id, "mineru", extractor_key(ExtractionOptions(client.model, mode="document"))
+    )
+    incomplete = LaneExtraction.read(path).model_copy(
+        update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
+    )
+    incomplete.write(path)
+
+    lane = extract_document(document, "mineru", settings, client)
+
+    assert client.call_count == 2
+    assert lane.failed_questions == ()
+    assert LaneExtraction.read(path).failed_questions == ()
+
+
+def test_a_comparison_of_a_lane_with_an_unanswered_question_is_not_stored(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
+    client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good])
+    lanes = {backend: extract_document(document, backend, settings, client) for backend in BACKENDS}
+    lanes[BACKEND_A] = lanes[BACKEND_A].model_copy(
+        update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
+    )
+
+    report = compare_document(document, settings, client, lanes=lanes)
+
+    path = DataLayout(settings.data_root).comparison_path(
+        document.document_id, report.extractor_key, report.comparison_key
+    )
+    assert not path.is_file()
 
 
 def test_a_failed_matching_is_reported_but_not_stored_so_the_next_run_asks_again(

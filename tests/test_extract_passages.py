@@ -773,6 +773,24 @@ def test_a_field_question_that_fails_propagates_instead_of_being_swallowed():
         extract(FakeLlmClient(explode), concurrency=4)
 
 
+@pytest.mark.parametrize("concurrency", [1, 4])
+def test_a_field_question_answered_badly_twice_costs_that_field_not_the_lane(concurrency: int):
+    # At temperature 0 a question whose answer is always malformed (a table that always truncates) would
+    # otherwise fail the paper on every run.
+    answers = responder(
+        sheet_resistance="this is not JSON",
+        ar_flow_rate=values_json({"sample_id": "A", "value_raw": "100", "unit_raw": "sccm"}),
+    )
+
+    lane = extract(FakeLlmClient(answers), concurrency=concurrency)
+
+    [failed] = lane.failed_questions
+    assert failed.field == "sheet_resistance"
+    assert "twice failed" in failed.detail
+    assert lane.sample("A").get("ar_flow_rate") is not None
+    assert lane.sample("A").get("sheet_resistance") is None
+
+
 def test_a_concurrency_below_one_is_rejected_before_any_call_is_made():
     client = FakeLlmClient([])
 
