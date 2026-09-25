@@ -26,7 +26,15 @@ from paperfacts.parsers import SubprocessParser
 from paperfacts.prompts import inventory_system_prompt
 from paperfacts.records import FailedQuestion, LaneExtraction
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import BACKEND_A, BACKEND_B, build_llm_client, build_parser, compare_document, extract_document
+from paperfacts.workflow import (
+    BACKEND_A,
+    BACKEND_B,
+    build_llm_client,
+    build_parser,
+    compare_document,
+    export_document,
+    extract_document,
+)
 from support.extraction import make_artifact
 from support.factories import make_block
 from support.llm import FakeLlmClient
@@ -441,6 +449,43 @@ def test_a_comparison_of_a_lane_with_an_unanswered_question_is_not_stored(
         document.document_id, report.extractor_key, report.comparison_key
     )
     assert not path.is_file()
+
+
+def test_an_offline_export_stores_the_comparison_it_rebuilt(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    # export recompares with regrounded values; left unstored, /report kept showing the old verdicts beside
+    # a table built from the new ones.
+    good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
+    client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good])
+    report = compare_document(document, settings, client)
+    path = DataLayout(settings.data_root).comparison_path(
+        document.document_id, report.extractor_key, report.comparison_key
+    )
+    report.model_copy(update={"comparisons": ()}).write(path)
+
+    export_document(document, dataclasses.replace(settings, llm_model=client.model))
+
+    assert ComparisonReport.read(path).comparisons == report.comparisons
+
+
+def test_an_offline_export_of_a_lane_with_an_unanswered_question_is_refused(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str]
+):
+    # The comparison on disk came from a complete run; the lane stored since is not complete. A table built
+    # from it would mark the paper finished with that question never asked again.
+    good = json.dumps({"pairs": [{"a": "A1", "b": "B1", "confidence": 0.9, "justification": "same"}]})
+    client = FakeLlmClient([extraction_json(sample_id="A1"), extraction_json(sample_id="B1"), good])
+    compare_document(document, settings, client)
+    path = DataLayout(settings.data_root).extraction_path(
+        document.document_id, BACKEND_A, extractor_key(ExtractionOptions(client.model, mode="document"))
+    )
+    LaneExtraction.read(path).model_copy(
+        update={"failed_questions": (FailedQuestion(field="thickness", detail="cut off at max_tokens"),)}
+    ).write(path)
+
+    with pytest.raises(FileNotFoundError, match="no valid answer to mineru:thickness"):
+        export_document(document, dataclasses.replace(settings, llm_model=client.model))
 
 
 def test_a_failed_matching_is_reported_but_not_stored_so_the_next_run_asks_again(

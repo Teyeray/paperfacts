@@ -821,8 +821,13 @@ def export_document(document: DocumentInput, settings: Settings) -> DocumentData
         lanes[backend] = lane
     if not _compared_these(report, lanes[BACKEND_A], lanes[BACKEND_B]):
         raise FileNotFoundError(f"the comparison of {document.display_filename} predates its parse; run it again")
-    # Grounding is rechecked on read, so comparison must use those same refreshed values.
+    # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
+    # serves the report beside the table, and the two must be the same verdicts.
     report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching)
+    reason = _not_kept(lanes, report)
+    if reason:
+        raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")
+    report.write(report_path)
     dataset = consolidate_document(document, lanes, report)
     # An offline re-export is how a code-only change reaches the browser, so refresh the web view too.
     _store_dataset(layout, dataset)
