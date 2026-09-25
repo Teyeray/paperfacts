@@ -9,14 +9,23 @@ a budget -- because each of them exists to stop a specific failure that was seen
 from __future__ import annotations
 
 import logging
+from functools import partial
 
 import pytest
 
+from paperfacts import passages
 from paperfacts.continuation import continuation_pairs
-from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.models import SourceBlock
-from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
+from paperfacts.passages import fit_budget
 from support.factories import make_block
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, units and retrieval, at module level because constants and parametrize
+# lists need them before any fixture runs.
+TCO = shipped_profile()
+FIELD_BY_NAME = TCO.by_name
+candidate_blocks = partial(passages.candidate_blocks, units=TCO.units)
+inventory_blocks = partial(passages.inventory_blocks, retrieval=TCO.retrieval)
 
 COMPONENT = FIELD_BY_NAME["component"]
 SHEET_RESISTANCE = FIELD_BY_NAME["sheet_resistance"]
@@ -49,6 +58,26 @@ def test_a_standalone_abbreviation_keyword_still_matches():
     block = text(0, "The measured Rs was 12.3 per square.")
 
     assert ids(candidate_blocks(SHEET_RESISTANCE, [block])) == [block.source_id]
+
+
+def test_a_chinese_keyword_matches_inside_running_chinese_text():
+    # Chinese writes no spaces between words, so a word boundary beside a Chinese character never matches:
+    # "煅烧温度" in "样品的煅烧温度为800" would be missed and the value never asked about.
+    assert passages.keyword_hits(["煅烧温度"], "样品的煅烧温度为800 °c") == 1
+    assert passages.keyword_hits(["煅烧温度"], "样品的烧结温度为800 °c") == 0
+    # An ASCII edge keeps its boundary: "Rs" still does not match inside "years".
+    assert passages.keyword_hits(["Rs", "薄层Rs"], "over the years 薄层rsx") == 0
+
+
+def test_a_profile_pattern_searches_only_the_head_of_a_very_long_block():
+    # A profile's own expression is bounded per block; a built-in one searches everything.
+    filler = "word " * (passages.PROFILE_PATTERN_SPAN // 5)
+    late = text(0, f"{filler} annealed at 500 °C")
+    retrieval = TCO.retrieval.__class__(condition_keywords=(), condition_unit_pattern=r"\d\s*°c")
+
+    assert passages.inventory_blocks([late], retrieval) == []
+    assert passages.inventory_blocks([text(1, "annealed at 500 °C")], retrieval) != []
+    assert passages.candidate_blocks(FIELD_BY_NAME["annealing_temperature"], [late], units=TCO.units) == [late]
 
 
 def test_matching_ignores_case():

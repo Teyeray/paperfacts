@@ -12,9 +12,13 @@ import unicodedata
 
 import pytest
 
-from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.normalize import canonical_category, delatex, normalize_key, normalize_text, text_key
 from paperfacts.records import sample_key
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
 
 # ---- Superscripts: must be handled before NFKC ------------------------------------------------------
 

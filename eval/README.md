@@ -5,13 +5,16 @@
 markdown used only to find where to look.
 
 ```bash
-uv run python eval/score.py --data-root data                         # newest dataset of each gold paper
-uv run python eval/score.py --data-root data --out report.md --json cells.json
+uv run python eval/score.py --data-root data --keys <extractor_key>.<comparison_key>   # the run those keys name
+uv run python eval/score.py --data-root data --out report.md --json cells.json          # newest dataset of each paper
 uv run python eval/score.py --dataset 80c3b69d570c2b6d=/path/to/dataset.json --only 80c3b69d570c2b6d
 ```
 
-Runs in the package's environment: tolerances and categories come from `config.json` (`--config` to point
-elsewhere), and categories are matched by the package's own `normalize.canonical_category`.
+Runs in the package's environment: tolerances, categories and which fields are paper-level come from the profile
+(`profiles/tco.json`; `--profile` to point elsewhere), and categories are matched by the package's own
+`normalize.canonical_category`. `--keys` scores `datasets/<extractor_key>.<comparison_key>.json`; without it the
+newest dataset file of each paper is scored, which is only right while the library holds a single set of keys.
+The gold files keep `"target"` as the id of the paper-level record, whatever the profile calls that group.
 
 ## Gold file format
 
@@ -39,7 +42,7 @@ A **cell** is one value the paper states:
 
 | key | meaning |
 |---|---|
-| `value` | number in the field's canonical unit (`config.json`), or text for `component` / `mode`; `null` = the paper states something that is not a scalar (a range, a lower bound, a power density) |
+| `value` | number in the field's canonical unit (the profile's), or text for `component` / `mode`; `null` = the paper states something that is not a scalar (a range, a lower bound, a power density) |
 | `raw` | the words on the page (abridged) |
 | `page` | 0-based page index, the same numbering as source ids (`mineru_p3_b1` is page 3) |
 | `condition` | measurement condition, e.g. `average 400-800 nm` for transmittance, `O2/Ar` for o2_ratio |

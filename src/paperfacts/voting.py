@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from paperfacts.grounding import grounding_key
-from paperfacts.normalize import clean_unit, normalize_key
 from paperfacts.records import ExtractedRecords, FieldValue, SampleRecord, TargetRecord, sample_key
+from paperfacts.text import clean_unit, normalize_key
 
 
 class Scope(Enum):

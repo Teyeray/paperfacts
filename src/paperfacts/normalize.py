@@ -1,5 +1,6 @@
-"""Turn the text the model transcribed into comparable canonical values: text folding, number parsing, unit
-conversion, and applying all three to a lane.
+"""Turn the text the model transcribed into comparable canonical values: number parsing, unit conversion, and
+applying both to a lane. The text folding they share is :mod:`paperfacts.text`; the unit tables are
+:mod:`paperfacts.units`.
 
 Pure functions, millisecond-fast, the one layer that offers a determinism guarantee. The model only
 transcribes (``value_raw`` / ``unit_raw``); every conversion happens here, because a model's unit conversion
@@ -14,77 +15,14 @@ from __future__ import annotations
 
 import itertools
 import re
-import unicodedata
 from collections.abc import Callable
 from functools import cache
-from pathlib import Path
 
-from paperfacts.errors import ConfigError
-from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FIELDS_SOURCE, FieldSpec
+from paperfacts.fields import FieldSpec, RangePolicy
+from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
-
-# ---- Text ------------------------------------------------------------------------------------------------
-# Superscript digits are folded **before** NFKC, which would collapse "10⁻⁴" to "10-4" and lose the exponent.
-
-_SUPERSCRIPTS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
-_SUBSCRIPTS = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
-_SUPERSCRIPT_RUN = re.compile(r"[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+")
-# MinerU's Markdown writes sub/superscripts as HTML tags: SnO<sub>2</sub>, 10<sup>-4</sup>
-_HTML_SUP = re.compile(r"<sup>\s*([^<]*?)\s*</sup>", re.IGNORECASE)
-_HTML_SUB = re.compile(r"<sub>\s*([^<]*?)\s*</sub>", re.IGNORECASE)
-# Only variants NFKC does not already fold (OHM SIGN, MICRO SIGN and NBSP are covered by NFKC).
-_REPLACEMENTS = {
-    "−": "-",  # minus sign U+2212
-    "–": "-",  # en dash
-    "—": "-",  # em dash
-    "‐": "-",  # hyphen U+2010 (NFKC also folds the non-breaking hyphen U+2011 to it)
-    "‒": "-",  # figure dash
-    "―": "-",  # horizontal bar
-    "×": "x",  # multiplication sign
-    "⋅": ".",  # dot operator U+22C5
-    "·": ".",  # middle dot U+00B7
-    "•": ".",  # bullet U+2022, read off a chart axis as "Ω•cm"
-    "∙": ".",  # bullet operator U+2219
-    "’": "'",
-    "∼": "~",  # tilde operator U+223C, what papers actually print for "approximately"
-}
-# Characters that carry meaning in a value: digits, letters, units and the punctuation inside numbers.
-KEY_CHARACTERS = "0-9a-zΩμ%./:+-"
-_NON_KEY = re.compile(f"[^{KEY_CHARACTERS}]+")
-_SPACES = re.compile(r"\s+")
-
-
-def _ascii_superscripts(text: str) -> str:
-    def repl(match: re.Match[str]) -> str:
-        run = match.group(0)
-        sign = "-" if run.startswith("⁻") else ""
-        digits = run.lstrip("⁺⁻").translate(_SUPERSCRIPTS)
-        return f"^{sign}{digits}"
-
-    return _SUPERSCRIPT_RUN.sub(repl, text)
-
-
-def normalize_text(text: str) -> str:
-    """Normalise spelling while preserving meaning: sub/superscripts to ASCII, Unicode variants folded,
-    whitespace collapsed."""
-    text = _HTML_SUP.sub(lambda m: f"^{m.group(1)}", text)
-    text = _HTML_SUB.sub(lambda m: m.group(1), text)
-    text = _ascii_superscripts(text).translate(_SUBSCRIPTS)
-    text = unicodedata.normalize("NFKC", text)
-    for source, target in _REPLACEMENTS.items():
-        text = text.replace(source, target)
-    return _SPACES.sub(" ", text).strip()
-
-
-def normalize_key(text: str | None) -> str:
-    """A key for "are these the same" comparisons of text, conditions and compositions. Never use it for
-    units: lowercasing collides mΩ with MΩ; use :func:`clean_unit` there. Nor for sample ids: it deletes
-    Greek letters and folds a case-distinguished suffix; use :func:`paperfacts.records.sample_key` there."""
-    if not text:
-        return ""
-    # .lower() turns Ω into ω; put it back before the whitelist filter or Ω would be stripped.
-    return _NON_KEY.sub("", normalize_text(text).lower().replace("ω", "Ω"))
-
+from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
+from paperfacts.units import UnitRegistry
 
 # ---- Closed category sets --------------------------------------------------------------------------------
 # A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
@@ -189,7 +127,8 @@ _OWN_UNIT = re.compile(rf"^\s*(?!x\b){_UNIT_TOKEN}")
 # 300 K", "400 °C for 2 h", "500 °C under N2"): its numbers describe when the value was measured, not the value.
 # Not "in": that is also the inch, and "2 in x 3 in" would read as 2. Not "after": see _AFTER.
 _CONDITION = re.compile(r"\s+(?:at|@|for|during|under)\s+(?=.*\d)", re.IGNORECASE)
-# "85% after 10 cycles", "100 nm after annealing": another state of the sample, not a condition of this value.
+# "85% after 10 cycles", "100 nm after annealing": another state of the sample, not a condition of this value --
+# unless the field says otherwise (FieldSpec.after_clause, read by split_after_clause).
 _AFTER = re.compile(r"\s+after\s+\S", re.IGNORECASE)
 # The words of a condition tail that may name a unit ("2 h", "550 nm", "°C").
 _TAIL_WORD = re.compile(r"[^\d\s,;:()\[\]]+")
@@ -200,79 +139,18 @@ _QUALIFIERS = re.compile(
     r"^(?P<q>>=|<=|approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅≥≤<>])\s*", re.IGNORECASE
 )
 
-_LATEX_MARKERS = ("$", "\\")
-# \Omega and \mu are unit symbols rather than spacing: a cell reading "\times 10^{-4} \Omega cm" is a
-# resistivity, and without them the unit is unrecognised.
-_LATEX_COMMANDS = {
-    r"\times": " x ",
-    r"\cdot": " x ",
-    r"\pm": "±",
-    r"\sim": "~",
-    r"\approx": "≈",
-    r"\Omega": "Ω",
-    r"\omega": "Ω",
-    r"\mu": "μ",
-    r"\,": " ",
-    r"\;": " ",
-    "\\ ": " ",
-}
-_DIGIT_GAP = re.compile(r"(?<=[0-9.])\s+(?=[0-9.])")
-# The LaTeX spacing signature: a run of single characters, each a digit or a lone ".", separated by single
-# spaces ("4 0 0", "8 . 4", "1 0"). Two multi-digit numbers ("300 500", "40 x 10") never look like this, so
-# collapsing the run cannot merge two genuinely separate numbers. Two single-digit numbers ("2 5") do look
-# like it and are read as 25: in a table cell that is the right reading, and it is the accepted trade-off.
-_SPACED_DIGITS = re.compile(r"(?<![0-9.])[0-9.](?: [0-9.])+(?![0-9.])")
-_CARET_GAP = re.compile(r"\^\s*([-+]?)\s*(?=\d)")
 
-
-# Formatting commands that survive delatex and split what they wrap: MinerU writes the unit Ω·cm as
-# "\Omega { \cdot } \mathrm { c m }" and the formula SnO2 as "\mathrm { S n O } _ { 2 }".
-_WRAPPED_DIGITS = re.compile(r"(?<=[0-9.] )\s*\{\s*([0-9.])\s*\}")
-LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
-
-
-# LaTeX symbols a unit is written with, restored as the character before anything else is undone: "300
-# $^{\circ}$C" and "5 at.\%" otherwise lose the very character a unit is recognised by. The one table for
-# retrieval, grounding and unit parsing alike, so the three cannot fold the same text differently.
-LATEX_SYMBOLS = {"\\circ": "°", "\\%": "%"}
-# A degree sign typeset as a superscript ("^{°}" once \circ is restored) is just a degree sign; left as a
-# caret it reads as the start of an exponent, and "500" in "500 ^{\circ}C" as the base of a power.
-_RAISED_DEGREE = re.compile(r"\^\s*\{?\s*°\s*\}?")
-
-
-def delatex(text: str) -> str:
-    """Undo the LaTeX MinerU produces for numbers in tables and formulas.
-
-    ``6.4 × 10⁻³`` arrives as ``$6 . 4 \\times 1 0 ^ { - 3 }$``, a space between every character, and the
-    prompt's "verbatim" rule keeps it that way. Spaces between digits are collapsed only when the text
-    carries a LaTeX marker, so ordinary "10 20" is left alone.
-    """
-    for command, symbol in LATEX_SYMBOLS.items():
-        text = text.replace(command, symbol)
-    text = _RAISED_DEGREE.sub("°", text)
-    # A digit wrapped in a formatting command ("2 3 \\mathbf { 0 }", MinerU bolding a table cell's last digit)
-    # is unwrapped first, so the run of spaced digits below still reads as one number.
-    text = _WRAPPED_DIGITS.sub(r"\1", LATEX_WRAPPERS.sub("", text)) if "\\" in text else text
-    text = re.sub(r"\^\s*\{\s*([-+]?\s*\d+)\s*\}", lambda m: "^" + m.group(1).replace(" ", ""), text)
-    # MinerU drops the LaTeX markers from some cells ("4 0 0 °C", "1 0 ^ { - 4 }"), so this run has to be
-    # collapsed on its own signature rather than on the presence of "$" or a backslash.
-    text = _SPACED_DIGITS.sub(lambda m: m.group(0).replace(" ", ""), text)
-    if not any(marker in text for marker in _LATEX_MARKERS):
-        return text
-    for command, replacement in _LATEX_COMMANDS.items():
-        text = text.replace(command, replacement)
-    text = text.replace("$", " ").replace("{", " ").replace("}", " ")
-    text = _DIGIT_GAP.sub("", text)
-    return _CARET_GAP.sub(r"^\1", text)
-
-
-def parse_number(raw: str) -> tuple[float | None, str | None]:
+def parse_number(raw: str, *, range_policy: RangePolicy = "midpoint") -> tuple[float | None, str | None]:
     """``(value, note)``: the number ``raw`` spells, or None with the reason it was refused.
 
     A qualifier ("~", ">", "about") is dropped and recorded first; what is left must then match one of the
     spellings in :data:`_SPELLINGS`, tried in order. Each spelling either claims the text -- with a value, or
     with a refusal -- or passes it on. A refusal is always better than a guess: the comparison turns None
     into AMBIGUOUS, while a wrong number is indistinguishable from a real measurement.
+
+    ``range_policy`` is the field's (``FieldSpec.range_policy``): ``"midpoint"`` reads a range as its midpoint,
+    ``"reject"`` refuses it, for a quantity whose range is a window rather than a scatter around one value (a
+    cathode's "2.8–4.3 V" is the cycling window; its midpoint was never measured).
     """
     text, notes, _ = set_aside(raw)
     if _AFTER.search(text):
@@ -284,8 +162,33 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     if unglued != text:
         notes.append("digits of a formula or unit exponent ignored")
         text = unglued.strip()
-    value, reading = _read(text)
+    value, reading, is_range = _read(text)
+    if range_policy == "reject" and is_range:
+        refused = [
+            f"{n.removesuffix(_MIDPOINT)} refused (range_policy 'reject')" if n.endswith(_MIDPOINT) else n
+            for n in reading
+        ]
+        return None, _join([*notes, *refused])
     return value, _join([*notes, *reading])
+
+
+def split_after_clause(text: str) -> tuple[str, str]:
+    """``(value, clause)``: ``text`` cut where an "after ..." clause follows a number ("92.5% after 100 cycles" ->
+    "92.5%", "after 100 cycles"), or ``(text, "")`` when there is none. Only for a field whose ``after_clause``
+    is "condition"; every other field refuses such a value in :func:`parse_number`."""
+    match = _AFTER.search(text)
+    if match is None or not NUMBER_RE.search(text[: match.start()]):
+        return text, ""
+    return text[: match.start()].strip(), text[match.start() :].strip()
+
+
+def _with_after_condition(field: FieldValue, clause: str) -> FieldValue:
+    """``field`` with ``clause`` in its condition, unless the condition already says it: normalising twice must
+    give the same value."""
+    condition = field.condition
+    if condition and normalize_key(clause) in normalize_key(condition):
+        return field
+    return field.model_copy(update={"condition": f"{condition}; {clause}" if condition else clause})
 
 
 def set_aside(raw: str) -> tuple[str, list[str], str]:
@@ -318,7 +221,10 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
     return text, notes, ""
 
 
-_Reading = tuple[float | None, list[str]]
+# (value, notes, is_range): is_range is set by the spellings that read a whole range as its midpoint, which is
+# what range_policy 'reject' refuses.
+_Reading = tuple[float | None, list[str], bool]
+_MIDPOINT = " → midpoint"
 
 
 def _read(text: str) -> _Reading:
@@ -330,7 +236,7 @@ def _read(text: str) -> _Reading:
 
 
 def _refuse(reason: str) -> _Reading:
-    return None, [reason]
+    return None, [reason], False
 
 
 def _ratio(text: str) -> _Reading | None:
@@ -347,7 +253,7 @@ def _parenthesised_mantissa(text: str) -> _Reading | None:
     if NUMBER_RE.search(text[match.end() :]):
         return _refuse("numbers outside the scientific notation; ambiguous")
     value = float(_plain(match.group("m"))) * 10 ** int(match.group("e"))
-    return value, ["uncertainty dropped"] if match.group("pm") else []
+    return value, ["uncertainty dropped"] if match.group("pm") else [], False
 
 
 def _leading_parenthesis(text: str) -> _Reading | None:
@@ -365,8 +271,8 @@ def _parenthesised_alternative(text: str) -> _Reading | None:
     rest = _PARENTHESES.sub(" ", text).strip()
     if "(" in rest or ")" in rest:
         return _refuse("unbalanced or nested parentheses; ambiguous")
-    value, reading = _read(rest)
-    return value, ["parenthesized alternative ignored", *reading]
+    value, reading, is_range = _read(rest)
+    return value, ["parenthesized alternative ignored", *reading], is_range
 
 
 def _scientific(text: str) -> _Reading | None:
@@ -380,20 +286,20 @@ def _scientific(text: str) -> _Reading | None:
     if len(matches) == 2:
         between = text[matches[0].end() : matches[1].start()].strip()
         if not NUMBER_RE.search(rest) and _PLUS_MINUS_SIGN.fullmatch(between):
-            return values[0], ["uncertainty dropped"]
+            return values[0], ["uncertainty dropped"], False
         if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
             low, high = values
             if low < high:
-                return (low + high) / 2, [f"range {low:g}-{high:g} → midpoint"]
+                return (low + high) / 2, [f"range {low:g}-{high:g}{_MIDPOINT}"], True
             return _refuse("descending range in scientific notation; ambiguous")
     if len(matches) > 1 or NUMBER_RE.search(rest):
         return _refuse("numbers outside the scientific notation; ambiguous")
-    return values[0], []
+    return values[0], [], False
 
 
 def _uncertainty(text: str) -> _Reading | None:
     match = _PLUS_MINUS.match(text)
-    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"])
+    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"], False)
 
 
 def _range(text: str) -> _Reading | None:
@@ -411,7 +317,7 @@ def _range(text: str) -> _Reading | None:
         return _refuse("descending range, or an exponent without its caret; ambiguous")
     unit = second or first
     notes = [f"trailing unit {unit!r} in value ignored"] if unit else []
-    return (low + high) / 2, [*notes, f"range {low:g}-{high:g} → midpoint"]
+    return (low + high) / 2, [*notes, f"range {low:g}-{high:g}{_MIDPOINT}"], True
 
 
 def _first_number(text: str) -> _Reading:
@@ -423,7 +329,7 @@ def _first_number(text: str) -> _Reading:
     if not numbers:
         return _refuse("no number found")
     if len(numbers) == 1:
-        return float(_plain(numbers[0])), []
+        return float(_plain(numbers[0])), [], False
     if _JOINED.search(text):
         return _refuse("a range among other numbers; ambiguous")
     if _CONJOINED.search(text):
@@ -434,7 +340,7 @@ def _first_number(text: str) -> _Reading:
         return _refuse("numbers separated by ',', ';' or ':'; ambiguous")
     if _OWN_UNIT.match(gaps[0]):
         return _refuse("a number with its own unit followed by another number; ambiguous")
-    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"]
+    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"], False
 
 
 # Tried in order; the first to claim the text decides. The ratio and parenthesis checks come first because
@@ -478,112 +384,9 @@ def _join(notes: list[str]) -> str | None:
 
 
 # ---- Units -----------------------------------------------------------------------------------------------
-# One recogniser per canonical unit, each handling only certain conversions. An unrecognised unit is never
-# guessed: it returns None with a reason and the comparison layer decides AMBIGUOUS. What a bare number
-# means is decided by ``FieldSpec.bare_number``, never by field name here.
-
-# Case is meaningful (m = milli, M = mega): the regexes ignore case for the unit word, never for the prefix.
-_PREFIX = {"": 1.0, "k": 1e3, "K": 1e3, "M": 1e6, "m": 1e-3, "μ": 1e-6, "n": 1e-9}
-_OHM = r"(?:Ω|(?i:ohms?))"
-# The separator may be "/", a dot (normalize_text folds "·" to "."), or the word "per"; "Ω/L" is OCR
-# damage rather than a spelling of "per square" and stays unrecognised.
-_PER_SQUARE = re.compile(rf"^(?P<p>[kKMmμn]?){_OHM}\s*(?:[./]|per)?\s*(?i:sq|square|□)\.?(?:\^?-1)?$")
-# The separator class needs "-" because "Ω-cm" / "ohm-cm" is at least as common in papers as the dotted
-# spellings; the hyphen survives where "·" and "⋅" are folded to "." by normalize_text.
-_RESISTIVITY = re.compile(rf"^(?P<p>[kKMmμn]?){_OHM}\s*[.x*-]?\s*(?i:cm)$")
-_LENGTH = {"nm": 1.0, "μm": 1e3, "um": 1e3, "mm": 1e6, "cm": 1e7, "å": 0.1, "angstrom": 0.1}
-_TIME = {
-    "min": 1.0,
-    "mins": 1.0,
-    "minute": 1.0,
-    "minutes": 1.0,
-    "h": 60.0,
-    "hr": 60.0,
-    "hrs": 60.0,
-    "hour": 60.0,
-    "hours": 60.0,
-    "s": 1 / 60,
-    "sec": 1 / 60,
-    "seconds": 1 / 60,
-}
-# A paper writes inches as a double prime; OCR renders it as one of four characters.
-_INCH_MARKS = ('"', "''", "″", "′′")
-_SIZE = {"inch": 1.0, "inches": 1.0, "in": 1.0, "mm": 1 / 25.4, "cm": 1 / 2.54} | dict.fromkeys(_INCH_MARKS, 1.0)
-_PERCENT = {"%": 1.0, "percent": 1.0}
-# NFKC folds ℃ (U+2103) to "°C" before the table's lowercased lookup, so one key catches all three
-# spellings. Kelvin is deliberately absent: K → ℃ needs an offset (−273.15), not a factor, and this
-# interface is a factor -- an unknown unit is reported as ambiguous rather than converted wrongly.
-_TEMPERATURE = {"°c": 1.0, "c": 1.0}
-# Distances in a deposition chamber; nm is left out on purpose: no target-holder gap is written in
-# nanometres, and admitting it would misread every film thickness as a candidate distance.
-_DISTANCE = {"cm": 1.0, "mm": 0.1, "m": 100.0, "μm": 1e-4, "um": 1e-4, "inch": 2.54, "in": 2.54} | dict.fromkeys(
-    _INCH_MARKS, 2.54
-)
-# sccm is defined as cm³/min at standard conditions, so the two spellings are the same unit.
-_FLOW = {"sccm": 1.0, "cm3/min": 1.0}
-_ROTATION = {"rpm": 1.0, "r/min": 1.0, "rev/min": 1.0}
-# Power prefixes are case-sensitive (mW ≠ MW), so the table's lowercasing cannot be used here.
-_POWER = re.compile(r"^(?P<p>[kKMmμn]?)[Ww]$")
-# Working pressure in Pa. "mPa" and "MPa" differ only in case, so those two are looked up as written and
-# everything else case-folded.
-_PRESSURE_EXACT = {"mPa": 1e-3, "MPa": 1e6}
-_PRESSURE = {"pa": 1.0, "hpa": 100.0, "kpa": 1e3, "mbar": 100.0, "bar": 1e5, "torr": 133.322, "mtorr": 0.133322}
-
-
-def _pressure(unit: str) -> float | None:
-    return _PRESSURE_EXACT.get(unit, _PRESSURE.get(unit.lower()) if unit.lower() != "mpa" else None)
-
-
-Converter = Callable[[str], float | None]
-
-
-def _by_table(table: dict[str, float]) -> Converter:
-    def convert(unit: str) -> float | None:
-        return table.get(unit.lower())
-
-    return convert
-
-
-def _by_pattern(pattern: re.Pattern[str]) -> Converter:
-    def convert(unit: str) -> float | None:
-        match = pattern.match(unit)
-        return None if match is None else _PREFIX[match.group("p")]
-
-    return convert
-
-
-# Canonical unit -> "multiply by what to reach it".
-CONVERTERS: dict[str, Converter] = {
-    "Ω/sq": _by_pattern(_PER_SQUARE),
-    "Ω·cm": _by_pattern(_RESISTIVITY),
-    "nm": _by_table(_LENGTH),
-    "min": _by_table(_TIME),
-    "inch": _by_table(_SIZE),
-    "%": _by_table(_PERCENT),
-    "℃": _by_table(_TEMPERATURE),
-    "cm": _by_table(_DISTANCE),
-    "sccm": _by_table(_FLOW),
-    "rpm": _by_table(_ROTATION),
-    "W": _by_pattern(_POWER),
-    "Pa": _pressure,
-}
-
-
-def check_canonical_units(specs: tuple[FieldSpec, ...], source: Path) -> None:
-    """Refuse a field whose canonical unit nothing here can convert into, naming the field and the file.
-
-    Checked at import rather than as a KeyError buried in normalisation, field by field. It lives here and
-    not in fields.py because the converters do, and fields.py cannot import this module.
-    """
-    for spec in specs:
-        if spec.canonical_unit and spec.canonical_unit not in CONVERTERS:
-            raise ConfigError(
-                f"{source}: field {spec.name!r}: canonical_unit {spec.canonical_unit!r} has no converter; "
-                f"known units are {', '.join(CONVERTERS)}"
-            )
-
-
-check_canonical_units(FIELD_SPECS, FIELDS_SOURCE)
+# The converters are a paperfacts.units registry's: the built-ins plus what a profile declares. Every canonical
+# unit was checked against it when the field table was loaded. What a bare number means is decided by
+# ``FieldSpec.bare_number``, never by field name here.
 
 
 # A power-of-ten factor in a transcribed table header: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm", "ρ × 10^4"
@@ -651,16 +454,19 @@ def has_scale_factor(text: str) -> bool:
     return _SCI.search(delatex(normalize_text(text))) is not None
 
 
-def clean_unit(unit_raw: str) -> str:
-    """Whitespace and decoration stripped, case preserved; no interpretation."""
-    return normalize_text(unit_raw).replace(" ", "").rstrip(".")
-
-
 def convert_to_canonical(
-    spec: FieldSpec, value: float, unit_raw: str | None, *, value_text: str | None = None
+    spec: FieldSpec,
+    value: float,
+    unit_raw: str | None,
+    units: UnitRegistry,
+    *,
+    value_text: str | None = None,
 ) -> tuple[float | None, str | None, str | None]:
-    """``(canonical value, canonical unit, note)``; the value is None when conversion fails.
+    """``(canonical value, canonical unit, note)`` in ``units`` (a profile's); the value is None when conversion
+    fails.
 
+    The value is multiplied by any scale factor in the header first, then converted as ``value * factor +
+    offset``: the header's power of ten counts in the unit it was written in, before a temperature is shifted.
     ``value_text`` is the raw text ``value`` was parsed from. It is only consulted to detect a power of ten
     written twice, once in the value and once in the unit, which no reading can resolve.
     """
@@ -669,7 +475,11 @@ def convert_to_canonical(
         return value, None, None
     if unit_raw is None:
         return _bare_number(spec, value)
-    scale, unit = split_scale_factor(unit_raw, CONVERTERS[canonical])
+
+    def convert(unit: str) -> tuple[float, float] | None:
+        return units.convert(canonical, unit)
+
+    scale, unit = split_scale_factor(unit_raw, convert)
     if scale is None:
         return (
             None,
@@ -685,22 +495,26 @@ def convert_to_canonical(
     if not unit:
         canonical_value, canonical_unit, note = _bare_number(spec, value)
         return canonical_value, canonical_unit, _join([n for n in (scale_note, note) if n])
-    factor = CONVERTERS[canonical](unit)
-    if factor is None:
+    conversion = convert(unit)
+    if conversion is None:
         # "1.1 Pa Ar", "3 mTorr (O2)": a pressure or flow named with the gas it belongs to. The gas says whose
         # quantity it is, not what unit, so the unit is read without it -- only when the rest is a known unit.
-        gasless = _GAS_SUFFIX.sub("", unit)
+        # Which words are such suffixes is the profile's (ignored_unit_suffixes).
+        gasless = units.without_ignored_suffix(unit)
         if gasless != unit and gasless:
-            factor = CONVERTERS[canonical](gasless)
-            if factor is not None:
+            conversion = convert(gasless)
+            if conversion is not None:
+                factor, offset = conversion
                 note = f"gas name in the unit ({unit[len(gasless) :].strip('()')}) set aside"
-                return value * factor, canonical, _join([n for n in (scale_note, note) if n])
+                return _apply(value, factor, offset), canonical, _join([n for n in (scale_note, note) if n])
         return None, None, f"unknown unit {unit_raw!r} for {canonical}"
-    return value * factor, canonical, scale_note
+    factor, offset = conversion
+    return _apply(value, factor, offset), canonical, scale_note
 
 
-# A gas species written after a unit, bracketed or not (units are compared with their spaces removed).
-_GAS_SUFFIX = re.compile(r"\(?(?:Ar|O2|N2|H2|He|Kr|Xe|air)\)?$")
+def _apply(value: float, factor: float, offset: float) -> float:
+    # A zero offset is not added at all: -0.0 + 0.0 is 0.0, and a factor-only unit keeps the bits it always gave.
+    return value * factor + offset if offset else value * factor
 
 
 def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | None, str | None]:
@@ -730,7 +544,7 @@ _COMPOUND = re.compile(
 _SUMMED_UNITS = {"min"}
 
 
-def compound_value(spec: FieldSpec, text: str) -> float | None:
+def compound_value(spec: FieldSpec, text: str, units: UnitRegistry) -> float | None:
     """The canonical value of a duration spelled in two of its units, larger first ("3 h 30 min" -> 210), or
     None for anything else. The larger part must be whole and the smaller one less than one of the larger unit:
     "1 h 90 min" is no way anyone writes 150 minutes, and "0.5 h 30 min" restates 30 minutes. Both units carry
@@ -744,9 +558,13 @@ def compound_value(spec: FieldSpec, text: str) -> float | None:
     match = _COMPOUND.match(normalize_text(text).strip())
     if match is None:
         return None
-    convert = CONVERTERS[spec.canonical_unit]
-    big, small = convert(match.group("ua")), convert(match.group("ub"))
-    if big is None or small is None or big <= small or not match.group("a").isdigit():
+    canonical = spec.canonical_unit
+    big, small = units.convert(canonical, match.group("ua")), units.convert(canonical, match.group("ub"))
+    # A unit with an offset is no part of a sum: only a duration is summed, and none of its units has one.
+    if big is None or small is None or big[1] or small[1]:
+        return None
+    big, small = big[0], small[0]
+    if big <= small or not match.group("a").isdigit():
         # A fractional larger part ("0.5 h 30 min") is a restatement, not a sum: nobody writes 30 min that way.
         return None
     part = float(_plain(match.group("b"))) * small
@@ -755,75 +573,87 @@ def compound_value(spec: FieldSpec, text: str) -> float | None:
     return float(_plain(match.group("a"))) * big + part
 
 
-def _names_unit_of(spec: FieldSpec, text: str) -> bool:
+def _names_unit_of(spec: FieldSpec, text: str, units: UnitRegistry) -> bool:
     """Whether ``text`` names a unit of the field's own quantity ("2 h" for a time, "°C" for a temperature)."""
-    if spec.canonical_unit is None:
+    canonical = spec.canonical_unit
+    if canonical is None:
         return False
-    convert = CONVERTERS[spec.canonical_unit]
-    return any(convert(word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
+    return any(units.convert(canonical, word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
 
 
-def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
+def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
         return field
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
-    word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    lead_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    if spec.after_clause == "condition":
+        # "92.5% after 100 cycles": the number is the value, the clause is what it was measured after. Moved into
+        # the condition, it separates "after 50 cycles" from "after 100 cycles" in the comparison and the cell.
+        spelled, clause = split_after_clause(spelled)
+        if clause:
+            field = _with_after_condition(field, clause)
+            lead_note = "; ".join(n for n in (lead_note, f"{clause!r} moved into the condition") if n)
     bare, context_notes, condition = set_aside(spelled)
-    if condition and _names_unit_of(spec, condition) and not _names_unit_of(spec, bare):
+    if condition and _names_unit_of(spec, condition, units) and not _names_unit_of(spec, bare, units):
         # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
         note = f"the condition {condition!r} holds this field's quantity and the value does not; ambiguous"
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
-    compound = compound_value(spec, bare)
+    compound = compound_value(spec, bare, units)
     if compound is not None:
         compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"
-        note = "; ".join(n for n in (word_note, *context_notes, compound_note) if n)
+        note = "; ".join(n for n in (lead_note, *context_notes, compound_note) if n)
         return field.model_copy(update={"value": compound, "unit": spec.canonical_unit, "normalization_note": note})
-    number, parse_note = parse_number(spelled)
+    number, parse_note = parse_number(spelled, range_policy=spec.range_policy)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
-    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, value_text=spelled)
-    note = "; ".join(n for n in (word_note, parse_note, unit_note) if n) or None
+    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=spelled)
+    note = "; ".join(n for n in (lead_note, parse_note, unit_note) if n) or None
     return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 
 
-def _normalize_fields(fields: tuple[FieldValue, ...]) -> tuple[FieldValue, ...]:
+def _normalize_fields(fields: tuple[FieldValue, ...], profile: DomainProfile) -> tuple[FieldValue, ...]:
     # Fields outside the schema were dropped at extraction time; this is a defensive second check.
-    return tuple(normalize_field(f, FIELD_BY_NAME[f.field]) if f.field in FIELD_BY_NAME else f for f in fields)
+    specs = profile.by_name
+    return tuple(normalize_field(f, specs[f.field], profile.units) if f.field in specs else f for f in fields)
 
 
-def normalize_lane(lane: LaneExtraction) -> LaneExtraction:
-    """Fill in ``value`` / ``unit`` for every field. Pure and idempotent: always returns a new object."""
+def normalize_lane(lane: LaneExtraction, profile: DomainProfile) -> LaneExtraction:
+    """Fill in ``value`` / ``unit`` for every field, in ``profile``'s units. Pure and idempotent: always returns
+    a new object."""
     target: TargetRecord | None = None
     if lane.target is not None:
-        target = lane.target.model_copy(update={"fields": _normalize_fields(lane.target.fields)})
-    samples = tuple(sample.model_copy(update={"fields": _normalize_fields(sample.fields)}) for sample in lane.samples)
+        target = lane.target.model_copy(update={"fields": _normalize_fields(lane.target.fields, profile)})
+    samples = tuple(
+        sample.model_copy(update={"fields": _normalize_fields(sample.fields, profile)}) for sample in lane.samples
+    )
     # Unattributed values are compared now, so they need canonical values like every other; leaving them
     # raw would silently turn every such comparison into "unparsed" and bury real agreements.
-    unattributed = _normalize_fields(lane.unattributed)
+    unattributed = _normalize_fields(lane.unattributed, profile)
     return lane.model_copy(update={"target": target, "samples": samples, "unattributed": unattributed})
 
 
-def drop_implausible(records: ExtractedRecords) -> ExtractedRecords:
+def drop_implausible(records: ExtractedRecords, profile: DomainProfile) -> ExtractedRecords:
     """Drop every value whose converted number falls outside its field's ``valid_range``, with the reason.
 
-    The range lives in the canonical unit, so this has to run on the converted value: "2 μm" is outside a
-    500 nm ceiling although its digits are not. A value that cannot be converted is kept, since there is no
-    number to judge and the comparison already reports it as unparsed.
+    The range lives in the canonical unit, so this has to run on the converted value, in ``profile``'s units:
+    "2 μm" is outside a 500 nm ceiling although its digits are not. A value that cannot be converted is kept,
+    since there is no number to judge and the comparison already reports it as unparsed.
     """
     dropped: list[str] = []
 
     def plausible(value: FieldValue) -> bool:
-        spec = FIELD_BY_NAME.get(value.field)
+        spec = profile.by_name.get(value.field)
         if spec is None or spec.describe_range() is None:
             return True
-        number = normalize_field(value, spec).value
+        number = normalize_field(value, spec, profile.units).value
         if number is None or spec.in_range(number):
             return True
         unit = f" {value.unit_raw}" if value.unit_raw else ""
+        canonical = f" {spec.canonical_unit}" if spec.canonical_unit else ""
         dropped.append(
-            f"{spec.name}: {value.value_raw!r}{unit} is {number:g} {spec.canonical_unit}, "
+            f"{spec.name}: {value.value_raw!r}{unit} is {number:g}{canonical}, "
             f"outside the plausible range ({spec.describe_range()})"
         )
         return False

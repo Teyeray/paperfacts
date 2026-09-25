@@ -1,0 +1,59 @@
+{
+  "document_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backend": "mineru",
+  "extractor_key": "0123456789ab",
+  "model": "fake-model",
+  "schema_version": "d3ef62926528",
+  "target": null,
+  "samples": [
+    {
+      "sample_id": "A",
+      "label": "ITO film",
+      "conditions": {},
+      "source_ids": [],
+      "fields": [
+        {
+          "field": "thickness",
+          "value_raw": "100",
+          "unit_raw": "nm",
+          "condition": null,
+          "source_ids": [
+            "mineru_p0_b1"
+          ],
+          "note": null,
+          "grounded": true,
+          "series": false,
+          "agreement": 1.0,
+          "value": null,
+          "unit": null,
+          "normalization_note": null
+        },
+        {
+          "field": "mode",
+          "value_raw": "RF",
+          "unit_raw": null,
+          "condition": null,
+          "source_ids": [
+            "mineru_p0_b1"
+          ],
+          "note": null,
+          "grounded": true,
+          "series": false,
+          "agreement": 1.0,
+          "value": null,
+          "unit": null,
+          "normalization_note": null
+        }
+      ]
+    }
+  ],
+  "invalid_source_ids": [],
+  "dropped": [],
+  "unattributed": [],
+  "no_tco_film": false,
+  "passes": 1,
+  "failed_questions": [],
+  "usage": {},
+  "raw_response": "",
+  "artifact_sha256": null
+}

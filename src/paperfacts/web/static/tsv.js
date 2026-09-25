@@ -6,11 +6,17 @@
 
 import { fmt, toast } from "./html.js";
 
+// A pasted cell starting with one of these is read by a spreadsheet as a formula, and a paper's text is not
+// ours to have evaluated. A number ("-3.5") is still pasted as a number: only other text gets the quote.
+const FORMULA_START = /^[=+\-@]/;
+const isNumber = (text) => text.trim() !== "" && Number.isFinite(Number(text));
+
 // Tabs and newlines inside a value would invent columns and rows, so they collapse to a space.
 const tsvCell = (value) => {
   if (value == null) return "";
-  const text = typeof value === "number" ? fmt(value) : String(value);
-  return text.replace(/[\t\r\n]+/g, " ");
+  if (typeof value === "number") return fmt(value);
+  const text = String(value).replace(/[\t\r\n]+/g, " ");
+  return FORMULA_START.test(text) && !isNumber(text) ? `'${text}` : text;
 };
 
 export function buildTsv(columns, items) {

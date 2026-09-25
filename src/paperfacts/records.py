@@ -21,13 +21,15 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from paperfacts.fields import FIELD_BY_NAME, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.models import Backend
 from paperfacts.storage import write_text_atomic
 
@@ -124,6 +126,45 @@ class FieldResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     values: list[ResponseValue] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ResponseModels:
+    """The two answer shapes whose keys a profile names: document mode's and the inventory's."""
+
+    extraction: type[ExtractionResponse]
+    inventory: type[InventoryResponse]
+
+
+@cache
+def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
+    """The answer shapes for a profile that tells the model to emit ``paper_key`` and ``no_samples_key``.
+
+    The keys are validation aliases onto the unchanged attributes ``target`` and ``no_tco_film``, so every
+    stored record keeps its shape. The class names are the base classes' own: a rejected answer goes back to
+    the model as ``str(ValidationError)``, which names the class, and under keys equal to the attribute names
+    the text is byte-identical to the base class's, as is every request that carries it.
+    """
+    extraction = create_model(
+        ExtractionResponse.__name__,
+        __base__=ExtractionResponse,
+        __doc__=ExtractionResponse.__doc__,
+        target=(ResponseTarget | None, Field(default=None, validation_alias=paper_key)),
+    )
+    inventory = create_model(
+        InventoryResponse.__name__,
+        __base__=InventoryResponse,
+        __doc__=InventoryResponse.__doc__,
+        no_tco_film=(
+            bool,
+            Field(
+                default=False,
+                validation_alias=no_samples_key,
+                description=InventoryResponse.model_fields["no_tco_film"].description,
+            ),
+        ),
+    )
+    return ResponseModels(extraction=extraction, inventory=inventory)
 
 
 # ---- Stored records --------------------------------------------------------------------------
@@ -250,7 +291,13 @@ class LaneExtraction(BaseModel):
     backend: Backend
     extractor_key: str
     model: str
-    schema_version: str
+    # Older files also carry ``schema_version``, which held this same fingerprint. It is no longer written, and an
+    # unknown key is ignored on reading, so such a file still loads.
+    profile_fingerprint: str | None = Field(
+        default=None,
+        description="keys.profile_extraction_fingerprint of the profile the lane was extracted under; None in "
+        "files written before profiles existed",
+    )
     target: TargetRecord | None = None
     samples: tuple[SampleRecord, ...] = ()
     invalid_source_ids: tuple[str, ...] = Field(
@@ -464,7 +511,9 @@ def place_on_every_sample(
     return True
 
 
-def response_to_records(response: ExtractionResponse, *, known_ids: frozenset[str]) -> ExtractedRecords:
+def response_to_records(
+    response: ExtractionResponse, *, fields: Mapping[str, FieldSpec], known_ids: frozenset[str]
+) -> ExtractedRecords:
     """Convert a validated response into records, cleaning as it goes.
 
     Three things are removed: fields that are not in the schema, numeric fields whose value contains no
@@ -498,7 +547,7 @@ def response_to_records(response: ExtractionResponse, *, known_ids: frozenset[st
         )
 
     def in_schema(item: ResponseField) -> FieldSpec | None:
-        spec = FIELD_BY_NAME.get(item.field)
+        spec = fields.get(item.field)
         if spec is None:
             cleaning.dropped.append(f"{item.field}: not in schema")
         return spec
@@ -507,7 +556,7 @@ def response_to_records(response: ExtractionResponse, *, known_ids: frozenset[st
     if response.target is not None:
         # Validate first: if every field is dropped, invented ids still belong in the audit.
         target_ids = cleaning.keep_ids(response.target.source_ids, known_ids)
-        fields: list[FieldValue] = []
+        target_fields: list[FieldValue] = []
         for item in response.target.fields:
             spec = in_schema(item)
             if spec is None:
@@ -521,9 +570,9 @@ def response_to_records(response: ExtractionResponse, *, known_ids: frozenset[st
             if spec.is_sample_level:
                 place_on_every_sample(value, sample_fields, unattributed)
             else:
-                fields.append(value)
-        if fields:
-            target = TargetRecord(source_ids=target_ids, fields=tuple(fields))
+                target_fields.append(value)
+        if target_fields:
+            target = TargetRecord(source_ids=target_ids, fields=tuple(target_fields))
 
     for listed, index in zip(response.samples, placement, strict=True):
         for item in listed.fields:

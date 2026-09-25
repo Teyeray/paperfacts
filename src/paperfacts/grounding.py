@@ -17,8 +17,8 @@ from collections.abc import Mapping, Sequence
 
 from paperfacts.continuation import continuation_pairs
 from paperfacts.models import SourceBlock
-from paperfacts.normalize import KEY_CHARACTERS, LATEX_WRAPPERS, delatex, normalize_text
 from paperfacts.records import FieldValue, LaneExtraction
+from paperfacts.text import KEY_CHARACTERS, LATEX_WRAPPERS, delatex, normalize_text
 
 # LaTeX expands to " x ", Unicode papers use "×"; fold both so the two spellings compare equal.
 _MULTIPLICATION = re.compile(r"[×✕✖⋅·]")

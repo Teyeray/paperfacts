@@ -25,8 +25,14 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, SAMPLE_FIELDS, TARGET_FIELDS, FieldSpec
-from paperfacts.keys import comparison_key
+from paperfacts.errors import ProfileMismatchError
+from paperfacts.fields import FieldSpec
+from paperfacts.keys import (
+    ComparisonOptions,
+    comparison_key,
+    profile_comparison_fingerprint,
+    profile_extraction_fingerprint,
+)
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
 from paperfacts.normalize import (
@@ -110,6 +116,8 @@ class ComparisonReport(BaseModel):
     # The lanes' artifact_sha256, so a report is tied to the parses it compared (None: unknown, older file).
     artifact_sha256_a: str | None = None
     artifact_sha256_b: str | None = None
+    # keys.profile_comparison_fingerprint of the profile the verdicts were reached under (None: an older file).
+    profile_fingerprint: str | None = None
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -119,14 +127,18 @@ class ComparisonReport(BaseModel):
         return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: SampleMatching) -> ComparisonReport:
+def compare_lanes(
+    lane_a: LaneExtraction, lane_b: LaneExtraction, matching: SampleMatching, options: ComparisonOptions
+) -> ComparisonReport:
     if lane_a.extractor_key != lane_b.extractor_key:
         raise ValueError(
             f"lanes have different extractor_key ({lane_a.extractor_key} vs {lane_b.extractor_key}); cannot compare"
         )
+    profile = options.profile
+    _check_lane_profiles(lane_a, lane_b, profile_extraction_fingerprint(profile))
     # Normalization is a pure, idempotent function, so it is unconditionally redone here: callers never have
     # to remember to normalize first, which rules out "forgot to normalize, so the answer was silently wrong"
-    lane_a, lane_b = normalize_lane(lane_a), normalize_lane(lane_b)
+    lane_a, lane_b = normalize_lane(lane_a, profile), normalize_lane(lane_b, profile)
     a_name, b_name = lane_a.backend, lane_b.backend
     comparisons: list[FieldComparison] = []
 
@@ -135,7 +147,7 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
         "target",
         lane_a.target.fields if lane_a.target else (),
         lane_b.target.fields if lane_b.target else (),
-        TARGET_FIELDS,
+        profile.paper_fields,
         a_name,
         b_name,
     )
@@ -148,7 +160,7 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
             f"sample:{pair.a_id}|{pair.b_id}",
             sample_a.fields,
             sample_b.fields,
-            SAMPLE_FIELDS,
+            profile.sample_fields,
             a_name,
             b_name,
             match_confidence=pair.confidence if pair.method == "llm" else None,
@@ -163,7 +175,7 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
                 f"sample:{sample_id}",
                 sample.fields,
                 (),
-                SAMPLE_FIELDS,
+                profile.sample_fields,
                 a_name,
                 b_name,
                 one_sided=one_sided,
@@ -175,7 +187,7 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
                 f"sample:{sample_id}",
                 (),
                 sample.fields,
-                SAMPLE_FIELDS,
+                profile.sample_fields,
                 a_name,
                 b_name,
                 one_sided=one_sided,
@@ -190,7 +202,7 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
         "unattributed",
         lane_a.unattributed,
         lane_b.unattributed,
-        SAMPLE_FIELDS,
+        profile.sample_fields,
         a_name,
         b_name,
         emit_one_sided=False,
@@ -201,15 +213,41 @@ def compare_lanes(lane_a: LaneExtraction, lane_b: LaneExtraction, matching: Samp
     return ComparisonReport(
         document_id=lane_a.document_id,
         extractor_key=lane_a.extractor_key,
-        comparison_key=comparison_key(),
+        comparison_key=comparison_key(options),
         backend_a=a_name,
         backend_b=b_name,
         matching=matching,
         comparisons=tuple(comparisons),
-        counts=_count(comparisons, matching, (lane_a, lane_b)),
+        counts=_count(comparisons, matching, (lane_a, lane_b), options.ambiguous_match_confidence),
         artifact_sha256_a=lane_a.artifact_sha256,
         artifact_sha256_b=lane_b.artifact_sha256,
+        profile_fingerprint=profile_comparison_fingerprint(profile),
     )
+
+
+def check_profile(found: str | None, expected: str, what: str) -> None:
+    """Refuse ``what`` unless it was produced under the profile whose fingerprint is ``expected``.
+
+    Results of two profiles may name the same field with other units or verdict rules, so combining them would
+    report agreement that means nothing. A file without a fingerprint predates profiles and is reachable only
+    through an explicitly old key; it is refused too rather than trusted.
+    """
+    if found is None:
+        raise ProfileMismatchError(f"{what} was written before profiles; re-run it")
+    if found != expected:
+        raise ProfileMismatchError(f"{what} comes from profile {found}, not {expected}; re-run it under one profile")
+
+
+def _check_lane_profiles(lane_a: LaneExtraction, lane_b: LaneExtraction, expected: str) -> None:
+    # Two lanes of different profiles are a broken run whatever the options say, so that is reported first.
+    found_a, found_b = lane_a.profile_fingerprint, lane_b.profile_fingerprint
+    if found_a is not None and found_b is not None and found_a != found_b:
+        raise ProfileMismatchError(
+            f"the {lane_a.backend} and {lane_b.backend} lanes were extracted under different profiles "
+            f"({found_a} vs {found_b}); re-run both under one profile"
+        )
+    for lane in (lane_a, lane_b):
+        check_profile(lane.profile_fingerprint, expected, f"the {lane.backend} lane")
 
 
 def compare_values(a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
@@ -502,7 +540,10 @@ def _unit_key(unit_raw: str | None) -> str:
 
 
 def _count(
-    comparisons: Sequence[FieldComparison], matching: SampleMatching, lanes: Sequence[LaneExtraction]
+    comparisons: Sequence[FieldComparison],
+    matching: SampleMatching,
+    lanes: Sequence[LaneExtraction],
+    ambiguous_match_confidence: float,
 ) -> ComparisonCounts:
     tally = Counter(c.status for c in comparisons)
     missing_by_backend = Counter(c.missing_in for c in comparisons if c.missing_in is not None)
@@ -515,7 +556,7 @@ def _count(
         missing_by_backend={str(k): v for k, v in sorted(missing_by_backend.items())},
         samples_matched=len(matching.pairs),
         samples_unmatched=len(matching.unmatched_a) + len(matching.unmatched_b),
-        low_confidence_matches=sum(1 for p in matching.pairs if p.confidence < AMBIGUOUS_MATCH_CONFIDENCE),
+        low_confidence_matches=sum(1 for p in matching.pairs if p.confidence < ambiguous_match_confidence),
         matching_failed=matching.failed,
         unattributed_by_backend={lane.backend: len(lane.unattributed) for lane in lanes if lane.unattributed},
         unattributed_compared=sum(1 for c in comparisons if c.scope == "unattributed"),

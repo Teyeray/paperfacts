@@ -4,7 +4,8 @@ Three layers, each winning over the one before it:
 
 1. the constants in this module, which are what the code shipped with;
 2. ``config.json`` -- the file to edit. Everything that is not a secret lives there: the server address, the
-   model and its endpoint, the parser services, and the field table itself (read by :mod:`paperfacts.fields`);
+   model and its endpoint, the parser services, and which domain profile to run (``profile``; the field table
+   is the profile's, in ``profiles/<name>.json``);
 3. the environment, including anything ``.env`` puts there. This is how one machine points at its own parser
    services, and the only place a secret belongs: the API key is never written to ``config.json``.
 
@@ -19,9 +20,7 @@ behaves the same on a machine that happens to have a key lying around.
 from __future__ import annotations
 
 import json
-import logging
 import os
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -122,6 +121,11 @@ DEFAULT_MAX_UPLOAD_MB = 200
 DEFAULT_MAX_PARALLEL_DOCUMENTS = 3
 DEFAULT_PAGE_DPI = 110
 DEFAULT_OVERLAY_DPI = 150
+# The domain profile: a bare name is profiles/<name>.json under the repository root (paperfacts.profile).
+DEFAULT_PROFILE = "tco"
+# Sample-pairing confidence below this counts as low confidence: the fact is still compared, but the report
+# counts it separately so a reviewer can look at it. File-only (comparison.ambiguous_match_confidence).
+DEFAULT_AMBIGUOUS_MATCH_CONFIDENCE = 0.6
 
 # How the model is asked for the facts: the whole paper in one question, or one question per field over the
 # blocks retrieved for it (see :mod:`paperfacts.extract`). Passage mode is the default because on the three
@@ -145,6 +149,8 @@ DEFAULT_FIGURES_DPI = DEFAULT_RENDER_DPI
 DEFAULT_FIGURES_MAX_PIXELS = 2_000_000
 # One chart took up to 134 s in the measurement, and one request to a sibling model hung for 271 s.
 DEFAULT_FIGURES_TIMEOUT_S = 300.0
+# Keys config.json held until the domain moved into a profile (profiles/<name>.json).
+MOVED_TO_PROFILE = ("fields", "condition_keywords")
 _TRUE_WORDS = {"1", "true", "yes", "on"}
 _FALSE_WORDS = {"0", "false", "no", "off"}
 
@@ -215,6 +221,19 @@ def load_config(path: Path) -> ConfigDocument:
         raise ConfigError(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"{path} must hold a JSON object, got {type(data).__name__}")
+    for key in MOVED_TO_PROFILE:
+        if key in data:
+            # Loud rather than ignored: a table left here looks live while every run reads the profile's, so an
+            # edit to it would silently do nothing.
+            # Imported here: profile_loader.py imports this module. Its rule, so a profile given as a path is named
+            # as one.
+            from paperfacts.profile_loader import profile_path
+
+            profile = data["profile"] if isinstance(data.get("profile"), str) else "<name>"
+            raise ConfigError(
+                f"{path}: {key} moved to {profile_path(Settings(profile=profile))}; delete {key!r} from {path} and "
+                "edit it there"
+            )
     return ConfigDocument(data=data, path=path)
 
 
@@ -235,25 +254,12 @@ def load_env_file() -> None:
     load_dotenv(DEFAULT_REPO_ROOT / ENV_FILENAME, override=False)
 
 
-def _warn_if_fields_came_from_elsewhere(path: Path) -> None:
-    """Warn when these settings and the field table were read from two different files.
-
-    ``paperfacts.fields`` binds the table once, at import, against the real environment. Passing ``from_env``
-    a mapping that names a different file therefore yields settings from one file and a field schema from
-    another -- harmless in a test that means it, confusing anywhere else, so it is said out loud.
-    """
-    fields_module = sys.modules.get("paperfacts.fields")
-    loaded = getattr(fields_module, "_CONFIG", None)
-    if loaded is not None and loaded.path != path:
-        logging.getLogger(__name__).warning(
-            "settings read from %s but the field table was loaded from %s", path, loaded.path
-        )
-
-
 @dataclass(frozen=True)
 class Settings:
     data_root: Path = Path("data")
     repo_root: Path = DEFAULT_REPO_ROOT
+    # A profile name, or a path to a profile file (anything with a "/" or ending in ".json").
+    profile: str = DEFAULT_PROFILE
     uv_bin: str = "uv"
     mineru_url: str | None = None
     paddle_url: str | None = None
@@ -317,6 +323,7 @@ class Settings:
     figures_dpi: int = DEFAULT_FIGURES_DPI
     figures_max_pixels: int = DEFAULT_FIGURES_MAX_PIXELS
     figures_timeout_s: float = DEFAULT_FIGURES_TIMEOUT_S
+    ambiguous_match_confidence: float = DEFAULT_AMBIGUOUS_MATCH_CONFIDENCE
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -337,12 +344,12 @@ class Settings:
             return _parse_number(name, get(name), default, kind)
 
         file = configuration(env)
-        _warn_if_fields_came_from_elsewhere(file.path)
         repo_root = Path(get("REPO_ROOT") or DEFAULT_REPO_ROOT)
         key_file = get("LLM_API_KEY_FILE")
         settings = cls(
             data_root=Path(get("DATA_ROOT") or file.get("data_root", str)),
             repo_root=repo_root,
+            profile=get("PROFILE") or file.get("profile", str),
             uv_bin=get("UV_BIN") or file.get("parsers.uv_bin", str),
             mineru_url=get("MINERU_URL") or file.text_or_none("parsers.mineru_url"),
             paddle_url=get("PADDLE_URL") or file.text_or_none("parsers.paddle_url"),
@@ -419,6 +426,8 @@ class Settings:
             figures_timeout_s=_positive_seconds(
                 number("FIGURES_TIMEOUT_S", file.get("figures.timeout_s", float), float), "figures.timeout_s", file.path
             ),
+            # File-only: a verdict threshold is not something to flip per invocation.
+            ambiguous_match_confidence=file.get("comparison.ambiguous_match_confidence", float),
         )
         _check_ranges(settings, file.path)
         return settings
@@ -483,6 +492,10 @@ def _check_ranges(settings: Settings, source: Path) -> None:
             f"({settings.page_dpi_min}) and server.page_dpi.max ({settings.page_dpi_max})",
         ),
         (settings.overlay_dpi >= 1, f"overlay.dpi must be at least 1, got {settings.overlay_dpi}"),
+        (
+            0 <= settings.ambiguous_match_confidence <= 1,
+            f"comparison.ambiguous_match_confidence must be between 0 and 1, got {settings.ambiguous_match_confidence}",
+        ),
     ]
     for ok, message in rules:
         if not ok:

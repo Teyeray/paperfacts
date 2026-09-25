@@ -1,0 +1,625 @@
+{
+  "$comment": "The TCO profile: sputtered transparent conductive oxide films. Written by scripts/extract_tco_profile.py from config.json and the prompts as they stood; every slot is a verbatim slice of today's prompts, so editing one changes what the model is asked.",
+  "format": 1,
+  "name": "tco",
+  "title_zh": "透明导电氧化物（TCO）薄膜",
+  "maturity": "production",
+  "description_zh": "磁控溅射透明导电氧化物薄膜：靶材、沉积工艺与薄膜的电学、光学性能。",
+  "groups": [
+    {
+      "name": "target",
+      "level": "paper",
+      "label_zh": "靶材"
+    },
+    {
+      "name": "process",
+      "level": "sample",
+      "label_zh": "工艺"
+    },
+    {
+      "name": "film",
+      "level": "sample",
+      "label_zh": "薄膜"
+    }
+  ],
+  "prompt": {
+    "domain_subject": "transparent conductive oxide (TCO) thin films",
+    "sample_definition": "A sample is a TCO or transparent-electrode film that this paper deposits itself. The other layers of a device -- a perovskite or organic absorber / active layer, charge-transport layers, thin buffer layers (e.g. evaporated MoOx, WOx, NbOy, VOx, or nanoparticle SnO2 / ZnO under an electrode), metal contacts -- are never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When the paper varies only those other layers, the TCO film it deposits is still a single sample. A multilayer transparent electrode (oxide/metal/oxide such as ITO/Ag/ITO or WO3/Ag/WO3) is one film: its thin metal interlayer is part of it, not a metal contact. Changes to the TCO film itself do make separate samples: each deposition condition, each thickness of any of its layers, and each post-treatment (as-deposited, annealed at 150 °C, annealed at 230 °C...) is its own sample. So is each substrate the paper compares the film's properties on (glass vs. a metal foil); the same film merely deposited on a second substrate to characterise it (Si for XRD, a TEM grid) is the same sample.",
+    "field_scope": "Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A value that belongs to another layer (a perovskite or organic absorber / active layer, a transport layer, a metal contact, the substrate) or to a whole device is not a value of this field, however well its name fits: leave it out.",
+    "fact_noun": "materials-science facts",
+    "sample_plural": "film samples",
+    "sample_singular": "film",
+    "sample_unit": "film sample / deposition condition set",
+    "sample_examples": "(e.g. one per O2 flow rate, per power, per substrate temperature)",
+    "sample_id_example": "O2-100sccm",
+    "condition_noun": "deposition conditions",
+    "condition_examples": "(flow rates, power, temperature, pressure, time...)",
+    "unit_examples": "\"Ω/sq\", \"μm\", \"sccm\"",
+    "paper_key": "target",
+    "paper_level_rule": "Target fields (group \"target\") describe the sputtering target and belong to the paper, not to a sample: put them under \"target\" only, never under a sample. `component` is the TARGET composition; a film's dopant concentration is not a component value. Use null for \"target\" only if the paper says nothing about the target.",
+    "no_samples_key": "no_tco_film",
+    "no_samples_clause": "the paper deposits no such film",
+    "no_samples_condition": "the paper deposits no TCO or transparent-electrode film of its own (it only uses purchased ITO/FTO glass, say)",
+    "samples_present_condition": "such a film is deposited",
+    "subset_examples": "\"all films deposited at 100 °C\", \"the annealed films\", \"the samples on glass\"",
+    "whole_series_examples": "\"all films\", \"for all samples\"",
+    "partial_collective_example": "\"the sputtered films\", when one listed sample is not sputtered",
+    "multi_condition_example": "transmittance at 550 nm and averaged",
+    "matching_condition_examples": "(flow rate, power, temperature, time...)",
+    "matching_value_examples": "(sheet resistance, thickness...)",
+    "matching_justification_example": "both are the 100 sccm O2 sample",
+    "scaled_header_examples": "\"ρ × 10^4 (Ω cm)\" or \"ρ (×10^-4 Ω·cm)\"",
+    "plain_header_example": "a column \"Thickness (nm)\" gives just \"nm\"",
+    "implausible_origin": "a different layer, process step or quantity"
+  },
+  "figures": {
+    "subject": "thin films (e.g. sputtered transparent conductive oxides)",
+    "property_noun": "film properties",
+    "chart_definition": "a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name)",
+    "axis_example": "axis \"Sheet resistance [10^2 ohm/sq]\" with a marker at the \"25\" gridline => y = 25, unit \"10^2 ohm/sq\"",
+    "symbol_axis_example": "axis \"ρ × 10^4 (Ω cm)\" => unit \"ρ × 10^4 (Ω cm)\"",
+    "x_label_examples": "400, 1.5, \"As-deposited\", \"ITO-RT\""
+  },
+  "retrieval": {
+    "condition_keywords": [
+      "sample",
+      "substrate",
+      "deposition",
+      "deposited",
+      "sputtering",
+      "sputtered",
+      "annealing",
+      "annealed",
+      "flow",
+      "flow rate",
+      "power",
+      "pressure",
+      "temperature",
+      "atmosphere"
+    ],
+    "condition_unit_pattern": "\\d\\s*(?:sccm|W\\b|°C|℃|K\\b|Pa\\b|mtorr|torr|mbar|kv\\b|ma\\b|rpm|min\\b|h\\b|s\\b|(?:vol|at)\\.?\\s*%)"
+  },
+  "units": {},
+  "ignored_unit_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"],
+  "ui": {
+    "paper_level_label_zh": "靶材（论文级）",
+    "paper_level_short_zh": "靶材",
+    "entity_label_zh": "样品",
+    "no_samples_message_zh": "该论文没有自己沉积的 TCO 膜，所以没有样品级数据。"
+  },
+  "fields": [
+    {
+      "name": "component",
+      "label": "靶材成分",
+      "group": "target",
+      "kind": "composition",
+      "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.",
+      "description_zh": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
+      "keywords": [
+        "target",
+        "sputtering target",
+        "component",
+        "composition",
+        "wt%",
+        "at%",
+        "purity"
+      ],
+      "canonical_unit": null,
+      "rel_tol": 0.0,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "resistance",
+      "label": "靶材电阻率",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Electrical resistivity of the sputtering target itself (not the film).",
+      "description_zh": "靶材电阻率；与薄膜电阻率 resistivity 区分。",
+      "keywords": [
+        "target resistivity",
+        "target resistance",
+        "resistivity of the target",
+        "bulk resistivity"
+      ],
+      "canonical_unit": "Ω·cm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject",
+      "display_format": "scientific"
+    },
+    {
+      "name": "density",
+      "label": "靶材密度",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Relative density of the sputtering target as a percentage of theoretical density.",
+      "description_zh": "靶材相对理论密度，数值 95 表示 95%。",
+      "keywords": [
+        "relative density",
+        "target density",
+        "theoretical density",
+        "density of the target"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.0,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "inch",
+      "label": "靶材尺寸",
+      "group": "target",
+      "kind": "numeric",
+      "description": "Size of the sputtering target: diameter, or length and width for a rectangular or rotary target.",
+      "description_zh": "靶材直径或唯一长度；矩形长宽、范围值不转成单个数值。",
+      "keywords": [
+        "inch",
+        "target size",
+        "diameter",
+        "target",
+        "magnetron",
+        "cathode",
+        "length and width"
+      ],
+      "canonical_unit": "inch",
+      "rel_tol": 0.01,
+      "abs_tol": 0.05,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sputtering_time",
+      "label": "溅射时间",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Duration of the sputtering deposition for this sample.",
+      "description_zh": "所选样品的溅射沉积时间。",
+      "keywords": [
+        "sputtering time",
+        "deposition time",
+        "duration",
+        "deposited for",
+        "sputtered for",
+        "sputtering duration",
+        "deposition duration",
+        "growth time",
+        "sputtering period"
+      ],
+      "canonical_unit": "min",
+      "rel_tol": 0.02,
+      "abs_tol": 1.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "sputtering_power",
+      "label": "溅射功率",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Electrical power applied to the sputtering target to generate and sustain the plasma (W).",
+      "description_zh": "所选样品的溅射功率（W）。",
+      "keywords": [
+        "sputtering power",
+        "sputter power",
+        "applied power",
+        "power density",
+        "DC power",
+        "RF power",
+        "pulsed DC power"
+      ],
+      "canonical_unit": "W",
+      "rel_tol": 0.02,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "mode",
+      "label": "溅射模式",
+      "group": "process",
+      "kind": "text",
+      "description": "Operational regime of the sputtering process: DC, RF or pulsed DC.",
+      "description_zh": "溅射工作模式：DC、RF 或 pulsed DC。",
+      "keywords": [
+        "DC",
+        "RF",
+        "pulsed DC",
+        "sputtering mode",
+        "power mode"
+      ],
+      "canonical_unit": null,
+      "rel_tol": 0.0,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject",
+      "categories": [
+        "DC",
+        "RF",
+        "pulsed DC",
+        "DC+RF",
+        "HiPIMS"
+      ]
+    },
+    {
+      "name": "ar_flow_rate",
+      "label": "Ar 流量",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Argon flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
+      "description_zh": "所选样品的氩气流量（sccm）。",
+      "keywords": [
+        "Ar flow rate",
+        "argon flow rate",
+        "Ar flow",
+        "gas ratio",
+        "flow ratio",
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "H2/Ar",
+        "H2/(Ar+H2)"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "o2_flow_rate",
+      "label": "O2 流量",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Oxygen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
+      "description_zh": "所选样品的氧气流量（sccm）。",
+      "keywords": [
+        "O2 flow rate",
+        "oxygen flow rate",
+        "O2 flow",
+        "gas ratio",
+        "flow ratio",
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "H2/Ar",
+        "H2/(Ar+H2)"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "h2_flow_rate",
+      "label": "H2 流量",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Hydrogen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
+      "description_zh": "所选样品的氢气流量（sccm）。",
+      "keywords": [
+        "H2 flow rate",
+        "hydrogen flow rate",
+        "H2 flow",
+        "gas ratio",
+        "flow ratio",
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "H2/Ar",
+        "H2/(Ar+H2)"
+      ],
+      "canonical_unit": "sccm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "o2_ratio",
+      "label": "O2 比例",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Oxygen share of the SPUTTERING gas as the paper states it, O2/(Ar+O2) or O2/Ar (%). Record which of the two in `condition`. Never the gas of an annealing, forming-gas or other post-treatment step.",
+      "description_zh": "溅射气体中氧气的比例（%），O2/(Ar+O2) 或 O2/Ar，具体口径见条件。",
+      "keywords": [
+        "O2/Ar",
+        "O2/(Ar+O2)",
+        "oxygen ratio",
+        "oxygen content",
+        "oxygen partial pressure ratio",
+        "gas ratio",
+        "flow ratio",
+        "O2 concentration"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": "which ratio, e.g. 'O2/(Ar+O2)' or 'O2/Ar'",
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "h2_ratio",
+      "label": "H2 比例",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Hydrogen share of the SPUTTERING gas as the paper states it, H2/(Ar+H2) or H2/Ar (%). Record which of the two in `condition`. Never the gas of an annealing, forming-gas or other post-treatment step: forming gas H2/N2 15/85 used to anneal the film is not h2_ratio.",
+      "description_zh": "溅射气体中氢气的比例（%），H2/(Ar+H2) 或 H2/Ar，具体口径见条件。",
+      "keywords": [
+        "H2/Ar",
+        "H2/(Ar+H2)",
+        "hydrogen ratio",
+        "hydrogen content",
+        "hydrogen volume",
+        "gas ratio",
+        "flow ratio",
+        "H2 concentration"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": "which ratio, e.g. 'H2/(Ar+H2)' or 'H2/Ar'",
+      "bare_number": "percent_or_fraction"
+    },
+    {
+      "name": "working_pressure",
+      "label": "工作气压",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Working (sputtering) pressure in the chamber during deposition (Pa) -- not the base pressure reached before it.",
+      "description_zh": "沉积时腔体的工作气压（Pa），不是本底真空。",
+      "keywords": [
+        "working pressure",
+        "sputtering pressure",
+        "deposition pressure",
+        "process pressure",
+        "chamber pressure",
+        "Pa",
+        "mTorr",
+        "mbar",
+        "Torr"
+      ],
+      "canonical_unit": "Pa",
+      "rel_tol": 0.02,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "target_substrate_distance",
+      "label": "靶基距",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Spatial gap between the sputtering target and the substrate holder (cm).",
+      "description_zh": "靶到基片/样品台的间距（cm）。",
+      "keywords": [
+        "target to substrate distance",
+        "target-substrate distance",
+        "target to holder distance",
+        "target-substrate separation",
+        "substrate to target distance",
+        "substrate-to-target distance",
+        "throw distance",
+        "target-to-substrate distance",
+        "working distance"
+      ],
+      "canonical_unit": "cm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "substrate_axis_distance",
+      "label": "基片偏轴距",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Lateral offset of the substrate from the holder's rotation axis or centre, i.e. the off-axis distance (cm). Never the target-to-substrate distance, which is target_substrate_distance.",
+      "description_zh": "基片到样品台中心的偏轴距离（cm）。",
+      "keywords": [
+        "off-axis distance",
+        "offset",
+        "substrate-to-axis distance",
+        "substrate to holder center distance"
+      ],
+      "canonical_unit": "cm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "substrate_temperature",
+      "label": "基片温度",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Substrate/holder temperature during the sputtering deposition (°C).",
+      "description_zh": "沉积时的基片/样品台温度（°C）。",
+      "keywords": [
+        "substrate temperature",
+        "holder temperature",
+        "stage temperature",
+        "deposition temperature"
+      ],
+      "canonical_unit": "℃",
+      "rel_tol": 0.02,
+      "abs_tol": 2.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "annealing_temperature",
+      "label": "退火温度",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Temperature of the thermal treatment of the TCO film performed after its deposition is complete (°C) -- not the annealing of an absorber, active or transport layer.",
+      "description_zh": "沉积后退火处理的温度（°C）。",
+      "keywords": [
+        "post-annealing temperature",
+        "annealing temperature",
+        "post-deposition annealing",
+        "PDA",
+        "heat treatment"
+      ],
+      "canonical_unit": "℃",
+      "rel_tol": 0.02,
+      "abs_tol": 2.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "annealing_time",
+      "label": "退火时间",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Duration of the thermal treatment of the TCO film performed after its deposition is complete (min) -- not the annealing of an absorber, active or transport layer.",
+      "description_zh": "沉积后退火处理的时长（min）。",
+      "keywords": [
+        "post-annealing duration",
+        "annealing time",
+        "post-deposition annealing duration",
+        "annealed for"
+      ],
+      "canonical_unit": "min",
+      "rel_tol": 0.02,
+      "abs_tol": 1.0,
+      "condition_hint": null,
+      "bare_number": "reject"
+    },
+    {
+      "name": "rotation_speed",
+      "label": "转速",
+      "group": "process",
+      "kind": "numeric",
+      "description": "Rotation speed of the substrate holder during sputter deposition of the film (rpm). The spin-coating speed of any layer is never a rotation speed.",
+      "description_zh": "沉积时样品台的旋转速度（rpm）。",
+      "keywords": [
+        "rotation speed",
+        "rotational speed",
+        "substrate rotation rate",
+        "holder rotation",
+        "rpm"
+      ],
+      "canonical_unit": "rpm",
+      "rel_tol": 0.02,
+      "abs_tol": 0.5,
+      "condition_hint": null,
+      "bare_number": "reject",
+      "valid_range": {
+        "max": 100
+      }
+    },
+    {
+      "name": "sheet_resistance",
+      "label": "方阻",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Sheet resistance of the film (Ω/sq).",
+      "description_zh": "所选样品的薄膜方块电阻。",
+      "keywords": [
+        "sheet resistance",
+        "sheet resistivity",
+        "Rs",
+        "R_s",
+        "Rsq",
+        "Rsheet"
+      ],
+      "canonical_unit": "Ω/sq",
+      "rel_tol": 0.02,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject",
+      "figure_readable": true
+    },
+    {
+      "name": "resistivity",
+      "label": "电阻率",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Electrical resistivity of the deposited film, as opposed to the `resistance` of the target it was sputtered from.",
+      "description_zh": "所选样品的薄膜电阻率。",
+      "keywords": [
+        "resistivity",
+        "electrical resistivity",
+        "specific resistance",
+        "ρ"
+      ],
+      "canonical_unit": "Ω·cm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject",
+      "figure_readable": true,
+      "display_format": "scientific"
+    },
+    {
+      "name": "transmittance",
+      "label": "透光率",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Optical transmittance (%) of the transparent electrode or transparent conductive film -- not of a perovskite film, an absorber layer or a complete device. Always record the wavelength or range it refers to.",
+      "description_zh": "所选样品的透光率，数值 85 表示 85%；测量波段见条件及数据质量。",
+      "keywords": [
+        "transmittance",
+        "transmission",
+        "transparency",
+        "UV-vis",
+        "%T",
+        "AVT",
+        "optical transmittance",
+        "visible transmittance",
+        "average transmittance",
+        "Tvis",
+        "Tavg",
+        "T550nm",
+        "T%",
+        "Tir"
+      ],
+      "canonical_unit": "%",
+      "rel_tol": 0.0,
+      "abs_tol": 1.0,
+      "condition_hint": "wavelength or spectral range, e.g. '550 nm' or 'average 400-800 nm'",
+      "bare_number": "percent_or_fraction",
+      "valid_range": {
+        "min": 60
+      },
+      "condition_preference": [
+        "400-800",
+        "380-780",
+        "400-700",
+        "550",
+        "400-1100"
+      ],
+      "condition_rule": "the wavelength or spectral range",
+      "missing_condition_note_zh": "原文提取结果未注明透光率波长或波段",
+      "figure_readable": true
+    },
+    {
+      "name": "thickness",
+      "label": "厚度",
+      "group": "film",
+      "kind": "numeric",
+      "description": "Thickness of the TCO / transparent-electrode film itself (e.g. from SEM cross section or profilometry) -- not of an absorber or active layer, a transport layer, the substrate or a whole device.",
+      "description_zh": "所选样品的薄膜厚度。",
+      "keywords": [
+        "thickness",
+        "film thickness",
+        "SEM cross section",
+        "profilometry",
+        "d =",
+        "thick",
+        "thicknesses"
+      ],
+      "canonical_unit": "nm",
+      "rel_tol": 0.05,
+      "abs_tol": 0.0,
+      "condition_hint": null,
+      "bare_number": "reject",
+      "valid_range": {
+        "max": 5000
+      },
+      "figure_readable": true
+    }
+  ]
+}

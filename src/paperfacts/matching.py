@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.errors import LlmResponseError
 from paperfacts.llm import LlmClient, complete_validated
+from paperfacts.profile import DomainProfile
 from paperfacts.prompts import matching_system_prompt, matching_user_prompt, repair_prompt
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, sample_key
 
@@ -79,7 +80,12 @@ class _MatchingResponse(BaseModel):
 
 
 def match_samples(
-    lane_a: LaneExtraction, lane_b: LaneExtraction, client: LlmClient, *, refresh: bool = False
+    lane_a: LaneExtraction,
+    lane_b: LaneExtraction,
+    client: LlmClient,
+    profile: DomainProfile,
+    *,
+    refresh: bool = False,
 ) -> SampleMatching:
     exact, rest_a, rest_b = _exact_pairs(lane_a.samples, lane_b.samples)
     if not rest_a or not rest_b:
@@ -90,7 +96,7 @@ def match_samples(
         response, raw_text, usage = complete_validated(
             client,
             _MatchingResponse,
-            system=matching_system_prompt(),
+            system=matching_system_prompt(profile),
             user=user,
             repair=lambda previous, error: repair_prompt(user, previous, error),
             refresh=refresh,

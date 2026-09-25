@@ -1,0 +1,47 @@
+{
+ "doc_id": "0000000000000001",
+ "title": "Synthetic gold paper: every outcome, a category, a series and an unaligned row",
+ "target": {
+  "component": [{"value": "ITO 90:10 wt%", "page": 1, "accept": ["90\\s*:\\s*10"]}],
+  "inch": [{"value": 3, "page": 2}]
+ },
+ "series": {
+  "mode": [{"value": "RF", "page": 1}],
+  "working_pressure": [{"value": 0.5, "page": 2}]
+ },
+ "samples": [
+  {
+   "id": "S-100",
+   "match": {"fields": {"thickness": 100}, "label": "as-?dep"},
+   "fields": {
+    "thickness": [{"value": 100, "page": 3}],
+    "sheet_resistance": [{"value": 20, "page": 3}],
+    "transmittance": [
+     {"value": 85, "condition": "550 nm", "page": 4},
+     {"value": 80, "condition": "400-800 nm", "page": 4, "ambiguous": true}
+    ]
+   }
+  },
+  {
+   "id": "S-200",
+   "match": {"fields": {"thickness": 200}},
+   "fields": {
+    "thickness": [{"value": 200, "page": 3}],
+    "sheet_resistance": [{"value": 10, "page": 3}],
+    "resistivity": [{"value": 0.0002, "page": 5, "figure_only": true}]
+   }
+  },
+  {
+   "id": "S-annealed",
+   "ambiguous": true,
+   "match": {"label": "anneal"},
+   "exclude_series": ["mode"],
+   "fields": {"thickness": [{"value": 300, "page": 3}]}
+  },
+  {
+   "id": "S-absent",
+   "match": {"label": "never-there"},
+   "fields": {"thickness": [{"value": 400, "page": 3}]}
+  }
+ ]
+}

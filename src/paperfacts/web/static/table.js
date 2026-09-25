@@ -10,11 +10,10 @@ import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpic
 import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
 import { clearEvidence, showEvidence } from "./samples.js";
-import { LANE_LABEL, noSamplesReason, state } from "./state.js";
+import { LANE_LABEL, noSamplesReason, state, uiCopy } from "./state.js";
 import { copyTable } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
-const TARGET_LABEL = "靶材（论文级）";
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
 // two decisions that produce one; every other decision deliberately leaves the cell empty.
 const CELL_CLASS = { agree: "ok", single_source: "warn" };
@@ -153,14 +152,15 @@ function documentColumns(fields, quality, paperSampleId) {
       (item) => (isTarget(item) ? "<td></td>" : `<td class="${className}" title="${escapeHtml(text(item))}">${escapeHtml(text(item))}</td>`),
       (item) => (isTarget(item) ? "" : text(item)),
     );
-  const paperMark = `<span class="paper-mark" title="被选作论文行的样品">★ 论文行</span>`;
+  const paperMark = `<span class="paper-mark" title="被选作论文行的${escapeHtml(uiCopy("entity_label_zh"))}">★ 论文行</span>`;
+  const paperLabel = uiCopy("paper_level_label_zh");
   return [
     column(
-      "样品",
+      uiCopy("entity_label_zh"),
       (item) => isTarget(item)
-        ? `<td class="mono">${escapeHtml(TARGET_LABEL)}</td>`
+        ? `<td class="mono">${escapeHtml(paperLabel)}</td>`
         : `<td class="mono">${escapeHtml(item.row.sample_id ?? "")}${item.row.sample_id === paperSampleId ? paperMark : ""}</td>`,
-      (item) => (isTarget(item) ? TARGET_LABEL : item.row.sample_id ?? ""),
+      (item) => (isTarget(item) ? paperLabel : item.row.sample_id ?? ""),
     ),
     sampleColumn("标签", "label", (item) => String(item.row.sample_label ?? "")),
     sampleColumn("条件", "muted cond", (item) => String(item.row.conditions ?? "")),

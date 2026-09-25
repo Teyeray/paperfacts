@@ -15,11 +15,13 @@ import pytest
 from openpyxl import load_workbook
 from typer.testing import CliRunner
 
+from paperfacts.batch import run_batch
 from paperfacts.cli import app
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, ParserError
 from paperfacts.models import DocumentInput
-from paperfacts.workflow import run_batch, run_document
+from paperfacts.profile import DomainProfile
+from paperfacts.workflow import run_document
 from support.factories import make_blank_pdf
 from support.web import WAIT_TIMEOUT_S
 from test_workflow_run import install_fake_pipeline
@@ -40,51 +42,53 @@ def sheets(path: Path) -> dict[str, list[tuple]]:
         workbook.close()
 
 
-def test_papers_run_side_by_side(monkeypatch, tmp_path: Path):
+def test_papers_run_side_by_side(monkeypatch, tmp_path: Path, tco_profile: DomainProfile):
     make_papers(tmp_path / "papers", 3)
     install_fake_pipeline(monkeypatch)
     barrier = threading.Barrier(3)
 
-    def overlapping(document: DocumentInput, settings: Settings, **kwargs):
+    def overlapping(document: DocumentInput, settings: Settings, profile: DomainProfile, **kwargs):
         barrier.wait(timeout=WAIT_TIMEOUT_S)
-        return run_document(document, settings, **kwargs)
+        return run_document(document, settings, profile, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", overlapping)
-    result = run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3)
+    monkeypatch.setattr("paperfacts.batch.run_document", overlapping)
+    result = run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), tco_profile, jobs=3)
 
     assert len(result.documents) == 3
     assert result.failures == ()
     assert not barrier.broken
 
 
-def test_the_output_is_in_input_order_and_a_failed_paper_costs_only_its_own_row(monkeypatch, tmp_path: Path):
+def test_the_output_is_in_input_order_and_a_failed_paper_costs_only_its_own_row(
+    monkeypatch, tmp_path: Path, tco_profile: DomainProfile
+):
     papers = make_papers(tmp_path / "papers", 4)
     install_fake_pipeline(monkeypatch)
     settings = Settings(data_root=tmp_path / "data")
 
-    def failing_b(document: DocumentInput, settings: Settings, **kwargs):
+    def failing_b(document: DocumentInput, settings: Settings, profile: DomainProfile, **kwargs):
         if document.pdf_path.name == "b.pdf":
             raise ParserError("mineru", "run", "bad PDF")
-        return run_document(document, settings, **kwargs)
+        return run_document(document, settings, profile, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", failing_b)
-    serial = run_batch(tmp_path / "papers", settings, output=tmp_path / "serial.xlsx", jobs=1)
+    monkeypatch.setattr("paperfacts.batch.run_document", failing_b)
+    serial = run_batch(tmp_path / "papers", settings, tco_profile, output=tmp_path / "serial.xlsx", jobs=1)
 
     # Now every paper waits for the next one to finish before it does, so they complete in reverse order.
     finished = {path.name: threading.Event() for path in papers}
     after = {papers[i].name: papers[i + 1].name for i in range(len(papers) - 1)}
 
-    def reversed_completion(document: DocumentInput, settings: Settings, **kwargs):
+    def reversed_completion(document: DocumentInput, settings: Settings, profile: DomainProfile, **kwargs):
         name = document.pdf_path.name
         try:
             if name in after:
                 assert finished[after[name]].wait(timeout=WAIT_TIMEOUT_S)
-            return failing_b(document, settings, **kwargs)
+            return failing_b(document, settings, profile, **kwargs)
         finally:
             finished[name].set()
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", reversed_completion)
-    parallel = run_batch(tmp_path / "papers", settings, output=tmp_path / "parallel.xlsx", jobs=4)
+    monkeypatch.setattr("paperfacts.batch.run_document", reversed_completion)
+    parallel = run_batch(tmp_path / "papers", settings, tco_profile, output=tmp_path / "parallel.xlsx", jobs=4)
 
     assert [d.filename for d in parallel.documents] == ["a.pdf", "c.pdf", "d.pdf"]
     assert [f["filename"] for f in parallel.failures] == ["b.pdf"]
@@ -94,18 +98,18 @@ def test_the_output_is_in_input_order_and_a_failed_paper_costs_only_its_own_row(
     assert sheets(parallel.excel_path) == sheets(serial.excel_path)
 
 
-def test_stage_reports_are_serialised_and_name_their_paper(monkeypatch, tmp_path: Path):
+def test_stage_reports_are_serialised_and_name_their_paper(monkeypatch, tmp_path: Path, tco_profile: DomainProfile):
     make_papers(tmp_path / "papers", 3)
     install_fake_pipeline(monkeypatch)
     # All three papers are released at once and report straight away, so their first reports contend.
     start_together = threading.Barrier(3)
 
-    def contending(document: DocumentInput, settings: Settings, *, on_stage, **kwargs):
+    def contending(document: DocumentInput, settings: Settings, profile: DomainProfile, *, on_stage, **kwargs):
         start_together.wait(timeout=WAIT_TIMEOUT_S)
         on_stage("probe", "running", "")
-        return run_document(document, settings, on_stage=on_stage, **kwargs)
+        return run_document(document, settings, profile, on_stage=on_stage, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", contending)
+    monkeypatch.setattr("paperfacts.batch.run_document", contending)
     calls: list[tuple[str, str]] = []
     guard = threading.Lock()
     inside = 0
@@ -123,7 +127,7 @@ def test_stage_reports_are_serialised_and_name_their_paper(monkeypatch, tmp_path
         with guard:
             inside -= 1
 
-    run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3, on_stage=on_stage)
+    run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), tco_profile, jobs=3, on_stage=on_stage)
 
     assert not overlapped
     for name in ("a.pdf", "b.pdf", "c.pdf"):
@@ -133,7 +137,9 @@ def test_stage_reports_are_serialised_and_name_their_paper(monkeypatch, tmp_path
         assert any(stage.endswith(f"{name} parse:mineru") for stage in own)
 
 
-def test_a_stopped_batch_stops_its_running_papers_at_the_next_stage(monkeypatch, tmp_path: Path):
+def test_a_stopped_batch_stops_its_running_papers_at_the_next_stage(
+    monkeypatch, tmp_path: Path, tco_profile: DomainProfile
+):
     """Ctrl-C and an unexpected error take the same path: nothing new starts, the running papers stop at
     their next stage boundary, and the caller hears how many it is waiting for."""
     make_papers(tmp_path / "papers", 3)
@@ -141,14 +147,14 @@ def test_a_stopped_batch_stops_its_running_papers_at_the_next_stage(monkeypatch,
     all_started = threading.Barrier(3)
     stopping = threading.Event()
 
-    def one_breaks(document: DocumentInput, settings: Settings, **kwargs):
+    def one_breaks(document: DocumentInput, settings: Settings, profile: DomainProfile, **kwargs):
         all_started.wait(timeout=WAIT_TIMEOUT_S)
         if document.pdf_path.name == "c.pdf":
             raise RuntimeError("not a paper's own failure")
         assert stopping.wait(timeout=WAIT_TIMEOUT_S)
-        return run_document(document, settings, **kwargs)
+        return run_document(document, settings, profile, **kwargs)
 
-    monkeypatch.setattr("paperfacts.workflow.run_document", one_breaks)
+    monkeypatch.setattr("paperfacts.batch.run_document", one_breaks)
     reports: list[tuple[str, str, str]] = []
 
     def on_stage(stage: str, status: str, detail: str) -> None:
@@ -157,7 +163,7 @@ def test_a_stopped_batch_stops_its_running_papers_at_the_next_stage(monkeypatch,
             stopping.set()
 
     with pytest.raises(RuntimeError, match="own failure"):
-        run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3, on_stage=on_stage)
+        run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), tco_profile, jobs=3, on_stage=on_stage)
 
     assert ("batch", "failed", "stopping; waiting for 2 running papers to reach a stage boundary") in reports
     stopped = sorted(stage for stage, status, _ in reports if status == "skipped")
@@ -165,37 +171,39 @@ def test_a_stopped_batch_stops_its_running_papers_at_the_next_stage(monkeypatch,
     assert spy.parse == []  # both stopped at their first boundary, before any work
 
 
-def test_the_first_copy_of_a_duplicate_is_the_one_processed(monkeypatch, tmp_path: Path):
+def test_the_first_copy_of_a_duplicate_is_the_one_processed(monkeypatch, tmp_path: Path, tco_profile: DomainProfile):
     source = tmp_path / "papers"
     (original,) = make_papers(source, 1)
     (source / "z_copy.pdf").write_bytes(original.read_bytes())
     spy = install_fake_pipeline(monkeypatch)
 
-    result = run_batch(source, Settings(data_root=tmp_path / "data"), jobs=4)
+    result = run_batch(source, Settings(data_root=tmp_path / "data"), tco_profile, jobs=4)
 
     assert result.duplicate_count == 1
     assert [d.filename for d in result.documents] == ["a.pdf"]
     assert len(spy.parse) == 2  # one paper, two lanes
 
 
-def test_a_workbook_that_cannot_be_written_stops_a_parallel_batch(monkeypatch, tmp_path: Path):
+def test_a_workbook_that_cannot_be_written_stops_a_parallel_batch(
+    monkeypatch, tmp_path: Path, tco_profile: DomainProfile
+):
     make_papers(tmp_path / "papers", 3)
     install_fake_pipeline(monkeypatch)
 
     def fail_write(*args, **kwargs):
         raise PermissionError("workbook is locked")
 
-    monkeypatch.setattr("paperfacts.workflow.write_dataset", fail_write)
+    monkeypatch.setattr("paperfacts.batch.write_dataset", fail_write)
     with pytest.raises(PermissionError, match="locked"):
-        run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=3)
+        run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), tco_profile, jobs=3)
     # Every paper that was running has finished: none is left writing after the caller gave up.
     assert not [thread for thread in threading.enumerate() if thread.name.startswith("paperfacts-document")]
 
 
-def test_jobs_below_one_is_refused(tmp_path: Path):
+def test_jobs_below_one_is_refused(tmp_path: Path, tco_profile: DomainProfile):
     make_papers(tmp_path / "papers", 1)
     with pytest.raises(ConfigError, match="--jobs"):
-        run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), jobs=0)
+        run_batch(tmp_path / "papers", Settings(data_root=tmp_path / "data"), tco_profile, jobs=0)
 
 
 @pytest.mark.parametrize(("flags", "expected"), [([], 3), (["--jobs", "5"], 5), (["-j", "1"], 1)])
@@ -205,7 +213,7 @@ def test_the_cli_takes_jobs_from_the_flag_or_the_parallel_documents_setting(
     (paper,) = make_papers(tmp_path / "papers", 1)
     captured: list[int] = []
 
-    def fake_run_batch(source: Path, settings: Settings, **kwargs):
+    def fake_run_batch(source: Path, settings: Settings, profile: DomainProfile, **kwargs):
         captured.append(kwargs["jobs"])
         raise ParserError("mineru", "run", "stop here")
 
@@ -221,7 +229,7 @@ def test_export_reads_the_caches_one_paper_at_a_time(monkeypatch, tmp_path: Path
     (paper,) = make_papers(tmp_path / "papers", 1)
     captured: list[int] = []
 
-    def fake_run_batch(source: Path, settings: Settings, **kwargs):
+    def fake_run_batch(source: Path, settings: Settings, profile: DomainProfile, **kwargs):
         captured.append(kwargs["jobs"])
         raise ParserError("mineru", "run", "stop here")
 

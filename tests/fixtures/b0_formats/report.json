@@ -1,0 +1,124 @@
+{
+  "document_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "extractor_key": "0123456789ab",
+  "comparison_key": "859a4081e5ea",
+  "backend_a": "mineru",
+  "backend_b": "paddleocr_vl",
+  "matching": {
+    "pairs": [
+      {
+        "a_id": "A",
+        "b_id": "A",
+        "confidence": 1.0,
+        "justification": "identical sample_id",
+        "method": "exact"
+      }
+    ],
+    "unmatched_a": [],
+    "unmatched_b": [],
+    "failed": false,
+    "failure": null,
+    "usage": {},
+    "raw_response": ""
+  },
+  "comparisons": [
+    {
+      "scope": "sample:A|A",
+      "field": "mode",
+      "condition": null,
+      "status": "agree",
+      "missing_in": null,
+      "match_confidence": null,
+      "a": {
+        "field": "mode",
+        "value_raw": "RF",
+        "unit_raw": null,
+        "condition": null,
+        "source_ids": [
+          "mineru_p0_b1"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "value": null,
+        "unit": null,
+        "normalization_note": null
+      },
+      "b": {
+        "field": "mode",
+        "value_raw": "RF",
+        "unit_raw": null,
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p0_b1"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "value": null,
+        "unit": null,
+        "normalization_note": null
+      },
+      "detail": "both name RF"
+    },
+    {
+      "scope": "sample:A|A",
+      "field": "thickness",
+      "condition": null,
+      "status": "agree",
+      "missing_in": null,
+      "match_confidence": null,
+      "a": {
+        "field": "thickness",
+        "value_raw": "100",
+        "unit_raw": "nm",
+        "condition": null,
+        "source_ids": [
+          "mineru_p0_b1"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "value": 100.0,
+        "unit": "nm",
+        "normalization_note": null
+      },
+      "b": {
+        "field": "thickness",
+        "value_raw": "100",
+        "unit_raw": "nm",
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p0_b1"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "value": 100.0,
+        "unit": "nm",
+        "normalization_note": null
+      },
+      "detail": "100 ≈ 100 nm (rel_tol=0.05, abs_tol=0)"
+    }
+  ],
+  "counts": {
+    "agree": 2,
+    "conflict": 0,
+    "ambiguous": 0,
+    "missing": 0,
+    "total": 2,
+    "missing_by_backend": {},
+    "samples_matched": 1,
+    "samples_unmatched": 0,
+    "low_confidence_matches": 0,
+    "matching_failed": false,
+    "unattributed_by_backend": {},
+    "unattributed_compared": 0
+  },
+  "artifact_sha256_a": null,
+  "artifact_sha256_b": null
+}

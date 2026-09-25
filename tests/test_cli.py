@@ -7,6 +7,9 @@ next. The real parsing is replaced by a monkeypatched fake parser; not one subpr
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -15,12 +18,14 @@ import pytest
 from typer.testing import CliRunner
 
 from paperfacts.cli import BackendOption, app
-from paperfacts.errors import ParserError
-from paperfacts.fields import FIELD_SPECS
+from paperfacts.errors import ConfigError, ParserError
+from paperfacts.figures import user_prompt as figure_user_prompt
 from paperfacts.models import Backend, DocumentInput, RawParseOutput
 from paperfacts.parsers import Parser
+from paperfacts.profile_loader import load_profile
 from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
+from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data
 
 runner = CliRunner()
 
@@ -246,12 +251,247 @@ def test_no_arguments_shows_help_instead_of_a_traceback():
     assert "Usage" in result.output
 
 
-def test_fields_lists_every_field_the_package_loaded():
-    # The table lives in config.json; this is the one-glance check that an edit did what it was meant to.
+def test_fields_lists_every_field_of_the_profile(tco_profile):
+    # The table lives in the profile; this is the one-glance check that an edit did what it was meant to.
     result = runner.invoke(app, ["fields"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
-    for spec in FIELD_SPECS:
+    for spec in tco_profile.fields:
         assert any(line.startswith(spec.name) for line in lines)
         assert any(f"keywords: {', '.join(spec.keywords)}" in line for line in lines)
+
+
+def test_fields_takes_the_profile_flag(tmp_path: Path):
+    path = write_demo(tmp_path / "demo.json")
+
+    result = runner.invoke(app, ["fields", "--profile", str(path)])
+
+    assert result.exit_code == 0
+    names = [line.split()[0] for line in result.output.splitlines() if not line.startswith(" ")]
+    assert names == ["precursor_purity", "coating_thickness", "solvent"]
+
+
+# ---- Authoring tools: profiles, profiles --check, prompts ----------------------------------------------
+
+# Read-only: the recording test_prompt_snapshot.py pins byte for byte, so what `prompts` prints is what is sent.
+RECORDED_PROMPTS: dict[str, str] = json.loads(
+    (Path(__file__).parent / "fixtures" / "prompts" / "snapshot.json").read_text(encoding="utf-8")
+)
+
+
+def write_demo(path: Path, data: dict[str, Any] | None = None) -> Path:
+    path.write_text(json.dumps(data or profile_data(), ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def prompt_sections(output: str) -> dict[str, str]:
+    """``paperfacts prompts`` output split at its ``===== title =====`` lines, each text without the blank line
+    that separates it from the next section."""
+    sections: dict[str, list[str]] = {}
+    current: list[str] = []
+    for line in output.splitlines():
+        heading = re.fullmatch(r"===== (.+) =====", line)
+        if heading:
+            current = sections.setdefault(heading.group(1), [])
+        else:
+            current.append(line)
+    return {title: "\n".join(lines[:-1]) for title, lines in sections.items()}
+
+
+def test_profiles_lists_the_shipped_profile_with_its_counts_and_hash(tco_profile):
+    result = runner.invoke(app, ["profiles"])
+
+    assert result.exit_code == 0
+    line = next(line for line in result.output.splitlines() if line.startswith("tco "))
+    assert tco_profile.maturity in line and tco_profile.title_zh in line
+    assert f"{len(tco_profile.paper_fields)} paper + {len(tco_profile.sample_fields)} sample fields" in line
+    assert tco_profile.content_hash[:12] in line
+
+
+def test_profiles_check_accepts_a_valid_file(tmp_path: Path):
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json"))])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert lines[0].startswith("demo ") and lines[-1] == "ok"
+
+
+def test_profiles_check_prints_the_warnings_of_a_valid_file(tmp_path: Path):
+    field = profile_data()["fields"][1]
+    data = profile_data({"fields": [field | {"name": f"f{i}"} for i in range(41)]})
+
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json", data))])
+
+    assert result.exit_code == 0
+    assert any(line.startswith("warning:") and "41 fields" in line for line in result.output.splitlines())
+
+
+def test_profiles_check_prints_the_error_and_exits_one(tmp_path: Path):
+    # The name must be the file's stem: the one mistake a copied profile is sure to have.
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "battery.json"))])
+
+    assert result.exit_code == 1
+    assert "error:" in result.output and "battery.json" in result.output
+    assert "ok" not in result.output.splitlines()
+
+
+FIGURE_SECTION = "figure user prompt (figures stage, only when figures.enabled; one per chart panel)"
+
+
+def test_prompts_prints_the_system_prompts_exactly_as_recorded():
+    tco = load_profile(SHIPPED_PROFILE_PATH)
+    result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH)])
+
+    assert result.exit_code == 0
+    assert prompt_sections(result.output) == {
+        "inventory system prompt (passage mode)": RECORDED_PROMPTS["inventory_system"],
+        "field system prompt (passage mode)": RECORDED_PROMPTS["field_system"],
+        "extraction system prompt (document mode)": RECORDED_PROMPTS["extraction_system"],
+        "matching system prompt (compare, both modes)": RECORDED_PROMPTS["matching_system"],
+        FIGURE_SECTION: figure_user_prompt("<caption>", tco.figure_fields, tco.figures),
+    }
+
+
+def test_prompts_print_no_figure_prompt_for_a_profile_without_figure_fields(tmp_path: Path):
+    result = runner.invoke(app, ["prompts", "--profile", str(write_demo(tmp_path / "demo.json"))])
+
+    assert result.exit_code == 0
+    assert FIGURE_SECTION not in prompt_sections(result.output)
+
+
+def test_profiles_check_refuses_the_reserved_name_as_a_run_would(tmp_path: Path):
+    path = write_demo(tmp_path / "paperfacts.json", profile_data({"name": "paperfacts"}))
+
+    result = runner.invoke(app, ["profiles", "--check", str(path)])
+
+    assert result.exit_code == 1
+    assert "error:" in result.output and "reserved" in result.output
+
+
+def test_profiles_check_refuses_a_file_that_shadows_a_repository_profile(tmp_path: Path):
+    # A run refuses a profile named like a shipped one but different, since their workbooks would collide.
+    path = write_demo(tmp_path / "tco.json", profile_data({"name": "tco"}))
+
+    result = runner.invoke(app, ["profiles", "--check", str(path)])
+
+    assert result.exit_code == 1
+    assert "both named 'tco'" in result.output
+
+
+def test_profiles_check_accepts_a_byte_identical_copy_of_a_repository_profile(tmp_path: Path):
+    copy = tmp_path / "tco.json"
+    shutil.copyfile(SHIPPED_PROFILE_PATH, copy)
+
+    result = runner.invoke(app, ["profiles", "--check", str(copy)])
+
+    assert result.exit_code == 0 and result.output.splitlines()[-1] == "ok"
+
+
+def test_prompts_for_one_field_prints_its_system_prompt_its_line_and_the_question():
+    result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH), "--field", "thickness"])
+
+    assert result.exit_code == 0
+    sections = prompt_sections(result.output)
+    assert sections["field system prompt (passage mode)"] == RECORDED_PROMPTS["field_system"]
+    line = sections["field line (thickness)"]
+    assert line.startswith("- `thickness`")
+    assert f"Field to extract:\n{line}\n\n" in RECORDED_PROMPTS["field_user:thickness"]
+    question = sections["field user prompt (thickness, passage mode)"]
+    assert question.startswith(f"Field to extract:\n{line}\n\nSamples this paper reports:\n<sample list>\n\n")
+    assert "<excerpts>" in question and question.endswith("Return the JSON object now.")
+
+
+def test_prompts_for_one_field_use_that_profiles_own_wording():
+    # The range sentence names where an implausible number comes from; a battery field must not be told "layer".
+    battery = SHIPPED_PROFILE_PATH.with_name("battery_cathode.json")
+    result = runner.invoke(app, ["prompts", "--profile", str(battery), "--field", "calcination_temperature"])
+
+    assert result.exit_code == 0
+    line = prompt_sections(result.output)["field line (calcination_temperature)"]
+    assert "a different electrode component, test condition or quantity" in line
+    assert "layer" not in line
+
+
+def test_prompts_for_an_unknown_field_names_the_fields_there_are():
+    result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH), "--field", "colour"])
+
+    assert result.exit_code == 1
+    assert "colour" in result.output and "thickness" in result.output
+
+
+# ---- A broken configuration --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def broken_config(monkeypatch, tmp_path: Path) -> Path:
+    path = tmp_path / "config.json"
+    path.write_text("{", encoding="utf-8")
+    monkeypatch.setenv("PAPERFACTS_CONFIG", str(path))
+    return path
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["parse", "{pdf}"],
+        ["overlay", "{pdf}"],
+        ["extract", "{pdf}"],
+        ["compare", "{pdf}"],
+        ["run", "{pdf}"],
+        ["batch", "{dir}"],
+        ["export", "{dir}"],
+        ["fields"],
+        ["prompts"],
+        ["serve"],
+    ],
+)
+def test_a_broken_configuration_is_one_red_line_and_exit_one(broken_config: Path, two_page_pdf: Path, command):
+    arguments = [part.format(pdf=two_page_pdf, dir=two_page_pdf.parent) for part in command]
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1, result.output
+    assert result.output.startswith("[config] failed:") and "not valid JSON" in result.output
+    assert len(result.output.strip().splitlines()) == 1
+    assert not isinstance(result.exception, ConfigError)
+
+
+def test_profiles_lists_without_a_valid_configuration(broken_config: Path, tco_profile):
+    result = runner.invoke(app, ["profiles"])
+
+    assert result.exit_code == 0
+    assert any(line.startswith("tco ") for line in result.output.splitlines())
+
+
+def test_profiles_check_prints_every_problem_of_a_file(tmp_path: Path):
+    changes = {
+        "maturity": "beta",
+        "fields.0.kind": "number",
+        "fields.2.name": "Solvent",
+        "retrieval.condition_keywords": 3,
+    }
+
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json", profile_data(changes)))])
+
+    errors = [line for line in result.output.splitlines() if line.startswith("error:")]
+    assert result.exit_code == 1
+    assert len(errors) == 4
+    assert all(str(tmp_path / "demo.json") in line for line in errors)
+    assert any("maturity" in line for line in errors) and any("condition_keywords" in line for line in errors)
+    assert any("'precursor_purity'" in line and "kind" in line for line in errors)
+    assert any("'Solvent'" in line for line in errors)
+
+
+def test_profiles_check_prints_warnings_from_the_whole_package(monkeypatch, tmp_path: Path):
+    def load_and_warn(path: Path):
+        logging.getLogger("paperfacts.units").warning("a unit warning")
+        return make_profile()
+
+    # --check loads the way a run does, through load_run_profile.
+    monkeypatch.setattr("paperfacts.workflow.load_profile", load_and_warn)
+
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json"))])
+
+    assert result.exit_code == 0
+    assert "warning: a unit warning" in result.output.splitlines()

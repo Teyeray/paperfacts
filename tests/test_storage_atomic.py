@@ -10,7 +10,7 @@ import pytest
 from paperfacts.compare import compare_lanes
 from paperfacts.matching import SampleMatching
 from paperfacts.storage import write_atomic, write_bytes_atomic, write_text_atomic
-from support.extraction import make_artifact, make_lane
+from support.extraction import comparison_options, make_artifact, make_lane
 from support.factories import make_block
 
 
@@ -91,7 +91,7 @@ def _stored_models():
     lane_a, lane_b = make_lane(backend="mineru"), make_lane(backend="paddleocr_vl")
     return {
         "lane": lane_a,
-        "comparison": compare_lanes(lane_a, lane_b, SampleMatching.trivial((), [], [])),
+        "comparison": compare_lanes(lane_a, lane_b, SampleMatching.trivial((), [], []), comparison_options()),
         "artifact": make_artifact((make_block(page=0, order=0),)),
     }
 

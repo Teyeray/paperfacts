@@ -15,6 +15,7 @@ from pathlib import Path
 from paperfacts.compare import ComparisonReport
 from paperfacts.dataset import DatasetPayload
 from paperfacts.models import BACKENDS, Backend, ParsedArtifact
+from paperfacts.readings import stored_figures_path
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout
 from paperfacts.workflow import Stage, StageStatus, stage_names
@@ -125,6 +126,7 @@ def stored_stages(
     extractor_key: str,
     comparison_key: str,
     figure_key: str,
+    profile: str,
     figures_enabled: bool,
 ) -> tuple[Stage, ...]:
     """How far a stored document got, one entry per :func:`stage_names` stage, read off the file each stage
@@ -142,7 +144,9 @@ def stored_stages(
     def current(path: Path, hashes: Callable[[Path], Mapping]) -> StageStatus:
         return "done" if _current(layout, document_id, path, hashes) else "pending"
 
-    figures = done(layout.figures_path(document_id, figure_key))
+    figures: StageStatus = (
+        "pending" if stored_figures_path(layout, document_id, figure_key, profile) is None else "done"
+    )
     stages: dict[str, Stage] = {
         **{f"parse:{b}": Stage(name=f"parse:{b}", status=done(layout.artifact_path(document_id, b))) for b in BACKENDS},
         # Opt-in: switched off and never read is a skip, not work still to do.

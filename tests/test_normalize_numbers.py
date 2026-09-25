@@ -8,9 +8,13 @@ reading must leave a note** (so it's traceable in provenance), and **an unreadab
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
-from paperfacts.normalize import parse_number
+from paperfacts.normalize import normalize_field, parse_number
+from support.extraction import make_field
+from support.profiles import shipped_profile
 
 # ---- Scientific notation ---------------------------------------------------------------------
 
@@ -92,6 +96,48 @@ def test_a_range_collapses_to_its_midpoint_with_a_note():
 
     assert value == 15.0
     assert "range" in note
+
+
+@pytest.mark.parametrize("raw", ["2.8–4.3 V", "10-20", "3.2 x 10^-4 to 4.1 x 10^-4", "~15.6-16.3 nm"])
+def test_a_range_under_reject_gives_no_scalar_and_says_why(raw):
+    value, note = parse_number(raw, range_policy="reject")
+
+    assert value is None
+    assert "refused (range_policy 'reject')" in note
+    assert "midpoint" not in note
+
+
+@pytest.mark.parametrize("policy", ["reject", "midpoint"])
+def test_number_words_under_either_range_policy(policy):
+    # "two to three" is words containing numbers, never read as a range (records.spell_number_word), so no
+    # policy gives it a value; a single number word is one value, which reject has no reason to refuse.
+    spec = dataclasses.replace(shipped_profile().by_name["thickness"], range_policy=policy)
+
+    words_range = normalize_field(make_field("thickness", "two to three", unit_raw="nm"), spec, shipped_profile().units)
+    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, shipped_profile().units)
+
+    assert words_range.value is None
+    assert "midpoint" not in (words_range.normalization_note or "")
+    assert one_word.value == 2.0
+
+
+def test_a_range_behind_a_parenthesised_alternative_is_refused_under_reject():
+    value, note = parse_number("10-20 (30)", range_policy="reject")
+
+    assert value is None and "refused (range_policy 'reject')" in note
+
+
+def test_reject_leaves_everything_that_is_not_a_range_alone():
+    for raw in ("12", "3.5 ± 0.2", "~12 (60)", "1.2 × 10^-4 at 300 K", "10–20 nm, 30 nm", "1:4"):
+        assert parse_number(raw, range_policy="reject") == parse_number(raw)
+
+
+def test_midpoint_is_the_default_policy():
+    assert parse_number("2.8–4.3 V", range_policy="midpoint") == parse_number("2.8–4.3 V")
+    assert parse_number("2.8–4.3 V") == (
+        pytest.approx(3.55),
+        "trailing unit 'V' in value ignored; range 2.8-4.3 → midpoint",
+    )
 
 
 @pytest.mark.parametrize(

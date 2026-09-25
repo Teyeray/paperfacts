@@ -6,7 +6,7 @@
 
 import { caveats, escapeHtml, fmt, keepFocus, onActivate, toast } from "./html.js";
 import { documentHash } from "./router.js";
-import { LANES, LANE_LABEL, STATUS, STATUS_ORDER, noSamplesReason, slot, state } from "./state.js";
+import { LANES, LANE_LABEL, STATUS, STATUS_ORDER, noSamplesReason, slot, state, uiCopy } from "./state.js";
 import { revealViewer } from "./viewer.js";
 
 export function renderKpis(root) {
@@ -17,7 +17,7 @@ export function renderKpis(root) {
   const matchNote = `${counts.samples_unmatched} 未配对${counts.low_confidence_matches ? ` · ${counts.low_confidence_matches} 低置信度` : ""}${counts.matching_failed ? " · 匹配失败" : ""}`;
   const tiles = [
     ...STATUS_ORDER.map((status) => [status, STATUS[status].label, counts[status], status === "missing" ? missingNote : STATUS[status].note]),
-    ["samples", "样品配对", counts.samples_matched, matchNote],
+    ["samples", `${uiCopy("entity_label_zh")}配对`, counts.samples_matched, matchNote],
   ];
   // Only worth a tile when it happened: a lane that placed every value has nothing to report here.
   const unplaced = Object.entries(counts.unattributed_by_backend ?? {});
@@ -97,8 +97,8 @@ export function renderRows(tbody, emptyNode) {
 // scope is "target", "sample:<a>|<b>" (each lane's own sample_id) or "unattributed" (both lanes
 // extracted the value but neither could place it on a sample)
 function scopeLabel(scope) {
-  if (scope === "target") return "靶材（论文级）";
-  if (scope === "unattributed") return "未归属（两路均未对应到样品）";
+  if (scope === "target") return uiCopy("paper_level_label_zh");
+  if (scope === "unattributed") return `未归属（两路均未对应到${uiCopy("entity_label_zh")}）`;
   const m = scope.match(/^sample:(.*)$/);
   if (!m) return scope;
   const [a, b] = m[1].split("|");

@@ -4,6 +4,7 @@ and the static frontend.
 Endpoints (all under ``/api``, JSON)::
 
     GET  /api/health
+    GET  /api/profile                              the served profile's title, UI copy, groups and fields
     GET  /api/documents                            document list (stage reached, counts)
     GET  /api/dataset                              corpus results table (paper_row + every sample row per document)
     GET  /api/dataset.xlsx                         the whole library as one Excel workbook
@@ -33,6 +34,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
+import hashlib
 import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -53,17 +56,17 @@ from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload
 from paperfacts.errors import ConfigError
-from paperfacts.figures import FiguresView
-from paperfacts.keys import figure_key_for
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.readings import shown_figures
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import IDENTIFIER, loaded_file_sha256, profile_path
+from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobBrief, JobManager, JobRunner
-from paperfacts.workflow import corpus_workbook, run_document, stage_names
+from paperfacts.workflow import StageCallback, corpus_workbook, load_run_profile, run_document, stage_names
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +136,73 @@ def same_origin(request: Request) -> bool:
     return urlsplit(source).netloc in hosts - {None, ""}
 
 
-def pipeline_runner(settings: Settings, library: Library) -> JobRunner:
-    """Job body: hand the document to workflow.run_document; the stage callback is just mark."""
-    return lambda job, mark: run_document(library.document(job.document_id), settings, force=job.force, on_stage=mark)
+def profile_origin(settings: Settings, profile: DomainProfile) -> Path:
+    """The path ``profile`` is named by, unresolved: the settings' own when it leads to the file the profile was
+    loaded from, so a symlink retargeted later is followed again; otherwise that file itself."""
+    named = profile_path(settings)
+    return named if named.resolve() == profile.source else profile.source
+
+
+def profile_file_changed(profile: DomainProfile, origin: Path) -> bool:
+    """Whether the file ``origin`` leads to now holds other bytes than ``profile`` was loaded from. Every byte
+    counts, display text included: a server keeps showing the text it started with. Raises OSError when the file
+    cannot be read; a profile built in memory has no file, and never changed."""
+    loaded = loaded_file_sha256(profile)
+    if loaded is None:
+        return False
+    return hashlib.sha256(origin.resolve().read_bytes()).hexdigest() != loaded
+
+
+def profile_view(profile: DomainProfile) -> dict[str, Any]:
+    """What the page needs to name things the profile's way: its title, its copy and its groups and fields.
+    Display text only; the prompts, units and retrieval stay on the server."""
+    return {
+        "name": profile.name,
+        "title_zh": profile.title_zh,
+        "maturity": profile.maturity,
+        "description_zh": profile.description_zh,
+        "ui": dataclasses.asdict(profile.ui),
+        "groups": [{"name": group.name, "level": group.level, "label_zh": group.label_zh} for group in profile.groups],
+        "fields": [
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "group": spec.group,
+                "level": spec.level,
+                "unit": spec.canonical_unit,
+            }
+            for spec in profile.fields
+        ],
+        "field_count": {"paper": len(profile.paper_fields), "sample": len(profile.sample_fields)},
+    }
+
+
+def pipeline_runner(settings: Settings, profile: DomainProfile, library: Library) -> JobRunner:
+    """Job body: hand the document to workflow.run_document; the stage callback is just mark.
+
+    The profile file is checked first: after an edit on disk the server would still run the old profile and
+    store its results under keys the edited file no longer names, so the job is refused until a restart."""
+
+    origin = profile_origin(settings, profile)
+
+    def run(job: Job, mark: StageCallback) -> None:
+        try:
+            changed = profile_file_changed(profile, origin)
+        except OSError as exc:
+            # Deleted, locked, or caught mid-save: not known to have changed, and not safe to run under either.
+            # The job's error reaches the browser, so it names the file only; the log has the path and the error
+            # (an OSError's message carries the absolute path too).
+            logger.error("cannot read the profile file %s (%s)", origin, exc)
+            raise ConfigError(
+                f"无法读取领域配置文件 {origin.name}，请检查后重启服务器 "
+                f"(cannot read the profile file {origin.name}: {type(exc).__name__})"
+            ) from exc
+        if changed:
+            logger.error("profile %s changed on disk (%s); restart the server", profile.name, origin)
+            raise ConfigError(f"领域配置 {profile.source.name} 在磁盘上已改动，请重启服务器 (profile changed on disk)")
+        run_document(library.document(job.document_id), settings, profile, force=job.force, on_stage=mark)
+
+    return run
 
 
 def login_accepted(header: str | None, settings: Settings) -> bool:
@@ -162,16 +229,26 @@ def login_accepted(header: str | None, settings: Settings) -> bool:
     return user_ok and password_ok
 
 
-def create_app(settings: Settings | None = None, *, jobs: JobManager | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, profile: DomainProfile | None = None, jobs: JobManager | None = None
+) -> FastAPI:
+    """The app over one data root under one profile. Without ``profile``, the one ``settings`` selects is loaded
+    here, once: the library's keys and every job run under that same value."""
     settings = settings or Settings.from_env()
     if settings.llm_offline:
         # Replay is a proof run over a batch; a server under it would fail every upload, and its misses
         # would pile up in one process-wide record that no job reports.
         raise ConfigError("offline replay is for `run` and `batch`; unset PAPERFACTS_LLM_OFFLINE / llm.offline")
     set_max_in_flight(settings.llm_max_in_flight)
-    library = Library(settings)
+    profile = profile or load_run_profile(settings)
+    if not IDENTIFIER.fullmatch(profile.name):
+        # The name goes unquoted into a Content-Disposition header; the loader enforces this, a profile built in
+        # memory need not have been through it.
+        raise ConfigError(f"profile name {profile.name!r} must match {IDENTIFIER.pattern}")
+    logger.info("serving profile %s (%s)", profile.name, profile.content_hash[:12])
+    library = Library(settings, profile)
     manager = jobs or JobManager(
-        pipeline_runner(settings, library), stage_names(), workers=settings.max_parallel_documents
+        pipeline_runner(settings, profile, library), stage_names(), workers=settings.max_parallel_documents
     )
 
     @asynccontextmanager
@@ -231,9 +308,25 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         except RuntimeError as exc:  # the manager has shut down: the server is on its way out
             raise HTTPException(status_code=503, detail="The server is shutting down; try again shortly") from exc
 
+    origin = profile_origin(settings, profile)
+
     @app.get("/api/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "model": settings.llm_model}
+    def health() -> dict[str, str | bool]:
+        try:
+            changed = profile_file_changed(profile, origin)
+        except OSError:
+            changed = True  # a file that cannot be read is no longer the one being served
+        return {
+            "status": "ok",
+            "model": settings.llm_model,
+            "profile": profile.name,
+            "profile_hash": profile.content_hash[:12],
+            "profile_on_disk_changed": changed,
+        }
+
+    @app.get("/api/profile")
+    def get_profile() -> dict[str, Any]:
+        return profile_view(profile)
 
     @app.get("/api/documents")
     def list_documents() -> list[DocumentSummary]:
@@ -253,9 +346,10 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         if not datasets:
             raise HTTPException(status_code=404, detail="No consolidated dataset yet")
         return Response(
-            content=corpus_workbook(datasets, settings),
+            content=corpus_workbook(datasets, settings, library.profile),
             media_type=EXCEL_MEDIA_TYPE,
-            headers={"content-disposition": 'attachment; filename="paperfacts-corpus.xlsx"'},
+            # create_app refused a name outside IDENTIFIER, so it needs no quoting in the header.
+            headers={"content-disposition": f'attachment; filename="{profile.name}-corpus.xlsx"'},
         )
 
     @app.post(
@@ -392,8 +486,8 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         """
         require_document(document_id)
         identity = library.identity(document_id)
-        figures = shown_figures(document_id, identity.name if identity else document_id, settings)
-        return figures or FiguresView(document_id=document_id, figure_key=figure_key_for(settings), model="")
+        figures = shown_figures(document_id, identity.name if identity else document_id, settings, library.profile)
+        return figures or FiguresView(document_id=document_id, figure_key=library.figure_key, model="")
 
     @app.get("/api/documents/{document_id}/dataset.xlsx")
     def get_dataset_excel(document_id: str) -> FileResponse:
@@ -405,7 +499,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
             path,
             media_type=EXCEL_MEDIA_TYPE,
             # The upload name is user input; the id is the safe, stable download name.
-            filename=f"paperfacts-{document_id}.xlsx",
+            filename=f"{profile.name}-{document_id}.xlsx",
         )
 
     @app.get("/api/documents/{document_id}/pages/{page}.png")

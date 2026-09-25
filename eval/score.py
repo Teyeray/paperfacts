@@ -3,9 +3,19 @@
 Run it in the package's environment: a text field's closed categories are matched by the package's own rule
 (``normalize.canonical_category``), so the score can never disagree with the pipeline about what "RF" is.
 
-    uv run python eval/score.py --data-root data                     # newest dataset of every gold document
-    uv run python eval/score.py --data-root data --out report.md --json report.json
+    uv run python eval/score.py --data-root data --keys <extractor_key>.<comparison_key>
+    uv run python eval/score.py --data-root data --out report.md --json report.json   # newest datasets
     uv run python eval/score.py --dataset 80c3b69d570c2b6d=path/to/dataset.json
+
+The field table is the profile's (``--profile``, default ``profiles/tco.json``), parsed and validated by the
+package itself, so scoring reads the same fields, tolerances and categories as the run. The gold files keep their
+own ids: paper-level cells are under ``"target"`` and are reported with sample ``"target"``, whatever the profile
+calls its paper-level group.
+
+``--keys`` names the dataset file (``datasets/<extractor_key>.<comparison_key>.json``), so the score is of the
+run those keys describe. Without it the newest dataset file of each document that was built under this profile
+(by the profile fingerprint the dataset records) is scored, which is only right while a library holds datasets
+of a single set of keys per profile.
 
 The rules (sample alignment, cell outcomes, what counts toward precision and recall) are documented in
 eval/README.md; the code below implements exactly those rules and nothing else.
@@ -22,21 +32,20 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from paperfacts.fields import FieldSpec
+from paperfacts.keys import profile_comparison_fingerprint
 from paperfacts.normalize import canonical_category
+from paperfacts.profile import DomainProfile
+from paperfacts.profile_loader import parse_profile
 
 REPO = Path(__file__).resolve().parent.parent
-TARGET_GROUP = "target"
+# The gold files' id for the paper-level record, and the sample id the report prints for it.
+PAPER = "target"
 OUTCOMES = ("correct", "soft", "wrong", "missing", "extra", "disputed")
 
 
-@dataclass(frozen=True)
-class Spec:
-    name: str
-    group: str
-    kind: str
-    rel_tol: float
-    abs_tol: float
-    categories: tuple[str, ...] = ()
+# The package's field description: kind, tolerances, categories and level are what scoring reads.
+Spec = FieldSpec
 
 
 @dataclass(frozen=True)
@@ -51,20 +60,17 @@ class Cell:
     detail: str  # quality_rows decision + detail for the dataset cell
 
 
-def load_specs(config: Path) -> dict[str, Spec]:
-    """The field table as scoring needs it. Tolerances are optional and 0 when absent, as in ``fields.py``."""
-    fields = json.loads(config.read_text(encoding="utf-8"))["fields"]
-    return {
-        f["name"]: Spec(
-            f["name"],
-            f["group"],
-            f["kind"],
-            float(f.get("rel_tol", 0.0)),
-            float(f.get("abs_tol", 0.0)),
-            tuple(f.get("categories", ())),
-        )
-        for f in fields
-    }
+def load_scoring_profile(path: Path) -> DomainProfile:
+    """The profile in ``path``, as the package parses it. Parsed under its own name rather than the file's: the
+    stem rule keeps two profiles' workbooks apart, and scoring writes none, so a renamed copy scores the same."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    name = data.get("name") if isinstance(data, dict) else None
+    return parse_profile(data, path.with_name(f"{name}.json") if isinstance(name, str) else path)
+
+
+def load_specs(profile: Path) -> dict[str, Spec]:
+    """The profile's field table as scoring needs it: the package's own ``FieldSpec`` by name."""
+    return load_scoring_profile(profile).by_name
 
 
 # ---------------------------------------------------------------------------------------------- value matching
@@ -152,8 +158,7 @@ def agreement(specs: dict[str, Spec], gold: dict, sample: dict, row: dict) -> in
     return sum(
         1
         for name, spec in specs.items()
-        if spec.group != TARGET_GROUP
-        and any(value_matches(spec, row.get(name), c) for c in gold_cells(gold, sample, name))
+        if spec.level != "paper" and any(value_matches(spec, row.get(name), c) for c in gold_cells(gold, sample, name))
     )
 
 
@@ -198,16 +203,16 @@ def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Ce
 
     target_row = dataset.get("paper_row") or {}
     for name, spec in specs.items():
-        if spec.group != TARGET_GROUP:
+        if spec.level != "paper":
             continue
-        gcells = gold.get("target", {}).get(name, [])
+        gcells = gold.get(PAPER, {}).get(name, [])
         got = target_row.get(name)
         outcome = classify(spec, got, gcells, False)
         if outcome:
-            detail = trace(quality, "target", name)
-            cells.append(Cell(doc, "target", "target", name, outcome, got, render(gcells), detail))
+            detail = trace(quality, PAPER, name)
+            cells.append(Cell(doc, PAPER, PAPER, name, outcome, got, render(gcells), detail))
 
-    sample_fields = [s for s in specs.values() if s.group != TARGET_GROUP]
+    sample_fields = [s for s in specs.values() if s.level != "paper"]
     mapping = align(specs, gold, rows)
     for gi, sample in enumerate(gold["samples"]):
         ri = mapping.get(gi)
@@ -245,10 +250,29 @@ def prf(counts: Counter) -> tuple[float | None, float | None]:
 # ---------------------------------------------------------------------------------------------- IO + report
 
 
-def newest_dataset(data_root: Path, doc_id: str) -> Path:
+def _recorded_fingerprint(path: Path) -> str | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("profile_fingerprint")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def find_dataset(data_root: Path, doc_id: str, keys: str | None, fingerprint: str | None = None) -> Path:
+    """The dataset named by ``keys`` (``<extractor_key>.<comparison_key>``), or the newest one without it.
+
+    Without keys, ``fingerprint`` (the scored profile's comparison fingerprint) leaves out the datasets another
+    profile built: a library scored under two profiles would otherwise score one profile's table against the
+    other's gold set. A dataset that records no fingerprint predates profiles and is kept."""
     candidates = [p for p in (data_root / "docs").glob(f"{doc_id}*/datasets/*.json")]
+    if keys is not None:
+        candidates = [p for p in candidates if p.stem == keys]
+    elif fingerprint is not None:
+        candidates = [p for p in candidates if _recorded_fingerprint(p) in (None, fingerprint)]
     if not candidates:
-        raise FileNotFoundError(f"no dataset for {doc_id} under {data_root / 'docs'}")
+        which = f"dataset {keys}.json" if keys is not None else "dataset"
+        if keys is None and fingerprint is not None:
+            which += f" of profile fingerprint {fingerprint[:12]}"
+        raise FileNotFoundError(f"no {which} for {doc_id} under {data_root / 'docs'}")
     return max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
 
 
@@ -306,7 +330,10 @@ def report(cells: list[Cell], sources: dict[str, str], specs: dict[str, Spec]) -
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gold", type=Path, default=REPO / "eval" / "gold", help="directory of <doc_id>.json gold files")
-    ap.add_argument("--config", type=Path, default=REPO / "config.json", help="config.json with the field table")
+    ap.add_argument(
+        "--profile", type=Path, default=REPO / "profiles" / "tco.json", help="profile JSON with the field table"
+    )
+    ap.add_argument("--keys", metavar="EK.CK", help="score datasets/<EK.CK>.json (default: the newest dataset)")
     ap.add_argument("--data-root", type=Path, default=REPO / "data", help="PaperFacts data root (contains docs/)")
     ap.add_argument("--dataset", action="append", default=[], metavar="DOC=PATH", help="explicit dataset JSON")
     ap.add_argument("--only", action="append", default=[], metavar="DOC", help="score only these gold doc ids")
@@ -314,7 +341,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", type=Path, help="also write every scored cell as JSON")
     args = ap.parse_args(argv)
 
-    specs = load_specs(args.config)
+    profile = load_scoring_profile(args.profile)
+    specs = profile.by_name
+    fingerprint = profile_comparison_fingerprint(profile)
     explicit = dict(item.split("=", 1) for item in args.dataset)
     cells: list[Cell] = []
     sources: dict[str, str] = {}
@@ -324,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
         doc = gold["doc_id"]
         if args.only and doc not in args.only:
             continue
-        ds_path = Path(explicit[doc]) if doc in explicit else newest_dataset(args.data_root, doc)
+        ds_path = Path(explicit[doc]) if doc in explicit else find_dataset(args.data_root, doc, args.keys, fingerprint)
         sources[doc] = str(ds_path)
         cells += score_document(specs, gold, json.loads(ds_path.read_text(encoding="utf-8")))
     text = report(cells, sources, specs)

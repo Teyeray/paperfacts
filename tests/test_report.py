@@ -12,7 +12,7 @@ from paperfacts.compare import compare_lanes
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.records import TargetRecord
 from paperfacts.report import render_lane, render_report
-from support.extraction import make_field, make_lane, make_sample
+from support.extraction import comparison_options, make_field, make_lane, make_sample
 
 # ---- render_lane --------------------------------------------------------------------
 
@@ -92,7 +92,7 @@ def test_an_empty_lane_renders_just_the_header():
 
 
 def report_text(lane_a, lane_b, matching) -> str:
-    return "\n".join(render_report(compare_lanes(lane_a, lane_b, matching)))
+    return "\n".join(render_report(compare_lanes(lane_a, lane_b, matching, comparison_options())))
 
 
 def test_the_counts_line_comes_first():

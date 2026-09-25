@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.fields import FIELD_BY_NAME, FieldSpec
-from paperfacts.normalize import CONVERTERS, clean_unit, convert_to_canonical, parse_number, split_scale_factor
+from paperfacts.fields import FieldSpec
+from paperfacts.normalize import clean_unit, convert_to_canonical, parse_number, split_scale_factor
+from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
+TCO_UNITS = shipped_profile().units
 
 
 def convert(field: str, value: float, unit_raw: str | None):
-    return convert_to_canonical(FIELD_BY_NAME[field], value, unit_raw)
+    return convert_to_canonical(FIELD_BY_NAME[field], value, unit_raw, TCO_UNITS)
 
 
 # ---- Sheet resistance Ω/sq ---------------------------------------------------------------------
@@ -225,7 +232,7 @@ def test_the_assume_canonical_policy_takes_the_number_at_face_value():
         bare_number="assume_canonical",
     )
 
-    assert convert_to_canonical(spec, 500.0, None) == (500.0, "nm", "no unit; assumed nm")
+    assert convert_to_canonical(spec, 500.0, None, TCO_UNITS) == (500.0, "nm", "no unit; assumed nm")
 
 
 def test_the_bare_number_policy_comes_from_the_field_table_not_from_the_field_name():
@@ -265,7 +272,7 @@ def test_a_gas_name_does_not_make_an_unknown_unit_known(unit):
 def test_a_field_without_a_canonical_unit_returns_the_value_untouched():
     # component is a chemical-composition text field with no convertible unit; that must not cause the
     # value to be discarded.
-    assert convert_to_canonical(FIELD_BY_NAME["component"], 2.0, "wt%") == (2.0, None, None)
+    assert convert_to_canonical(FIELD_BY_NAME["component"], 2.0, "wt%", TCO_UNITS) == (2.0, None, None)
 
 
 # ---- clean_unit --------------------------------------------------------------------
@@ -419,14 +426,18 @@ def test_a_power_of_ten_in_both_the_value_and_the_unit_is_refused():
     spec = FIELD_BY_NAME["resistivity"]
     number, _ = parse_number("1.2 × 10^-4")
 
-    assert convert_to_canonical(spec, number, "×10^-4 Ω·cm", value_text="1.2 × 10^-4") == (
+    assert convert_to_canonical(spec, number, "×10^-4 Ω·cm", TCO_UNITS, value_text="1.2 × 10^-4") == (
         None,
         None,
         "scale factor in both value and unit; ambiguous",
     )
     # Only one of the two carrying a factor stays unambiguous, whichever one it is.
-    assert convert_to_canonical(spec, number, "Ω·cm", value_text="1.2 × 10^-4") == (pytest.approx(1.2e-4), "Ω·cm", None)
-    assert convert_to_canonical(spec, 19.4, "×10^-4 Ω-cm", value_text="19.4")[0] == pytest.approx(1.94e-3)
+    assert convert_to_canonical(spec, number, "Ω·cm", TCO_UNITS, value_text="1.2 × 10^-4") == (
+        pytest.approx(1.2e-4),
+        "Ω·cm",
+        None,
+    )
+    assert convert_to_canonical(spec, 19.4, "×10^-4 Ω-cm", TCO_UNITS, value_text="19.4")[0] == pytest.approx(1.94e-3)
 
 
 # ---- A power of ten in a table header: on the quantity or on the unit ---------------------------------------
@@ -507,7 +518,7 @@ def test_a_header_factor_whose_convention_cannot_be_told_is_refused(unit):
 def test_a_quantity_factor_and_a_value_with_its_own_power_of_ten_are_still_refused():
     spec = FIELD_BY_NAME["resistivity"]
 
-    assert convert_to_canonical(spec, 6.8e-4, "ρ × 10^4 (Ω cm)", value_text="6.8 × 10^-4")[0] is None
+    assert convert_to_canonical(spec, 6.8e-4, "ρ × 10^4 (Ω cm)", TCO_UNITS, value_text="6.8 × 10^-4")[0] is None
 
 
 @pytest.mark.parametrize("unit", ["10mm", "10 mm"])

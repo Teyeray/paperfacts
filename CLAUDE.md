@@ -30,21 +30,39 @@ this file is the part that is easy to get wrong.
   the only sub-package. Do not add re-exporting `__init__` files or nest packages; import from the module
   that defines a name.
 - Every exception class is in `errors.py`.
+- Domain modules: `text.py` (a leaf: text folding, `clean_unit`), `units.py` (built-in converters and retrieval
+  patterns, the `UnitRegistry` of declared units), `fields.py` (`FieldSpec` and its roles), `profile.py`
+  (`DomainProfile` and the slots: value types and their defaults, hashed), `profile_loader.py` (reading and
+  checking a profile file, `field_spec`, `load_units`, the regex checks: unhashed, since everything it decides
+  reaches a key as a value). Presentation: `ui_copy.py`, `workbook.py`, `columns.py`, `readings.py`. `batch.py`
+  is directory runs and offline export; `stored.py` is what is stored for a document and whether it is current.
+  `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists).
+- No module converts or retrieves with a unit table of its own: every conversion goes through the
+  `UnitRegistry` of the profile it runs under (`profile.units`), including in tests and fixture generators.
 
 ## Configuration
 
-- Everything that is not a secret lives in `config.json` at the repository root, including the field table.
-  `config.py` reads it once, validates it with errors that name the key and the file, and layers
-  `PAPERFACTS_*` environment variables over it. Built-in constants are the third layer underneath, and they
-  are the **baseline** the cache keys treat as "unedited" -- never change one to change a default; change
-  `config.json`.
+- Everything that is not a secret and not the domain lives in `config.json` at the repository root. The domain
+  (groups, field table, condition keywords, prompt wording, units, display copy) is a profile,
+  `profiles/<name>.json`, picked by `profile` / `PAPERFACTS_PROFILE` / `--profile`; a `config.json` that still has
+  `fields` or `condition_keywords` is refused. `config.py` reads `config.json` once, validates it with errors that
+  name the key and the file, and layers `PAPERFACTS_*` environment variables over it. Built-in constants are the
+  third layer underneath, and they are the **baseline** the cache keys treat as "unedited" -- never change one to
+  change a default; change `config.json` or the profile. The same holds for the slot defaults (`PromptSlots` in
+  `profile.py`) and the attribute defaults (`FieldSpec` in `fields.py`): both modules are hashed and an attribute
+  at its default is left out of the key material.
+- A profile is loaded once per entry point (`profile_loader.load_profile`, cached per resolved path) and passed
+  explicitly as a `DomainProfile`; no module holds a domain table (`tests/test_no_domain_globals.py`). Python string constants
+  and `web/static/` stay domain-free (`tests/test_domain_free.py`): a domain word belongs in a profile slot or in
+  `ui`. Every profile error is a `ConfigError` naming the file and the key; `parse_profile` checks every section
+  and every field before raising one error with a line per problem.
+- One server per `data_root`, one profile per server (see Web interface).
 - Secrets only in `.env` (gitignored, loaded without overriding what the environment already has) and only
   the API key. `config.json` has nowhere to put a key, which is the point.
 - A new setting means: a key in `config.json`, a field on `Settings`, a `PAPERFACTS_*` override, and a line
   in the README. If it changes what the model is asked, it also goes into `extractor_key`; if it changes a
-  verdict, into `comparison_key`. The three exceptions with no override (`fields`, `condition_keywords`,
-  `comparison.ambiguous_match_confidence`) are listed in the README as file-only; do not add a fourth
-  without saying why.
+  verdict, into `comparison_key`. The one exception with no override, `comparison.ambiguous_match_confidence`,
+  is listed in the README as file-only; do not add a second without saying why.
 
 ## Code conventions
 
@@ -63,6 +81,8 @@ this file is the part that is easy to get wrong.
   with "Data format error" until the process restarts.
 - `workflow.run_document` is the single orchestration path; the CLI and the web job both call it. Business
   logic lives in `workflow.py` — `web/` only does the document library, background jobs and HTTP mapping.
+  Directory batches and offline re-export (`run_batch`, `discover_pdfs`, `export_document`) are `batch.py`,
+  which runs each document through `run_document`.
 - Errors: parsers raise `ParserError(backend, stage, detail)`. Adapters map unknown labels to `unknown`
   while keeping `raw_label`, and skip malformed boxes with a warning — never silently, never fatally.
 - Logging is the standard library, logger name = module name.
@@ -93,35 +113,64 @@ this file is the part that is easy to get wrong.
   (`valid_range`, judged on the converted value by `normalize.drop_implausible`), plus grounding
   (`grounding.py`), where the quoted text must occur in the block it cites. The first four drop the value
   with an audited reason; grounding only flags, never drops.
+- Prompts are profile-driven: the templates in `prompts.py` are domain-free and every domain word is a
+  `PromptSlots` slot, rendered in one pass (a slot is never rescanned; computed markers are finished text
+  first). The TCO profile's slots reproduce the measured prompts byte for byte, pinned by
+  `tests/fixtures/prompts/snapshot.json` (sha-pinned) and `tests/fixtures/payloads/b0.json`; never re-record
+  either to make a change pass.
+- Internal names are kept on purpose: `target` (the paper-level record, `TargetRecord`, scope `"target"`) and
+  `no_tco_film` (the no-samples verdict) stay in code, stored files and the web for every profile. The model
+  sees the profile's `paper_key` / `no_samples_key`, mapped onto them by `records.response_models` aliases.
+  Every persisted model ignores unknown keys, so a rename without typed fixtures of every persisted type would
+  load empty records silently.
 - Cache keys live in `keys.py`. `extractor_key(options)` is the only extraction key: it hashes one frozen
-  `ExtractionOptions` (model, mode and every sampling/retrieval setting). The workflow builds it once with
-  `ExtractionOptions.from_settings` and passes it into `extract_lane`, and readers use
-  `extractor_key_for(settings)`, so writer and reader cannot disagree -- never spell the settings out a
-  second time. It also hashes the field schema *minus* the verdict-only cells (tolerances, categories,
-  condition preferences, display text), the prompts, and the source of the extraction modules (`extract.py`,
-  `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`,
-  `continuation.py`); passage mode adds its two prompts plus `retrieval_fingerprint` (the keywords,
-  `passages.py` and `continuation.py`). `comparison_key` hashes the whole field schema including
-  tolerances, categories, condition preferences, `normalize.py`, `compare.py`, `matching.py`, `decide.py`, `dataset.py` and the matching prompt.
-  A tolerance edit therefore re-keys comparisons only. Anything that is at its built-in
-  baseline is left out of the material, so an unedited checkout keeps the filenames it has. Changing any of them invalidates the right cache automatically; do not add a
-  hand-maintained version number. The LLM cache is keyed by request payload, so a code-only change
-  re-derives records for free as long as the rendered document and prompts stay byte-identical.
+  `ExtractionOptions` (profile, model, mode and every sampling/retrieval setting). The workflow builds it once
+  with `ExtractionOptions.from_settings(settings, profile)` and hands the same object to both lanes, and readers
+  use `extractor_key_for(settings, profile)`, so writer and reader cannot disagree -- never spell the settings
+  out a second time. `comparison_key` takes a `ComparisonOptions` the same way. Lanes, reports and datasets
+  record the profile fingerprint; a mismatch raises `ProfileMismatchError`, never a mixed comparison.
+- What reaches which key follows from roles, never from a hand list. Every `FieldSpec` attribute declares its
+  `FieldRole` set in its dataclass metadata (`tests/test_field_roles.py`): PROMPT and CLEANING attributes, the
+  groups (name, level) and the declared units form the extraction schema; VERDICT adds to that for the
+  comparison; RETRIEVAL (keywords) plus the profile's `retrieval` go into `retrieval_fingerprint` (passage mode
+  only); FIGURE attributes of `figure_readable` fields plus the `figures` slots into `figure_key`; DISPLAY
+  reaches no key. Prompt slots are hashed by value as the rendered system prompts. The profile's file name,
+  `title_zh`, `maturity`, `ui` and every `label_zh` are display. A new attribute is a decision about its roles,
+  made where it is declared. Anything at its built-in baseline is left out of the material, so an unedited
+  checkout keeps the filenames it has; do not add a hand-maintained version number. The LLM cache is keyed by
+  request payload, so a code-only change re-derives records for free as long as the rendered document and
+  prompts stay byte-identical; prove it with an offline replay (`--offline` / `PAPERFACTS_LLM_OFFLINE=1`,
+  zero misses) plus `scripts/diff_derived.py`.
+- Hashed module sources, by fingerprint (`keys.py` is the truth; the docs follow it):
+  - extraction code: `extract`, `fields`, `profile`, `units`, `text`, `voting`, `records`, `adapters`,
+    `prompts`, `normalize`, `grounding`, `continuation`;
+  - retrieval (passage mode): `passages`, `continuation`, `units`, `text`;
+  - normalization (comparison): `normalize`, `units`, `text`;
+  - comparison code: `compare`, `matching`, `dataset`, `decide`, `fields`, `profile`;
+  - figure code: `figures`, `normalize`, `passages`, `units`, `text`, `fields`, `profile`.
+  Editing any of them re-keys. A module that holds a default the keys omit must be hashed.
+- Presentation and orchestration stay out of hashed modules: the Excel layout is `workbook.py`, not
+  `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
+  `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading
+  a profile file is `profile_loader.py`. `workbook`, `columns`, `readings`, `ui_copy`, `profile_loader`, `llm`,
+  `config`, `cli`, `workflow` and `batch` are in no key list, and `tests/test_keys_unhashed.py` holds that. Do not
+  move display, storage or loading code into a hashed module.
 
 ## Figures
 
 - `figures.py` is the opt-in `figures` stage (starts after parse, runs beside the extraction lanes, joined
   before export): a vision model reads property-vs-condition charts selected by deterministic code (the
-  whole-figure caption names a film field by its keywords; panels go to captions by geometry). It is
+  whole-figure caption names a `figure_readable` field by its keywords; panels go to captions by geometry).
+  Readings are stored per profile, `figures/<profile>/<figure_key>.json`. It is
   paper-level, not a lane: its readings are approximate (±10 % / ±20 %), never create or identify a sample
   (chart x snaps to ticks), never fill a dataset cell and never join the two-lane comparison. They live in
-  their own file, the 图中读数 sheet (`write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
+  their own file, the 图中读数 sheet (`workbook.write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
   and their own web section; `dataset.py` and `decide.py` must not import `figures.py`. A failure in it marks only its own
   stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
   tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
-- Where readings are stored and which are shown (`shown_figures`, `read_document_figures`) is `readings.py`,
-  not `figures.py`: `figures.py`'s source is hashed into `figure_key`, and moving storage code there would
-  rename every stored reading.
+- Where readings are stored and which are shown (`shown_figures`, `read_document_figures`, `FiguresView`,
+  `figure_rows`) is `readings.py`, not `figures.py`: `figures.py`'s source is hashed into `figure_key`, and
+  moving storage or display code there would rename every stored reading.
 - Vision requests go through `llm.complete_vision` on a `VisionClient`, never the extraction client;
   crops come from `pdf.render_region`.
 
@@ -165,6 +214,11 @@ this file is the part that is easy to get wrong.
   document twice while it is active returns the same job. A job's log is attributed by a context variable:
   every pool in the pipeline is `threads.ContextThreadPoolExecutor`, which runs each task in a copy of the
   caller's context; a plain `ThreadPoolExecutor` would drop its records from the log.
+- One server per data root. The per-document and per-parser locks are process-local, so two servers (say,
+  under two profiles) over one `data_root` can parse the same document at once. A server's profile is read
+  once; `pipeline_runner` refuses a job once the file's bytes on disk (re-resolved from the path it was named
+  by) differ from the ones loaded. That sha256 is `profile.loaded_file_sha256`, kept beside the profile, never in
+  `content_hash` or a key.
 - Parallel documents are bounded twice: `parsers.py` holds one lock per parser around the actual parse
   (not around a cache hit), and every model request takes a slot of `llm.IN_FLIGHT` around the HTTP call
   only -- never while waiting on a future or a backoff, which is what keeps the nested pools deadlock-free.
@@ -177,5 +231,9 @@ this file is the part that is easy to get wrong.
 ## Deployment
 
 `deploy/` targets a Linux GPU server. GPU ids are set per service by env var, default 0. Development
-happens on macOS, is pushed to GitHub, and pulled on the server — do not try to operate the server over
-ssh from here.
+happens on macOS and is pushed to GitHub; the server pulls it. The server may be operated over ssh
+(`ssh yangrm@ssh.yangruiming.org`, through a cloudflared tunnel that drops connections now and then):
+production runs from `~/Projects/paperfacts` under `systemctl --user` and is updated only with
+`scripts/deploy.sh`; experiments run in the `~/Projects/paperfacts-dev` worktree against its own copy of the
+data. Run anything longer than a minute there with `nohup`, and judge whether it ran from the files it
+writes, never from `pgrep -f`/`pkill -f`, whose pattern matches the ssh command's own shell.

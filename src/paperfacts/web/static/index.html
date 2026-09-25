@@ -12,7 +12,7 @@
 <header class="topbar">
   <a class="brand" href="#/">
     <span class="brand-mark">PF</span>
-    <span class="brand-text"><b>PaperFacts</b></span>
+    <span class="brand-text"><b>PaperFacts</b><small class="profile-title" id="profile-title"></small></span>
   </a>
   <div class="topbar-meta" id="health">…</div>
 </header>
@@ -41,9 +41,9 @@
   <section class="content" id="content" tabindex="-1">
     <div class="intro" id="empty-state">
       <h1><span class="intro-title" data-when="empty">文献参数提取</span><span class="intro-title" data-when="corpus">论文结果总表</span></h1>
-      <p class="intro-lead" data-when="corpus">下表汇总已处理论文的样品级参数，点论文名可以查看它的逐条证据。</p>
+      <p class="intro-lead" data-when="corpus">下表汇总已处理论文的<span data-ui="entity_label_zh"></span>级参数，点论文名可以查看它的逐条证据。</p>
       <div class="intro-empty" data-when="empty">
-        <p class="intro-lead">从科研论文中抽取样品级的测量参数：两路解析各自抽取、逐条比较，每一个数都能点回原文页面上的那一块。</p>
+        <p class="intro-lead">从科研论文中抽取<span data-ui="entity_label_zh"></span>级的测量参数：两路解析各自抽取、逐条比较，每一个数都能点回原文页面上的那一块。</p>
         <p class="intro-cta">在左侧拖入一份 PDF，或点「选择文件」开始。</p>
         <p class="intro-steps muted">两路解析 → LLM 抽取 → 对齐比较</p>
       </div>
@@ -73,12 +73,12 @@
   <div class="kpis" data-slot="kpis"></div>
   <section class="results" aria-label="结果表">
     <div class="results-head">
-      <h2>结果表（按样品）</h2>
+      <h2>结果表（按<span data-ui="entity_label_zh"></span>）</h2>
       <div class="chips" data-slot="results-chips"></div>
       <button class="copy-table hidden" data-slot="dataset-copy" type="button">复制表格</button>
       <a class="download hidden" data-slot="dataset-download" download>下载 Excel</a>
     </div>
-    <p class="results-note muted">每一行是合并两路解析后的一个样品；空白单元格是流水线拒绝猜测的取值，不是 0。</p>
+    <p class="results-note muted">每一行是合并两路解析后的一个<span data-ui="entity_label_zh"></span>；空白单元格是流水线拒绝猜测的取值，不是 0。</p>
     <div class="table-wrap">
       <div class="table-empty hidden" data-slot="results-empty">还没有结果表，处理完成后会出现在这里。</div>
       <table class="facts-table results-table" data-slot="results-table">
@@ -90,7 +90,7 @@
   <section class="figures hidden" data-slot="figures" aria-label="图中读数">
     <div class="results-head"><h2>图中读数</h2></div>
     <p class="figures-warning hidden" data-slot="figures-warning" role="note"></p>
-    <p class="results-note muted">视觉模型从“性质—条件”图上读出的近似值：线性轴 ±10%，对数轴或 4 条以上系列 ±20%。只作参考，不进结果表，也不参与两路比较；横轴读数会被取整到刻度，不用来判断是哪个样品。点击一行（或聚焦后按回车），在页面上定位这张图。</p>
+    <p class="results-note muted">视觉模型从“性质—条件”图上读出的近似值：线性轴 ±10%，对数轴或 4 条以上系列 ±20%。只作参考，不进结果表，也不参与两路比较；横轴读数会被取整到刻度，不用来判断是哪个<span data-ui="entity_label_zh"></span>。点击一行（或聚焦后按回车），在页面上定位这张图。</p>
     <div class="table-wrap">
       <table class="facts-table figures-table">
         <thead><tr><th>图</th><th>字段</th><th>系列</th><th>横轴（参考）</th><th>读数</th><th>图中原始读数</th><th>说明</th></tr></thead>
@@ -106,7 +106,7 @@
       </div>
       <div class="table-wrap">
         <table class="facts-table">
-          <thead><tr><th>状态</th><th>样品</th><th>字段</th><th class="cond">条件</th><th class="lane-a">MinerU</th><th class="lane-b">PaddleOCR-VL</th><th>说明</th></tr></thead>
+          <thead><tr><th>状态</th><th><span data-ui="entity_label_zh"></span></th><th>字段</th><th class="cond">条件</th><th class="lane-a">MinerU</th><th class="lane-b">PaddleOCR-VL</th><th>说明</th></tr></thead>
           <tbody data-slot="rows"></tbody>
         </table>
         <div class="table-empty hidden" data-slot="rows-empty">还没有比较报告。</div>
@@ -114,8 +114,8 @@
     </section>
     <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
   </div>
-  <details class="samples" aria-label="样品记录">
-    <summary class="samples-head"><h2>样品记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
+  <details class="samples" data-slot="samples">
+    <summary class="samples-head"><h2><span data-ui="entity_label_zh"></span>记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
     <div class="lanes" data-slot="lanes"></div>
   </details>
   <details class="joblog" data-slot="joblog">
