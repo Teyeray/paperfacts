@@ -277,9 +277,11 @@ def test_s15_an_approximate_series_value_and_a_sample_value_are_not_merged():
 
 
 def test_s4_a_merged_lane_cannot_agree_with_the_other_lanes_different_state():
+    # 104 nm is within tolerance of 100 nm but belongs to another state; only an identical number would let the
+    # restated conditions pass.
     result = paired(
         [value("thickness", "100", "nm", condition="TEM"), value("thickness", "100", "nm", condition="SEM")],
-        [value("thickness", "100", "nm", condition="after annealing at 500 °C", backend="paddleocr_vl")],
+        [value("thickness", "104", "nm", condition="after annealing at 500 °C", backend="paddleocr_vl")],
     )
 
     row = decision(result, "thickness")
@@ -1023,3 +1025,43 @@ def test_the_dataset_module_knows_nothing_of_figure_reading():
         imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
         assert "paperfacts.figures" not in imported
     assert "figure_rows" not in DatasetPayload.model_fields
+
+
+def test_a_value_both_lanes_quote_identically_is_not_split_by_recipe_numbers_in_its_condition():
+    # GZO HN400: both lanes say 1 h; one condition restates the forming gas, the other adds "at 400 °C".
+    # Annealing time has no measurement axis, so those numbers describe the sample, not the measurement.
+    result = paired(
+        [value("annealing_time", "1", "h", condition="post-annealing in hydrogen (15%)/nitrogen (85%) forming gas")],
+        [
+            value(
+                "annealing_time",
+                "1",
+                "h",
+                condition="post-annealing in hydrogen (15%)/nitrogen (85%) forming gas at 400 °C",
+                backend="paddleocr_vl",
+            )
+        ],
+    )
+
+    assert (result.paper_row["annealing_time"], decision(result, "annealing_time")["decision"]) == (60, "agree")
+
+
+def test_one_lane_restating_the_recipe_under_one_value_is_one_measurement():
+    # s41598: the Ar flow quoted twice in one lane, each time with a different slice of the recipe.
+    fields = [
+        value("ar_flow_rate", "200", "sccm", condition="RF magnetron sputtering (50 W power, 30 min)"),
+        value("ar_flow_rate", "200", "sccm", condition="deposited at 100 °C, O2/Ar = 0.5%"),
+    ]
+
+    result = paired(fields, [value("ar_flow_rate", "200", "sccm", backend="paddleocr_vl")])
+
+    assert result.paper_row["ar_flow_rate"] == 200
+
+
+def test_on_a_field_with_a_measurement_axis_different_numbers_still_separate_measurements():
+    # Transmittance declares a condition_hint (the wavelength): 450 nm and 600 nm stay two measurements.
+    fields = [value("transmittance", "85", "%", condition=wavelength) for wavelength in ("450 nm", "600 nm")]
+
+    result = paired(fields, [])
+
+    assert result.paper_row["transmittance"] is None

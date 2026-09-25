@@ -147,7 +147,10 @@ def decide(
         same_lane = [c.scalar for c in final if c.backend == backend]
         if any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
-    if _lanes_measure_differently(final, strict=several):
+    # Recipe numbers in a condition only stop an agreement the values themselves do not settle: two lanes quoting
+    # the very same number agree whatever else their conditions restate; 100 against 104 needs the same state.
+    exactly_equal = all(_same_value(final[0].scalar, c.scalar, spec) for c in final)
+    if (_numbers_matter(spec) or not exactly_equal) and _lanes_measure_differently(final, strict=several):
         return reject("multiple_conditions", "两个解析通道的数值来自不同的测量条件")
     chosen = min(final, key=lambda c: (-c.value.agreement, BACKENDS.index(c.backend), c.value.value_raw))
     agreed = len({c.backend for c in final}) == 2 and all(
@@ -215,8 +218,9 @@ def _one_number(spec: FieldSpec, candidates: Sequence[_Candidate]) -> bool:
     "100 nm, by TEM cross-section" and "100 nm, not reduced by the forming gas" are one thickness under two
     wordings. Only the very same number counts: 100 nm as-deposited and 104 nm after annealing are within
     tolerance of each other and are still two states, which a lane holding both under one sample usually means
-    an inventory error worth surfacing. Conditions naming different numbers are never merged, however equal the
-    values: 85 % at 450 nm and 85 % at 600 nm are two measurements. Whether the other lane measured the same
+    an inventory error worth surfacing. For a field measured along a stated axis (:func:`_numbers_matter`),
+    conditions naming different numbers are never merged, however equal the values: 85 % at 450 nm and 85 % at
+    600 nm are two measurements. Whether the other lane measured the same
     thing is judged afterwards, by :func:`_lanes_measure_differently`.
     """
     for backend in BACKENDS:
@@ -225,7 +229,9 @@ def _one_number(spec: FieldSpec, candidates: Sequence[_Candidate]) -> bool:
             for other in same_lane[index + 1 :]:
                 if candidate.scalar is None or other.scalar is None:
                     return False
-                if conditions_measure_differently(candidate.value.condition, other.value.condition):
+                if _numbers_matter(spec) and conditions_measure_differently(
+                    candidate.value.condition, other.value.condition
+                ):
                     return False
                 if not _same_value(candidate.scalar, other.scalar, spec):
                     return False
@@ -321,6 +327,18 @@ def _held_to(
 
 
 # ---- Agreement ---------------------------------------------------------------------------------------------
+
+
+def _numbers_matter(spec: FieldSpec) -> bool:
+    """Whether a number in this field's condition text names the measurement itself.
+
+    A field that declares a ``condition_hint`` is measured along an axis the paper states beside the value --
+    transmittance at a wavelength -- so "85 % at 450 nm" and "85 % at 600 nm" are two measurements. Every other
+    field's condition text is a description, and its numbers are the sample's recipe restated ("1 h, in 15 %
+    H2 forming gas" against "1 h, forming gas, 400 °C"): reading those as separate measurements refuses a value
+    both lanes quote identically.
+    """
+    return spec.condition_hint is not None
 
 
 def _lanes_measure_differently(final: Sequence[_Candidate], *, strict: bool) -> bool:
