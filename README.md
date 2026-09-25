@@ -633,22 +633,51 @@ re-reads only them, since each costs minutes of a different model.
 
 `--offline` on `run` or `batch` (or `PAPERFACTS_LLM_OFFLINE=1` for any command) answers every model request,
 text and vision, from the LLM cache and never sends one. It is how a refactor proves it re-derives the
-corpus for zero model calls. It is a switch for one invocation, not a standing setting: `llm.offline` in
-`config.json` is still read, for compatibility, but a replay left switched on in the shared file would
-make every later run fail.
+corpus for zero model calls. It is a switch for one invocation, not a standing setting. `llm.offline` in
+`config.json` is still read, for compatibility, but a replay left switched on in the shared file would make
+every later run fail. `serve` refuses to start under it. `--force` and `--force-figures` cannot be combined
+with it, because a forced request skips the cache and could only miss.
 
 A request the cache cannot answer raises `LlmOfflineMiss` and is logged as `llm offline miss key=… user=…`.
-A miss is never an outcome. It is not a failed panel, a failed figures stage or a failed sample matching:
-the paper fails, and nothing derived from the miss is written (no readings file, no comparison, no
-dataset). `batch` goes on with the other papers, so one replay collects every miss. `run` and `batch` end
-with `offline misses: N`, whether they finished or failed. When `PAPERFACTS_LLM_OFFLINE_REPORT` names a
-file, the misses are also written there as JSON (`key` is the first 16 hex digits of the cache key, `kind`
-is `json` or `vision`, and `user` is the first 120 characters of the question), so two replays can be
-compared by request rather than by count.
+A miss is never an outcome. It is not a failed panel, a failed figures stage or a failed sample matching.
+The paper fails, and nothing derived from the miss is written: no readings file, no comparison, no
+dataset. `batch` goes on with the other papers. `run` and `batch` end with `offline misses: N`, whether they
+finished or failed. When `PAPERFACTS_LLM_OFFLINE_REPORT` names a file, the misses are also written there as
+JSON. Each entry has three parts:
 
-A question that needed a repair replays too. Its rejected first answer is in the cache (see below). Replay
-serves it, validation fails as it did online, and the repair request is rebuilt byte-identical from that
-answer and pydantic's error, so the cache answers it as well.
+- `key`: the first 16 hex digits of the cache key.
+- `kind`: `json`, `repair` (the follow-up to an answer that failed validation) or `vision`.
+- `user`: the first 120 characters of the question.
+
+This lets two replays be compared by request.
+
+N is a **lower bound**. It counts the misses reached before each paper stopped, and the first miss hides
+the ones behind it:
+
+- A missed inventory question means the field questions are never built.
+- A missed lane means sample matching never runs.
+- A failed lane stops the figures stage before its remaining panels are asked.
+
+`0` is the proof. Any other count means "at least this many", and the set can differ between two replays
+of the same change.
+
+A question that needed a repair replays too. When an answer fails validation, it is also kept under its own
+cache entry, `<key>.rejected.json`, which an online run never reads. Offline replay serves the accepted
+answer when there is one, exactly as online. Otherwise it serves the rejected answer, but only if that
+answer still fails validation. The repair request is then rebuilt from the rejected answer and pydantic's
+error, and the cache answers that too. A rejected answer that now validates (a loosened schema) is a miss,
+because an online run would ask again.
+
+Three limits follow:
+
+- **Same `uv.lock`.** The repair request quotes pydantic's error text, including its documentation URL with
+  the pydantic version. A different pydantic moves every repair request's key, and every repaired question
+  misses.
+- **Caches recorded before rejected answers were kept.** On such a cache, every question that needed a
+  repair misses until one online run has recorded its rejected answer. That run asks the model again, and
+  the model may answer differently.
+- **Permanent misses.** A reply cut off at `max_tokens`, or a request that ended in an HTTP error, was
+  never cached. It misses on every replay, so a corpus that has one never reaches zero.
 
 ## Caching, and why filenames carry keys
 
@@ -669,11 +698,10 @@ are positional, so the old citations would point at whatever block now has that 
 free from the LLM cache whenever the rendered prompts are byte-identical. Files written before the hash was
 recorded have none and are read as before.
 
-Only an answer that validated is cached as an answer. A JSON reply cut off at `max_tokens` is an error and
-is never written. An invalid answer costs one repair request and is written marked `"rejected": true`, only
-so that offline replay can reach the repair. It never replaces an accepted answer. An online run asks a
-rejected or invalid cached answer again rather than replaying it. Entries without the marker, which is
-every entry written before it existed, are accepted answers. A sample matching that failed (the model answered badly twice) is shown for that run
+Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
+costs one repair request and is never written as the answer (it is kept apart only for
+[offline replay](#offline-replay)), and an invalid answer already in the cache is asked again rather than
+replayed. A sample matching that failed (the model answered badly twice) is shown for that run
 but not stored, so the next run asks again instead of serving the failure until `--force`.
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
