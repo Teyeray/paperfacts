@@ -330,6 +330,14 @@ def test_an_authors_pattern_is_used_as_written():
     assert pattern is not None and pattern.pattern == r"\d\s*c\b(?!\s*°)"
 
 
+def test_an_authors_pattern_with_capitals_still_finds_the_lower_cased_text():
+    registry = load_units({"mAh/g": {"aliases": {"mAh/g": 1}, "retrieval": r"\d\s*mAh\s*/?\s*g"}}, WHERE)
+    pattern = registry.retrieval("mAh/g")
+
+    assert pattern is not None
+    assert pattern.search(searchable(block("a capacity of 152 mAh/g")))
+
+
 def test_an_extension_is_searched_beside_the_built_in_pattern():
     registry = load_units({"nm": {"extends_builtin": True, "aliases": {"angstroms": 0.1}}}, WHERE)
     pattern = registry.retrieval("nm")

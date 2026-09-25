@@ -266,7 +266,8 @@ def _suffix_pattern(suffixes: tuple[str, ...]) -> re.Pattern[str]:
 
 @cache
 def _compiled(pattern: str) -> re.Pattern[str]:
-    return re.compile(pattern)
+    # Searched text is lower-cased, so an author's "mAh" would otherwise never match and nothing would say why.
+    return re.compile(pattern, re.IGNORECASE)
 
 
 def derive_retrieval(spellings: Iterable[str]) -> str:
@@ -367,7 +368,7 @@ def _declared_unit(canonical: str, entry: Any, where: str) -> DeclaredUnit:
     if retrieval is None:
         retrieval = derive_retrieval(table)
     else:
-        compile_pattern(retrieval, f"{where}: retrieval")
+        compile_pattern(retrieval, f"{where}: retrieval", re.IGNORECASE)
     return DeclaredUnit(
         canonical=canonical,
         aliases=tuple(aliases),

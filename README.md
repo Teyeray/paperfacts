@@ -811,7 +811,7 @@ beside the old. Two profiles with identical non-display content share every key 
 - **Retrieval.** Every canonical unit needs a pattern that finds a number in it in running text. By default it
   is derived from the spellings: a digit, then the spelling lower-cased with its spaces optional, then a word
   boundary when it ends in a letter or digit (so `V` does not match "Vis"). Give `retrieval` yourself when that
-  is too loose -- a bare `C` would match "°C" -- and write it in lower case: it runs on lower-cased text.
+  is too loose -- a bare `C` would match "°C". It is matched case-insensitively, on lower-cased text.
 - **Extending a built-in.** A built-in unit (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`, `W`, `sccm`,
   `rpm`, `Pa`) can only gain spellings, with `extends_builtin` set to true; its own converter is always asked first, so
   an extension never changes how a spelling it already reads converts. The TCO conventions stay: under `tco`,
