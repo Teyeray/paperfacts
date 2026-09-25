@@ -855,7 +855,10 @@ on the quantity with the unit bracketed apart (`ρ × 10^4 (Ω cm)`) it is divid
 symbol as in `ρ (×10^-4) (Ω cm)`, `ρ × 10^4` with no unit), or a cell that carries its own power of ten as
 well, is refused. A range
 keeps its midpoint whether or not each bound repeats the unit (`80%–85%`, `500 °C to 530 °C`). A condition
-after the value (`550 nm at 80%`, `400 °C for 2 h`, `500 °C under N2`; `at`, `for`, `during`, `under`, `after`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
+after the value (`550 nm at 80%`, `400 °C for 2 h`, `500 °C under N2`; `at`, `for`, `during`, `under`, and only
+when a number stays before it, so `deposited for 10 min` still reads 10; a condition holding the field's own
+quantity when the value does not, such as annealing time `400 °C for 2 h`, is refused; `after` introduces
+another state of the sample, so `85% after 10 cycles` is refused), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
 unit exponent (`H2`, `cm^-3`) are set aside with a note, never read as the value. On a field whose bare
 number may be a fraction, only a value below 1 is read as one: a bare `1` is 1 %, not 100 %. A value
 the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to

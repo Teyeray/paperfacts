@@ -185,10 +185,14 @@ _LIST_SEPARATOR = re.compile(r"[,;:]")
 # second quantity stands beside the first, and which one is the value is not the parser's to guess. A lone
 # "x" is the multiplication sign of "40 x 10 cm", not a unit.
 _OWN_UNIT = re.compile(rf"^\s*(?!x\b){_UNIT_TOKEN}")
-# A measurement or process condition stated after the value ("550 nm at 80%", "1.2 × 10^-4 at 300 K", "400 °C
-# for 2 h", "500 °C under N2"): its numbers describe when the value was measured, not the value. Not "in":
-# that is also the inch, and "2 in x 3 in" would read as 2.
-_CONDITION = re.compile(r"\s+(?:at|@|for|during|under|after)\s+(?=.*\d).*$", re.IGNORECASE)
+# Where a measurement or process condition stated after the value begins ("550 nm at 80%", "1.2 × 10^-4 at
+# 300 K", "400 °C for 2 h", "500 °C under N2"): its numbers describe when the value was measured, not the value.
+# Not "in": that is also the inch, and "2 in x 3 in" would read as 2. Not "after": see _AFTER.
+_CONDITION = re.compile(r"\s+(?:at|@|for|during|under)\s+(?=.*\d)", re.IGNORECASE)
+# "85% after 10 cycles", "100 nm after annealing": another state of the sample, not a condition of this value.
+_AFTER = re.compile(r"\s+after\s+\S", re.IGNORECASE)
+# The words of a condition tail that may name a unit ("2 h", "550 nm", "°C").
+_TAIL_WORD = re.compile(r"[^\d\s,;:()\[\]]+")
 NUMBER_RE = re.compile(_NUM)
 """Every plain number in a piece of text. Public because the comparison layer reads the numbers out of a
 measurement condition ("550 nm") and must use the same notion of "a number" this module parses with."""
@@ -270,7 +274,11 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     with a refusal -- or passes it on. A refusal is always better than a guess: the comparison turns None
     into AMBIGUOUS, while a wrong number is indistinguishable from a real measurement.
     """
-    text, notes = _set_aside(raw)
+    text, notes, _ = set_aside(raw)
+    if _AFTER.search(text):
+        return None, _join(
+            [*notes, "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"]
+        )
     # The digits of a formula or a unit exponent are set aside before the value's own numbers are counted.
     unglued = _GLUED_DIGITS.sub(" ", text)
     if unglued != text:
@@ -280,10 +288,14 @@ def parse_number(raw: str) -> tuple[float | None, str | None]:
     return value, _join([*notes, *reading])
 
 
-def _set_aside(raw: str) -> tuple[str, list[str]]:
-    """``raw`` without what surrounds the value -- typesetting, a qualifier, a name before "=", a condition
-    after it -- and a note for each thing set aside. The same for every spelling, scientific, plain or
-    compound, so none of them reads a condition's number as the value."""
+def set_aside(raw: str) -> tuple[str, list[str], str]:
+    """``(value text, notes, condition)``: ``raw`` without what surrounds the value -- typesetting, a qualifier,
+    a name before "=", a condition after it -- a note for each thing set aside, and the condition itself ("" when
+    there is none). The same for every spelling, scientific, plain or compound, and for the dataset cell
+    (``decide``), so none of them reads a condition's number as the value.
+
+    A condition is set aside only where the value before it keeps a number: "deposited for 10 min" is the
+    quote of a value that opens with its verb, not a condition with no value in front of it."""
     # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
     text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw)))
     # A command delatex has no reading for is typesetting; left in place, its letters would glue to the
@@ -298,11 +310,12 @@ def _set_aside(raw: str) -> tuple[str, list[str]]:
     if named and text[named.end() :]:
         notes.append(f"name {text[: named.end()].rstrip(' =')!r} before '=' ignored")
         text = text[named.end() :]
-    condition = _CONDITION.search(text)
-    if condition:
-        notes.append(f"condition {condition.group(0).strip()!r} ignored")
-        text = text[: condition.start()].strip()
-    return text, notes
+    for start in _CONDITION.finditer(text):
+        if NUMBER_RE.search(text[: start.start()]):
+            condition = text[start.start() :].strip()
+            notes.append(f"condition {condition!r} ignored")
+            return text[: start.start()].strip(), notes, condition
+    return text, notes, ""
 
 
 _Reading = tuple[float | None, list[str]]
@@ -724,6 +737,14 @@ def compound_value(spec: FieldSpec, text: str) -> float | None:
     return float(_plain(match.group("a"))) * big + part
 
 
+def _names_unit_of(spec: FieldSpec, text: str) -> bool:
+    """Whether ``text`` names a unit of the field's own quantity ("2 h" for a time, "°C" for a temperature)."""
+    if spec.canonical_unit is None:
+        return False
+    convert = CONVERTERS[spec.canonical_unit]
+    return any(convert(word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
+
+
 def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
@@ -731,7 +752,11 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
     word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
-    bare, context_notes = _set_aside(spelled)
+    bare, context_notes, condition = set_aside(spelled)
+    if condition and _names_unit_of(spec, condition) and not _names_unit_of(spec, bare):
+        # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
+        note = f"the condition {condition!r} holds this field's quantity and the value does not; ambiguous"
+        return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
     compound = compound_value(spec, bare)
     if compound is not None:
         compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"

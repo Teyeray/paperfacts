@@ -346,7 +346,12 @@ SPELLINGS = [
     ("400 °C in air for 1 h", 400.0, "condition 'for 1 h' ignored"),
     ("500 °C under N2 for 1 h", 500.0, "condition 'under N2 for 1 h' ignored"),
     ("90% for 550 nm", 90.0, "condition 'for 550 nm' ignored"),
-    ("100 nm after annealing at 400 °C", 100.0, "condition"),
+    # "after" introduces another state of the sample (after bending, after annealing), not a condition.
+    ("100 nm after annealing at 400 °C", None, "after"),
+    ("85% after 10 cycles", None, "after"),
+    ("15 after 1000 bending cycles", None, "after"),
+    # A tail is set aside only when the value keeps a number of its own: a quote opening with the verb reads.
+    ("deposited for 10 min", 10.0, None),
     ("12 Ω/sq during 30 min", 12.0, "condition"),
 ]
 

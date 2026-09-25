@@ -101,6 +101,25 @@ def test_a_value_restated_in_a_second_unit_is_never_added_up(field, raw, unit_ra
     assert normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value is None
 
 
+@pytest.mark.parametrize(
+    ("field", "raw", "unit_raw", "expected"),
+    [
+        ("annealing_temperature", "400 °C for 2 h", "°C", 400.0),
+        ("sputtering_time", "deposited for 10 min", "min", 10.0),
+        ("annealing_time", "annealed for 2 h", "h", 120.0),
+        ("annealing_time", "held for 30 min", "min", 30.0),
+        # The tail holds the field's own quantity and the value does not: the time is in the tail.
+        ("annealing_time", "400 °C for 2 h", "h", None),
+        ("sheet_resistance", "increase of 5 % after 1000 cycles", "Ω/sq", None),
+    ],
+)
+def test_a_condition_tail_is_set_aside_only_when_it_is_not_the_value(field, raw, unit_raw, expected):
+    # "400 °C for 2 h" on annealing_time read 400 h (24000 min) once "for" opened a condition.
+    value = normalize_field(make_field(field, raw, unit_raw=unit_raw), FIELD_BY_NAME[field]).value
+
+    assert value == (pytest.approx(expected) if expected is not None else None)
+
+
 def test_a_text_field_is_returned_untouched():
     # Text/composition comparison is computed on the fly in the comparison layer via normalize_key, rather
     # than caching a canonical text copy on the record (to avoid the two rule sets drifting apart).
