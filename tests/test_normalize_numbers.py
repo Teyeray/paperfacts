@@ -158,10 +158,17 @@ def test_a_thousands_separator_does_not_split_the_number():
 
 
 def test_the_first_number_wins_when_several_are_present_and_the_count_is_recorded():
-    value, note = parse_number("550 nm at 80%")
+    value, note = parse_number("550 nm, 80%")
 
     assert value == 550.0
     assert note == "2 numbers found, first used"
+
+
+def test_a_condition_after_the_value_is_set_aside_with_a_note():
+    # "at ..." states when the value was measured; its numbers are not the value's. The same rule holds for
+    # scientific notation, so "1.2 × 10^-4 at 300 K" is not refused for its "300".
+    assert parse_number("550 nm at 80%") == (550.0, "condition 'at 80%' ignored")
+    assert parse_number("1.2 × 10^-4 at 300 K") == (pytest.approx(1.2e-4), "condition 'at 300 K' ignored")
 
 
 def test_text_without_any_number_yields_none_and_says_so():
@@ -285,7 +292,7 @@ SPELLINGS = [
     ("1.2-1.5 × 10^-3", None, "ambiguous"),  # does the exponent apply to 1.2? refuse
     ("4.5 ± 0.2 × 10^-4", None, "ambiguous"),  # the exponent may scale only the uncertainty
     ("4.1 x 10^-4 - 3.2 x 10^-4", None, "descending"),
-    ("1.2 × 10^-4 at 550 nm", None, "ambiguous"),
+    ("1.2 × 10^-4 at 550 nm", 1.2e-4, "condition 'at 550 nm' ignored"),
     ("10-4", None, "ambiguous"),
     ("300-200", None, "ambiguous"),
     ("1:4", None, "ratio"),
@@ -294,11 +301,33 @@ SPELLINGS = [
     ("(12)", None, "parenthesis"),
     ("x (5)", None, "parenthesis"),
     ("12 (60", None, "parenthes"),
-    ("10–20 at 550 nm", None, "range among other numbers"),
+    ("10–20 at 550 nm", 15.0, "midpoint"),
+    ("10–20 nm, 30 nm", None, "range among other numbers"),
     # Still accepted, unchanged:
     ("12 (60)", 12.0, "parenthesized alternative ignored"),
     ("1.2 × 10⁻⁴ Ω·cm", 1.2e-4, None),
-    ("550 nm at 80%", 550.0, "first used"),
+    ("550 nm at 80%", 550.0, "condition"),
+    # Ranges with a unit on each bound, as for "3.2e-4 to 4.1e-4": the midpoint, never the first bound.
+    ("80%–85%", 82.5, "midpoint"),
+    ("20 W–100 W", 60.0, "midpoint"),
+    ("500 °C to 530 °C", 515.0, "midpoint"),
+    ("500 ℃ to 530 ℃", 515.0, "midpoint"),
+    ("5 nm - 10 μm", None, "different units"),
+    # Slash ratios are refused like colon ratios.
+    ("10/10", None, "ratio"),
+    ("12/10/3", None, "ratio"),
+    ("Ar/O2 = 20/1", None, "ratio"),
+    # The digits of a formula or a unit exponent are not the value.
+    ("O2/(Ar+O2) = 5%", 5.0, "before '='"),
+    ("5% H2", 5.0, "formula"),
+    ("4.5 × 10^20 cm^-3", 4.5e20, "formula"),
+    ("4.5 × 10^20 cm-3", None, "ambiguous"),  # without a caret "-3" may be a second number
+    ("x = 0.1", 0.1, "before '='"),
+    ("\\sim82", 82.0, "qualifier '~' dropped"),  # MinerU's \sim without the $ markers
+    ("$ \\sim $25 and 70", None, "joined by 'and'"),
+    ("25 nm or 70 nm", None, "joined by 'and'"),
+    ("1.2e-4", 1.2e-4, None),
+    ("1.2x10^-4", 1.2e-4, None),
     ("15.6 to 16.3 nm", 15.95, "midpoint"),
 ]
 

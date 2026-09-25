@@ -727,9 +727,13 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 
 Approximate values and measurements with ± uncertainty keep their centre value and carry a note, including
 `(4.5 ± 0.2) × 10⁻⁴`. A spelling with no single safe reading is refused and compared as ambiguous rather
-than guessed: a ratio such as `1:4`, a pair that does not ascend (`10-4` is as likely 10⁻⁴ without its
-caret as a range), a range whose exponent is written once (`1.2-1.5 × 10⁻³`), or scientific notation with
-other numbers beside it. A value
+than guessed: a ratio such as `1:4` or `10/10`, a pair that does not ascend (`10-4` is as likely 10⁻⁴
+without its caret as a range), a range whose exponent is written once (`1.2-1.5 × 10⁻³`), bounds in two
+different units, two values joined by "and", or scientific notation with other numbers beside it. A range
+keeps its midpoint whether or not each bound repeats the unit (`80%–85%`, `500 °C to 530 °C`). A condition
+after the value (`550 nm at 80%`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
+unit exponent (`H2`, `cm^-3`) are set aside with a note, never read as the value. On a field whose bare
+number may be a fraction, only a value below 1 is read as one: a bare `1` is 1 %, not 100 %. A value
 the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to
 2500 nm" — is kept and shown as **unattributed** rather than attached to a plausible neighbour. When both
 lanes hold the same unplaced value it is paired and compared like any other; a value only one lane could
