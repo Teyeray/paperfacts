@@ -9,8 +9,8 @@ Three selectors, one per question the extractor asks:
 
 - :func:`inventory_blocks` — "which samples does this paper report?" Needs breadth: section titles, every
   table and caption, and the prose that carries deposition conditions.
-- :func:`candidate_blocks` — "where might this one field's value be?" Needs precision: keyword and unit
-  matching, ranked, capped.
+- :func:`candidate_blocks` — "where might this one field's value be?" Needs precision: every block naming
+  the field by a keyword, plus the blocks carrying only its unit, ranked and capped.
 - :func:`fit_budget` — keep a prompt inside the context window without ever silently dropping a table.
 
 Matching rules that were tuned against real papers, and why:
@@ -19,13 +19,13 @@ Matching rules that were tuned against real papers, and why:
   resistance of a paper would then be looked for in half the document.
 - **A numeric field needs a digit.** A paragraph saying resistance "decreased sharply" cannot contain the
   number, so it is not a candidate however often it says the word.
-- **A unit is a weak signal, not a filter.** Selection ranks and then cuts, so a unit match can qualify a
-  block while scoring below any block that matched by name. Filtering on units instead would either drown
+- **A unit is a weak signal, not a filter.** A block that names the field is always shown; a block that
+  only carries the unit competes for the places left under the limit. Filtering on units instead would either drown
   the prompt (every paper is full of percentages and wavelengths) or lose the paper that writes "films of
   2108 nm" without the word "thickness".
 
-Measured against the blocks earlier whole-document runs cited on the papers in ``data/docs``: the default
-limit recalls 97% of them. See ``.omc/research/extraction-modes.md``.
+The limit's baseline was measured when it capped every block (``.omc/research/extraction-modes.md``); it
+now caps only what the named blocks leave room for.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
+from typing import Literal
 
 from paperfacts.config import DEFAULT_CANDIDATE_LIMIT
 from paperfacts.continuation import continuation_partners
@@ -45,23 +46,18 @@ logger = logging.getLogger(__name__)
 # Blocks that are dense in values and cheap to include: a table holds the numbers, a caption holds the
 # condition they were measured under, and the two are useless apart.
 DENSE_TYPES: frozenset[str] = frozenset({"table", "caption"})
-# How many blocks one question carries is extraction.candidate_limit in config.json. Its built-in baseline
-# was measured against the blocks earlier whole-document runs cited: 4 recalls 77% of them, 6 recalls 95%,
-# 8 recalls 97%, and 12 adds nothing but prose.
-# Score weights. A name match is worth more than a unit match, and a table or caption more than prose.
-KEYWORD_SCORE = 2
-UNIT_SCORE = 1
-DENSE_SCORE = 1
+# extraction.candidate_limit in config.json caps the unit-only blocks, together with the named ones: named
+# blocks are never cut, and the unit-only ones fill whatever places they left.
 
 
 # How each canonical unit is recognised **inside running text**. :mod:`paperfacts.normalize` has unit
 # patterns too, but those are anchored: they answer "is this whole string the unit?" for a value the model
 # already quoted. Searching prose for a unit is a different question and needs looser expressions.
 #
-# A unit match is worth less than a name match rather than being filtered out, because the two failure modes
-# are not symmetric. "%" and "nm" appear in every paper, so treating them as proof would drown the prompt;
+# A unit match ranks below a name match rather than being filtered out, because the two failure modes are
+# not symmetric. "%" and "nm" appear in every paper, so treating them as proof would drown the prompt;
 # refusing them outright loses the paper that writes "films of 2108 nm" without the word "thickness". As a
-# low score they only fill places no named block wanted.
+# weaker class they only fill places no named block wanted.
 # Lowercase omega, not the ohm sign: _searchable() lowercases, and "Ω".lower() is "ω". normalize_key has to
 # undo the same fold for the same reason. Spelling it uppercase here would silently match only "ohm".
 _OHM = r"(?:ohms?|ω)"
@@ -176,31 +172,31 @@ def candidate_blocks(
     limit: int = DEFAULT_CANDIDATE_LIMIT,
     sample_blocks: frozenset[str] = frozenset(),
 ) -> list[SourceBlock]:
-    """The blocks that could hold a value of ``spec``, ranked by score and returned in document order.
+    """The blocks that could hold a value of ``spec``, returned in document order.
 
-    Ranking rather than plain filtering is what keeps the prompt small on a paper that says "sheet
-    resistance" thirty times: the blocks that say it *and* carry numbers *and* are a table win the places.
+    Every block naming the field comes along; the blocks that only carry its unit are capped by ``limit``,
+    which is what keeps a paper full of percentages from putting every caption into every question.
     """
     if limit < 1:
         raise ValueError(f"limit must be at least 1, got {limit}")
     unit = UNIT_PATTERNS.get(spec.canonical_unit or "")
     named: set[int] = set()
-    unit_only: list[tuple[int, int]] = []
+    unit_only: list[tuple[bool, int]] = []
     for index, block in enumerate(blocks):
-        score = _score(spec, block, unit)
-        if score is None:
-            continue
-        if score >= KEYWORD_SCORE:
+        match = _classify(spec, block, unit)
+        if match == "named":
             named.add(index)
-        else:
-            unit_only.append((score, index))
+        elif match == "unit":
+            unit_only.append((block.type in DENSE_TYPES, index))
 
     # Every block that names the field is shown: ranking named blocks against each other cut the later
-    # pages of a paper (ties break on document order), which is where the results section is. Only the
-    # blocks that qualified on a unit alone compete, for the places the named ones left.
-    # Ties break on document order, so the selection is reproducible run to run.
+    # pages of a paper (ties break on document order), which is where the results section is. "Named"
+    # means a keyword matched, nothing else: a table or caption carrying only the unit ("XRD at 20%
+    # power") is unit-only however dense it is, or every caption with a "%" would ride along uncapped.
+    # The unit-only blocks compete for the places the named ones left, tables and captions first, then
+    # document order, so the selection is reproducible run to run.
     spare = max(limit - len(named), 0)
-    chosen = named | {index for _, index in sorted(unit_only, key=lambda item: (-item[0], item[1]))[:spare]}
+    chosen = named | {index for _, index in sorted(unit_only, key=lambda item: (not item[0], item[1]))[:spare]}
     if spec.is_sample_level:
         # The blocks the inventory said describe the samples. A methods paragraph stating "240 nm thick" or
         # "the substrate to target distance is 69 mm" names the recipe in words no keyword list foresees,
@@ -228,16 +224,16 @@ def _has_digit(block: SourceBlock) -> bool:
     return any(character.isdigit() for character in block.content)
 
 
-def _score(spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None) -> int | None:
-    """This block's score for ``spec``, or None when it does not qualify at all."""
+def _classify(spec: FieldSpec, block: SourceBlock, unit: re.Pattern[str] | None) -> Literal["named", "unit"] | None:
+    """Whether ``block`` names ``spec`` by a keyword, only carries its unit, or does not qualify at all."""
     text = _searchable(block)
     if spec.kind == "numeric" and not any(character.isdigit() for character in text):
         return None  # a number cannot be quoted from a block that has none
-    names = _names(spec.keywords, text)
-    has_unit = unit is not None and bool(unit.search(text))
-    if not names and not has_unit:
-        return None
-    return KEYWORD_SCORE * names + (UNIT_SCORE if has_unit else 0) + (DENSE_SCORE if block.type in DENSE_TYPES else 0)
+    if _names(spec.keywords, text):
+        return "named"
+    if unit is not None and unit.search(text):
+        return "unit"
+    return None
 
 
 def _dense_neighbours(chosen: set[int], blocks: Sequence[SourceBlock]) -> set[int]:

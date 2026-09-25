@@ -291,7 +291,8 @@ class Settings:
     # per pass, so it stays at 1 unless a run explicitly asks for more.
     extraction_passes: int = 1
     extraction_mode: ExtractionMode = DEFAULT_EXTRACTION_MODE
-    # How many blocks one passage-mode question may carry; ignored in document mode.
+    # Caps the blocks a passage-mode question sees on a unit match alone; blocks naming the field by a
+    # keyword always come. Ignored in document mode.
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT
     server_host: str = DEFAULT_SERVER_HOST
     server_port: int = DEFAULT_SERVER_PORT
