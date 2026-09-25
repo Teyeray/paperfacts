@@ -36,9 +36,10 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_sample
 from support.factories import make_blank_pdf
-from support.profiles import SHIPPED_PROFILE_PATH, profile_data
+from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data
 from support.web import (
     DOC_KEY,
+    DOC_SHA,
     RecordingRunner,
     corpus_payload,
     seed_artifact,
@@ -135,6 +136,65 @@ def test_health_reports_the_model_and_the_profile_that_will_be_used(client: Test
         "profile": "tco",
         "profile_hash": tco_profile.content_hash[:12],
     }
+
+
+# ---- the profile (AC-14) ------------------------------------------------------------------
+
+
+def test_the_profile_gives_the_page_tcos_own_copy(client: TestClient, tco_profile: DomainProfile):
+    body = client.get("/api/profile").json()
+
+    assert (body["name"], body["title_zh"], body["maturity"]) == ("tco", tco_profile.title_zh, "production")
+    # The strings the page and the workbook printed before they came from the profile.
+    assert body["ui"] == {
+        "paper_level_label_zh": "靶材（论文级）",
+        "paper_level_short_zh": "靶材",
+        "entity_label_zh": "样品",
+        "no_samples_message_zh": "该论文没有自己沉积的 TCO 膜，所以没有样品级数据。",
+    }
+    assert body["groups"][0] == {"name": "target", "level": "paper", "label_zh": "靶材"}
+    assert body["field_count"] == {"paper": len(tco_profile.paper_fields), "sample": len(tco_profile.sample_fields)}
+    assert [field["name"] for field in body["fields"]] == [spec.name for spec in tco_profile.fields]
+    thickness = next(field for field in body["fields"] if field["name"] == "thickness")
+    assert thickness == {"name": "thickness", "label": "厚度", "group": "film", "level": "sample", "unit": "nm"}
+
+
+def test_another_profile_serves_its_own_copy_over_the_defaults(settings: Settings, jobs: JobManager):
+    """The copy a profile sets replaces the default; what it leaves out is the domain-free default."""
+    profile = make_profile({"ui": {"paper_level_label_zh": "前驱体（论文级）", "entity_label_zh": "涂层"}})
+
+    with TestClient(create_app(settings, profile=profile, jobs=jobs)) as other:
+        body = other.get("/api/profile").json()
+
+    assert (body["name"], body["title_zh"], body["maturity"]) == ("demo", "示例领域", "example")
+    assert body["ui"] == {
+        "paper_level_label_zh": "前驱体（论文级）",
+        "paper_level_short_zh": "论文级",
+        "entity_label_zh": "涂层",
+        "no_samples_message_zh": "该论文没有范围内的样品，所以没有样品级数据。",
+    }
+    assert body["groups"] == [
+        {"name": "precursor", "level": "paper", "label_zh": "前驱体"},
+        {"name": "coating", "level": "sample", "label_zh": "涂层"},
+    ]
+    assert body["field_count"] == {"paper": 1, "sample": 2}
+
+
+def test_a_b0_lane_with_no_film_still_carries_the_flag_the_no_samples_message_keys_on(
+    client: TestClient, library: Library, parsed_only: str
+):
+    """The page shows ``ui.no_samples_message_zh`` when every lane is empty with ``no_tco_film`` set. A lane
+    written before profiles existed must still arrive with that internal name."""
+    b0 = json.loads((Path(__file__).parent / "fixtures" / "b0_formats" / "lane.json").read_text(encoding="utf-8"))
+    b0.update(document_id=DOC_SHA, extractor_key=library.extractor_key, samples=[], no_tco_film=True)
+    path = library.layout.extraction_path(DOC_SHA, "mineru", library.extractor_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(b0), encoding="utf-8")
+
+    body = client.get(f"/api/documents/{parsed_only}/extraction/mineru").json()
+
+    assert body["samples"] == [] and body["no_tco_film"] is True
+    assert "no_samples_message_zh" in client.get("/api/profile").json()["ui"]
 
 
 def test_the_document_list_is_empty_before_anything_is_uploaded(client: TestClient):

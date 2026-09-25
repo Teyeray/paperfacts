@@ -223,7 +223,7 @@ def test_the_excel_export_is_served_as_a_download(client: TestClient, library: L
     assert response.content == b"PK\x03\x04 workbook"
     assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
     assert "attachment" in response.headers["content-disposition"]
-    assert f'filename="paperfacts-{parsed_only}.xlsx"' in response.headers["content-disposition"]
+    assert f'filename="tco-{parsed_only}.xlsx"' in response.headers["content-disposition"]
 
 
 # ---- the corpus table --------------------------------------------------------------------------
@@ -341,4 +341,4 @@ def test_the_corpus_workbook_is_rebuilt_from_the_datasets(client: TestClient, li
     assert response.status_code == 200
     assert response.content.startswith(b"PK")  # a real xlsx (a zip), built on demand rather than read from disk
     assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
-    assert 'filename="paperfacts-corpus.xlsx"' in response.headers["content-disposition"]
+    assert 'filename="tco-corpus.xlsx"' in response.headers["content-disposition"]

@@ -4,6 +4,7 @@ and the static frontend.
 Endpoints (all under ``/api``, JSON)::
 
     GET  /api/health
+    GET  /api/profile                              the served profile's title, UI copy, groups and fields
     GET  /api/documents                            document list (stage reached, counts)
     GET  /api/dataset                              corpus results table (paper_row + every sample row per document)
     GET  /api/dataset.xlsx                         the whole library as one Excel workbook
@@ -33,6 +34,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import json
 import logging
 import secrets
@@ -140,6 +142,30 @@ def profile_on_disk_hash(profile: DomainProfile) -> str:
         return parse_profile(json.loads(profile.source.read_text(encoding="utf-8")), profile.source).content_hash
     except (OSError, ValueError, ConfigError) as exc:
         return f"unreadable: {exc}"
+
+
+def profile_view(profile: DomainProfile) -> dict[str, Any]:
+    """What the page needs to name things the profile's way: its title, its copy and its groups and fields.
+    Display text only; the prompts, units and retrieval stay on the server."""
+    return {
+        "name": profile.name,
+        "title_zh": profile.title_zh,
+        "maturity": profile.maturity,
+        "description_zh": profile.description_zh,
+        "ui": dataclasses.asdict(profile.ui),
+        "groups": [{"name": group.name, "level": group.level, "label_zh": group.label_zh} for group in profile.groups],
+        "fields": [
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "group": spec.group,
+                "level": spec.level,
+                "unit": spec.canonical_unit,
+            }
+            for spec in profile.fields
+        ],
+        "field_count": {"paper": len(profile.paper_fields), "sample": len(profile.sample_fields)},
+    }
 
 
 def pipeline_runner(settings: Settings, profile: DomainProfile, library: Library) -> JobRunner:
@@ -265,6 +291,10 @@ def create_app(
             "profile_hash": profile.content_hash[:12],
         }
 
+    @app.get("/api/profile")
+    def get_profile() -> dict[str, Any]:
+        return profile_view(profile)
+
     @app.get("/api/documents")
     def list_documents() -> list[DocumentSummary]:
         return library.list()
@@ -285,7 +315,8 @@ def create_app(
         return Response(
             content=corpus_workbook(datasets, settings, library.profile),
             media_type=EXCEL_MEDIA_TYPE,
-            headers={"content-disposition": 'attachment; filename="paperfacts-corpus.xlsx"'},
+            # A profile name is ^[a-z][a-z0-9_]*$, so it needs no quoting in the header.
+            headers={"content-disposition": f'attachment; filename="{profile.name}-corpus.xlsx"'},
         )
 
     @app.post(
@@ -435,7 +466,7 @@ def create_app(
             path,
             media_type=EXCEL_MEDIA_TYPE,
             # The upload name is user input; the id is the safe, stable download name.
-            filename=f"paperfacts-{document_id}.xlsx",
+            filename=f"{profile.name}-{document_id}.xlsx",
         )
 
     @app.get("/api/documents/{document_id}/pages/{page}.png")

@@ -9,6 +9,7 @@ from paperfacts.records import TargetRecord
 from paperfacts.workbook import write_dataset
 from support.extraction import make_lane, make_sample
 from support.factories import DOC_ID
+from support.profiles import make_profile
 from test_dataset import dataset, paired, value
 
 
@@ -105,3 +106,29 @@ def test_figure_rows_fill_only_their_own_sheet(tmp_path: Path, tco_profile):
     cells = {header[i]: cell.value for i, cell in enumerate(sheet[2])}
     assert cells["图"] == "Fig. 3" and cells["读数（近似值）"] is None and cells["精度"] == "±20%"
     assert workbook["样品数据"].max_row == 2  # the sample sheet is what it would have been without the row
+
+
+def field_levels(output: Path) -> dict[str, str]:
+    sheet = load_workbook(output)["字段说明"]
+    header = [cell.value for cell in sheet[1]]
+    name, level = header.index("字段"), header.index("层级")
+    return {row[name].value: row[level].value for row in sheet.iter_rows(min_row=2)}
+
+
+def test_the_field_sheet_names_each_level_in_the_profiles_own_words(tmp_path: Path, tco_profile):
+    write_dataset([], tmp_path / "tco.xlsx", tco_profile)
+
+    levels = field_levels(tmp_path / "tco.xlsx")
+
+    # TCO's copy is what the sheet said before the level label came from the profile.
+    assert levels["component"] == "靶材（论文级）"
+    assert levels["thickness"] == "样品级"
+
+
+def test_another_profile_labels_its_levels_its_own_way(tmp_path: Path):
+    profile = make_profile({"ui": {"paper_level_label_zh": "前驱体（论文级）", "entity_label_zh": "涂层"}})
+    write_dataset([], tmp_path / "demo.xlsx", profile)
+
+    levels = field_levels(tmp_path / "demo.xlsx")
+
+    assert levels == {"precursor_purity": "前驱体（论文级）", "coating_thickness": "涂层级", "solvent": "涂层级"}

@@ -2,6 +2,8 @@
 // the per-sample table inside a document and the corpus table on the home view -- share this module,
 // so a column hidden on one stays hidden on the other.
 
+import { uiCopy } from "./state.js";
+
 // A field earns a column when at least one row put a value in it; the toggle brings the rest back so the
 // full table stays inspectable without making the default view mostly blank. Shared with the corpus table,
 // which applies the same rule across papers instead of across samples.
@@ -22,7 +24,7 @@ export function visibleFields(fields, rows, showAll) {
 const PICKER_KEY = "paperfacts.chosen-fields";
 // Fields carry `scope`, not the config's richer `group`, so the picker groups by the distinction the
 // dataset actually exposes: what belongs to the target/paper and what belongs to a sample.
-const SCOPE_LABEL = { target: "论文级", sample: "样品级" };
+const SCOPE_LABEL = { target: () => "论文级", sample: () => `${uiCopy("entity_label_zh")}级` };
 const SCOPE_ORDER = ["target", "sample"];
 
 // null means "no choice stored" -- every field is shown, including ones added after the last choice.
@@ -111,7 +113,7 @@ export function fieldPicker(fields, onChange) {
     const box = document.createElement("div");
     box.className = "picker-group";
     const title = document.createElement("h4");
-    title.textContent = SCOPE_LABEL[scope];
+    title.textContent = SCOPE_LABEL[scope]();
     box.append(title);
     for (const field of group) box.append(checkbox(field, isOn(field)));
     pop.append(box);

@@ -9,7 +9,7 @@
 import { api } from "./api.js";
 import { escapeHtml, keepFocus, toast } from "./html.js";
 import { documentHash } from "./router.js";
-import { state } from "./state.js";
+import { state, uiCopy } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
 import { bodyRow, column, fieldColumn, headRow, plainCell } from "./table.js";
 import { copyButton, copyTable } from "./tsv.js";
@@ -63,7 +63,7 @@ export function renderCorpus(root) {
   const download = document.createElement("a");
   download.className = "download";
   download.href = "/api/dataset.xlsx";
-  download.setAttribute("download", "");
+  download.setAttribute("download", `${state.profile?.name ?? "paperfacts"}-corpus.xlsx`);
   download.textContent = "下载全部 Excel";
   head.append(download);
 
@@ -123,7 +123,7 @@ function corpusColumns(fields) {
       name,
     ),
     column(
-      "样品",
+      uiCopy("entity_label_zh"),
       (item) => `<td class="mono">${escapeHtml(item.source.sample_id ?? "")}${isPaper(item) ? sampleCount(item.row) : chosenMark(item)}</td>`,
       (item) => item.source.sample_id ?? "",
     ),

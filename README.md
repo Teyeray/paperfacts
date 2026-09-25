@@ -301,7 +301,8 @@ The flags worth knowing:
   under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
   after the profile, so a profile file given by path whose name is also a different `profiles/<name>.json` is
   refused, and the name `paperfacts` (the pre-profile workbook) is reserved. `serve` reads its profile once:
-  `/api/health` reports its name and hash, and after the file is edited on disk every new job is refused
+  `/api/health` reports its name and hash, `/api/profile` gives the page its title and copy (the header shows
+  the title, and the paper-level record is named the profile's way), and after the file is edited on disk every new job is refused
   until the server is restarted. Run **one server per data root**: two servers under different profiles
   over the same `data_root` can parse the same document at the same time.
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
@@ -770,7 +771,8 @@ different settings lands beside the old one instead of overwriting it.
 `run` writes `data/docs/<sha>/exports/<profile>.xlsx` for one paper (`<profile>` is the domain profile's
 name, `tco` by default; workbooks from before profiles, `dataset.xlsx` and `exports/paperfacts.xlsx`, are left
 where they are); `batch` and `export` write one workbook for a
-whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」. Six
+whole directory; the web UI serves the same thing behind 「下载 Excel」 and 「下载全部 Excel」, downloaded as
+`<profile>-<id>.xlsx` and `<profile>-corpus.xlsx`. Six
 sheets:
 
 | Sheet | Contents |

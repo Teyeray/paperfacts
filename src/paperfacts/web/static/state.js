@@ -50,9 +50,14 @@ export const state = {
   filter: null,    // status filter for the facts table
   selectedFact: null, // index into report.comparisons of the fact in the URL, even while a filter hides it
   viewer: null,    // the PageViewer instance
+  profile: null,   // the served domain profile's title, UI copy, groups and fields (GET /api/profile)
 };
 
 export const isCurrent = (generation) => generation === state.generation;
+
+// One line of the profile's display copy (ui_copy.UiCopy). Every domain word on the page comes through here, so
+// the page names a paper-level record or a sample the way the served profile does. Empty until it has loaded.
+export const uiCopy = (key) => state.profile?.ui?.[key] ?? "";
 
 // Only a job belonging to the current document is used to draw progress; after switching
 // documents, a stale job snapshot must not carry over onto the new one
@@ -62,10 +67,11 @@ export const isActive = (job) => Boolean(job) && ACTIVE_JOB_STATUS.has(job.statu
 // slots in the document view template
 export const slot = (name, root = document.getElementById("document-view")) => root.querySelector(`[data-slot="${name}"]`);
 
-// Why a processed paper has no samples. Each lane carries the inventory's "this paper deposits no TCO film
-// of its own" verdict as `no_tco_film` (extract.py); any other empty lane just found no samples.
+// Why a processed paper has no samples. Each lane carries the inventory's "this paper reports no in-scope
+// sample of its own" verdict under the internal name `no_tco_film` (extract.py), and the profile words it; any
+// other empty lane just found no samples.
 export function noSamplesReason() {
   const lanes = LANES.map((lane) => state.lanes[lane]).filter(Boolean);
-  const noFilm = lanes.length > 0 && lanes.every((lane) => !lane.samples?.length && lane.no_tco_film === true);
-  return noFilm ? "该论文没有自己沉积的 TCO 膜，所以没有样品级数据。" : "未识别到样品：两路抽取都没有给出样品。";
+  const noneInScope = lanes.length > 0 && lanes.every((lane) => !lane.samples?.length && lane.no_tco_film === true);
+  return noneInScope ? uiCopy("no_samples_message_zh") : "未识别到样品：两路抽取都没有给出样品。";
 }

@@ -2,12 +2,11 @@
 
 import { releaseFact } from "./facts.js";
 import { caveats, escapeHtml, fmt, toast } from "./html.js";
-import { LANES, LANE_LABEL, state } from "./state.js";
+import { LANES, LANE_LABEL, state, uiCopy } from "./state.js";
 import { revealViewer } from "./viewer.js";
 
-// The paper-level record and the unplaced values are shown under these names, and told apart from real
-// samples by `data-kind`, never by the name: a model is free to call a sample 靶材 or 未归属 too.
-const TARGET_SID = "靶材";
+// The paper-level record (under the profile's short name for it) and the unplaced values are told apart from
+// real samples by `data-kind`, never by the name: a model is free to call a sample either name too.
 const UNATTRIBUTED_SID = "未归属";
 
 export function renderLanes(root) {
@@ -19,10 +18,10 @@ function laneNode(lane, data) {
   const box = document.createElement("div");
   box.className = "lane";
   const reasoning = data?.usage?.reasoning_tokens ? `（推理 ${data.usage.reasoning_tokens}）` : "";
-  const meta = data ? `${data.samples.length} 样品 · ${data.usage?.total_tokens ?? "?"} tokens${reasoning} · key ${data.extractor_key}` : "";
+  const meta = data ? `${data.samples.length} ${uiCopy("entity_label_zh")} ·${data.usage?.total_tokens ?? "?"} tokens${reasoning} · key ${data.extractor_key}` : "";
   box.innerHTML = `<div class="lane-head ${lane === "mineru" ? "a" : "b"}"><span>${LANE_LABEL[lane]}</span><span class="meta">${escapeHtml(meta)}</span></div>`;
   if (!data) { box.append(note("还没有抽取结果。")); return box; }
-  if (data.target) box.append(sampleNode({ sample_id: TARGET_SID, label: "论文级", conditions: {}, fields: data.target.fields }, "target"));
+  if (data.target) box.append(sampleNode({ sample_id: uiCopy("paper_level_short_zh"), label: "论文级", conditions: {}, fields: data.target.fields }, "target"));
   if (!data.samples.length) box.append(note("模型没有识别出样品。"));
   for (const sample of data.samples) box.append(sampleNode(sample));
   // Values the model found but could not place on any sample. Shown apart because nothing compares them:

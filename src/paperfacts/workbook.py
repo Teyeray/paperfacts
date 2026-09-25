@@ -158,7 +158,7 @@ def write_dataset(
         column.model_dump()
         | {
             # The sheet says the same things in Chinese, for a reader who opens the workbook alone.
-            "scope": "样品级" if column.scope == "sample" else "靶材（论文级）",
+            "scope": f"{profile.ui.entity_label_zh}级" if column.scope == "sample" else profile.ui.paper_level_label_zh,
             "unit": column.unit or "文本",
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
