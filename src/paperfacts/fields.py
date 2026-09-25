@@ -1,12 +1,11 @@
-"""The target field table: what to extract, in what unit, and how close counts as the same.
+"""A field: what to extract, in what unit, and how close counts as the same.
 
-The table itself lives in ``config.json`` and is read at import. Changing a field is therefore an edit to a
-JSON file rather than to Python -- which is the point, since which facts a group wants out of its papers is
-the thing that differs between groups. Every entry is validated on the way in: an unknown key or a
-misspelled group is a :class:`ConfigError` naming the field, not a surprise three stages later.
-
-Fields fall into three groups: the sputtering target (paper-level -- a paper usually has one), the
-deposition process (sample-level), and film characterisation (sample-level).
+The table itself is a domain profile's ``fields`` (``profiles/<name>.json``, read by :mod:`paperfacts.profile`),
+and this module holds no table of its own: every stage is handed the profile it runs under. Changing a field is
+therefore an edit to a JSON file rather than to Python -- which is the point, since which facts a group wants
+out of its papers is the thing that differs between groups. Every entry is validated on the way in by
+:func:`field_spec`: an unknown key or a misspelled group is a :class:`ConfigError` naming the field, not a
+surprise three stages later. A field's level (paper or sample) is its group's, as the profile declares it.
 
 One table drives five things: the field descriptions given to the model, unit conversion, what to do with
 a bare number that has no unit, the numeric tolerance used when comparing the two lanes, and -- through
@@ -33,14 +32,10 @@ from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from typing import Any, Literal, get_args
 
-from paperfacts.config import ConfigDocument, configuration
 from paperfacts.errors import ConfigError
-from paperfacts.units import BUILTIN_UNITS
 
 # Whether a field belongs to the paper as a whole or to each of its samples. A profile declares it per group.
 FieldLevel = Literal["paper", "sample"]
-# config.json's groups and their levels: its field table declares no groups of its own.
-CONFIG_GROUP_LEVELS: Mapping[str, FieldLevel] = {"target": "paper", "process": "sample", "film": "sample"}
 # A number as a measurement condition states it: "550", "400" and "800" in "average 400–800 nm".
 CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # numeric: a number with a unit; composition: a chemical formula; text: anything else
@@ -75,7 +70,7 @@ def field_roles(name: str) -> frozenset[FieldRole]:
 
 @dataclass(frozen=True)
 class FieldSpec:
-    """One extractable field, exactly as ``config.json`` describes it."""
+    """One extractable field, exactly as its profile describes it."""
 
     name: str = field(metadata=_roles(FieldRole.PROMPT, FieldRole.FIGURE))
     # A group the table declares; the field line shows it to the model ("group: film").
@@ -287,59 +282,3 @@ def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, fl
     if low is not None and high is not None and low >= high:
         raise ConfigError(f"{where}: valid_range.min ({low}) must be below valid_range.max ({high})")
     return (None if low is None else float(low), None if high is None else float(high))
-
-
-# Attributes only a profile may set. Nothing reads them from config.json's table, so accepting them there would
-# be an edit that silently does nothing.
-PROFILE_ONLY = ("condition_rule", "missing_condition_note_zh", "figure_readable", "display_format", "range_policy")
-
-
-def load_field_specs(document: ConfigDocument) -> tuple[FieldSpec, ...]:
-    """The whole field table, validated. An empty table is refused: it would extract nothing, silently."""
-    entries = document.entries("fields")
-    for index, entry in enumerate(entries):
-        found = [key for key in PROFILE_ONLY if isinstance(entry, Mapping) and key in entry]
-        if found:
-            raise ConfigError(
-                f"{document.path}: fields[{index}]: {', '.join(found)} can only be set in a profile (profiles/*.json)"
-            )
-    specs = tuple(
-        field_spec(entry, index, str(document.path), CONFIG_GROUP_LEVELS) for index, entry in enumerate(entries)
-    )
-    if not specs:
-        raise ConfigError(f"{document.path}: fields is empty, so there is nothing to extract")
-    duplicates = sorted({spec.name for spec in specs if sum(s.name == spec.name for s in specs) > 1})
-    if duplicates:
-        raise ConfigError(f"{document.path}: fields has more than one entry named {', '.join(duplicates)}")
-    for spec in specs:
-        if spec.canonical_unit:
-            # Refused here, naming the field, rather than as an unknown unit on every value it is asked for.
-            BUILTIN_UNITS.check(spec.canonical_unit, f"{document.path}: field {spec.name!r}")
-    return specs
-
-
-def load_condition_keywords(document: ConfigDocument) -> tuple[str, ...]:
-    words = document.entries("condition_keywords")
-    if not all(isinstance(word, str) and word for word in words):
-        raise ConfigError(f"{document.path}: condition_keywords must be a list of non-empty strings")
-    return tuple(words)
-
-
-_CONFIG = configuration()
-
-FIELD_SPECS: tuple[FieldSpec, ...] = load_field_specs(_CONFIG)
-
-# Words that mark a block as describing how a sample was made, used to choose what the sample inventory
-# question is shown. Deliberately about the process, not about measured results: the inventory question is
-# "which samples exist and what distinguishes them", answered in the Methods section and in table headers.
-# Numeric conditions ("100 sccm", "150 W") are recognised by pattern in paperfacts.passages.
-CONDITION_KEYWORDS: tuple[str, ...] = load_condition_keywords(_CONFIG)
-
-# Sample-pairing confidence below this counts as low confidence: the fact is still compared, but the report
-# counts it separately so a reviewer can look at it. It sits here because comparison_key hashes it, and
-# keys.py cannot import compare.py without a cycle.
-AMBIGUOUS_MATCH_CONFIDENCE: float = _CONFIG.get("comparison.ambiguous_match_confidence", float)
-
-FIELD_BY_NAME: dict[str, FieldSpec] = {spec.name: spec for spec in FIELD_SPECS}
-TARGET_FIELDS: tuple[FieldSpec, ...] = tuple(spec for spec in FIELD_SPECS if not spec.is_sample_level)
-SAMPLE_FIELDS: tuple[FieldSpec, ...] = tuple(spec for spec in FIELD_SPECS if spec.is_sample_level)

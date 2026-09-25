@@ -41,7 +41,9 @@ from paperfacts.config import (
     load_config,
 )
 from paperfacts.errors import ConfigError
-from paperfacts.fields import FIELD_SPECS, FieldRole, FieldSpec, load_condition_keywords, load_field_specs
+from paperfacts.fields import FieldRole, FieldSpec
+from paperfacts.profile import parse_profile
+from support.profiles import SHIPPED_PROFILE_PATH, make_profile
 
 SHIPPED = config_path({})
 
@@ -53,6 +55,14 @@ MINIMAL_FIELD: dict[str, Any] = {
     "description": "Film thickness.",
     "keywords": ["thickness"],
 }
+
+
+def load_fields(entries: list[Any]) -> tuple[FieldSpec, ...]:
+    """``entries`` as the shipped profile's field table, validated the way every field table is: config.json no
+    longer has one of its own that anything reads, and the entry rules are the profile's."""
+    # No chart slots: none of these entries is figure_readable, and a profile has slots only when one is.
+    data = json.loads(SHIPPED_PROFILE_PATH.read_text(encoding="utf-8")) | {"fields": entries, "figures": None}
+    return parse_profile(data, Path("profiles/tco.json")).fields
 
 
 def document(data: Mapping[str, Any]) -> ConfigDocument:
@@ -410,7 +420,7 @@ def test_a_missing_setting_in_the_file_fails_loudly(tmp_path: Path):
 
 
 def test_a_minimal_field_entry_fills_in_the_optional_keys():
-    specs = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
+    specs = load_fields([MINIMAL_FIELD])
 
     assert len(specs) == 1
     spec = specs[0]
@@ -431,7 +441,7 @@ def test_every_optional_key_is_read_when_it_is_given():
         "bare_number": "assume_canonical",
     }
 
-    spec = load_field_specs(document({"fields": [entry]}))[0]
+    spec = load_fields([entry])[0]
 
     assert spec.canonical_unit == "nm"
     assert (spec.rel_tol, spec.abs_tol) == (0.05, 1.0)
@@ -440,9 +450,9 @@ def test_every_optional_key_is_read_when_it_is_given():
 
 
 def test_a_field_label_is_optional_and_read_when_it_is_given():
-    assert load_field_specs(document({"fields": [MINIMAL_FIELD]}))[0].label == ""
+    assert load_fields([MINIMAL_FIELD])[0].label == ""
 
-    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": "厚度"}]}))[0]
+    spec = load_fields([MINIMAL_FIELD | {"label": "厚度"}])[0]
 
     assert spec.label == "厚度"
 
@@ -450,11 +460,11 @@ def test_a_field_label_is_optional_and_read_when_it_is_given():
 @pytest.mark.parametrize("bad", ["", "  ", 5, None])
 def test_a_label_that_is_not_a_non_empty_string_is_refused(bad):
     with pytest.raises(ConfigError, match="label"):
-        load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": bad}]}))
+        load_fields([MINIMAL_FIELD | {"label": bad}])
 
 
-def test_every_shipped_field_has_a_chinese_label():
-    assert all(spec.label for spec in FIELD_SPECS)
+def test_every_shipped_field_has_a_chinese_label(tco_profile):
+    assert all(spec.label for spec in tco_profile.fields)
 
 
 def keys_under(profile, specs) -> tuple[str, str, str]:
@@ -470,16 +480,16 @@ def keys_under(profile, specs) -> tuple[str, str, str]:
 
 def test_a_label_changes_neither_cache_key(tco_profile):
     # It is a column header, nothing more: adding or editing one must not re-extract or re-compare a paper.
-    plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
-    labelled = load_field_specs(document({"fields": [MINIMAL_FIELD | {"label": "厚度"}]}))
+    plain = load_fields([MINIMAL_FIELD])
+    labelled = load_fields([MINIMAL_FIELD | {"label": "厚度"}])
 
     assert keys_under(tco_profile, plain) == keys_under(tco_profile, labelled)
 
 
 def test_a_chinese_description_is_optional_and_read_when_it_is_given():
-    assert load_field_specs(document({"fields": [MINIMAL_FIELD]}))[0].description_zh == ""
+    assert load_fields([MINIMAL_FIELD])[0].description_zh == ""
 
-    spec = load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": "薄膜厚度"}]}))[0]
+    spec = load_fields([MINIMAL_FIELD | {"description_zh": "薄膜厚度"}])[0]
 
     assert spec.description_zh == "薄膜厚度"
 
@@ -487,17 +497,17 @@ def test_a_chinese_description_is_optional_and_read_when_it_is_given():
 @pytest.mark.parametrize("bad", ["", "  ", 5, None])
 def test_a_chinese_description_that_is_not_a_non_empty_string_is_refused(bad):
     with pytest.raises(ConfigError, match="description_zh"):
-        load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": bad}]}))
+        load_fields([MINIMAL_FIELD | {"description_zh": bad}])
 
 
-def test_every_shipped_field_has_a_chinese_description():
-    assert all(spec.description_zh for spec in FIELD_SPECS)
+def test_every_shipped_field_has_a_chinese_description(tco_profile):
+    assert all(spec.description_zh for spec in tco_profile.fields)
 
 
 def test_a_chinese_description_changes_neither_cache_key(tco_profile):
     # Like the label: it reaches a tooltip and a spreadsheet sheet, never a prompt and never a verdict.
-    plain = load_field_specs(document({"fields": [MINIMAL_FIELD]}))
-    described = load_field_specs(document({"fields": [MINIMAL_FIELD | {"description_zh": "薄膜厚度"}]}))
+    plain = load_fields([MINIMAL_FIELD])
+    described = load_fields([MINIMAL_FIELD | {"description_zh": "薄膜厚度"}])
 
     assert keys_under(tco_profile, plain) == keys_under(tco_profile, described)
 
@@ -507,7 +517,7 @@ def test_an_unknown_key_in_a_field_names_the_field_and_the_valid_keys():
     entry = MINIMAL_FIELD | {"keyword": ["thickness"]}
 
     with pytest.raises(ConfigError) as excinfo:
-        load_field_specs(document({"fields": [entry]}))
+        load_fields([entry])
 
     message = str(excinfo.value)
     assert "thickness" in message and "keyword" in message and "keywords" in message
@@ -539,7 +549,7 @@ def test_an_invalid_field_value_names_the_field_and_the_key(change: dict[str, An
     entry = MINIMAL_FIELD | change
 
     with pytest.raises(ConfigError) as excinfo:
-        load_field_specs(document({"fields": [entry]}))
+        load_fields([entry])
 
     message = str(excinfo.value)
     assert "thickness" in message and expected in message
@@ -552,53 +562,46 @@ def test_a_field_without_a_usable_name_is_refused(name: Any):
         del entry["name"]
 
     with pytest.raises(ConfigError, match="name"):
-        load_field_specs(document({"fields": [entry]}))
+        load_fields([entry])
 
 
 def test_a_field_without_a_description_is_refused():
     entry = {key: value for key, value in MINIMAL_FIELD.items() if key != "description"}
 
     with pytest.raises(ConfigError, match="description"):
-        load_field_specs(document({"fields": [entry]}))
+        load_fields([entry])
 
 
 def test_a_field_that_is_not_an_object_names_its_position():
     with pytest.raises(ConfigError, match=r"fields\[1\]"):
-        load_field_specs(document({"fields": [MINIMAL_FIELD, "thickness"]}))
+        load_fields([MINIMAL_FIELD, "thickness"])
 
 
 def test_an_empty_field_table_is_refused():
     # An empty table would extract nothing at all, and would do it without a word.
-    with pytest.raises(ConfigError, match="nothing to extract"):
-        load_field_specs(document({"fields": []}))
+    with pytest.raises(ConfigError, match="at least one field"):
+        load_fields([])
 
 
 def test_two_fields_with_the_same_name_are_refused():
-    # FIELD_BY_NAME would keep the last one, so the earlier entry would be configured but never used.
+    # A table by name would keep the last one, so the earlier entry would be configured but never used.
     with pytest.raises(ConfigError, match="thickness"):
-        load_field_specs(document({"fields": [MINIMAL_FIELD, MINIMAL_FIELD | {"canonical_unit": "nm"}]}))
+        load_fields([MINIMAL_FIELD, MINIMAL_FIELD | {"canonical_unit": "nm"}])
 
 
 @pytest.mark.parametrize("words", [["power", ""], ["power", 7], ["power", None]], ids=["empty", "number", "null"])
 def test_condition_keywords_must_all_be_non_empty_strings(words: list[Any]):
     with pytest.raises(ConfigError, match="condition_keywords"):
-        load_condition_keywords(document({"condition_keywords": words}))
+        make_profile({"retrieval.condition_keywords": words})
 
 
 def test_condition_keywords_come_back_in_the_order_they_were_written():
-    words = load_condition_keywords(document({"condition_keywords": ["power", "pressure", "flow rate"]}))
+    words = make_profile({"retrieval.condition_keywords": ["power", "pressure", "flow rate"]})
 
-    assert words == ("power", "pressure", "flow rate")
+    assert words.retrieval.condition_keywords == ("power", "pressure", "flow rate")
 
 
 # ---- The shipped file ------------------------------------------------------------------
-
-
-def test_the_shipped_configuration_is_the_field_table_the_package_exposes():
-    # Catches an edit that leaves the file loadable but no longer describing what the package extracts.
-    specs = load_field_specs(load_config(SHIPPED))
-
-    assert specs == FIELD_SPECS
 
 
 def test_the_shipped_configuration_mirrors_the_built_in_baselines():
@@ -722,7 +725,7 @@ RANGED_FIELD: dict[str, Any] = MINIMAL_FIELD | {"canonical_unit": "nm"}
 
 
 def test_a_field_without_a_range_accepts_every_value():
-    spec = load_field_specs(document({"fields": [RANGED_FIELD]}))[0]
+    spec = load_fields([RANGED_FIELD])[0]
 
     assert spec.valid_range == (None, None)
     assert spec.describe_range() is None
@@ -738,7 +741,7 @@ def test_a_field_without_a_range_accepts_every_value():
     ],
 )
 def test_a_range_is_read_in_the_canonical_unit_with_either_end_open(bounds, described, inside, outside):
-    spec = load_field_specs(document({"fields": [RANGED_FIELD | {"valid_range": bounds}]}))[0]
+    spec = load_fields([RANGED_FIELD | {"valid_range": bounds}])[0]
 
     assert spec.describe_range() == described
     assert spec.in_range(inside)
@@ -759,7 +762,7 @@ def test_a_range_is_read_in_the_canonical_unit_with_either_end_open(bounds, desc
 )
 def test_a_malformed_range_names_the_field_and_the_problem(entry, expected):
     with pytest.raises(ConfigError, match=expected) as excinfo:
-        load_field_specs(document({"fields": [entry]}))
+        load_fields([entry])
 
     assert "thickness" in str(excinfo.value)
 
@@ -767,8 +770,8 @@ def test_a_malformed_range_names_the_field_and_the_problem(entry, expected):
 def test_a_range_moves_both_cache_keys_and_its_absence_moves_neither(tco_profile):
     # It changes what the model is told and which values survive, so it must re-extract; but a table that
     # declares no range has to keep the keys it had before ranges existed.
-    plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
-    ranged = load_field_specs(document({"fields": [RANGED_FIELD | {"valid_range": {"max": 500}}]}))
+    plain = load_fields([RANGED_FIELD])
+    ranged = load_fields([RANGED_FIELD | {"valid_range": {"max": 500}}])
 
     everything = (FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT)
     assert "valid_range" not in keys._field_material(plain[0], *everything)
@@ -803,8 +806,8 @@ def test_every_field_cell_is_classified_for_the_cache_keys():
 def test_a_tolerance_moves_only_the_comparison_key(tco_profile):
     # A tolerance decides whether two quoted values agree; the model is never told it and no cleaning rule
     # reads it, so editing one must leave every stored extraction where it is.
-    plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
-    tolerant = load_field_specs(document({"fields": [RANGED_FIELD | {"rel_tol": 0.1, "abs_tol": 2}]}))
+    plain = load_fields([RANGED_FIELD])
+    tolerant = load_fields([RANGED_FIELD | {"rel_tol": 0.1, "abs_tol": 2}])
 
     document_key, passage_key, comparison = keys_under(tco_profile, plain)
     document_after, passage_after, comparison_after = keys_under(tco_profile, tolerant)
@@ -842,7 +845,7 @@ def test_fields_py_is_part_of_the_extraction_code_fingerprint(monkeypatch):
 
 
 def test_a_condition_preference_is_read_in_order():
-    spec = load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": ["400-800", "550"]}]}))[0]
+    spec = load_fields([RANGED_FIELD | {"condition_preference": ["400-800", "550"]}])[0]
 
     assert spec.condition_preference == ("400-800", "550")
 
@@ -850,13 +853,13 @@ def test_a_condition_preference_is_read_in_order():
 @pytest.mark.parametrize("bad", ["400-800", [""], ["visible"], [550]])
 def test_a_condition_preference_must_be_a_list_of_entries_naming_numbers(bad):
     with pytest.raises(ConfigError, match="condition_preference"):
-        load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": bad}]}))
+        load_fields([RANGED_FIELD | {"condition_preference": bad}])
 
 
 def test_a_condition_preference_moves_only_the_comparison_key(tco_profile):
     # It picks a dataset cell among values already extracted; the model never hears of it.
-    plain = load_field_specs(document({"fields": [RANGED_FIELD]}))
-    preferring = load_field_specs(document({"fields": [RANGED_FIELD | {"condition_preference": ["550"]}]}))
+    plain = load_fields([RANGED_FIELD])
+    preferring = load_fields([RANGED_FIELD | {"condition_preference": ["550"]}])
 
     (document_key, passage_key, comparison), after = keys_under(tco_profile, plain), keys_under(tco_profile, preferring)
     assert (document_key, passage_key) == after[:2]
@@ -954,6 +957,15 @@ def test_a_figures_timeout_of_zero_names_the_key(tmp_path: Path):
         Settings.from_env(env_for(path))
 
 
+@pytest.mark.parametrize("value", [-0.1, 1.5])
+def test_an_ambiguous_match_confidence_outside_0_to_1_names_the_key(tmp_path: Path, value: float):
+    # A confidence outside [0, 1] would count every pairing, or none, as low confidence.
+    path = write_config(tmp_path / "config.json", {"comparison.ambiguous_match_confidence": value})
+
+    with pytest.raises(ConfigError, match=r"comparison\.ambiguous_match_confidence must be between 0 and 1"):
+        Settings.from_env(env_for(path))
+
+
 # ---- Ranges and cross-checks on the settings -------------------------------------------------------
 
 
@@ -1003,8 +1015,8 @@ def test_the_shipped_settings_pass_every_range_check(tmp_path: Path):
 
 
 def test_a_canonical_unit_with_no_converter_names_the_field_and_the_file():
-    with pytest.raises(ConfigError, match=r"config\.json: field 'thickness': canonical_unit 'furlong'"):
-        load_field_specs(document({"fields": [MINIMAL_FIELD | {"canonical_unit": "furlong"}]}))
+    with pytest.raises(ConfigError, match=r"tco\.json: field 'thickness': canonical_unit 'furlong'"):
+        load_fields([MINIMAL_FIELD | {"canonical_unit": "furlong"}])
 
 
 def test_offline_replay_is_off_by_default_and_the_environment_can_turn_it_on(tmp_path: Path):

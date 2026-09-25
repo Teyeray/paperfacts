@@ -15,10 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.normalize import compound_value, parse_number
 from paperfacts.records import sample_key
 from paperfacts.units import BUILTIN_UNITS
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
 
 CORPUS = Path(__file__).parent / "fixtures" / "corpus"
 VALUES = json.loads((CORPUS / "values.json").read_text(encoding="utf-8"))

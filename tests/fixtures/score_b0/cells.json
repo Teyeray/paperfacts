@@ -1,0 +1,222 @@
+[
+ {
+  "doc": "0000000000000001",
+  "sample": "target",
+  "row": "target",
+  "field": "component",
+  "outcome": "correct",
+  "value": "In2O3:SnO2 90:10 wt%",
+  "gold": "ITO 90:10 wt% (p1)",
+  "detail": "single_source | one lane | mineru_p0_b1"
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "target",
+  "row": "target",
+  "field": "resistance",
+  "outcome": "extra",
+  "value": 0.001,
+  "gold": "",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "target",
+  "row": "target",
+  "field": "inch",
+  "outcome": "wrong",
+  "value": 2,
+  "gold": "3 (p2)",
+  "detail": "agree | both lanes | mineru_p1_b2"
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-100",
+  "row": "100nm-asdep",
+  "field": "mode",
+  "outcome": "correct",
+  "value": "RF magnetron sputtering",
+  "gold": "RF (p1)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-100",
+  "row": "100nm-asdep",
+  "field": "working_pressure",
+  "outcome": "missing",
+  "value": null,
+  "gold": "0.5 (p2)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-100",
+  "row": "100nm-asdep",
+  "field": "sheet_resistance",
+  "outcome": "correct",
+  "value": 20.3,
+  "gold": "20 (p3)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-100",
+  "row": "100nm-asdep",
+  "field": "transmittance",
+  "outcome": "soft",
+  "value": 80,
+  "gold": "85 @550 nm (p4); 80 @400-800 nm [amb] (p4)",
+  "detail": "agree | 400-800 nm | mineru_p3_b4"
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-100",
+  "row": "100nm-asdep",
+  "field": "thickness",
+  "outcome": "correct",
+  "value": 100,
+  "gold": "100 (p3)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-200",
+  "row": "200nm",
+  "field": "mode",
+  "outcome": "wrong",
+  "value": "DC",
+  "gold": "RF (p1)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-200",
+  "row": "200nm",
+  "field": "working_pressure",
+  "outcome": "correct",
+  "value": 0.5,
+  "gold": "0.5 (p2)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-200",
+  "row": "200nm",
+  "field": "sheet_resistance",
+  "outcome": "wrong",
+  "value": 15,
+  "gold": "10 (p3)",
+  "detail": "conflict | 15 vs 16 | paddleocr_vl_p2_b7"
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-200",
+  "row": "200nm",
+  "field": "resistivity",
+  "outcome": "soft",
+  "value": 0.0002,
+  "gold": "0.0002 [fig] (p5)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-200",
+  "row": "200nm",
+  "field": "thickness",
+  "outcome": "correct",
+  "value": 200,
+  "gold": "200 (p3)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-annealed",
+  "row": "ann",
+  "field": "mode",
+  "outcome": "extra",
+  "value": "RF",
+  "gold": "",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-annealed",
+  "row": "ann",
+  "field": "thickness",
+  "outcome": "soft",
+  "value": 300,
+  "gold": "300 (p3)",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-absent",
+  "row": "",
+  "field": "mode",
+  "outcome": "missing",
+  "value": null,
+  "gold": "RF (p1)",
+  "detail": "no dataset row aligned to this gold sample"
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-absent",
+  "row": "",
+  "field": "working_pressure",
+  "outcome": "missing",
+  "value": null,
+  "gold": "0.5 (p2)",
+  "detail": "no dataset row aligned to this gold sample"
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "S-absent",
+  "row": "",
+  "field": "thickness",
+  "outcome": "missing",
+  "value": null,
+  "gold": "400 (p3)",
+  "detail": "no dataset row aligned to this gold sample"
+ },
+ {
+  "doc": "0000000000000001",
+  "sample": "(unaligned) stray",
+  "row": "stray",
+  "field": "thickness",
+  "outcome": "extra",
+  "value": 50,
+  "gold": "",
+  "detail": "row matches no gold sample; single_source | mineru_p2_b3"
+ },
+ {
+  "doc": "0000000000000002",
+  "sample": "target",
+  "row": "target",
+  "field": "component",
+  "outcome": "extra",
+  "value": "ITO",
+  "gold": "",
+  "detail": ""
+ },
+ {
+  "doc": "0000000000000002",
+  "sample": "(unaligned) film",
+  "row": "film",
+  "field": "mode",
+  "outcome": "extra",
+  "value": "DC",
+  "gold": "",
+  "detail": "row matches no gold sample; "
+ },
+ {
+  "doc": "0000000000000002",
+  "sample": "(unaligned) film",
+  "row": "film",
+  "field": "thickness",
+  "outcome": "extra",
+  "value": 10,
+  "gold": "",
+  "detail": "row matches no gold sample; "
+ }
+]

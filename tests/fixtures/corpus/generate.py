@@ -24,8 +24,9 @@ import sys
 import types
 from pathlib import Path
 
-from paperfacts.fields import FIELD_BY_NAME
+from paperfacts.config import Settings
 from paperfacts.normalize import parse_number
+from paperfacts.profile import load_profile, profile_path
 from paperfacts.records import sample_key
 
 HERE = Path(__file__).parent
@@ -61,13 +62,14 @@ def main() -> None:
     args = parser.parse_args()
     reference = reference_module(args.reference)
 
+    fields = load_profile(profile_path(Settings())).by_name
     lanes = sorted(args.data_root.glob("*/facts/*.json"))
     counts: collections.Counter[tuple[str, str]] = collections.Counter()
     by_pair: dict[tuple[str, str], dict[str, list[str]]] = collections.defaultdict(dict)
     for path in lanes:
         lane = json.loads(path.read_text(encoding="utf-8"))
         for value in lane_values(lane):
-            spec = FIELD_BY_NAME.get(value["field"])
+            spec = fields.get(value["field"])
             if spec is not None and spec.kind == "numeric":
                 counts[(value["field"], value["value_raw"])] += 1
         backend, key, _ = path.name.split(".")

@@ -38,11 +38,11 @@ from typing import Literal
 
 from paperfacts.config import DEFAULT_CANDIDATE_LIMIT
 from paperfacts.continuation import continuation_partners
-from paperfacts.fields import CONDITION_KEYWORDS, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.models import SourceBlock
 from paperfacts.profile import RetrievalSpec
 from paperfacts.text import delatex, normalize_text
-from paperfacts.units import BUILTIN_UNITS, UnitRegistry
+from paperfacts.units import UnitRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -52,24 +52,7 @@ DENSE_TYPES: frozenset[str] = frozenset({"table", "caption"})
 # extraction.candidate_limit in config.json caps the unit-only blocks, together with the named ones: named
 # blocks are never cut, and the unit-only ones fill whatever places they left.
 
-
-# A deposition condition stated as a number with its unit. This is what distinguishes one sample from
-# another ("100 sccm", "150 W", "300 °C"), so a block carrying one belongs in the inventory question even
-# when it uses none of the condition words.
-# A bare "%" is deliberately absent: it appears in every results paragraph (transmittance, ratios),
-# so it would flood the inventory selection with prose. Only explicit composition ratios count here.
-# "\d\s*s\b" does not match "2 samples": \b requires a non-word character after the "s", and the "a" of
-# "amples" is a word character, so the boundary fails and the block stays out of the inventory.
-CONDITION_UNIT = re.compile(
-    r"\d\s*(?:sccm|W\b|°C|℃|K\b|Pa\b|mtorr|torr|mbar|kv\b|ma\b|rpm|min\b|h\b|s\b|(?:vol|at)\.?\s*%)",
-    re.IGNORECASE,
-)
-# The shipped profile's retrieval, for callers that do not pass their profile's. The pattern is written in this
-# module rather than read from profiles/tco.json so that retrieval_fingerprint, which hashes this source and the
-# keywords, still covers every byte the inventory selection depends on.
-DEFAULT_RETRIEVAL = RetrievalSpec(condition_keywords=CONDITION_KEYWORDS, condition_unit_pattern=CONDITION_UNIT.pattern)
-
-# Compiled on first use and kept: the keyword tables are small and fixed at import time.
+# Compiled on first use and kept: the keyword tables are small and a profile never changes while it is loaded.
 _PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
 
 
@@ -105,7 +88,7 @@ def keyword_hits(keywords: Sequence[str], text: str) -> int:
     return sum(1 for keyword in keywords if _pattern(keyword).search(squeezed))
 
 
-def inventory_blocks(blocks: Sequence[SourceBlock], retrieval: RetrievalSpec = DEFAULT_RETRIEVAL) -> list[SourceBlock]:
+def inventory_blocks(blocks: Sequence[SourceBlock], retrieval: RetrievalSpec) -> list[SourceBlock]:
     """The blocks that could name a sample or the conditions that distinguish one.
 
     Section titles come along because they are nearly free and tell the model which part of the paper it is
@@ -145,7 +128,7 @@ def candidate_blocks(
     spec: FieldSpec,
     blocks: Sequence[SourceBlock],
     *,
-    units: UnitRegistry = BUILTIN_UNITS,
+    units: UnitRegistry,
     limit: int = DEFAULT_CANDIDATE_LIMIT,
     sample_blocks: frozenset[str] = frozenset(),
 ) -> list[SourceBlock]:

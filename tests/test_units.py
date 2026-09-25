@@ -7,10 +7,10 @@ from typing import Any
 import pytest
 
 from paperfacts.errors import ConfigError
-from paperfacts.fields import FIELD_BY_NAME, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.models import SourceBlock
 from paperfacts.normalize import convert_to_canonical, normalize_field
-from paperfacts.passages import DEFAULT_RETRIEVAL, candidate_blocks, inventory_blocks, searchable
+from paperfacts.passages import candidate_blocks, inventory_blocks, searchable
 from paperfacts.profile import RetrievalSpec
 from paperfacts.units import (
     BUILTIN_CONVERTERS,
@@ -23,6 +23,11 @@ from paperfacts.units import (
 )
 from support.extraction import make_field
 from support.factories import make_block
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
 
 WHERE = "profiles/battery.json"
 CAPACITY: dict[str, Any] = {"aliases": {"mAh/g": 1, "mAh g-1": 1, "Ah/kg": 1, "Ah/g": 1000}, "case_sensitive": True}
@@ -329,18 +334,14 @@ def test_candidate_blocks_find_a_declared_unit_through_the_registry():
     spec = probe("mAh/g", keywords=("specific capacity",))
     unit_only = block("the cell delivered 152 mAh g-1 at 0.1 C")
 
-    assert candidate_blocks(spec, [unit_only]) == []
+    assert candidate_blocks(spec, [unit_only], units=BUILTIN_UNITS) == []
     assert candidate_blocks(spec, [unit_only], units=registry) == [unit_only]
 
 
-def test_inventory_blocks_use_the_condition_pattern_they_are_given():
+def test_inventory_blocks_use_the_condition_pattern_they_are_given(tco_profile):
     cycled = block("cells were cycled at 0.5 C between two limits")
     retrieval = RetrievalSpec(condition_keywords=(), condition_unit_pattern=r"\d\s*C\b")
 
-    assert inventory_blocks([cycled]) == []
+    assert inventory_blocks([cycled], tco_profile.retrieval) == []
     # Compiled case-insensitively: the pattern is matched on lower-cased searchable() text.
     assert inventory_blocks([cycled], retrieval) == [cycled]
-
-
-def test_the_default_retrieval_is_the_shipped_profiles(tco_profile):
-    assert tco_profile.retrieval == DEFAULT_RETRIEVAL

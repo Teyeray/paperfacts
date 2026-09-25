@@ -21,7 +21,6 @@ import pytest
 
 from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
-from paperfacts.fields import FIELD_SPECS
 from paperfacts.keys import ExtractionOptions, extractor_key
 from paperfacts.prompts import extraction_system_prompt, field_system_prompt, inventory_system_prompt
 from support.extraction import lane_options, make_artifact
@@ -148,7 +147,7 @@ def test_a_field_no_block_mentions_is_never_asked_about_and_the_lane_says_why():
     assert any("thickness: no block in this lane mentions it" in entry for entry in lane.dropped)
     assert not any(entry.startswith(f"{ASKED_FIELD}: no block") for entry in lane.dropped)
     # All but the four asked fields go unasked, which is why only four field calls were made.
-    unasked = len(FIELD_SPECS) - len(ASKED_FIELDS)
+    unasked = len(shipped_profile().fields) - len(ASKED_FIELDS)
     assert sum(1 for entry in lane.dropped if "was not asked about" in entry) == unasked
 
 
@@ -756,7 +755,7 @@ def test_a_concurrent_run_produces_the_same_records_and_the_same_usage_as_a_sequ
 
 
 def test_the_raw_response_keeps_the_field_order_whatever_the_concurrency():
-    """The stored transcript is read by a human, so its sections stay in FIELD_SPECS order."""
+    """The stored transcript is read by a human, so its sections stay in the profile's field order."""
     sequential = extract(FakeLlmClient(responder()), concurrency=1)
     concurrent = extract(FakeLlmClient(responder()), concurrency=4)
 

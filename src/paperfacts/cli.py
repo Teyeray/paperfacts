@@ -26,7 +26,6 @@ import typer
 from paperfacts.batch import run_batch
 from paperfacts.config import EXTRACTION_MODES, Settings
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
-from paperfacts.fields import FIELD_SPECS
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
@@ -464,9 +463,13 @@ def export(
 
 
 @app.command()
-def fields() -> None:
-    """List the field table the package actually loaded, so an edit to config.json can be checked at a glance."""
-    for spec in FIELD_SPECS:
+def fields(profile: ProfileOpt = None) -> None:
+    """List the field table of the profile a run would load, so an edit to it can be checked at a glance."""
+    # Not _settings(): a listing asks no model, so it leaves the in-flight limit and the miss record alone.
+    settings = Settings.from_env()
+    if profile is not None:
+        settings = dataclasses.replace(settings, profile=profile)
+    for spec in _profile(settings).fields:
         unit = spec.canonical_unit or "-"
         tolerance = f"rel={spec.rel_tol:g} abs={spec.abs_tol:g}" if spec.kind == "numeric" else "-"
         hint = f"  condition: {spec.condition_hint}" if spec.condition_hint else ""

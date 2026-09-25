@@ -14,12 +14,17 @@ from paperfacts.dataset import (
     write_dataset_json,
 )
 from paperfacts.decide import decide
-from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.records import FailedQuestion, FieldValue, TargetRecord
 from support.extraction import comparison_options, make_lane, make_sample
 from support.factories import DOC_ID
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
+FIELD_SPECS = shipped_profile().fields
 
 
 def value(name, raw, unit=None, *, condition=None, backend="mineru", **kwargs):

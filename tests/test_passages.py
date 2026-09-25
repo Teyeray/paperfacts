@@ -9,14 +9,23 @@ a budget -- because each of them exists to stop a specific failure that was seen
 from __future__ import annotations
 
 import logging
+from functools import partial
 
 import pytest
 
+from paperfacts import passages
 from paperfacts.continuation import continuation_pairs
-from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.models import SourceBlock
-from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
+from paperfacts.passages import fit_budget
 from support.factories import make_block
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, units and retrieval, at module level because constants and parametrize
+# lists need them before any fixture runs.
+TCO = shipped_profile()
+FIELD_BY_NAME = TCO.by_name
+candidate_blocks = partial(passages.candidate_blocks, units=TCO.units)
+inventory_blocks = partial(passages.inventory_blocks, retrieval=TCO.retrieval)
 
 COMPONENT = FIELD_BY_NAME["component"]
 SHEET_RESISTANCE = FIELD_BY_NAME["sheet_resistance"]

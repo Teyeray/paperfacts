@@ -45,14 +45,15 @@ def test_a_different_category_does_not_match(got, gold):
 
 
 def test_the_specs_take_categories_and_default_the_tolerances_like_the_package(tmp_path: Path):
-    config = tmp_path / "config.json"
+    config = tmp_path / "profile.json"
     config.write_text(
         json.dumps(
             {
+                "groups": [{"name": "process", "level": "sample"}, {"name": "film", "level": "sample"}],
                 "fields": [
                     {"name": "mode", "group": "process", "kind": "text", "categories": ["DC", "RF"]},
                     {"name": "thickness", "group": "film", "kind": "numeric", "rel_tol": 0.05},
-                ]
+                ],
             }
         ),
         encoding="utf-8",

@@ -554,7 +554,8 @@ def run_document(
     profile ``settings`` selects, for a one-off script: the recorded payload generator predates the parameter
     and must keep running unchanged.
     """
-    profile = profile or load_profile(profile_path(settings))
+    if profile is None:
+        profile = load_profile(profile_path(settings))
     comparison = ComparisonOptions.from_settings(settings, profile)
     parse_reports: dict[Backend, ParseReport] = {}
     parsed: dict[Backend, ParsedArtifact | None] = {}

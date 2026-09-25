@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.fields import FIELD_BY_NAME, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.normalize import clean_unit, convert_to_canonical, parse_number, split_scale_factor
 from paperfacts.units import BUILTIN_CONVERTERS as CONVERTERS
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
 
 
 def convert(field: str, value: float, unit_raw: str | None):

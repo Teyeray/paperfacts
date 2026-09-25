@@ -11,7 +11,6 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.records import (
     ExtractionResponse,
     InventoryResponse,
@@ -19,6 +18,11 @@ from paperfacts.records import (
     response_models,
     response_to_records,
 )
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
 
 # Cleaning needs to know both "which source_ids actually exist" and "which fields are in the schema";
 # tests are given one fixed known set.

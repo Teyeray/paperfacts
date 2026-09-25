@@ -1,0 +1,6 @@
+{
+ "document_id": "0000000000000002",
+ "paper_row": {"sample_id": "target", "component": "ITO"},
+ "sample_rows": [{"sample_id": "film", "sample_label": "film", "thickness": 10, "mode": "DC"}],
+ "quality_rows": []
+}

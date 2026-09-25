@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.fields import FIELD_BY_NAME
 from paperfacts.normalize import drop_implausible, normalize_field, normalize_lane
 from paperfacts.records import ExtractedRecords, FieldValue, TargetRecord
 from paperfacts.units import BUILTIN_UNITS
 from support.extraction import make_field, make_lane, make_sample
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
 
 # ---- normalize_field ----------------------------------------------------------------
 

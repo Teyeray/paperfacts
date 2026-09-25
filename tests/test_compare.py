@@ -21,13 +21,17 @@ from paperfacts.compare import (
     conditions_measure_differently,
 )
 from paperfacts.config import Settings
-from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_BY_NAME
 from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key_for
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import normalize_field
 from paperfacts.records import FieldValue, TargetRecord
 from paperfacts.units import BUILTIN_UNITS
 from support.extraction import comparison_options, make_field, make_lane, make_sample
+from support.profiles import shipped_profile
+
+# The shipped profile's field table, at module level because constants and parametrize lists need it before
+# any fixture runs.
+FIELD_BY_NAME = shipped_profile().by_name
 
 
 def normalized(field: FieldValue) -> FieldValue:
@@ -574,7 +578,11 @@ def test_a_confident_llm_pair_is_not_counted_as_low_confidence():
     lane_a = make_lane(backend="mineru", samples=[make_sample("A", fields)])
     lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("A", fields)])
     strong = SampleMatching(
-        pairs=(SampleMatch(a_id="A", b_id="A", confidence=AMBIGUOUS_MATCH_CONFIDENCE, justification="", method="llm"),)
+        pairs=(
+            SampleMatch(
+                a_id="A", b_id="A", confidence=Settings().ambiguous_match_confidence, justification="", method="llm"
+            ),
+        )
     )
 
     report = compare_lanes(lane_a, lane_b, strong, comparison_options())

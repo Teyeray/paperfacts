@@ -1,22 +1,23 @@
-"""``profiles/tco.json``: the shipped profile says exactly what the running code says about TCO.
+"""``profiles/tco.json``: the shipped profile says exactly what the code said about TCO before it had profiles.
 
-Until the code reads its fields from the profile, the field table still comes from ``config.json``. This file
-is what keeps the two from drifting apart: every attribute the table had is equal field by field, and the
-attributes that replace a special case the code makes by field name carry exactly that case.
+The code read its field table, condition keywords and condition pattern from ``config.json`` and ``passages.py``
+until S4e deleted them; ``tests/fixtures/b0_field_table/field_table.json`` is what they were, recorded before the
+deletion. Every attribute the table had is equal field by field, and the attributes that replace a special case
+the code made by field name carry exactly that case.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import re
+import json
 from pathlib import Path
 
 import pytest
 
-from paperfacts import figures, passages
+from paperfacts import figures
 from paperfacts.config import DEFAULT_REPO_ROOT, Settings
 from paperfacts.errors import ConfigError
-from paperfacts.fields import CONDITION_KEYWORDS, FIELD_SPECS, FieldSpec
+from paperfacts.fields import FieldSpec
 from paperfacts.profile import FigureSlots, PromptSlots, load_profile, profile_path
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -26,25 +27,32 @@ from paperfacts.prompts import (
 )
 from support.profiles import make_profile
 
-# The attributes that restate a special case the code makes by field name; everything else must equal the
-# config.json table as it is.
+# The attributes that restate a special case the code made by field name; everything else must equal the
+# config.json table as it was.
 NAME_BASED = {"condition_rule", "missing_condition_note_zh", "figure_readable", "display_format"}
+B0 = json.loads(
+    (Path(__file__).parent / "fixtures" / "b0_field_table" / "field_table.json").read_text(encoding="utf-8")
+)
+# The recorded table as plain JSON; a FieldSpec compares through dataclasses.asdict, lists for tuples.
+B0_FIELDS: list[dict[str, object]] = B0["fields"]
 
 
-def test_the_tco_fields_are_the_running_field_table_attribute_by_attribute(tco_profile):
-    assert [spec.name for spec in tco_profile.fields] == [spec.name for spec in FIELD_SPECS]
-    for loaded, running in zip(tco_profile.fields, FIELD_SPECS, strict=True):
-        for attribute in dataclasses.fields(FieldSpec):
-            if attribute.name not in NAME_BASED:
-                assert getattr(loaded, attribute.name) == getattr(running, attribute.name), (
-                    loaded.name,
-                    attribute.name,
-                )
+def as_json(spec: FieldSpec) -> dict[str, object]:
+    return json.loads(json.dumps(dataclasses.asdict(spec)))
 
 
-def test_the_tco_levels_are_the_scope_the_code_applies(tco_profile):
+def test_the_tco_fields_are_the_b0_field_table_attribute_by_attribute(tco_profile):
+    assert [spec.name for spec in tco_profile.fields] == [entry["name"] for entry in B0_FIELDS]
+    assert {attribute.name for attribute in dataclasses.fields(FieldSpec)} == set(B0_FIELDS[0])
+    for loaded, recorded in zip(tco_profile.fields, B0_FIELDS, strict=True):
+        for attribute, value in as_json(loaded).items():
+            if attribute not in NAME_BASED:
+                assert value == recorded[attribute], (loaded.name, attribute)
+
+
+def test_the_tco_levels_are_the_scope_the_code_applied(tco_profile):
     assert {spec.name for spec in tco_profile.paper_fields} == {
-        spec.name for spec in FIELD_SPECS if spec.group == "target"
+        entry["name"] for entry in B0_FIELDS if entry["group"] == "target"
     }
     assert [(group.name, group.level) for group in tco_profile.groups] == [
         ("target", "paper"),
@@ -65,17 +73,18 @@ def test_the_name_based_special_cases_became_attributes(tco_profile):
     assert where("missing_condition_note_zh") == {"transmittance": "原文提取结果未注明透光率波长或波段"}
     # The rule figures.figure_fields() applied before the profile said which fields a chart is read for:
     # the numeric film fields, in table order.
-    film = [spec.name for spec in FIELD_SPECS if spec.group == "film" and spec.kind == "numeric"]
+    film = [entry["name"] for entry in B0_FIELDS if entry["group"] == "film" and entry["kind"] == "numeric"]
     assert set(where("figure_readable")) == set(film)
     assert [spec.name for spec in tco_profile.figure_fields] == film
     # The workbook's scientific number format.
     assert where("display_format") == {"resistance": "scientific", "resistivity": "scientific"}
 
 
-def test_the_tco_retrieval_is_the_running_one(tco_profile):
-    assert tco_profile.retrieval.condition_keywords == CONDITION_KEYWORDS
-    assert tco_profile.retrieval.condition_unit_pattern == passages.CONDITION_UNIT.pattern
-    assert passages.CONDITION_UNIT.flags & re.IGNORECASE
+def test_the_tco_retrieval_is_the_b0_one(tco_profile):
+    assert list(tco_profile.retrieval.condition_keywords) == B0["condition_keywords"]
+    # passages compiles the profile's pattern case-insensitively, as the B0 constant was.
+    assert tco_profile.retrieval.condition_unit_pattern == B0["condition_unit_pattern"]
+    assert B0["condition_unit_ignorecase"]
 
 
 def test_every_tco_slot_reaches_the_prompts(tco_profile):
@@ -138,6 +147,19 @@ def test_a_profile_is_read_once_per_file(monkeypatch):
 def test_a_missing_profile_names_the_path(tmp_path):
     with pytest.raises(ConfigError, match="no profile at"):
         load_profile(tmp_path / "absent.json")
+
+
+def test_an_unreadable_profile_is_a_config_error_naming_the_path(tmp_path, monkeypatch):
+    path = tmp_path / "locked.json"
+    path.write_text("{}", encoding="utf-8")
+
+    def refuse(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+
+    with pytest.raises(ConfigError, match=r"cannot read the profile at .*locked\.json"):
+        load_profile(path)
 
 
 # ---- The content hash ------------------------------------------------------------------

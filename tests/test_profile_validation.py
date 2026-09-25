@@ -11,9 +11,7 @@ from typing import Any
 
 import pytest
 
-from paperfacts.config import ConfigDocument
 from paperfacts.errors import ConfigError
-from paperfacts.fields import load_field_specs
 from paperfacts.profile import MAX_SLOT_LENGTH, parse_profile
 from support.profiles import DELETE, make_profile, profile_data
 
@@ -145,18 +143,3 @@ def test_many_fields_are_allowed_with_a_warning(caplog):
 def test_a_profile_that_is_not_an_object_is_refused():
     with pytest.raises(ConfigError, match="JSON object"):
         parse_profile([], SOURCE)
-
-
-@pytest.mark.parametrize("key", ["condition_rule", "figure_readable", "display_format", "range_policy"])
-def test_config_json_refuses_an_attribute_only_a_profile_reads(key):
-    entry = {"name": "thickness", "group": "film", "kind": "numeric", "description": "d", "keywords": [], key: "x"}
-
-    with pytest.raises(ConfigError, match=f"fields\\[0\\]: {key} can only be set in a profile"):
-        load_field_specs(ConfigDocument(data={"fields": [entry]}, path=Path("config.json")))
-
-
-def test_config_json_refuses_a_derived_level_too():
-    entry = {"name": "thickness", "group": "film", "kind": "numeric", "description": "d", "keywords": [], "level": "x"}
-
-    with pytest.raises(ConfigError, match="level"):
-        load_field_specs(ConfigDocument(data={"fields": [entry]}, path=Path("config.json")))

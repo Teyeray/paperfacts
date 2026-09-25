@@ -271,7 +271,7 @@ uv run paperfacts run paper.pdf --figures  # the same, and read the paper's char
 uv run paperfacts batch template_files --output data/exports/template_files.xlsx
 uv run paperfacts batch template_files --jobs 4   # four papers at once; default web.max_parallel_documents
 uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
-uv run paperfacts fields                   # list the field table the package actually loaded
+uv run paperfacts fields                   # list the field table of the profile a run would load
 ```
 
 | Command | Purpose |
@@ -284,7 +284,7 @@ uv run paperfacts fields                   # list the field table the package ac
 | `compare <pdf>` | Match samples across lanes and compare their fields. Needs `extract` (which implies `parse`) |
 | `overlay <pdf>` | Draw block boxes onto page images, to check provenance by eye. Needs `parse` |
 | `serve` | Serve the web interface |
-| `fields` | Print the loaded field table, so an edit to `config.json` can be checked at a glance |
+| `fields` | Print the profile's field table (`--profile` for another), so an edit can be checked at a glance |
 
 The flags worth knowing:
 
@@ -465,9 +465,9 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `web.max_parallel_documents` | Documents processed at once, by the web job queue and by `batch` (unless `--jobs` says otherwise). Default 3 |
 | `overlay.dpi` | Default 150 |
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
-| `condition_keywords` | The words that mark a measurement condition worth recording |
+| `condition_keywords` | No longer read: the profile's `retrieval.condition_keywords` are. Left in the file until it drops it |
 | `data_root` | Where everything is written. Default `data` |
-| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). `config.json`'s own `fields` and `condition_keywords` ([The field table](#the-field-table)), which `profiles/tco.json` mirrors, are still what `paperfacts fields` prints. Default `tco` |
+| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). `config.json`'s own `fields` and `condition_keywords`, which `profiles/tco.json` mirrors, are no longer read by any code. Default `tco` |
 
 ### Environment overrides
 
@@ -500,7 +500,8 @@ without overriding what the environment already holds.
 
 ### The field table
 
-`config.json`'s `fields` list **is** the schema. Each entry drives the description the model is given, the
+The profile's `fields` list (`profiles/tco.json` for the shipped one) **is** the schema; `config.json` still
+carries a copy that nothing reads. Each entry drives the description the model is given, the
 keywords retrieval searches for, the unit everything is converted to, and how close two numbers have to be
 to count as the same fact.
 
@@ -546,8 +547,8 @@ A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `mi
 `W`, `sccm`, `rpm`, `Pa`) or startup fails, naming the field and the file, rather than guessing. Adding a field is one table entry; the prompt,
 normalisation and tolerances follow from it. `rel_tol` and `abs_tol` only decide verdicts, so editing one
 re-compares the stored facts instead of re-extracting them. Tolerances may not be negative, and
-`percent_or_fraction` is only accepted on a `%` field. `uv run paperfacts fields` prints what was actually
-loaded.
+`percent_or_fraction` is only accepted on a `%` field. `uv run paperfacts fields` prints the profile's
+table.
 
 A sample often has one field measured several ways -- transmittance averaged over 400-800 nm, at 550 nm,
 over 400-1800 nm -- and the dataset has one cell for it. The cell takes the measurement stated in the same

@@ -193,6 +193,10 @@ def _load_resolved(path: Path) -> DomainProfile:
         raise ConfigError(f"no profile at {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        # An unreadable file (permissions, a directory race) is a configuration problem naming the file, like a
+        # missing one, not a traceback from the first stage that needed the profile.
+        raise ConfigError(f"cannot read the profile at {path}: {exc}") from exc
     except ValueError as exc:
         raise ConfigError(f"{path} is not valid JSON: {exc}") from exc
     return parse_profile(data, path)
