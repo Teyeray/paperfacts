@@ -7,6 +7,8 @@ next. The real parsing is replaced by a monkeypatched fake parser; not one subpr
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,7 @@ from paperfacts.models import Backend, DocumentInput, RawParseOutput
 from paperfacts.parsers import Parser
 from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
+from support.profiles import SHIPPED_PROFILE_PATH, profile_data
 
 runner = CliRunner()
 
@@ -254,3 +257,107 @@ def test_fields_lists_every_field_of_the_profile(tco_profile):
     for spec in tco_profile.fields:
         assert any(line.startswith(spec.name) for line in lines)
         assert any(f"keywords: {', '.join(spec.keywords)}" in line for line in lines)
+
+
+def test_fields_takes_the_profile_flag(tmp_path: Path):
+    path = write_demo(tmp_path / "demo.json")
+
+    result = runner.invoke(app, ["fields", "--profile", str(path)])
+
+    assert result.exit_code == 0
+    names = [line.split()[0] for line in result.output.splitlines() if not line.startswith(" ")]
+    assert names == ["precursor_purity", "coating_thickness", "solvent"]
+
+
+# ---- Authoring tools: profiles, profiles --check, prompts ----------------------------------------------
+
+# Read-only: the recording test_prompt_snapshot.py pins byte for byte, so what `prompts` prints is what is sent.
+RECORDED_PROMPTS: dict[str, str] = json.loads(
+    (Path(__file__).parent / "fixtures" / "prompts" / "snapshot.json").read_text(encoding="utf-8")
+)
+
+
+def write_demo(path: Path, data: dict[str, Any] | None = None) -> Path:
+    path.write_text(json.dumps(data or profile_data(), ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def prompt_sections(output: str) -> dict[str, str]:
+    """``paperfacts prompts`` output split at its ``===== title =====`` lines, each text without the blank line
+    that separates it from the next section."""
+    sections: dict[str, list[str]] = {}
+    current: list[str] = []
+    for line in output.splitlines():
+        heading = re.fullmatch(r"===== (.+) =====", line)
+        if heading:
+            current = sections.setdefault(heading.group(1), [])
+        else:
+            current.append(line)
+    return {title: "\n".join(lines[:-1]) for title, lines in sections.items()}
+
+
+def test_profiles_lists_the_shipped_profile_with_its_counts_and_hash(tco_profile):
+    result = runner.invoke(app, ["profiles"])
+
+    assert result.exit_code == 0
+    line = next(line for line in result.output.splitlines() if line.startswith("tco "))
+    assert tco_profile.maturity in line and tco_profile.title_zh in line
+    assert f"{len(tco_profile.paper_fields)} paper + {len(tco_profile.sample_fields)} sample fields" in line
+    assert tco_profile.content_hash[:12] in line
+
+
+def test_profiles_check_accepts_a_valid_file(tmp_path: Path):
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json"))])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert lines[0].startswith("demo ") and lines[-1] == "ok"
+
+
+def test_profiles_check_prints_the_warnings_of_a_valid_file(tmp_path: Path):
+    field = profile_data()["fields"][1]
+    data = profile_data({"fields": [field | {"name": f"f{i}"} for i in range(41)]})
+
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "demo.json", data))])
+
+    assert result.exit_code == 0
+    assert any(line.startswith("warning:") and "41 fields" in line for line in result.output.splitlines())
+
+
+def test_profiles_check_prints_the_error_and_exits_one(tmp_path: Path):
+    # The name must be the file's stem: the one mistake a copied profile is sure to have.
+    result = runner.invoke(app, ["profiles", "--check", str(write_demo(tmp_path / "battery.json"))])
+
+    assert result.exit_code == 1
+    assert "error:" in result.output and "battery.json" in result.output
+    assert "ok" not in result.output.splitlines()
+
+
+def test_prompts_prints_the_system_prompts_exactly_as_recorded():
+    result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH)])
+
+    assert result.exit_code == 0
+    assert prompt_sections(result.output) == {
+        "inventory system prompt": RECORDED_PROMPTS["inventory_system"],
+        "extraction system prompt": RECORDED_PROMPTS["extraction_system"],
+        "field system prompt": RECORDED_PROMPTS["field_system"],
+        "matching system prompt": RECORDED_PROMPTS["matching_system"],
+    }
+
+
+def test_prompts_for_one_field_prints_its_system_prompt_and_its_line():
+    result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH), "--field", "thickness"])
+
+    assert result.exit_code == 0
+    sections = prompt_sections(result.output)
+    assert sections["field system prompt"] == RECORDED_PROMPTS["field_system"]
+    line = sections["field line (thickness)"]
+    assert line.startswith("- `thickness`")
+    assert f"Field to extract:\n{line}\n\n" in RECORDED_PROMPTS["field_user:thickness"]
+
+
+def test_prompts_for_an_unknown_field_names_the_fields_there_are():
+    result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH), "--field", "colour"])
+
+    assert result.exit_code == 1
+    assert "colour" in result.output and "thickness" in result.output

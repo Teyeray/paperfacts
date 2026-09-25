@@ -39,8 +39,8 @@ REMOVED = {
     "_DATA_COLUMNS",
     "CONFIG_GROUP_LEVELS",
 }
-# config.json keys that held the domain until the profile did. The file still carries them until S9, and no
-# code may read them.
+# config.json keys that held the domain until the profile did. Loading a file that still has one is refused, and
+# no code may read them.
 DOMAIN_CONFIG_KEYS = {"fields", "condition_keywords"}
 # The calls that load a configuration or a profile: at module level they would bind one at import.
 LOADERS = {"configuration", "load_config", "load_profile", "_load_resolved", "parse_profile"}

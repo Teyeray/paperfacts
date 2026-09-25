@@ -149,6 +149,8 @@ DEFAULT_FIGURES_DPI = DEFAULT_RENDER_DPI
 DEFAULT_FIGURES_MAX_PIXELS = 2_000_000
 # One chart took up to 134 s in the measurement, and one request to a sibling model hung for 271 s.
 DEFAULT_FIGURES_TIMEOUT_S = 300.0
+# Keys config.json held until the domain moved into a profile (profiles/<name>.json).
+MOVED_TO_PROFILE = ("fields", "condition_keywords")
 _TRUE_WORDS = {"1", "true", "yes", "on"}
 _FALSE_WORDS = {"0", "false", "no", "off"}
 
@@ -219,6 +221,14 @@ def load_config(path: Path) -> ConfigDocument:
         raise ConfigError(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"{path} must hold a JSON object, got {type(data).__name__}")
+    for key in MOVED_TO_PROFILE:
+        if key in data:
+            # Loud rather than ignored: a table left here looks live while every run reads the profile's, so an
+            # edit to it would silently do nothing.
+            profile = data["profile"] if isinstance(data.get("profile"), str) else "<name>"
+            raise ConfigError(
+                f"{path}: {key} moved to profiles/{profile}.json; delete {key!r} from {path} and edit it there"
+            )
     return ConfigDocument(data=data, path=path)
 
 

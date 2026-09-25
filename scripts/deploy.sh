@@ -319,7 +319,8 @@ DEPLOYED_LOCK="$(read_state lock_hash)"
 
 APP_STATE="$(unit_state paperfacts.service)"
 APP_START="$(unit_started paperfacts.service)"
-NEWEST_SRC="$(find src config.json -type f ! -path '*__pycache__*' -printf '%T@\n' 2>/dev/null \
+# profiles/ too: a server reads its profile once, so an edited one is live only after a restart.
+NEWEST_SRC="$(find src config.json profiles -type f ! -path '*__pycache__*' -printf '%T@\n' 2>/dev/null \
     | sort -n | tail -1 | cut -d. -f1)"
 NEWEST_SRC="${NEWEST_SRC:-0}"
 
@@ -331,7 +332,7 @@ elif [ -z "$DEPLOYED_HEAD" ]; then
 elif [ "$DEPLOYED_HEAD" != "$HEAD_SHA" ]; then
     NEED_RESTART=1 RESTART_WHY="running process predates $(git rev-parse --short "$DEPLOYED_HEAD") (HEAD is $(git rev-parse --short "$HEAD_SHA"))"
 elif [ "$NEWEST_SRC" -gt "$APP_START" ]; then
-    NEED_RESTART=1 RESTART_WHY="src/ or config.json is newer than the running process (uncommitted edit?)"
+    NEED_RESTART=1 RESTART_WHY="src/, config.json or profiles/ is newer than the running process (uncommitted edit?)"
 fi
 
 NEED_SYNC=0
