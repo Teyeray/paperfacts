@@ -272,6 +272,9 @@ uv run paperfacts batch template_files --output data/exports/template_files.xlsx
 uv run paperfacts batch template_files --jobs 4   # four papers at once; default web.max_parallel_documents
 uv run paperfacts serve                    # the web interface on http://127.0.0.1:8000
 uv run paperfacts fields                   # list the field table of the profile a run would load
+uv run paperfacts profiles                 # list profiles/: name, maturity, field counts, content hash, title
+uv run paperfacts profiles --check profiles/my_domain.json   # validate a profile while writing it
+uv run paperfacts prompts --profile tco --field thickness          # what the model is asked, no model call
 ```
 
 | Command | Purpose |
@@ -285,6 +288,8 @@ uv run paperfacts fields                   # list the field table of the profile
 | `overlay <pdf>` | Draw block boxes onto page images, to check provenance by eye. Needs `parse` |
 | `serve` | Serve the web interface |
 | `fields` | Print the profile's field table (`--profile` for another), so an edit can be checked at a glance |
+| `profiles` | List the profiles in `profiles/` with their maturity, paper/sample field counts, content hash prefix and title. `--check PATH` validates one file instead: it prints the profile's line and any warnings then `ok`, or the error and exits 1 |
+| `prompts` | Print the rendered inventory, extraction, per-field and matching system prompts of a profile (`--profile`), exactly as the model gets them. `--field NAME` prints the per-field system prompt and that field's line of the question. No model is called |
 
 The flags worth knowing:
 
@@ -471,9 +476,12 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `web.max_parallel_documents` | Documents processed at once, by the web job queue and by `batch` (unless `--jobs` says otherwise). Default 3 |
 | `overlay.dpi` | Default 150 |
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
-| `condition_keywords` | No longer read: the profile's `retrieval.condition_keywords` are. Left in the file until it drops it |
 | `data_root` | Where everything is written. Default `data` |
-| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). `config.json`'s own `fields` and `condition_keywords`, which `profiles/tco.json` mirrors, are no longer read by any code. Default `tco` |
+| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields, condition keywords and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). Default `tco` |
+
+`config.json` no longer holds `fields` or `condition_keywords`: they live in the profile (`fields` and
+`retrieval.condition_keywords`). A `config.json` that still has either is refused with an error naming the key,
+the file and the profile file to edit instead, so an old copy never looks as if its table were read.
 
 ### Environment overrides
 
@@ -498,16 +506,15 @@ points at its own services without editing the shared file:
 `PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
 and a value that will not parse as a number names the variable in the error.
 
-Three settings are **file-only**, because a single environment variable is the wrong shape for them:
-`fields`, `condition_keywords` and `comparison.ambiguous_match_confidence`.
+One setting is **file-only**, with no `PAPERFACTS_*` variable: `comparison.ambiguous_match_confidence`. (The field table and condition keywords were the other two; they are the profile's
+now, and `PAPERFACTS_PROFILE` picks the profile.)
 
 Secrets live only in `.env`: `PAPERFACTS_LLM_API_KEY` and `PAPERFACTS_WEB_PASSWORD`. `.env` is loaded
 without overriding what the environment already holds.
 
 ### The field table
 
-The profile's `fields` list (`profiles/tco.json` for the shipped one) **is** the schema; `config.json` still
-carries a copy that nothing reads. Each entry drives the description the model is given, the
+The profile's `fields` list (`profiles/tco.json` for the shipped one) **is** the schema. Each entry drives the description the model is given, the
 keywords retrieval searches for, the unit everything is converted to, and how close two numbers have to be
 to count as the same fact.
 

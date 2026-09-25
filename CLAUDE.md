@@ -33,8 +33,9 @@ this file is the part that is easy to get wrong.
 
 ## Configuration
 
-- Everything that is not a secret lives in `config.json` at the repository root, including the field table.
-  `config.py` reads it once, validates it with errors that name the key and the file, and layers
+- Everything that is not a secret and not the domain lives in `config.json` at the repository root. The domain
+  (groups, field table, condition keywords, prompt wording) is a profile, `profiles/<name>.json`, picked by
+  `profile`; a `config.json` that still has `fields` or `condition_keywords` is refused. `config.py` reads `config.json` once, validates it with errors that name the key and the file, and layers
   `PAPERFACTS_*` environment variables over it. Built-in constants are the third layer underneath, and they
   are the **baseline** the cache keys treat as "unedited" -- never change one to change a default; change
   `config.json`.
@@ -42,9 +43,8 @@ this file is the part that is easy to get wrong.
   the API key. `config.json` has nowhere to put a key, which is the point.
 - A new setting means: a key in `config.json`, a field on `Settings`, a `PAPERFACTS_*` override, and a line
   in the README. If it changes what the model is asked, it also goes into `extractor_key`; if it changes a
-  verdict, into `comparison_key`. The three exceptions with no override (`fields`, `condition_keywords`,
-  `comparison.ambiguous_match_confidence`) are listed in the README as file-only; do not add a fourth
-  without saying why.
+  verdict, into `comparison_key`. The one exception with no override, `comparison.ambiguous_match_confidence`,
+  is listed in the README as file-only; do not add a second without saying why.
 
 ## Code conventions
 

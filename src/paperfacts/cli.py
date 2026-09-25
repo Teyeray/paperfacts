@@ -4,6 +4,7 @@
     paperfacts overlay paper.pdf --backend both   # bbox overlays -> data/docs/<sha>/overlays/
     paperfacts run     paper.pdf                  # parse, extract and compare in one go
     paperfacts serve                              # the web interface
+    paperfacts prompts --field thickness          # what the model is asked, rendered; no model call
 
 Where the parsers run is decided by the environment (see :mod:`paperfacts.config`): subprocesses from
 ``runners/`` by default, or long-running services once ``PAPERFACTS_MINERU_URL`` /
@@ -18,6 +19,7 @@ import logging
 import os
 from collections.abc import Iterable
 from enum import StrEnum
+from logging.handlers import BufferingHandler
 from pathlib import Path
 from typing import Annotated, NoReturn, assert_never
 
@@ -30,7 +32,14 @@ from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
-from paperfacts.profile import DomainProfile
+from paperfacts.profile import PROFILES_DIRNAME, DomainProfile, load_profile
+from paperfacts.prompts import (
+    extraction_system_prompt,
+    field_system_prompt,
+    inventory_system_prompt,
+    matching_system_prompt,
+    render_field_table,
+)
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout, write_text_atomic
 from paperfacts.workflow import (
@@ -478,6 +487,83 @@ def fields(profile: ProfileOpt = None) -> None:
             f"{spec.name:<26} {spec.group:<8} {spec.kind:<12} {unit:<8} {tolerance:<22} {spec.bare_number}{hint}"
         )
         typer.echo(f"    keywords: {', '.join(spec.keywords) or '-'}")
+
+
+def _profile_line(domain: DomainProfile) -> str:
+    counts = f"{len(domain.paper_fields)} paper + {len(domain.sample_fields)} sample fields"
+    return f"{domain.name:<20} {domain.maturity:<10} {counts:<28} {domain.content_hash[:12]}  {domain.title_zh}"
+
+
+@app.command()
+def profiles(
+    check: Annotated[
+        Path | None,
+        typer.Option("--check", metavar="PATH", help="validate this profile file instead of listing profiles/"),
+    ] = None,
+) -> None:
+    """List the profiles under profiles/, or validate one file while writing it (--check)."""
+    if check is not None:
+        # The loader logs its warnings (a large field table, say); an author checking a file wants them here.
+        handler = BufferingHandler(capacity=1000)
+        handler.setLevel(logging.WARNING)
+        profile_logger = logging.getLogger("paperfacts.profile")
+        profile_logger.addHandler(handler)
+        try:
+            domain = load_profile(check)
+        except ConfigError as exc:
+            typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        finally:
+            profile_logger.removeHandler(handler)
+        typer.echo(_profile_line(domain))
+        _echo_lines(f"warning: {record.getMessage()}" for record in handler.buffer)
+        typer.echo("ok")
+        return
+    directory = Settings.from_env().repo_root / PROFILES_DIRNAME
+    failed = False
+    for path in sorted(directory.glob("*.json")):
+        try:
+            typer.echo(_profile_line(load_profile(path)))
+        except ConfigError as exc:
+            # One broken file should not hide the others from the listing.
+            typer.secho(f"{path.stem:<20} invalid: {exc}", fg=typer.colors.RED, err=True)
+            failed = True
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def prompts(
+    profile: ProfileOpt = None,
+    field: Annotated[
+        str | None, typer.Option("--field", metavar="NAME", help="the per-field question for this field instead")
+    ] = None,
+) -> None:
+    """Print the system prompts a profile renders, exactly as the model gets them. No model is called."""
+    settings = Settings.from_env()
+    if profile is not None:
+        settings = dataclasses.replace(settings, profile=profile)
+    domain = _profile(settings)
+    if field is not None:
+        spec = domain.by_name.get(field)
+        if spec is None:
+            typer.secho(f"no field {field!r} in {domain.name}; it has: {', '.join(domain.by_name)}", fg="red", err=True)
+            raise typer.Exit(code=1)
+        sections = {
+            "field system prompt": field_system_prompt(domain),
+            f"field line ({field})": render_field_table((spec,)),
+        }
+    else:
+        sections = {
+            "inventory system prompt": inventory_system_prompt(domain),
+            "extraction system prompt": extraction_system_prompt(domain),
+            "field system prompt": field_system_prompt(domain),
+            "matching system prompt": matching_system_prompt(domain),
+        }
+    for title, text in sections.items():
+        typer.echo(f"===== {title} =====")
+        typer.echo(text)
+        typer.echo("")
 
 
 @app.command()
