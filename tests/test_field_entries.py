@@ -261,7 +261,7 @@ def test_a_range_is_read_in_the_canonical_unit_with_either_end_open(bounds, desc
         pytest.param(RANGED_FIELD | {"valid_range": {"max": "500"}}, "valid_range.max", id="bound-as-text"),
         pytest.param(RANGED_FIELD | {"valid_range": {"max": True}}, "valid_range.max", id="bound-as-boolean"),
         pytest.param(RANGED_FIELD | {"valid_range": {"min": 5, "max": 5}}, "below", id="empty-interval"),
-        pytest.param(MINIMAL_FIELD | {"valid_range": {"max": 5}}, "canonical_unit", id="no-unit"),
+        pytest.param(MINIMAL_FIELD | {"kind": "text", "valid_range": {"max": 5}}, "numeric", id="not-numeric"),
     ],
 )
 def test_a_malformed_range_names_the_field_and_the_problem(entry, expected):
@@ -298,6 +298,7 @@ EXTRACTION_CELLS = {
     "level",
     "condition_rule",
     "range_policy",
+    "after_clause",
 }
 
 

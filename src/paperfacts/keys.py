@@ -94,7 +94,7 @@ def _schema_material(profile: DomainProfile, *roles: FieldRole) -> dict[str, obj
         # A group's level decides the scope rules; its Chinese label is display text.
         "groups": [[group.name, group.level] for group in profile.groups],
     }
-    if profile.units.declared:
+    if profile.units.material():
         material["units"] = profile.units.material()
     return material
 
@@ -318,7 +318,7 @@ def figure_profile_fingerprint(profile: DomainProfile) -> str:
         "fields": [_field_material(spec, FieldRole.FIGURE) for spec in profile.figure_fields],
         "slots": None if profile.figures is None else dataclasses.asdict(profile.figures),
     }
-    if profile.units.declared:
+    if profile.units.material():
         material["units"] = profile.units.material()
     return content_fingerprint(_dumps(material))
 

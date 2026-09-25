@@ -557,7 +557,30 @@ the confusions a unit cannot catch: the spin-coating rpm of an absorber read as 
 thickness of a wafer or a glass substrate read as the electrode's. The shipped table caps `rotation_speed`
 at 100 rpm and `thickness` at 5000 nm and floors `transmittance` at 60 %. A value that
 cannot be converted is kept, since there is no number to judge. A range changes the prompt and which values
-survive, so it moves both cache keys; a field without one keeps the keys it had.
+survive, so it moves both cache keys; a field without one keeps the keys it had. A numeric field with no
+`canonical_unit` (a count, such as the battery profile's `cycle_number`) may declare one too; it is judged on
+the number as parsed.
+
+Two more numeric attributes decide how a quoted value is read. `range_policy` (`midpoint`, the default, or
+`reject`) decides what a range quoted as one value ("10-20") becomes in the lanes and in the comparison: its
+midpoint, or no value. A **dataset cell** always needs a single scalar whatever the policy, so a range never
+fills one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
+clause: by default "100 nm after annealing" is refused, since it describes another state of the sample; under
+`condition` ("92.5% after 100 cycles" for a capacity retention) the number is read and the clause is appended
+to the value's `condition` (`; `-joined when the model already gave one), so "after 50 cycles" and "after 100
+cycles" stay separate measurements in the comparison and the dataset cell. Both are cleaning and verdict
+rules, so changing either moves both keys.
+
+A quoted unit is compared with its spaces removed (`clean_unit`), so a profile's unit aliases that differ only
+by spaces ("mAh g-1" and "mAhg-1") are one spelling, and declaring both is refused as a duplicate. A profile's
+top-level `ignored_unit_suffixes` lists the words a paper may write after a unit to say whose quantity it is:
+the TCO profile lists the chamber gases (`Ar`, `O2`, `N2`, `H2`, `He`, `Kr`, `Xe`, `air`), so "1.1 Pa Ar" and
+"3 mTorr (O2)" read as pressures. A profile that lists none sets nothing aside.
+
+The prompt wording that used to carry TCO examples is profile text too, each with a neutral default: rule 2's
+table-header examples (`prompt.scaled_header_examples`, `prompt.plain_header_example`), what a number outside a
+field's plausible range usually is (`prompt.implausible_origin`), and the chart prompt's axis and tick-label
+examples (`figures.symbol_axis_example`, `figures.x_label_examples`).
 
 A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
 `W`, `sccm`, `rpm`, `Pa`) or startup fails, naming the field and the file, rather than guessing. Adding a field is one table entry; the prompt,

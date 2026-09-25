@@ -182,6 +182,9 @@ class UnitRegistry:
     """The built-in units plus what one profile declares."""
 
     declared: tuple[DeclaredUnit, ...] = ()
+    # Words a paper writes after a unit to say whose quantity it is ("1.1 Pa Ar", "3 mTorr (O2)"): set aside
+    # when the unit is otherwise unknown. A profile's own list (``ignored_unit_suffixes``); none by default.
+    ignored_suffixes: tuple[str, ...] = ()
 
     def known(self) -> tuple[str, ...]:
         return (*BUILTIN_CONVERTERS, *(unit.canonical for unit in self.declared if not unit.extends_builtin))
@@ -224,6 +227,12 @@ class UnitRegistry:
             return _compiled(patterns[0])
         return _compiled("|".join(f"(?:{pattern})" for pattern in patterns))
 
+    def without_ignored_suffix(self, unit: str) -> str:
+        """``unit`` (already cleaned, so without spaces) with a trailing ignored suffix removed, bracketed or not."""
+        if not self.ignored_suffixes:
+            return unit
+        return _suffix_pattern(self.ignored_suffixes).sub("", unit)
+
     def check(self, canonical: str, where: str) -> None:
         """Refuse a canonical unit nothing converts into, or one retrieval cannot find in running text."""
         if not self.knows(canonical):
@@ -234,12 +243,25 @@ class UnitRegistry:
             raise ConfigError(f"{where}: canonical_unit {canonical!r} has no retrieval pattern")
 
     def material(self) -> list[dict[str, Any]]:
-        """What the declared units contribute to a fingerprint: nothing when a profile declares none."""
-        return [dataclasses.asdict(unit) for unit in self.declared]
+        """What the declared units and the ignored suffixes contribute to a fingerprint: nothing when a profile
+        declares neither."""
+        material = [dataclasses.asdict(unit) for unit in self.declared]
+        if self.ignored_suffixes:
+            material.append({"ignored_suffixes": list(self.ignored_suffixes)})
+        return material
 
 
-# The registry of a profile that declares no unit: exactly the built-ins.
-BUILTIN_UNITS = UnitRegistry()
+# The suffixes the built-in tables were measured with: the gases of a sputtering chamber. The TCO profile
+# declares exactly these; they are here only for a caller that converts without a profile.
+BUILTIN_IGNORED_SUFFIXES = ("Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air")
+# What a caller that converts without a profile gets: the built-in units, read as they always were.
+BUILTIN_UNITS = UnitRegistry(ignored_suffixes=BUILTIN_IGNORED_SUFFIXES)
+MAX_IGNORED_SUFFIXES = 50
+
+
+@cache
+def _suffix_pattern(suffixes: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(rf"\(?(?:{'|'.join(re.escape(suffix) for suffix in suffixes)})\)?$")
 
 
 @cache
@@ -277,12 +299,24 @@ def fold_spelling(spelling: str, case_sensitive: bool) -> str:
     return cleaned if case_sensitive else cleaned.casefold()
 
 
-def load_units(data: Any, where: str) -> UnitRegistry:
-    """A profile's ``units`` object, validated; ``where`` names the file in every error."""
+def load_units(data: Any, where: str, ignored_suffixes: Any = ()) -> UnitRegistry:
+    """A profile's ``units`` object and its ``ignored_unit_suffixes`` list, validated; ``where`` names the file in
+    every error."""
     if not isinstance(data, Mapping):
         raise ConfigError(f"{where}: units must be an object, got {type(data).__name__}")
+    if (
+        not isinstance(ignored_suffixes, list | tuple)
+        or len(ignored_suffixes) > MAX_IGNORED_SUFFIXES
+        or not all(isinstance(word, str) and word and not any(c.isspace() for c in word) for word in ignored_suffixes)
+        or len(set(ignored_suffixes)) != len(ignored_suffixes)
+    ):
+        # No spaces: a quoted unit is compared with its spaces removed, so a suffix with one would never match.
+        raise ConfigError(
+            f"{where}: ignored_unit_suffixes must be a list of at most {MAX_IGNORED_SUFFIXES} distinct words"
+            " without spaces"
+        )
     declared = (_declared_unit(canonical, entry, f"{where}: units[{canonical!r}]") for canonical, entry in data.items())
-    return UnitRegistry(tuple(declared))
+    return UnitRegistry(tuple(declared), tuple(ignored_suffixes))
 
 
 def _declared_unit(canonical: str, entry: Any, where: str) -> DeclaredUnit:

@@ -131,7 +131,8 @@ _OWN_UNIT = re.compile(rf"^\s*(?!x\b){_UNIT_TOKEN}")
 # 300 K", "400 °C for 2 h", "500 °C under N2"): its numbers describe when the value was measured, not the value.
 # Not "in": that is also the inch, and "2 in x 3 in" would read as 2. Not "after": see _AFTER.
 _CONDITION = re.compile(r"\s+(?:at|@|for|during|under)\s+(?=.*\d)", re.IGNORECASE)
-# "85% after 10 cycles", "100 nm after annealing": another state of the sample, not a condition of this value.
+# "85% after 10 cycles", "100 nm after annealing": another state of the sample, not a condition of this value --
+# unless the field says otherwise (FieldSpec.after_clause, read by split_after_clause).
 _AFTER = re.compile(r"\s+after\s+\S", re.IGNORECASE)
 # The words of a condition tail that may name a unit ("2 h", "550 nm", "°C").
 _TAIL_WORD = re.compile(r"[^\d\s,;:()\[\]]+")
@@ -173,6 +174,25 @@ def parse_number(raw: str, *, range_policy: RangePolicy = "midpoint") -> tuple[f
         ]
         return None, _join([*notes, *refused])
     return value, _join([*notes, *reading])
+
+
+def split_after_clause(text: str) -> tuple[str, str]:
+    """``(value, clause)``: ``text`` cut where an "after ..." clause follows a number ("92.5% after 100 cycles" ->
+    "92.5%", "after 100 cycles"), or ``(text, "")`` when there is none. Only for a field whose ``after_clause``
+    is "condition"; every other field refuses such a value in :func:`parse_number`."""
+    match = _AFTER.search(text)
+    if match is None or not NUMBER_RE.search(text[: match.start()]):
+        return text, ""
+    return text[: match.start()].strip(), text[match.start() :].strip()
+
+
+def _with_after_condition(field: FieldValue, clause: str) -> FieldValue:
+    """``field`` with ``clause`` in its condition, unless the condition already says it: normalising twice must
+    give the same value."""
+    condition = field.condition
+    if condition and normalize_key(clause) in normalize_key(condition):
+        return field
+    return field.model_copy(update={"condition": f"{condition}; {clause}" if condition else clause})
 
 
 def set_aside(raw: str) -> tuple[str, list[str], str]:
@@ -482,7 +502,8 @@ def convert_to_canonical(
     if conversion is None:
         # "1.1 Pa Ar", "3 mTorr (O2)": a pressure or flow named with the gas it belongs to. The gas says whose
         # quantity it is, not what unit, so the unit is read without it -- only when the rest is a known unit.
-        gasless = _GAS_SUFFIX.sub("", unit)
+        # Which words are such suffixes is the profile's (ignored_unit_suffixes).
+        gasless = units.without_ignored_suffix(unit)
         if gasless != unit and gasless:
             conversion = convert(gasless)
             if conversion is not None:
@@ -497,10 +518,6 @@ def convert_to_canonical(
 def _apply(value: float, factor: float, offset: float) -> float:
     # A zero offset is not added at all: -0.0 + 0.0 is 0.0, and a factor-only unit keeps the bits it always gave.
     return value * factor + offset if offset else value * factor
-
-
-# A gas species written after a unit, bracketed or not (units are compared with their spaces removed).
-_GAS_SUFFIX = re.compile(r"\(?(?:Ar|O2|N2|H2|He|Kr|Xe|air)\)?$")
 
 
 def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | None, str | None]:
@@ -573,7 +590,14 @@ def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> 
         return field
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
-    word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    lead_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    if spec.after_clause == "condition":
+        # "92.5% after 100 cycles": the number is the value, the clause is what it was measured after. Moved into
+        # the condition, it separates "after 50 cycles" from "after 100 cycles" in the comparison and the cell.
+        spelled, clause = split_after_clause(spelled)
+        if clause:
+            field = _with_after_condition(field, clause)
+            lead_note = "; ".join(n for n in (lead_note, f"{clause!r} moved into the condition") if n)
     bare, context_notes, condition = set_aside(spelled)
     if condition and _names_unit_of(spec, condition, units) and not _names_unit_of(spec, bare, units):
         # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
@@ -582,13 +606,13 @@ def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> 
     compound = compound_value(spec, bare, units)
     if compound is not None:
         compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"
-        note = "; ".join(n for n in (word_note, *context_notes, compound_note) if n)
+        note = "; ".join(n for n in (lead_note, *context_notes, compound_note) if n)
         return field.model_copy(update={"value": compound, "unit": spec.canonical_unit, "normalization_note": note})
     number, parse_note = parse_number(spelled, range_policy=spec.range_policy)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
     value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=spelled)
-    note = "; ".join(n for n in (word_note, parse_note, unit_note) if n) or None
+    note = "; ".join(n for n in (lead_note, parse_note, unit_note) if n) or None
     return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 
 
@@ -630,8 +654,9 @@ def drop_implausible(records: ExtractedRecords, profile: DomainProfile) -> Extra
         if number is None or spec.in_range(number):
             return True
         unit = f" {value.unit_raw}" if value.unit_raw else ""
+        canonical = f" {spec.canonical_unit}" if spec.canonical_unit else ""
         dropped.append(
-            f"{spec.name}: {value.value_raw!r}{unit} is {number:g} {spec.canonical_unit}, "
+            f"{spec.name}: {value.value_raw!r}{unit} is {number:g}{canonical}, "
             f"outside the plausible range ({spec.describe_range()})"
         )
         return False

@@ -46,6 +46,9 @@ BareNumberPolicy = Literal["reject", "assume_canonical", "percent_or_fraction"]
 DisplayFormat = Literal["plain", "scientific"]
 # What a range quoted as one value ("10-20") becomes: its midpoint, or no value at all.
 RangePolicy = Literal["midpoint", "reject"]
+# What a value quoted with an "after ..." clause ("92.5% after 100 cycles") becomes: refused as the value of
+# another state of the sample, or read with the clause moved into its measurement condition.
+AfterClause = Literal["refuse", "condition"]
 
 
 class FieldRole(StrEnum):
@@ -94,10 +97,11 @@ class FieldSpec:
     # comparison goes through paperfacts.normalize.canonical_category instead of raw text equality, so
     # "DC and RF magnetron co-sputtering" and "DC and RF" stop reading as two different modes.
     categories: tuple[str, ...] = field(default=(), metadata=_roles(FieldRole.VERDICT))
-    # Plausible (min, max) in canonical_unit, either end open. A value outside it is almost always a
-    # different quantity the model mistook for this one -- the spin-coating rpm of an absorber read as the
-    # substrate rotation, a perovskite layer's thickness read as the electrode's -- so the model is told the
-    # range and a converted value outside it is dropped with an audited reason.
+    # Plausible (min, max) in canonical_unit, either end open; a field with no unit (a cycle count) is judged on
+    # the number as parsed. A value outside it is almost always a different quantity the model mistook for
+    # this one -- the spin-coating rpm of an absorber read as the substrate rotation, a perovskite layer's
+    # thickness read as the electrode's -- so the model is told the range and a converted value outside it is
+    # dropped with an audited reason.
     valid_range: tuple[float | None, float | None] = field(
         default=(None, None), metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING)
     )
@@ -120,6 +124,10 @@ class FieldSpec:
     figure_readable: bool = field(default=False, metadata=_roles(FieldRole.FIGURE))
     display_format: DisplayFormat = field(default="plain", metadata=_roles(FieldRole.DISPLAY))
     range_policy: RangePolicy = field(default="midpoint", metadata=_roles(FieldRole.CLEANING, FieldRole.VERDICT))
+    # "refuse" suits a quantity whose "after annealing" value is a different sample state ("100 nm after
+    # annealing" is not the as-deposited thickness); "condition" suits one that is only ever stated after
+    # something (a capacity retention after N cycles), where the clause is what the value was measured under.
+    after_clause: AfterClause = field(default="refuse", metadata=_roles(FieldRole.CLEANING, FieldRole.VERDICT))
 
     @property
     def is_sample_level(self) -> bool:
@@ -129,13 +137,13 @@ class FieldSpec:
         """The plausible range in words, e.g. "at most 100 rpm", or None when the field declares none. Both ends
         are inclusive, as in :meth:`in_range`."""
         low, high = self.valid_range
-        unit = self.canonical_unit or ""
+        unit = f" {self.canonical_unit}" if self.canonical_unit else ""
         if low is not None and high is not None:
-            return f"between {low:g} and {high:g} {unit}"
+            return f"between {low:g} and {high:g}{unit}"
         if high is not None:
-            return f"at most {high:g} {unit}"
+            return f"at most {high:g}{unit}"
         if low is not None:
-            return f"at least {low:g} {unit}"
+            return f"at least {low:g}{unit}"
         return None
 
     def in_range(self, value: float) -> bool:
@@ -233,11 +241,12 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
     if figure_readable and (not numeric or entry.get("canonical_unit") is None):
         raise ConfigError(f"{where}: figure_readable needs a numeric field with a canonical_unit")
-    for key in ("display_format", "range_policy"):
+    for key in ("display_format", "range_policy", "after_clause"):
         if key in entry and not numeric:
             raise ConfigError(f"{where}: {key} is only meaningful for a numeric field, not a {entry.get('kind')!r} one")
     display_format = choice("display_format", get_args(DisplayFormat)) if "display_format" in entry else "plain"
     range_policy = choice("range_policy", get_args(RangePolicy)) if "range_policy" in entry else "midpoint"
+    after_clause = choice("after_clause", get_args(AfterClause)) if "after_clause" in entry else "refuse"
     group = choice("group", tuple(levels))
 
     return FieldSpec(
@@ -262,6 +271,7 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         figure_readable=figure_readable,
         display_format=display_format,  # type: ignore[arg-type]
         range_policy=range_policy,  # type: ignore[arg-type]
+        after_clause=after_clause,  # type: ignore[arg-type]
     )
 
 
@@ -271,8 +281,8 @@ def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, fl
     bounds = entry["valid_range"]
     if not isinstance(bounds, Mapping) or not set(bounds) <= {"min", "max"}:
         raise ConfigError(f"{where}: valid_range must be an object with 'min' and/or 'max', got {bounds!r}")
-    if entry.get("kind") != "numeric" or entry.get("canonical_unit") is None:
-        raise ConfigError(f"{where}: valid_range needs a numeric field with a canonical_unit to be read in")
+    if entry.get("kind") != "numeric":
+        raise ConfigError(f"{where}: valid_range is only meaningful for a numeric field, not a {entry.get('kind')!r}")
     low, high = bounds.get("min"), bounds.get("max")
     for key, value in (("min", low), ("max", high)):
         if value is not None and type(value) not in (int, float):

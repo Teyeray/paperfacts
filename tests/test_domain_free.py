@@ -42,14 +42,11 @@ FORBIDDEN = (
 # - ``no_tco_film``: the persisted inventory flag, an internal name this migration keeps.
 # - records.py ``no TCO film``: the descriptions of that same flag. records.py is hashed into extractor_key, so
 #   rewording them would re-key every stored extraction; they change together with the rename.
-# - figures.py ``"ITO-RT"``: a tick-label example inside the chart-reading prompt. Rewording it changes the
-#   vision request and figure_key, which this migration pins byte for byte.
 # - app.css ``transparent``: the CSS colour keyword.
 ALLOWED: dict[str, tuple[str, ...]] = {
     "records.py": ("no_tco_film", "no TCO film"),
     "extract.py": ("no_tco_film",),
     "state.js": ("no_tco_film",),
-    "figures.py": ('"ITO-RT"',),
     "app.css": ("transparent",),
 }
 

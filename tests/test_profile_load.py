@@ -25,11 +25,14 @@ from paperfacts.prompts import (
     inventory_system_prompt,
     matching_system_prompt,
 )
+from paperfacts.units import BUILTIN_UNITS
 from support.profiles import make_profile
 
 # The attributes that restate a special case the code made by field name; everything else must equal the
 # config.json table as it was.
 NAME_BASED = {"condition_rule", "missing_condition_note_zh", "figure_readable", "display_format"}
+# Attributes added after B0 was recorded, with the value that is B0's behaviour.
+AFTER_B0 = {"after_clause": "refuse"}
 B0 = json.loads(
     (Path(__file__).parent / "fixtures" / "b0_field_table" / "field_table.json").read_text(encoding="utf-8")
 )
@@ -43,10 +46,12 @@ def as_json(spec: FieldSpec) -> dict[str, object]:
 
 def test_the_tco_fields_are_the_b0_field_table_attribute_by_attribute(tco_profile):
     assert [spec.name for spec in tco_profile.fields] == [entry["name"] for entry in B0_FIELDS]
-    assert {attribute.name for attribute in dataclasses.fields(FieldSpec)} == set(B0_FIELDS[0])
+    assert {attribute.name for attribute in dataclasses.fields(FieldSpec)} == set(B0_FIELDS[0]) | set(AFTER_B0)
     for loaded, recorded in zip(tco_profile.fields, B0_FIELDS, strict=True):
         for attribute, value in as_json(loaded).items():
-            if attribute not in NAME_BASED:
+            if attribute in AFTER_B0:
+                assert value == AFTER_B0[attribute], (loaded.name, attribute)
+            elif attribute not in NAME_BASED:
                 assert value == recorded[attribute], (loaded.name, attribute)
 
 
@@ -105,9 +110,11 @@ def test_every_tco_slot_reaches_the_prompts(tco_profile):
         assert getattr(tco_profile.figures, slot.name) in chart, slot.name
 
 
-def test_the_tco_profile_declares_no_units_of_its_own(tco_profile):
+def test_the_tco_profile_declares_no_units_of_its_own_only_the_gas_suffixes(tco_profile):
     assert tco_profile.units.declared == ()
-    assert tco_profile.units.material() == []
+    # Exactly the gas names the code set aside for every domain before a profile declared them.
+    assert tco_profile.units == BUILTIN_UNITS
+    assert tco_profile.units.material() == [{"ignored_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"]}]
 
 
 # ---- Selection -------------------------------------------------------------------------
