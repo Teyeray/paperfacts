@@ -614,6 +614,32 @@ def test_a_paper_stating_550_nm_and_400_to_1100_nm_keeps_its_550_nm_value():
     assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
 
 
+def test_a_conflict_at_a_condition_narrowing_set_aside_does_not_refuse_the_chosen_one():
+    # Both lanes agree at 550 nm, the condition the rules prefer; their 400-1100 nm averages differ by more
+    # than the tolerance. That conflict is about a candidate the cell never states.
+    def lane(backend, average):
+        return [
+            value("transmittance", "90.1", "%", condition="at 550 nm", backend=backend),
+            value("transmittance", average, "%", condition="average 400-1100 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru", "87.4"), lane("paddleocr_vl", "89.0"))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
+
+
+def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():
+    def lane(backend, at_550):
+        return [
+            value("transmittance", at_550, "%", condition="at 550 nm", backend=backend),
+            value("transmittance", "87.4", "%", condition="average 400-1100 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru", "90.1"), lane("paddleocr_vl", "92.0"))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (None, "conflict")
+
+
 def test_two_peaks_inside_one_preference_entry_are_still_refused():
     fields = [
         value("transmittance", "95.0", "%", condition="peak 400-800 nm"),

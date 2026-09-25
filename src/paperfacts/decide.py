@@ -16,6 +16,11 @@ candidate list, each narrowing it or refusing:
    field's tolerance, and no pair across the lanes quoting conditions that measure differently. Never from
    the comparison report's statuses, which may be about a candidate an earlier step set aside.
 
+The report's statuses serve one purpose, as a review gate: a ``conflict`` or ``ambiguous`` comparison refuses
+the cell. Once narrowing has chosen conditions, only the comparisons involving a candidate it kept count: a
+conflict at a condition it set aside (the lanes' 400-1100 nm averages differ, their preferred 550 nm values
+agree) is about a measurement the cell does not state.
+
 Conditions and source ids of a committed cell are derived from the final candidates, in one place.
 """
 
@@ -109,24 +114,27 @@ def decide(
         return reject("missing", "未提取到该字段；留空，不填 0")
     if blocked:
         return reject("ambiguous", blocked)
-    if any(c.status in {"conflict", "ambiguous"} for c in comparisons):
-        status = "conflict" if any(c.status == "conflict" for c in comparisons) else "ambiguous"
+    trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
+    candidates = [_Candidate(backend, value, *_scalar(value, spec)) for backend, value in trusted]
+    # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
+    # let it take its own condition out of the running, so the scalar's condition would win although no rule
+    # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
+    narrowed = _narrow(spec, candidates, row_sources) if candidates else None
+    troubled = [c for c in comparisons if c.status in {"conflict", "ambiguous"}]
+    if narrowed is not None and len(narrowed[0]) < len(candidates):
+        kept_values = {_identity(c.value) for c in narrowed[0]}
+        troubled = [c for c in troubled if any(v is not None and _identity(v) in kept_values for v in (c.a, c.b))]
+    if troubled:
+        status = "conflict" if any(c.status == "conflict" for c in troubled) else "ambiguous"
         return reject(status, "双路比较存在冲突或歧义，需人工复核")
     if not comparisons:
         return reject("unreviewed", "比较报告没有覆盖该字段")
-    trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
     if not trusted:
         return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
     details: list[str] = []
     if len(trusted) != len(evidence):
         details.append("已排除未定位到原文或缺少有效引用的候选")
-    candidates = [_Candidate(backend, value, *_scalar(value, spec)) for backend, value in trusted]
     several = _several_conditions(candidates)
-
-    # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
-    # let it take its own condition out of the running, so the scalar's condition would win although no rule
-    # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
-    narrowed = _narrow(spec, candidates, row_sources)
     if narrowed is None:
         return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
     kept, reason = narrowed
@@ -179,6 +187,12 @@ def _commit(
         series=all(c.value.series for c in final),
         lanes=tuple(dict.fromkeys(c.backend for c in final)),
     )
+
+
+def _identity(value: FieldValue) -> tuple[object, ...]:
+    """What identifies one extracted value between the lane and a comparison of it. Not the whole model: a
+    stored report may carry grounding verdicts older than the lane's re-derived ones."""
+    return (value.field, value.value_raw, value.unit_raw, value.condition, tuple(value.source_ids))
 
 
 # ---- Narrowing ---------------------------------------------------------------------------------------------

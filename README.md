@@ -756,7 +756,7 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 |---|---|
 | `agree` | Both lanes produced the same value. Committed |
 | `single_source` | One lane produced it, grounded and cited. Committed |
-| `conflict` | The lanes produced different values |
+| `conflict` | The lanes produced different values. Once a condition is chosen, only a conflict involving a candidate at that condition counts: differing 400-1100 nm averages do not refuse a cell whose preferred 550 nm values agree |
 | `ambiguous` | The lanes could not be decided between, or the sample match fell below `ambiguous_match_confidence` |
 | `ungrounded` | No evidence both located in the text and carrying a valid citation |
 | `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
