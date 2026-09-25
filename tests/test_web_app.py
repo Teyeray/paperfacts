@@ -481,6 +481,8 @@ def test_the_corpus_carries_one_row_per_document_with_a_dataset(
     row = body["rows"][0]
     assert row["paper_row"]["thickness"] == 300
     assert row["sample_count"] == 2
+    # Every sample travels with the paper, so the home table can expand it without another request.
+    assert [sample["sample_id"] for sample in row["sample_rows"]] == ["S1", "S2"]
     assert row["name"]
     assert "fields" not in row  # the field list travels once, at the top level
 

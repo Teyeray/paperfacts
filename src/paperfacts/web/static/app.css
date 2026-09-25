@@ -249,6 +249,14 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
    full text one hover away, so a row's height comes from its values and not from the model's prose. */
 .results-table th, .results-table td.mono, .results-table td.label { white-space: nowrap; }
 .results-table td.label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+/* The home table's expandable papers: a quiet disclosure button, and sample rows set in beneath. */
+.results-table button.expand { display: block; margin-top: 2px; padding: 0; border: 0; background: none;
+  font: inherit; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); cursor: pointer; }
+.results-table button.expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.results-table tr.expanded > td { border-bottom-color: transparent; }
+.results-table tr.sample-row > td { background: color-mix(in oklab, var(--ink) 3%, var(--paper)); font-size: 12px; }
+.results-table tr.sample-row td.indent { padding-left: 22px; color: var(--ink-2); }
+.results-table tr.sample-row small.chosen { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
 .results-table td.cond { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .results-table tr.paper-row { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
 .results-table tr.target-row td { color: var(--ink-2); }
