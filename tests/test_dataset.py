@@ -155,6 +155,227 @@ def test_approximation_and_uncertainty_keep_documented_center(raw, expected):
     assert "中心值" in decision(result, "thickness")["detail"]
 
 
+def test_a_lower_bound_beside_a_scalar_is_set_aside_rather_than_refusing_the_cell():
+    # Bauden O2-100sccm: both lanes quote 80.6 % (380-780 nm) and ">80 %" (500-2500 nm).
+    def lane(backend):
+        return [
+            value("transmittance", "80.6", "%", condition="380-780 nm", backend=backend),
+            value("transmittance", ">80", "%", condition="500-2500 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (80.6, "agree")
+    # 380-780 is a preferred condition, so the bound at 500-2500 nm is simply another measurement.
+    assert "优先条件 380-780" in row["detail"]
+    assert row["conditions"] == "380-780 nm"
+
+
+def test_a_cell_holding_only_bounds_and_ranges_is_still_non_scalar():
+    def lane(backend):
+        return [
+            value("transmittance", ">80", "%", condition="500-2500 nm", backend=backend),
+            value("transmittance", "80-85", "%", condition="400-800 nm", backend=backend),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    assert decision(result, "transmittance")["decision"] == "non_scalar"
+
+
+def test_one_value_under_differently_worded_conditions_is_one_measurement():
+    # GZO HN450: every candidate is 100 nm, under free-text notes rather than measurement conditions.
+    def lane(backend):
+        return [
+            value("thickness", "100", "nm", condition="measured by TEM cross-section", backend=backend),
+            value(
+                "thickness",
+                "100",
+                "nm",
+                condition="thickness not reduced after forming gas post-treatment",
+                backend=backend,
+            ),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    row = decision(result, "thickness")
+    assert (result.paper_row["thickness"], row["decision"]) == (100, "agree")
+    assert "视为同一测量" in row["detail"]
+    assert "measured by TEM cross-section" in row["conditions"] and "forming gas" in row["conditions"]
+
+
+def test_different_values_under_differently_worded_conditions_stay_refused():
+    fields = [
+        value("thickness", "100", "nm", condition="measured by TEM cross-section"),
+        value("thickness", "140", "nm", condition="by profilometry"),
+    ]
+
+    result = paired(fields, [])
+
+    assert decision(result, "thickness")["decision"] == "multiple_conditions"
+
+
+# ---- review-dataquality.md scenarios: set-aside candidates and merges may never commit a wrong value ----
+
+
+def both(fields):
+    """The same candidates in both lanes, each citing its own lane's block."""
+    return fields, [
+        f.model_copy(update={"source_ids": (f.source_ids[0].replace("mineru", "paddleocr_vl"),)}) for f in fields
+    ]
+
+
+def test_s1_a_bound_at_the_preferred_condition_is_not_replaced_by_a_less_preferred_scalar():
+    result = paired(
+        *both(
+            [
+                value("transmittance", ">80", "%", condition="average 400-800 nm"),
+                value("transmittance", "88", "%", condition="550 nm"),
+            ]
+        )
+    )
+
+    assert decision(result, "transmittance")["decision"] == "non_scalar"
+    assert result.paper_row["transmittance"] is None
+
+
+def test_s2_a_bound_in_the_rows_own_block_is_not_replaced_by_another_blocks_scalar():
+    def lane(backend):
+        return [
+            _cited(value("resistivity", "5.74e-4", "Ω·cm", backend=backend), f"{backend}_p0_b9"),
+            _cited(value("transmittance", ">85", "%", condition="400-800 nm"), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "90", "%", condition="550 nm"), f"{backend}_p3_b2"),
+            _cited(value("transmittance", "80", "%", condition="400-1100 nm"), f"{backend}_p4_b1"),
+        ]
+
+    result = paired(lane("mineru"), lane("paddleocr_vl"))
+
+    assert decision(result, "transmittance")["decision"] == "non_scalar"
+
+
+def test_s3_close_values_under_two_states_in_one_lane_are_not_merged():
+    result = paired(
+        [
+            value("thickness", "100", "nm", condition="as-deposited"),
+            value("thickness", "104", "nm", condition="after annealing"),
+        ],
+        [],
+    )
+
+    assert decision(result, "thickness")["decision"] == "multiple_conditions"
+
+
+def test_s15_an_approximate_series_value_and_a_sample_value_are_not_merged():
+    result = paired(
+        [value("thickness", "~100", "nm", condition="all films"), value("thickness", "96", "nm", condition="sample A")],
+        [],
+    )
+
+    assert decision(result, "thickness")["decision"] == "multiple_conditions"
+
+
+def test_s4_a_merged_lane_cannot_agree_with_the_other_lanes_different_state():
+    # 104 nm is within tolerance of 100 nm but belongs to another state; only an identical number would let the
+    # restated conditions pass.
+    result = paired(
+        [value("thickness", "100", "nm", condition="TEM"), value("thickness", "100", "nm", condition="SEM")],
+        [value("thickness", "104", "nm", condition="after annealing at 500 °C", backend="paddleocr_vl")],
+    )
+
+    row = decision(result, "thickness")
+    assert row["decision"] not in {"agree", "single_source"}
+    assert result.paper_row["thickness"] is None
+
+
+def test_s5_a_merged_lane_cannot_agree_with_the_other_lanes_single_wavelength():
+    result = paired(
+        [
+            value("transmittance", "88", "%", condition="as deposited"),
+            value("transmittance", "88", "%", condition="visible range"),
+        ],
+        [value("transmittance", "88.5", "%", condition="at 1000 nm", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "transmittance")["decision"] not in {"agree", "single_source"}
+    assert result.paper_row["transmittance"] is None
+
+
+def test_s7_a_minimum_does_not_win_over_a_peak():
+    result = paired(
+        [
+            value("transmittance", "70", "%", condition="minimum in 400-1100 nm"),
+            value("transmittance", "95", "%", condition="peak in 400-1100 nm"),
+        ],
+        [],
+    )
+
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def test_s16_a_dropped_bound_cannot_vouch_for_scalars_at_different_conditions():
+    result = paired(
+        [
+            value("transmittance", ">80", "%", condition="400-800 nm"),
+            value("transmittance", "88", "%", condition="550 nm"),
+        ],
+        [
+            value("transmittance", ">80", "%", condition="400-800 nm", backend="paddleocr_vl"),
+            value("transmittance", "88.5", "%", condition="600 nm", backend="paddleocr_vl"),
+        ],
+    )
+
+    assert decision(result, "transmittance")["decision"] not in {"agree", "single_source"}
+    assert result.paper_row["transmittance"] is None
+
+
+def test_s16_without_a_preference_the_bound_still_cannot_vouch_across_conditions():
+    result = paired(
+        [
+            value("thickness", ">100", "nm", condition="profilometry"),
+            value("thickness", "120", "nm", condition="550 nm"),
+        ],
+        [
+            value("thickness", ">100", "nm", condition="profilometry", backend="paddleocr_vl"),
+            value("thickness", "121", "nm", condition="600 nm", backend="paddleocr_vl"),
+        ],
+    )
+
+    assert decision(result, "thickness")["decision"] not in {"agree", "single_source"}
+
+
+def test_s18_a_merged_lane_cannot_agree_across_different_wavelengths():
+    result = paired(
+        [
+            value("transmittance", "88", "%", condition="550 nm, as-dep"),
+            value("transmittance", "88", "%", condition="550 nm"),
+        ],
+        [value("transmittance", "88.5", "%", condition="600 nm", backend="paddleocr_vl")],
+    )
+
+    assert decision(result, "transmittance")["decision"] not in {"agree", "single_source"}
+    assert result.paper_row["transmittance"] is None
+
+
+def test_two_lanes_quoting_one_value_at_different_wavelengths_are_two_measurements():
+    result = paired(
+        [value("transmittance", "85", "%", condition="450 nm")],
+        [value("transmittance", "85", "%", condition="600 nm", backend="paddleocr_vl")],
+    )
+
+    assert result.paper_row["transmittance"] is None
+
+
+def test_a_spelled_number_that_is_no_value_does_not_fill_a_cell():
+    # "ten-fold" is no power; the other lane's 10 is one lane's word, not an agreement.
+    result = paired(
+        [value("sputtering_power", "ten-fold", "W")], [value("sputtering_power", "100", "W", backend="paddleocr_vl")]
+    )
+
+    assert decision(result, "sputtering_power")["decision"] != "agree"
+
+
 def test_a_comparison_cannot_hide_different_same_condition_values_in_one_lane():
     result = paired(
         [value("thickness", "300", "nm"), value("thickness", "400", "nm")],
@@ -218,6 +439,37 @@ def test_the_condition_stated_in_the_same_block_as_the_rest_of_the_row_fills_the
     assert row["source_ids"] == "mineru_p0_b9; paddleocr_vl_p0_b9"
 
 
+def test_two_lanes_tying_different_conditions_to_the_row_are_not_committed_as_agreement():
+    # The review's scenario: each lane picks one condition by its own row block, but not the same one, and
+    # the two measurements used to be committed as one "agree" with conditions "450 nm; 600 nm".
+    def lane(backend, row_condition, other_condition):
+        values = {"450 nm": "85", "600 nm": "85.2"}
+        return [
+            _cited(value("resistivity", "5.74e-4", "Ω·cm", backend=backend), f"{backend}_p0_b9"),
+            _cited(value("transmittance", values[row_condition], "%", condition=row_condition), f"{backend}_p0_b9"),
+            _cited(value("transmittance", values[other_condition], "%", condition=other_condition), f"{backend}_p3_b2"),
+        ]
+
+    result = paired(lane("mineru", "450 nm", "600 nm"), lane("paddleocr_vl", "600 nm", "450 nm"))
+
+    row = decision(result, "transmittance")
+    assert row["decision"] == "multiple_conditions"
+    assert result.paper_row["transmittance"] is None
+
+
+def test_the_lanes_may_word_the_chosen_condition_differently():
+    def lane(backend, row_condition):
+        return [
+            _cited(value("resistivity", "5.74e-4", "Ω·cm", backend=backend), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "85", "%", condition=row_condition), f"{backend}_p0_b9"),
+            _cited(value("transmittance", "80", "%", condition="at 600 nm"), f"{backend}_p3_b2"),
+        ]
+
+    result = paired(lane("mineru", "at 450 nm"), lane("paddleocr_vl", "450 nm wavelength"))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (85.0, "agree")
+
+
 def test_several_conditions_sharing_the_rows_block_stay_refused():
     fields = [
         _cited(value("resistivity", "5.74e-4", "Ω·cm"), "mineru_p0_b9"),
@@ -246,17 +498,131 @@ def test_without_a_row_sharing_condition_the_fields_preference_picks_the_cell():
     assert row["source_ids"] == "mineru_p4_b3; paddleocr_vl_p4_b3"
 
 
-def test_a_preference_matching_two_conditions_in_one_lane_moves_on_to_the_next():
-    # Both name 400 and 800; the tie is not settled by the first entry, so 550 decides.
+def test_a_preference_entry_matching_two_states_in_one_lane_ends_the_search():
+    # Both are 400-800 averages, of two states of the film. Moving on to 550 would commit a third measurement
+    # whose state nobody chose, so the cell is refused instead.
+    fields = [
+        value("transmittance", "91.9", "%", condition="average 400-800 nm, as deposited"),
+        value("transmittance", "90.5", "%", condition="average 400-800 nm, after bending"),
+        value("transmittance", "92.2", "%", condition="550 nm"),
+    ]
+
+    result = paired(fields, [])
+
+    assert result.paper_row["transmittance"] is None
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
+
+
+def test_two_states_at_the_preferred_wavelength_are_not_bypassed_by_a_later_entry():
+    # The review's N14: 550 nm as-deposited and annealed tie; 400-1100 must not be committed instead.
+    fields = [
+        value("transmittance", "85", "%", condition="550 nm, as-deposited"),
+        value("transmittance", "88", "%", condition="550 nm, annealed"),
+        value("transmittance", "82", "%", condition="average 400-1100 nm"),
+    ]
+
+    result = paired(fields, [])
+
+    assert result.paper_row["transmittance"] is None
+
+
+def test_a_bound_at_one_state_does_not_hand_the_cell_to_the_other_state():
+    # The review's N1c: "<100 nm" as-deposited and 95 nm annealed in one lane, 98 nm as-deposited in the other.
+    # Setting the bound aside would let 95 (annealed) win and lane B's as-deposited 98 vouch for it.
+    a = [
+        value("thickness", "<100", "nm", condition="as-deposited"),
+        value("thickness", "95", "nm", condition="after annealing"),
+    ]
+    b = [value("thickness", "98", "nm", condition="as-deposited", backend="paddleocr_vl")]
+
+    result = paired(a, b)
+
+    assert result.paper_row["thickness"] is None
+    assert decision(result, "thickness")["decision"] != "agree"
+
+
+def test_a_bound_beside_another_quantity_never_makes_that_quantity_the_value():
+    # The review's T6: ">95 %" relative density next to a 99.99 % purity must not commit 99.99 as the density.
+    result = dataset(
+        make_lane(
+            target=TargetRecord(
+                fields=(
+                    value("density", ">95", "%", condition="relative density"),
+                    value("density", "99.99", "%", condition="purity"),
+                )
+            )
+        )
+    )
+
+    assert result.paper_row["density"] is None
+
+
+def test_the_other_lanes_condition_free_value_still_counts_against_the_chosen_one():
+    # The review's N4e: lane B's 70 % has no condition; the preference picks lane A's 400-800 value. Lane B must
+    # not be dropped silently -- its contradicting value keeps the cell from committing as settled.
+    a = [
+        value("transmittance", "85", "%", condition="average 400-800 nm"),
+        value("transmittance", "88", "%", condition="550 nm"),
+    ]
+    b = [value("transmittance", "70", "%", backend="paddleocr_vl")]
+
+    result = paired(a, b)
+
+    assert result.paper_row["transmittance"] is None
+
+
+def test_inside_one_preference_entry_an_average_beats_a_peak():
     fields = [
         value("transmittance", "91.9", "%", condition="average 400-800 nm"),
         value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
         value("transmittance", "92.2", "%", condition="550 nm"),
     ]
 
+    result = paired(fields, [value("transmittance", "91.9", "%", condition="avg. 400-800 nm", backend="paddleocr_vl")])
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (91.9, "agree")
+    assert "取平均值" in row["detail"]
+
+
+def test_zhaos_average_over_400_to_1100_nm_is_preferred_over_the_other_ranges():
+    # Zhao ICO-30nm annealed: averaged over 400-1100 nm, over 800-1100 nm, and a peak value.
+    def lane(backend, average):
+        return [
+            value("transmittance", average, "%", condition="average 400-1100 nm", backend=backend),
+            value("transmittance", "96.6", "%", condition="average 800-1100 nm", backend=backend),
+            value("transmittance", "98.1", "%", condition="maximum transmittance", backend=backend),
+        ]
+
+    result = paired(lane("mineru", "92.1"), lane("paddleocr_vl", "92.1"))
+
+    row = decision(result, "transmittance")
+    assert (result.paper_row["transmittance"], row["decision"]) == (92.1, "agree")
+    assert "优先条件 400-1100" in row["detail"]
+
+
+def test_a_paper_stating_550_nm_and_400_to_1100_nm_keeps_its_550_nm_value():
+    # 400-1100 nm was added for Zhao, whose 30 nm films state no 550 nm value; it comes after 550 so that no
+    # paper stating both changes the cell it has always had.
+    fields = [
+        value("transmittance", "90.1", "%", condition="at 550 nm"),
+        value("transmittance", "87.4", "%", condition="average 400-1100 nm"),
+    ]
+
+    result = paired(*both(fields))
+
+    assert (result.paper_row["transmittance"], decision(result, "transmittance")["decision"]) == (90.1, "agree")
+
+
+def test_two_peaks_inside_one_preference_entry_are_still_refused():
+    fields = [
+        value("transmittance", "95.0", "%", condition="peak 400-800 nm"),
+        value("transmittance", "97.5", "%", condition="max 400-800 nm after anneal"),
+    ]
+
     result = paired(fields, [])
 
-    assert result.paper_row["transmittance"] == 92.2
+    assert decision(result, "transmittance")["decision"] == "multiple_conditions"
 
 
 def test_the_other_lanes_value_for_a_condition_set_aside_cannot_vouch_for_the_chosen_one():
@@ -313,6 +679,20 @@ def test_one_lane_quoting_two_different_modes_stays_refused():
 
     assert result.paper_row["mode"] is None
     assert decision(result, "mode")["decision"] in {"conflict", "multiple_values"}
+
+
+def test_a_target_size_written_as_a_number_word_fills_the_cell():
+    # metals: "a four-inch ITO target", quoted as "four" with the unit "inch" by both lanes.
+    result = dataset(
+        make_lane(target=TargetRecord(fields=(value("inch", "four", "inch"),))),
+        make_lane(
+            backend="paddleocr_vl",
+            target=TargetRecord(fields=(value("inch", "four-inch", "inch", backend="paddleocr_vl"),)),
+        ),
+    )
+
+    assert result.paper_row["inch"] == 4
+    assert decision(result, "inch")["decision"] == "agree"
 
 
 def test_different_target_compositions_cannot_be_picked_or_joined():
@@ -638,8 +1018,50 @@ def test_the_dataset_module_knows_nothing_of_figure_reading():
     import ast
 
     import paperfacts.dataset
+    import paperfacts.decide
 
-    tree = ast.parse(Path(paperfacts.dataset.__file__).read_text(encoding="utf-8"))
-    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
-    assert "paperfacts.figures" not in imported
+    for module in (paperfacts.dataset, paperfacts.decide):
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        assert "paperfacts.figures" not in imported
     assert "figure_rows" not in DatasetPayload.model_fields
+
+
+def test_a_value_both_lanes_quote_identically_is_not_split_by_recipe_numbers_in_its_condition():
+    # GZO HN400: both lanes say 1 h; one condition restates the forming gas, the other adds "at 400 °C".
+    # Annealing time has no measurement axis, so those numbers describe the sample, not the measurement.
+    result = paired(
+        [value("annealing_time", "1", "h", condition="post-annealing in hydrogen (15%)/nitrogen (85%) forming gas")],
+        [
+            value(
+                "annealing_time",
+                "1",
+                "h",
+                condition="post-annealing in hydrogen (15%)/nitrogen (85%) forming gas at 400 °C",
+                backend="paddleocr_vl",
+            )
+        ],
+    )
+
+    assert (result.paper_row["annealing_time"], decision(result, "annealing_time")["decision"]) == (60, "agree")
+
+
+def test_one_lane_restating_the_recipe_under_one_value_is_one_measurement():
+    # s41598: the Ar flow quoted twice in one lane, each time with a different slice of the recipe.
+    fields = [
+        value("ar_flow_rate", "200", "sccm", condition="RF magnetron sputtering (50 W power, 30 min)"),
+        value("ar_flow_rate", "200", "sccm", condition="deposited at 100 °C, O2/Ar = 0.5%"),
+    ]
+
+    result = paired(fields, [value("ar_flow_rate", "200", "sccm", backend="paddleocr_vl")])
+
+    assert result.paper_row["ar_flow_rate"] == 200
+
+
+def test_on_a_field_with_a_measurement_axis_different_numbers_still_separate_measurements():
+    # Transmittance declares a condition_hint (the wavelength): 450 nm and 600 nm stay two measurements.
+    fields = [value("transmittance", "85", "%", condition=wavelength) for wavelength in ("450 nm", "600 nm")]
+
+    result = paired(fields, [])
+
+    assert result.paper_row["transmittance"] is None

@@ -118,7 +118,10 @@ and the cloudflared tunnel run as `systemctl --user` units (`paperfacts.service`
 `paperfacts-tunnel.service`), and the venv is an editable install, so a deployment is pull, test, restart,
 verify: `scripts/deploy.sh --pull --rerun` does exactly that and then re-runs, from the LLM cache, every
 document whose stored results the new cache keys displaced. `scripts/deploy.sh --help` lists the rest
-(`--check` reports whether the running service is stale).
+(`--check` reports whether the running service is stale). It refuses to restart only while a job is queued or
+running (`GET /api/jobs`; `--force` overrides), since a restart drops those; a document that was never run or
+failed for good does not block it. The web password is read from `.env` the way the service reads it, and
+reaches `curl` on stdin, never on its command line.
 
 **The current server has a single GPU (id 0).** All three services default to it; GPU ids are set per
 service by env var (Docker Compose's `device_ids`, or `CUDA_VISIBLE_DEVICES` for the host scripts), so a
@@ -174,6 +177,15 @@ With `PAPERFACTS_WEB_PASSWORD` set, every route, `/api` included, answers 401 un
 sends HTTP Basic credentials, so an open tunnel cannot upload PDFs or spend tokens. Unset, the app is
 open, which is what a laptop wants. Run it long-lived in tmux.
 
+Either way, a request that changes something (every POST) is refused with 403 when the browser says it
+came from another site, so a page elsewhere cannot use a logged-in browser to queue work. The browser's
+`Sec-Fetch-Site` decides when it is sent (`same-origin` or `none` pass), so a proxy that rewrites `Host`
+does not lock out the UI; only without it are `Origin` or `Referer` compared with `Host` (or
+`X-Forwarded-Host`). A request naming no origin at all (curl, `scripts/deploy.sh`) is not a browser and
+passes. Every response forbids framing and MIME sniffing. An upload carries one PDF within
+`server.max_upload_mb`: a declared `Content-Length` over it is refused unread, and the bytes that arrive
+are counted, so a chunked upload without a length works and a larger one is refused as it passes the limit.
+
 ### How code reaches the server
 
 Development happens on the Mac, is committed and pushed to GitHub, and pulled on the server. **Do not try
@@ -188,7 +200,9 @@ restarts it there.
 「选择文件」, and processing starts on upload; 「忽略缓存，全部重跑」 next to the drop zone forces every
 stage to run again. Each library entry shows the paper's name and four badges: 一致 (both lanes agreed),
 冲突 (the lanes read different values), 不确定 (the pipeline could not decide) and 缺失 (only one lane
-found it). 「处理全部未完成」 queues every document that can run and is not already compared under the
+found it), plus one dot per pipeline stage with a done/total count. Several PDFs can be dropped or picked
+at once; each is uploaded as its own request. On a narrow screen the list folds into 「文档列表」.
+「处理全部未完成」 queues every document that can run and is not already finished (exported) under the
 current keys, one job each, in library order; a document already queued or running simply gets its
 existing job back, so pressing it twice costs nothing. Documents with neither a PDF nor a cached parse
 are skipped with a reason. Up to `web.max_parallel_documents` (default 3) documents run at once, started in
@@ -204,7 +218,7 @@ library.
 1. The header carries the display name, the document id, 「强制重跑」 and 「重新处理」.
 2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `figures` (读图, skipped unless
    switched on), `extract:mineru`, `extract:paddleocr_vl`, `compare`, `export`.
-3. KPI tiles: the AGREE / CONFLICT / AMBIGUOUS / MISSING counts.
+3. KPI tiles: the 一致 / 冲突 / 不确定 / 缺失 counts.
 4. 结果表（按样品） — the deliverable.
 5. 图中读数, only when the paper's charts were read; see [Reading figures](#reading-figures).
 6. 事实对照 and the page viewer beside it.
@@ -340,13 +354,13 @@ keys treat as "unedited", so editing one renames every cached file. Change `conf
 | `model` | Model name sent with every request. Default `deepseek-v4.1-flash` |
 | `timeout_s` | Per-request timeout. Default 600, because this model reasons before it answers |
 | `context_tokens` | The window the prompt is planned against. Default 200000 |
-| `temperature` | Default 0.0 |
-| `max_tokens` | Completion budget, hidden reasoning included. Default 65536 |
+| `temperature` | 0 to 2. Default 0.0 |
+| `max_tokens` | Completion budget, hidden reasoning included; must be below `context_tokens`. Default 65536 |
 | `concurrency` | How many of one lane's field questions are in flight at once. Default 4 |
 | `max_in_flight` | How many model requests, text and vision, the whole process has on the wire at once. Default 8 |
 | `reasoning_effort` | `null` \| `"none"` \| `"low"` \| `"medium"` \| `"high"` |
 | `inventory_reasoning_effort` | `null`/`"inherit"` \| `"omit"` \| `"none"`…`"high"` |
-| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured |
+| `retry_attempts` | Default 4. `Retry-After` from the endpoint is honoured, up to 120 s |
 | `retry_backoff_s` | Default 2.0 |
 
 `reasoning_effort` is how much hidden reasoning the endpoint is asked for before it answers, sent as the
@@ -407,6 +421,13 @@ visibly weaker than a 3/3 one. Measured on three papers, a second pass reproduce
 pass's values at temperature 0. Two passes are therefore a reproducibility filter at twice the model cost,
 not a way to find more.
 
+Sample ids are keyed by one rule wherever samples meet: placing a value on a sample, merging passes, and
+pairing the two lanes before the model is asked. Spaces, hyphens, underscores and punctuation are dropped
+(only two adjacent numbers keep a boundary) and word case is folded, so `O2-100 sccm` and `O₂ 100sccm`, or
+`WOx` and `WO_x`, are one sample. Greek letters, decimals, a leading or `=`-sign and the case of a trailing
+single-letter suffix are kept, so `α-ITO` and `β-ITO`, or `ITO-a` and `ITO-A`, stay two. A LaTeX `\alpha`
+(or `\varepsilon`) counts as the letter, so both lanes key the one sample alike.
+
 ### `figures`
 
 Reading property-vs-condition charts with a vision model; see [Reading figures](#reading-figures).
@@ -428,7 +449,7 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `parsers.paddle_render_dpi` | DPI pages are rasterised at for PaddleOCR-VL. Default 200. The subprocess and HTTP paths must agree or their pixel coordinates are not comparable |
 | `parsers.paddle_vl_backend` / `paddle_vl_server_url` / `paddle_vl_model_name` | Hand PaddleOCR-VL's vision stage to an external server, as `dev_up.sh` does with MLX |
 | `parsers.subprocess_timeout_s` | Default 3600: a first subprocess run downloads weights |
-| `parsers.http_timeout_s` | Default 900 |
+| `parsers.http_timeout_s` | Default 900. Per request; a timeout, a connection error or a 5xx is retried twice with a 5 s / 10 s backoff before the parse fails (PaddleOCR-VL retries the one page; MinerU re-sends the whole paper, but not after a read timeout, when the service is most likely still parsing it) |
 | `parsers.uv_bin` | The `uv` executable used to launch the runner scripts |
 | `server.host` / `server.port` | Defaults `127.0.0.1` and 8000 |
 | `server.max_upload_mb` | Default 200 |
@@ -485,10 +506,10 @@ to count as the same fact.
   "description_zh": "所选样品的薄膜方块电阻。",   // Chinese explanation; display only
   "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
   "canonical_unit": "Ω/sq",
-  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol)
+  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol); both >= 0
   "abs_tol": 0.0,
   "condition_hint": null,                   // what to record alongside, e.g. a wavelength
-  "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction
+  "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction (only with "%")
   "valid_range": {"max": 500},              // optional plausible range in canonical_unit; min and/or max
   "condition_preference": ["400-800", "550"] // optional: which measurement fills the dataset cell
 }
@@ -514,14 +535,21 @@ cannot be converted is kept, since there is no number to judge. A range changes 
 survive, so it moves both cache keys; a field without one keeps the keys it had.
 
 A `canonical_unit` must be one the converters know (`Ω/sq`, `Ω·cm`, `nm`, `min`, `inch`, `%`, `℃`, `cm`,
-`W`, `sccm`, `rpm`, `Pa`) or startup fails rather than guessing. Adding a field is one table entry; the prompt,
-normalisation and tolerances follow from it. `uv run paperfacts fields` prints what was actually loaded.
+`W`, `sccm`, `rpm`, `Pa`) or startup fails, naming the field and the file, rather than guessing. Adding a field is one table entry; the prompt,
+normalisation and tolerances follow from it. `rel_tol` and `abs_tol` only decide verdicts, so editing one
+re-compares the stored facts instead of re-extracting them. Tolerances may not be negative, and
+`percent_or_fraction` is only accepted on a `%` field. `uv run paperfacts fields` prints what was actually
+loaded.
 
 A sample often has one field measured several ways -- transmittance averaged over 400-800 nm, at 550 nm,
 over 400-1800 nm -- and the dataset has one cell for it. The cell takes the measurement stated in the same
 block as the rest of the sample's row; failing that, the first entry of `condition_preference` that picks
 exactly one condition. An entry names the numbers a condition states, so `"400-800"` matches "average
-400–800 nm" and "from 400 to 800 nm" alike. If neither settles it the cell stays empty as
+400–800 nm" and "from 400 to 800 nm" alike. When one entry matches several conditions in a lane, the one
+that says average / avg / mean / AVT is taken and the others (a peak, a minimum, an unlabelled range) are set
+aside; without such an average the next entry is tried. The shipped transmittance preference is 400-800,
+380-780, 400-700, 550, then 400-1100 nm, last so that a paper stating both keeps the 550 nm value it has
+always committed. If none of that settles it the cell stays empty as
 `multiple_conditions`. Every measurement stays in the facts either way. The preference changes only which
 cell is committed, so editing it re-compares without re-extracting.
 
@@ -606,10 +634,21 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Cache | Keyed on | Invalidated by |
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
-| Extraction (`extractor_key`) | the model and its sampling settings, the field schema, the prompts, the document rendering, and the source of `extract.py`, `records.py` and `adapters.py`; passage mode adds its two prompts and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
-| Comparison (`comparison_key`) | the field tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py` and the matching prompt | changing a tolerance or a rule |
+| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader), the field schema minus the tolerances, categories, condition preferences and display text, the prompts, the document rendering, and the source of `extract.py`, `records.py`, `fields.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py` and `continuation.py`; passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, `passages.py` and `continuation.py` | changing any of them |
+| Comparison (`comparison_key`) | the whole field schema including the tolerances, the categories, the condition preferences, and the source of `normalize.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py` and the matching prompt | changing a tolerance or a rule |
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the film fields, and the source of `figures.py`, `normalize.py` and `passages.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
+
+Extractions and comparisons also record the parse they came from (a hash of the artifact's blocks).
+After a re-parse, a stored lane or comparison of the old parse is a miss and is derived again: source ids
+are positional, so the old citations would point at whatever block now has that ordinal. Re-deriving is
+free from the LLM cache whenever the rendered prompts are byte-identical. Files written before the hash was
+recorded have none and are read as before.
+
+Only an answer that validated is cached. A JSON reply cut off at `max_tokens` is an error, an invalid answer
+costs one repair request and is never written, and an invalid answer already in the cache is asked again
+rather than replayed. A sample matching that failed (the model answered badly twice) is shown for that run
+but not stored, so the next run asks again instead of serving the failure until `--force`.
 
 So adjusting a numeric tolerance recomputes the comparison without paying for extraction again, and cannot
 serve a stale verdict either. Re-running a finished paper costs nothing. And because the model's own
@@ -684,7 +723,7 @@ failure it catches was observed on real input:
 
 | Guardrail | What it catches |
 |---|---|
-| Schema and type cleaning | Fields outside the target schema; numeric fields holding words like `"minimum"` or `"n.a."` |
+| Schema and type cleaning | Fields outside the target schema; numeric fields holding words like `"minimum"` or `"n.a."` (a number word from one to twelve that is the whole value, or is followed only by the value's own unit -- `"four"` or `"four-inch"` quoted with the unit `inch` -- is read as 4; `"one of the samples"`, `"five to ten"`, `"one-third"`, `"ten-fold"` are not numbers) |
 | Scope enforcement | A paper-level field attached to one sample, or the reverse — a film's dopant concentration reported as the sputtering target's composition |
 | Citation validation | Block ids the model invented, or ids from parts of the document it was never shown |
 | Grounding | The quoted text cannot be found in the block it cites — a real id attached to a value that did not come from it |
@@ -693,12 +732,15 @@ The first three drop the value with an audited reason. Grounding only flags; it 
 the one that matters most and the one usually missing: without it, "traceable to a page and a bounding
 box" only means the model named a real block. It tolerates formatting differences — the same number
 reaches the model as `$( 4 0 \times 1 0 \mathrm { c m }$` from one parser and `(40 × 10 cm` from the other
-— while staying strict about digits, and a quote that straddles the junction between the cited block and
+— while staying strict about digits: a quoted `5` is not found inside `0.5` or `5.2`, nor `10` inside
+`10⁻⁴`. A quote that straddles the junction between the cited block and
 its same-page neighbour counts as grounded. A quote lying entirely inside the neighbour still does not.
 
 Two more rules shape the table. **Series fan-out**: when the model states that a value holds for every
 listed sample, the code writes it onto each of them and marks it 系列级, rather than leaving it
-unattributed. **The single-sample rule**: a cell is committed only when exactly one value survives for
+unattributed. Both modes do this the same way; document mode asks for such a value once, under the target.
+A sample the model lists without a usable id keeps its values as unattributed, and a sample listed twice is
+kept once; both are recorded in the lane's audit. **The single-sample rule**: a cell is committed only when exactly one value survives for
 that sample and field. Everything else is a refusal, and the refusal has a name:
 
 | Decision | What happened |
@@ -710,9 +752,33 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `ungrounded` | No evidence both located in the text and carrying a valid citation |
 | `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
-| `non_scalar` | A range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
+| `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
 
-Approximate values and measurements with ± uncertainty keep their centre value and carry a note. A value
+Two things are not refusals. A bound or range beside a scalar under the chosen condition (`>80 %` next to
+`80.6 %`) is set aside with a note and the scalar decides the cell. The condition is chosen over every
+candidate, bounds included, and a bound is never set aside to make room for another condition: a bound at the
+condition the row's block or `condition_preference` picks makes the cell `non_scalar`, and when nothing picks
+a condition the cell stays `multiple_conditions` rather than letting the scalar's condition win by default. A
+preference entry that matches two states of the film in one lane (550 nm as-deposited and annealed) ends the
+search rather than falling through to a later entry. And several condition texts in one lane that all give
+the very same number ("100 nm, by TEM cross-section", "100 nm, not reduced by the forming gas") are one
+measurement, committed with the texts joined -- unless the conditions name different numbers: 85 % at 450 nm
+and 85 % at 600 nm stay two measurements, and so do 100 nm as-deposited and 104 nm after annealing.
+
+A cell is `agree` only when both lanes' final candidates are within the field's tolerance and no pair across
+the lanes quotes conditions naming different numbers; where a lane quoted several conditions, the lanes must
+name the very same numbers. Two lanes that measured different things are `multiple_conditions`, however close
+their values.
+
+Approximate values and measurements with ± uncertainty keep their centre value and carry a note, including
+`(4.5 ± 0.2) × 10⁻⁴`. A spelling with no single safe reading is refused and compared as ambiguous rather
+than guessed: a ratio such as `1:4` or `10/10`, a pair that does not ascend (`10-4` is as likely 10⁻⁴
+without its caret as a range), a range whose exponent is written once (`1.2-1.5 × 10⁻³`), bounds in two
+different units, two values joined by "and", or scientific notation with other numbers beside it. A range
+keeps its midpoint whether or not each bound repeats the unit (`80%–85%`, `500 °C to 530 °C`). A condition
+after the value (`550 nm at 80%`), a name before `=` (`O2/(Ar+O2) = 5%`) and the digits of a formula or a
+unit exponent (`H2`, `cm^-3`) are set aside with a note, never read as the value. On a field whose bare
+number may be a fraction, only a value below 1 is read as one: a bare `1` is 1 %, not 100 %. A value
 the model cannot place on any sample — a paper-level claim such as "transmittance above 80 % from 500 to
 2500 nm" — is kept and shown as **unattributed** rather than attached to a plausible neighbour. When both
 lanes hold the same unplaced value it is paired and compared like any other; a value only one lane could
@@ -785,6 +851,9 @@ uv run pytest                                              # unit tests; no mode
 uv run pytest --cov=paperfacts                             # coverage target is 80%
 uv run pytest --run-parser                                 # integration; needs both parser environments and their weights
 uv run ruff check src tests runners && uv run ruff format --check src tests runners
+# the web frontend in a real browser (navigation races, polling, layout, keyboard); deselected by default
+uv run --with playwright python -m playwright install chromium   # once
+PYTHONPATH=src uv run --with playwright pytest -m e2e      # or: python tests/e2e/web_races.py [--only NAME]
 ```
 
 Line length is 120. Tests never touch a real model or a real LLM: parser output comes from recorded

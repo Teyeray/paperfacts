@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw
 from paperfacts.config import DEFAULT_OVERLAY_DPI
 from paperfacts.models import BlockType, ParsedArtifact
 from paperfacts.pdf import render_page
-from paperfacts.storage import overlay_page_name
+from paperfacts.storage import overlay_page_name, write_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def render_overlays(
     for page in targets:
         image = draw_page_overlay(pdf_path, artifact, page, dpi=dpi)
         path = out_dir / overlay_page_name(page)
-        image.save(path)
+        write_atomic(path, lambda tmp, image=image: image.save(tmp, format="PNG"))
         written.append(path)
     logger.info("overlays backend=%s pages=%d dir=%s", artifact.backend, len(written), out_dir)
     return written

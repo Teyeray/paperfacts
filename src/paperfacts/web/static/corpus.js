@@ -7,12 +7,12 @@
 // empty cell is "this paper has no committed value for this field".
 
 import { api } from "./api.js";
-import { escapeHtml, toast } from "./html.js";
+import { escapeHtml, keepFocus, toast } from "./html.js";
 import { documentHash } from "./router.js";
 import { state } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
-import { headRow, valueHtml } from "./table.js";
-import { copyButton, copyTable, tsvHeader, tsvRow } from "./tsv.js";
+import { bodyRow, column, fieldColumn, headRow, plainCell } from "./table.js";
+import { copyButton, copyTable } from "./tsv.js";
 
 let showAllFields = false;
 // Which papers are expanded. Kept across re-renders (a field toggle, a refresh) for as long as the page
@@ -39,7 +39,14 @@ export function renderCorpus(root) {
   const chosen = chosenFields(data.fields);
   const fields = visibleFields(chosen, allRows, showAllFields);
   const expandable = rows.filter((row) => (row.sample_rows ?? []).length > 1);
-  const rerender = () => renderCorpus(root);
+  const rerender = () => keepFocus(root, () => renderCorpus(root));
+  const columns = corpusColumns(fields);
+  // What the table shows, in order: every paper row, plus the sample rows of the papers expanded. The
+  // rendered rows and the clipboard copy are both built from this one list.
+  const items = rows.flatMap((row) => [
+    { kind: "paper", row, source: row.paper_row ?? {} },
+    ...(expanded.has(row.document_id) ? (row.sample_rows ?? []).map((sample) => ({ kind: "sample", row, source: sample })) : []),
+  ]);
 
   // No heading of its own: on the home view the page title above the table already names it.
   const head = document.createElement("div");
@@ -52,9 +59,7 @@ export function renderCorpus(root) {
   );
   if (expandable.length) chips.append(expandAllChip(expandable, rerender));
   head.append(chips);
-  const leading = ["论文", "样品", "可用/一致"];
-  // The copy is what the table shows: every paper row, plus the sample rows of the papers expanded.
-  head.append(copyButton(() => copyTable(tsvHeader(leading, fields), rows.flatMap((row) => copiedRows(row, fields, leading)))));
+  head.append(copyButton(() => copyTable(columns, items)));
   const download = document.createElement("a");
   download.className = "download";
   download.href = "/api/dataset.xlsx";
@@ -71,11 +76,11 @@ export function renderCorpus(root) {
   const table = document.createElement("table");
   table.className = "facts-table results-table";
   const thead = document.createElement("thead");
-  thead.append(headRow(leading, fields));
+  thead.append(headRow(columns));
   const tbody = document.createElement("tbody");
-  for (const row of rows) {
-    tbody.append(paperRow(row, fields));
-    if (expanded.has(row.document_id)) tbody.append(...sampleRows(row, fields));
+  for (const item of items) {
+    const open = item.kind === "paper" && expanded.has(item.row.document_id);
+    tbody.append(bodyRow(columns, item, item.kind === "sample" ? "sample-row" : open ? "expanded" : ""));
   }
   tbody.addEventListener("click", (event) => {
     const button = event.target.closest("button.expand");
@@ -98,47 +103,53 @@ export function renderCorpus(root) {
   root.append(section);
 }
 
-function paperRow(row, fields) {
-  const tr = document.createElement("tr");
-  const paper = row.paper_row ?? {};
-  const name = escapeHtml(row.name ?? row.document_id);
-  const sampleId = escapeHtml(paper.sample_id ?? "");
-  const cells = fields.map((field) => valueCell(paper[field.name], field));
-  const count = (row.sample_rows ?? []).length || row.sample_count || 0;
-  const open = expanded.has(row.document_id);
-  // Only a paper with more than one sample has anything to expand into.
-  const countHtml =
-    count > 1
-      ? `<button type="button" class="expand" data-doc="${escapeHtml(row.document_id)}" aria-expanded="${open}"` +
-        ` title="${open ? "收起" : "展开"}全部样品">${open ? "▾" : "▸"} ${escapeHtml(count)} 个样品</button>`
-      : `<small>${escapeHtml(count)} 个样品</small>`;
-  if (open) tr.classList.add("expanded");
-  tr.innerHTML =
-    `<td class="label" title="${name}"><a href="${escapeHtml(documentHash(row.document_id))}">${name}</a></td>` +
-    `<td class="mono">${sampleId}${countHtml}</td>` +
-    `<td class="mono">${escapeHtml(paper.available_fields ?? 0)} / ${escapeHtml(paper.agree_fields ?? 0)}</td>` +
-    cells.join("");
-  return tr;
+// A paper row links to its document and carries the sample count (a button when there is more than one
+// sample to expand into); a sample row is indented under it and marks the sample the paper row came from.
+// The clipboard gets the paper's name on every line, so a pasted sample row still says whose it is.
+function corpusColumns(fields) {
+  const isPaper = (item) => item.kind === "paper";
+  const name = (item) => item.row.name ?? item.row.document_id ?? "";
+  return [
+    column(
+      "论文",
+      (item) => {
+        if (!isPaper(item)) {
+          const label = escapeHtml(item.source.sample_label ?? "");
+          return `<td class="label indent" title="${label}">${label || "&nbsp;"}</td>`;
+        }
+        const text = escapeHtml(name(item));
+        return `<td class="label" title="${text}"><a href="${escapeHtml(documentHash(item.row.document_id))}">${text}</a></td>`;
+      },
+      name,
+    ),
+    column(
+      "样品",
+      (item) => `<td class="mono">${escapeHtml(item.source.sample_id ?? "")}${isPaper(item) ? sampleCount(item.row) : chosenMark(item)}</td>`,
+      (item) => item.source.sample_id ?? "",
+    ),
+    column(
+      "可用/一致",
+      (item) => `<td class="mono">${escapeHtml(`${item.source.available_fields ?? 0} / ${item.source.agree_fields ?? 0}`)}</td>`,
+      (item) => `${item.source.available_fields ?? 0} / ${item.source.agree_fields ?? 0}`,
+    ),
+    ...fields.map((field) => fieldColumn(field, (item) => item.source[field.name] ?? null, (_, value) => plainCell(value, field))),
+  ];
 }
 
-// Every sample of one paper, beneath its paper row. The sample the paper row was chosen from is marked,
-// since it repeats the paper row's values.
-function sampleRows(row, fields) {
-  const chosenId = row.paper_row?.sample_id ?? "";
-  return (row.sample_rows ?? []).map((sample) => {
-    const tr = document.createElement("tr");
-    tr.className = "sample-row";
-    const id = String(sample.sample_id ?? "");
-    const label = escapeHtml(sample.sample_label ?? "");
-    const mark = id === chosenId ? `<small class="chosen">论文行取自此样品</small>` : "";
-    tr.innerHTML =
-      `<td class="label indent" title="${label}">${label || "&nbsp;"}</td>` +
-      `<td class="mono">${escapeHtml(id)}${mark}</td>` +
-      `<td class="mono">${escapeHtml(sample.available_fields ?? 0)} / ${escapeHtml(sample.agree_fields ?? 0)}</td>` +
-      fields.map((field) => valueCell(sample[field.name], field)).join("");
-    return tr;
-  });
+// Only a paper with more than one sample has anything to expand into.
+function sampleCount(row) {
+  const count = (row.sample_rows ?? []).length || row.sample_count || 0;
+  if (count <= 1) return `<small>${escapeHtml(count)} 个样品</small>`;
+  const open = expanded.has(row.document_id);
+  const id = escapeHtml(row.document_id);
+  return (
+    `<button type="button" class="expand" data-doc="${id}" data-focus="expand:${id}" aria-expanded="${open}"` +
+    ` title="${open ? "收起" : "展开"}全部样品">${open ? "▾" : "▸"} ${escapeHtml(count)} 个样品</button>`
+  );
 }
+
+const chosenMark = (item) =>
+  item.source.sample_id === item.row.paper_row?.sample_id ? `<small class="chosen">论文行取自此样品</small>` : "";
 
 // One chip that expands every expandable paper, or collapses them all once they are all open.
 function expandAllChip(expandable, rerender) {
@@ -146,6 +157,7 @@ function expandAllChip(expandable, rerender) {
   const chip = document.createElement("button");
   chip.type = "button";
   chip.className = `chip${allOpen ? " on" : ""}`;
+  chip.dataset.focus = "expand-all";
   chip.textContent = allOpen ? "收起全部样品" : "展开全部样品";
   chip.addEventListener("click", () => {
     for (const row of expandable) {
@@ -155,27 +167,4 @@ function expandAllChip(expandable, rerender) {
     rerender();
   });
   return chip;
-}
-
-// The same three identity columns and the same field values the rendered rows show, without the link,
-// the sample count or the empty-cell dash: the paper row, then its samples when it is expanded.
-function copiedRows(row, fields, leading) {
-  const paper = row.paper_row ?? {};
-  const name = row.name ?? row.document_id ?? "";
-  const line = (source, first) =>
-    tsvRow(
-      leading,
-      [first, source.sample_id ?? "", `${source.available_fields ?? 0} / ${source.agree_fields ?? 0}`],
-      fields,
-      (field) => source[field.name],
-    );
-  const lines = [line(paper, name)];
-  if (expanded.has(row.document_id)) lines.push(...(row.sample_rows ?? []).map((sample) => line(sample, name)));
-  return lines;
-}
-
-// The value carries its own unit, as it does in the per-document table: the header no longer states it.
-function valueCell(value, field) {
-  if (value == null) return `<td class="cell empty">—</td>`;
-  return `<td class="cell">${valueHtml(value, field)}</td>`;
 }

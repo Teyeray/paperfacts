@@ -44,6 +44,7 @@ packages = ["src/paperfacts"]
 testpaths = ["tests"]
 markers = [
     "parser: integration tests needing real parser environments and weights; skipped unless --run-parser",
+    "e2e: headless-browser checks of the web frontend (tests/e2e); deselected unless -m names e2e",
 ]
 
 [tool.ruff]

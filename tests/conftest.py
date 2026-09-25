@@ -8,7 +8,8 @@ Two ground rules for unit tests:
 1. **Never touch a real parser**: PDFs are generated on the fly, parser native output is faked
    by hand, so tests depend on none of mineru / paddleocr / torch / model weights / the network;
 2. **Integration tests that need a real environment are skipped by default**: cases marked
-   ``@pytest.mark.parser`` only run when ``--run-parser`` is passed.
+   ``@pytest.mark.parser`` only run when ``--run-parser`` is passed, and ``@pytest.mark.e2e`` (a
+   headless browser) is deselected unless ``-m`` names it, as in ``pytest -m e2e``.
 """
 
 from __future__ import annotations
@@ -36,7 +37,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """When --run-parser isn't passed, mark every parser-tagged case as skipped."""
+    """Skip every parser-tagged case unless --run-parser is passed; leave out every e2e case unless -m names it."""
+    if "e2e" not in (config.getoption("markexpr") or ""):
+        browser = [item for item in items if "e2e" in item.keywords]
+        if browser:
+            config.hook.pytest_deselected(items=browser)
+            items[:] = [item for item in items if "e2e" not in item.keywords]
     if config.getoption("--run-parser"):
         return
     skip_parser = pytest.mark.skip(reason="needs a real parser environment; pass --run-parser to run it")

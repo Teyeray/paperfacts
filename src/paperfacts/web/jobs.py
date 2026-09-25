@@ -28,7 +28,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from paperfacts.workflow import StageStatus
+from paperfacts.workflow import Stage, StageStatus
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +36,9 @@ JobStatus = Literal["queued", "running", "done", "failed"]
 ACTIVE: frozenset[str] = frozenset({"queued", "running"})
 MAX_LOG_LINES = 2000
 MAX_TRACEBACK_CHARS = 2000
-
-
-class Stage(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    status: StageStatus = "pending"
-    detail: str = ""
+# Finished jobs kept for the pollers and the library's busy markers. Status lives only in memory and the
+# files on disk are the persistent truth, so a bounded history loses nothing a reload cannot rebuild.
+MAX_FINISHED_JOBS = 200
 
 
 class Job(BaseModel):
@@ -62,6 +57,25 @@ class Job(BaseModel):
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+
+
+class JobBrief(BaseModel):
+    """A job without its stages and log: what a list of every job needs, at a fraction of the size."""
+
+    model_config = ConfigDict(frozen=True)
+
+    job_id: str
+    document_id: str
+    force: bool
+    status: JobStatus
+    error: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+
+    @classmethod
+    def of(cls, job: Job) -> JobBrief:
+        return cls.model_validate(job.model_dump(exclude={"stages", "log"}))
 
 
 # Job body: receives a job snapshot (only document_id / force are used) and a mark(stage, status, detail) callback
@@ -126,11 +140,13 @@ class JobManager:
             return self._jobs.get(job_id)
 
     def all_jobs(self) -> list[Job]:
-        """Every job this process knows about, newest first. The dict is small (one entry per
-        submission since start-up), so the frontend can learn which documents are busy with one
-        request instead of one per row."""
+        """Every job this process still holds (the active ones and the most recent finished ones), newest
+        first, so the frontend can learn which documents are busy with one request instead of one per row."""
         with self._lock:
             return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+
+    def briefs(self) -> list[JobBrief]:
+        return [JobBrief.of(job) for job in self.all_jobs()]
 
     def for_document(self, document_id: str) -> list[Job]:
         with self._lock:
@@ -151,7 +167,9 @@ class JobManager:
 
     def _mark(self, job_id: str, stage: str, status: StageStatus, detail: str) -> None:
         with self._lock:
-            job = self._jobs[job_id]
+            job = self._jobs.get(job_id)
+            if job is None:  # already pruned from the history
+                return
             stages = tuple(
                 s.model_copy(update={"status": status, "detail": detail}) if s.name == stage else s for s in job.stages
             )
@@ -159,7 +177,9 @@ class JobManager:
 
     def _append_log(self, job_id: str, line: str) -> None:
         with self._lock:
-            job = self._jobs[job_id]
+            job = self._jobs.get(job_id)
+            if job is None:  # a record logged after the job finished and was pruned
+                return
             self._jobs[job_id] = job.model_copy(update={"log": (*job.log, line)[-MAX_LOG_LINES:]})
 
     def _finish(self, job_id: str, status: JobStatus, error: str | None, *, extra_log: str | None = None) -> None:
@@ -177,8 +197,16 @@ class JobManager:
             self._jobs[job_id] = job.model_copy(
                 update={"status": status, "error": error, "stages": stages, "log": log, "finished_at": _now()}
             )
+            self._prune(keep=job_id)
             # The document is free again: a rerun queued behind this job may now be taken.
             self._changed.notify_all()
+
+    def _prune(self, *, keep: str) -> None:
+        """Under the lock: forget the oldest finished jobs beyond :data:`MAX_FINISHED_JOBS`. Active jobs are
+        never dropped, and neither is the one that just finished, whose poller has yet to see its end."""
+        finished = [job_id for job_id, job in self._jobs.items() if job.status not in ACTIVE and job_id != keep]
+        for job_id in finished[: max(0, len(finished) + 1 - MAX_FINISHED_JOBS)]:
+            del self._jobs[job_id]
 
     # ---- worker threads ----------------------------------------------------------------------
 

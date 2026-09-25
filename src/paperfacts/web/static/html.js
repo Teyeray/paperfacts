@@ -1,4 +1,4 @@
-// Small utilities: HTML escaping, number formatting for normalized values, and the bottom-right toast.
+// Small utilities: HTML escaping, number formatting for normalized values, focus keeping, and the toast.
 // Any dynamic text spliced into innerHTML (filenames, raw extracted values, model-provided notes) must go through escapeHtml first.
 
 export function escapeHtml(text) {
@@ -19,10 +19,44 @@ export function caveats(field) {
   return marks.join("");
 }
 
+// Re-render `root` without dropping the keyboard focus. A control that re-renders its own table replaces
+// itself, and the browser then puts focus on <body>: a keyboard user would have to tab back from the top of
+// the page after every toggle. Controls that should survive carry a stable `data-focus` key.
+export function keepFocus(root, render) {
+  const active = document.activeElement;
+  const key = active && root.contains(active) ? active.dataset?.focus : null;
+  render();
+  if (key) root.querySelector(`[data-focus="${CSS.escape(key)}"]`)?.focus();
+}
+
+// Enter and Space act on a focusable row or cell the way a click does.
+export function onActivate(element, action) {
+  element.addEventListener("click", action);
+  element.addEventListener("keydown", (event) => {
+    if (event.target !== element || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    action();
+  });
+}
+
+// Toasts live in one polite live region, so a screen reader hears the errors a sighted reader sees.
+function toastRegion() {
+  let region = document.getElementById("toasts");
+  if (!region) {
+    region = document.createElement("div");
+    region.id = "toasts";
+    region.className = "toasts";
+    region.setAttribute("role", "status");
+    region.setAttribute("aria-live", "polite");
+    document.body.append(region);
+  }
+  return region;
+}
+
 export function toast(message, isError = false) {
   const div = document.createElement("div");
   div.className = "toast" + (isError ? " error" : "");
   div.textContent = message;
-  document.body.append(div);
+  toastRegion().append(div);
   setTimeout(() => div.remove(), isError ? 6000 : 3000);
 }

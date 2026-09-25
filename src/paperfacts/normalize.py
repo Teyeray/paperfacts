@@ -4,8 +4,10 @@ conversion, and applying all three to a lane.
 Pure functions, millisecond-fast, the one layer that offers a determinism guarantee. The model only
 transcribes (``value_raw`` / ``unit_raw``); every conversion happens here, because a model's unit conversion
 is wrong *silently*, and the two lanes fail differently, which would flood CONFLICT with noise unrelated to
-the parsers. This module's source is hashed into ``comparison_key``, so changing a rule invalidates stored
-comparisons but never the stored extractions.
+the parsers. This module's source is hashed into both keys: into ``comparison_key`` because it decides
+verdicts, and into ``extractor_key`` because extraction drops implausible values it converts here. The LLM
+cache is keyed by request payload, so a rule change re-derives stored extractions from cached answers
+without asking the model again.
 """
 
 from __future__ import annotations
@@ -14,9 +16,11 @@ import re
 import unicodedata
 from collections.abc import Callable
 from functools import cache
+from pathlib import Path
 
-from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FieldSpec
-from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord
+from paperfacts.errors import ConfigError
+from paperfacts.fields import FIELD_BY_NAME, FIELD_SPECS, FIELDS_SOURCE, FieldSpec
+from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
 
 # ---- Text ------------------------------------------------------------------------------------------------
 # Superscript digits are folded **before** NFKC, which would collapse "10⁻⁴" to "10-4" and lose the exponent.
@@ -73,7 +77,8 @@ def normalize_text(text: str) -> str:
 
 def normalize_key(text: str | None) -> str:
     """A key for "are these the same" comparisons of text, conditions and compositions. Never use it for
-    units: lowercasing collides mΩ with MΩ; use :func:`clean_unit` there."""
+    units: lowercasing collides mΩ with MΩ; use :func:`clean_unit` there. Nor for sample ids: it deletes
+    Greek letters and folds a case-distinguished suffix; use :func:`paperfacts.records.sample_key` there."""
     if not text:
         return ""
     # .lower() turns Ω into ω; put it back before the whitelist filter or Ω would be stripped.
@@ -127,25 +132,57 @@ def text_key(spec: FieldSpec, raw: str | None) -> str:
 # Returns ``(value, note)``: None when parsing fails, with the note saying why, so "why couldn't the two
 # lanes be compared" stays traceable.
 
-_NUM = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
+_UNSIGNED = r"(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
+_NUM = rf"[-+]?{_UNSIGNED}"
+# A mantissa may carry a sign only at the very start of the value: anywhere else a "-" in front of it is
+# the dash of a range ("1.2-1.5 × 10^-3"), and reading it as a minus sign turns a range into a negative number.
+_MANTISSA_NUM = rf"(?:^[-+])?{_UNSIGNED}"
 # Scientific notation matches three explicit spellings only ("2108" must never be read as 2x10^8):
 #   1.2 x 10^-4 / 1.2x10^-4 / 1.2 x 10-4  (an explicit "x 10" survives OCR losing the superscript)
 #   10^-4                                  (no mantissa, so the "^" is mandatory)
 #   1.2e-4 / 1.2E-4
 _SCI = re.compile(
-    rf"(?P<m>{_NUM})\s*x\s*10\s*\^?\s*(?P<e>[-+]?\d+)"
+    rf"(?P<m>{_MANTISSA_NUM})\s*x\s*10\s*\^?\s*(?P<e>[-+]?\d+)"
     rf"|10\s*\^\s*(?P<e1>[-+]?\d+)"
-    rf"|(?P<e2m>{_NUM})[eE](?P<e2>[-+]?\d+)"
+    rf"|(?P<e2m>{_MANTISSA_NUM})[eE](?P<e2>[-+]?\d+)"
 )
-_RANGE = re.compile(rf"^(?P<a>{_NUM})\s*(?:-|to|~)\s*(?P<b>{_NUM})$")
-# A unit token at the very end of a value: letters, Ω, μ, % with optional "." or "/" inside ("vol.%").
-# A digit, "-" or "x" anywhere disqualifies it, so "1.2 x 10^-4" and "40 x 10 cm" can never be stripped.
-_TRAILING_UNIT = re.compile(r"[a-zA-ZΩμ%]+(?:[./][a-zA-ZΩμ%]+)*$")
-_PLUS_MINUS = re.compile(rf"^(?P<a>{_NUM})\s*(?:\+/-|±|\+-)\s*{_NUM}")
+# The vocabulary every spelling below shares, spelled once.
+_PM = r"(?:\+/-|±|\+-)"
+_RANGE_SEP = r"(?:-|to|~)"
+# A unit token inside a value: letters, Ω, μ, % with an optional "." or "/" inside ("vol.%"), or a degree.
+# A digit, "-" or "x" on its own is no unit, so "1.2 x 10^-4" and "40 x 10 cm" never read as a range.
+_UNIT_TOKEN = r"(?:°?[a-zA-ZΩμ%]+(?:[./][a-zA-ZΩμ%]+)*)"
+_PLUS_MINUS_SIGN = re.compile(_PM)
+_RANGE_SEPARATOR = re.compile(_RANGE_SEP)
+# "10-20", "15.6 to 16.3 nm", "80%–85%", "500 °C to 530 °C": two bounds, each with an optional unit.
+_RANGE = re.compile(
+    rf"^(?P<a>{_NUM})\s*(?P<ua>{_UNIT_TOKEN})?\s*{_RANGE_SEP}\s*(?P<b>{_NUM})\s*(?P<ub>{_UNIT_TOKEN})?$"
+)
+# "(4.5 ± 0.2) × 10^-4": the parenthesis holds the mantissa and its uncertainty, the exponent applies to both.
+_MANTISSA = re.compile(rf"^\(\s*(?P<m>{_NUM})\s*(?:(?P<pm>{_PM})\s*{_UNSIGNED}\s*)?\)\s*x\s*10\s*\^?\s*(?P<e>[-+]?\d+)")
+_PARENTHESES = re.compile(r"\([^()]*\)")
+_CARET_PARENS = re.compile(r"\^\s*\(\s*([-+]?\d+)\s*\)")
+# "1:4", "20/1", "12/10/3": two numbers set against each other.
+_RATIO = re.compile(r"\d\s*[:/]\s*\.?\d")
+# Two numbers joined by a dash or tilde: a range, wherever it sits in the text.
+_JOINED = re.compile(r"\d\s*[-~]\s*[\d.]")
+_PLUS_MINUS = re.compile(rf"^(?P<a>{_NUM})\s*{_PM}\s*{_NUM}")
+# Digits glued to a letter belong to a chemical formula ("O2", "SnO2", "H2") or a unit exponent ("cm2",
+# "cm^-3"), never to the value: "O2/(Ar+O2) = 5%" read its first number as the 2 of "O2". e and x are left
+# alone because they carry the exponent of "1.2e-4" and "1.2x10^-4". A sign needs the caret: "W-100" in
+# "20 W-100 W" is a range, not an exponent.
+_GLUED_DIGITS = re.compile(r"(?<=[A-DF-WYZa-df-wyzΩμ])(?:\^[-+]?)?\d+(?![\d.])")
+# "O2/(Ar+O2) = 5%": what stands before "=" names the quantity; the value is what follows it.
+_NAMED = re.compile(r"^[^=]*=\s*")
+_LATEX_COMMAND = re.compile(r"\\[A-Za-z]+")
+# "25 and 70": two values, not a value and a remark.
+_CONJOINED = re.compile(r"\d\s*\S*\s+(?:and|or)\s+\d", re.IGNORECASE)
+# A measurement condition stated after the value ("550 nm at 80%", "1.2 × 10^-4 at 300 K"): its numbers
+# describe when the value was measured, not the value.
+_CONDITION = re.compile(r"\s+(?:at|@)\s+(?=.*\d).*$", re.IGNORECASE)
 NUMBER_RE = re.compile(_NUM)
 """Every plain number in a piece of text. Public because the comparison layer reads the numbers out of a
 measurement condition ("550 nm") and must use the same notion of "a number" this module parses with."""
-# Multi-character qualifiers first, or "<=" is swallowed by the lone "<" in the character class.
 _QUALIFIERS = re.compile(
     r"^(?P<q>>=|<=|approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅≥≤<>])\s*", re.IGNORECASE
 )
@@ -157,6 +194,8 @@ _LATEX_COMMANDS = {
     r"\times": " x ",
     r"\cdot": " x ",
     r"\pm": "±",
+    r"\sim": "~",
+    r"\approx": "≈",
     r"\Omega": "Ω",
     r"\omega": "Ω",
     r"\mu": "μ",
@@ -179,6 +218,15 @@ _WRAPPED_DIGITS = re.compile(r"(?<=[0-9.] )\s*\{\s*([0-9.])\s*\}")
 LATEX_WRAPPERS = re.compile(r"\\(?:mathrm|mathbf|mathit|mathsf|mathcal|text|rm|it|bf|left|right|operatorname)\b")
 
 
+# LaTeX symbols a unit is written with, restored as the character before anything else is undone: "300
+# $^{\circ}$C" and "5 at.\%" otherwise lose the very character a unit is recognised by. The one table for
+# retrieval, grounding and unit parsing alike, so the three cannot fold the same text differently.
+LATEX_SYMBOLS = {"\\circ": "°", "\\%": "%"}
+# A degree sign typeset as a superscript ("^{°}" once \circ is restored) is just a degree sign; left as a
+# caret it reads as the start of an exponent, and "500" in "500 ^{\circ}C" as the base of a power.
+_RAISED_DEGREE = re.compile(r"\^\s*\{?\s*°\s*\}?")
+
+
 def delatex(text: str) -> str:
     """Undo the LaTeX MinerU produces for numbers in tables and formulas.
 
@@ -186,6 +234,9 @@ def delatex(text: str) -> str:
     prompt's "verbatim" rule keeps it that way. Spaces between digits are collapsed only when the text
     carries a LaTeX marker, so ordinary "10 20" is left alone.
     """
+    for command, symbol in LATEX_SYMBOLS.items():
+        text = text.replace(command, symbol)
+    text = _RAISED_DEGREE.sub("°", text)
     # A digit wrapped in a formatting command ("2 3 \\mathbf { 0 }", MinerU bolding a table cell's last digit)
     # is unwrapped first, so the run of spaced digits below still reads as one number.
     text = _WRAPPED_DIGITS.sub(r"\1", LATEX_WRAPPERS.sub("", text)) if "\\" in text else text
@@ -203,63 +254,182 @@ def delatex(text: str) -> str:
 
 
 def parse_number(raw: str) -> tuple[float | None, str | None]:
-    text = delatex(normalize_text(raw))
-    notes: list[str] = []
+    """``(value, note)``: the number ``raw`` spells, or None with the reason it was refused.
 
+    A qualifier ("~", ">", "about") is dropped and recorded first; what is left must then match one of the
+    spellings in :data:`_SPELLINGS`, tried in order. Each spelling either claims the text -- with a value, or
+    with a refusal -- or passes it on. A refusal is always better than a guess: the comparison turns None
+    into AMBIGUOUS, while a wrong number is indistinguishable from a real measurement.
+    """
+    # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
+    text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw)))
+    # A command delatex has no reading for is typesetting; left in place, its letters would glue to the
+    # digits after it ("\\sim82").
+    text = _LATEX_COMMAND.sub(" ", text).strip()
+    notes: list[str] = []
     match = _QUALIFIERS.match(text)
     if match:
         notes.append(f"qualifier '{match.group('q')}' dropped")
         text = text[match.end() :].strip()
+    # The same two rules for every spelling, scientific or plain: a stated condition and the digits of a
+    # formula or a unit exponent are set aside before the value's own numbers are counted.
+    named = _NAMED.match(text)
+    if named and text[named.end() :]:
+        notes.append(f"name {text[: named.end()].rstrip(' =')!r} before '=' ignored")
+        text = text[named.end() :]
+    condition = _CONDITION.search(text)
+    if condition:
+        notes.append(f"condition {condition.group(0).strip()!r} ignored")
+        text = text[: condition.start()].strip()
+    unglued = _GLUED_DIGITS.sub(" ", text)
+    if unglued != text:
+        notes.append("digits of a formula or unit exponent ignored")
+        text = unglued.strip()
+    value, reading = _read(text)
+    return value, _join([*notes, *reading])
 
-    # A parenthesised alternative ("12 (60)"): take the value outside the parentheses.
-    if "(" in text:
-        notes.append("parenthesized alternative ignored")
-        text = re.sub(r"\([^)]*\)", " ", text).strip()
 
-    sci = _SCI.search(text)
-    if sci:
-        if sci.group("e2") is not None:
-            value = float(_plain(sci.group("e2m"))) * 10 ** int(sci.group("e2"))
-        elif sci.group("e1") is not None:
-            value = 10 ** int(sci.group("e1"))
-        else:
-            value = float(_plain(sci.group("m"))) * 10 ** int(sci.group("e"))
-        return float(value), _join(notes)
+_Reading = tuple[float | None, list[str]]
 
-    pm = _PLUS_MINUS.match(text)
-    if pm:
-        notes.append("uncertainty dropped")
-        return float(_plain(pm.group("a"))), _join(notes)
 
-    rng = _RANGE.match(text)
-    if rng:
-        a, b = float(_plain(rng.group("a"))), float(_plain(rng.group("b")))
-        # Only a < b is a range; "10-4" is probably 10^-4 that lost its superscript and falls through.
-        if a < b:
-            notes.append(f"range {a:g}-{b:g} → midpoint")
-            return (a + b) / 2, _join(notes)
+def _read(text: str) -> _Reading:
+    for spelling in _SPELLINGS:
+        reading = spelling(text)
+        if reading is not None:
+            return reading
+    raise AssertionError("the last spelling always answers")  # pragma: no cover
 
-    # "15.6 to 16.3 nm": the trailing unit made the anchored range match fail. Strip exactly one trailing
-    # unit token and try again; the token restrictions above keep the scientific-notation and
-    # multi-number spellings on their existing paths.
-    stripped = _TRAILING_UNIT.sub("", text, count=1).rstrip()
-    if stripped != text:
-        rng = _RANGE.match(stripped)
-        if rng:
-            a, b = float(_plain(rng.group("a"))), float(_plain(rng.group("b")))
-            if a < b:
-                token = text[len(stripped) :].strip()
-                notes.append(f"trailing unit {token!r} in value ignored")
-                notes.append(f"range {a:g}-{b:g} → midpoint")
-                return (a + b) / 2, _join(notes)
 
+def _refuse(reason: str) -> _Reading:
+    return None, [reason]
+
+
+def _ratio(text: str) -> _Reading | None:
+    """ "1:4", "Ar:O2 = 9:1", "10/10", "12/10/3": a ratio is two numbers, and reading its first as the value is
+    exactly the silent wrong answer this parser exists to prevent."""
+    return _refuse("ratio notation a:b or a/b is not a single number") if _RATIO.search(text) else None
+
+
+def _parenthesised_mantissa(text: str) -> _Reading | None:
+    """ "(4.5 ± 0.2) × 10^-4": the parenthesis holds the mantissa, so it cannot be discarded as an alternative."""
+    match = _MANTISSA.match(text)
+    if match is None:
+        return None
+    if NUMBER_RE.search(text[match.end() :]):
+        return _refuse("numbers outside the scientific notation; ambiguous")
+    value = float(_plain(match.group("m"))) * 10 ** int(match.group("e"))
+    return value, ["uncertainty dropped"] if match.group("pm") else []
+
+
+def _leading_parenthesis(text: str) -> _Reading | None:
+    """A parenthesis before any number is no alternative to a value outside it; there is nothing to prefer."""
+    opening = text.find("(")
+    if opening < 0 or NUMBER_RE.search(text[:opening]):
+        return None
+    return _refuse("parenthesis before the value; ambiguous")
+
+
+def _parenthesised_alternative(text: str) -> _Reading | None:
+    """ "12 (60)": an alternative value under other conditions; the primary one is outside the parentheses."""
+    if "(" not in text and ")" not in text:
+        return None
+    rest = _PARENTHESES.sub(" ", text).strip()
+    if "(" in rest or ")" in rest:
+        return _refuse("unbalanced or nested parentheses; ambiguous")
+    value, reading = _read(rest)
+    return value, ["parenthesized alternative ignored", *reading]
+
+
+def _scientific(text: str) -> _Reading | None:
+    """Scientific notation, alone or as a range or uncertainty of two. Any other number beside it -- the
+    lower bound of "1.2-1.5 × 10^-3", whose exponent may or may not apply to it -- is refused."""
+    matches = list(_SCI.finditer(text))
+    if not matches:
+        return None
+    values = [_sci_value(match) for match in matches]
+    rest = _cut(text, matches)
+    if len(matches) == 2:
+        between = text[matches[0].end() : matches[1].start()].strip()
+        if not NUMBER_RE.search(rest) and _PLUS_MINUS_SIGN.fullmatch(between):
+            return values[0], ["uncertainty dropped"]
+        if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
+            low, high = values
+            if low < high:
+                return (low + high) / 2, [f"range {low:g}-{high:g} → midpoint"]
+            return _refuse("descending range in scientific notation; ambiguous")
+    if len(matches) > 1 or NUMBER_RE.search(rest):
+        return _refuse("numbers outside the scientific notation; ambiguous")
+    return values[0], []
+
+
+def _uncertainty(text: str) -> _Reading | None:
+    match = _PLUS_MINUS.match(text)
+    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"])
+
+
+def _range(text: str) -> _Reading | None:
+    """ "10-20", "15.6 to 16.3 nm", "80%–85%": the midpoint, as for a range in scientific notation. Each bound
+    may carry a unit, but not two different ones. A pair that does not ascend is refused: "10-4" is as likely
+    10^-4 that lost its caret, and "300-200" is no range anybody writes."""
+    match = _RANGE.match(text)
+    if match is None:
+        return None
+    first, second = match.group("ua"), match.group("ub")
+    if first and second and first != second:
+        return _refuse(f"range bounds in different units ({first!r}, {second!r}); ambiguous")
+    low, high = float(_plain(match.group("a"))), float(_plain(match.group("b")))
+    if low >= high:
+        return _refuse("descending range, or an exponent without its caret; ambiguous")
+    unit = second or first
+    notes = [f"trailing unit {unit!r} in value ignored"] if unit else []
+    return (low + high) / 2, [*notes, f"range {low:g}-{high:g} → midpoint"]
+
+
+def _first_number(text: str) -> _Reading:
+    """The fallback: one number is the value. Several separated by words or spaces ("550 nm at 80%", "40 x
+    10 cm") keep the first with a note; a range buried among other numbers has no first value to keep."""
     numbers = NUMBER_RE.findall(text)
     if not numbers:
-        notes.append("no number found")
-        return None, _join(notes)
-    if len(numbers) > 1:
-        notes.append(f"{len(numbers)} numbers found, first used")
-    return float(_plain(numbers[0])), _join(notes)
+        return _refuse("no number found")
+    if len(numbers) == 1:
+        return float(_plain(numbers[0])), []
+    if _JOINED.search(text):
+        return _refuse("a range among other numbers; ambiguous")
+    if _CONJOINED.search(text):
+        return _refuse("two values joined by 'and' or 'or'; ambiguous")
+    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"]
+
+
+# Tried in order; the first to claim the text decides. The ratio and parenthesis checks come first because
+# they change what the rest of the text means.
+_SPELLINGS: tuple[Callable[[str], _Reading | None], ...] = (
+    _ratio,
+    _parenthesised_mantissa,
+    _leading_parenthesis,
+    _parenthesised_alternative,
+    _scientific,
+    _uncertainty,
+    _range,
+    _first_number,
+)
+
+
+def _sci_value(match: re.Match[str]) -> float:
+    if match.group("e2") is not None:
+        return float(_plain(match.group("e2m"))) * 10 ** int(match.group("e2"))
+    if match.group("e1") is not None:
+        return float(10 ** int(match.group("e1")))
+    return float(_plain(match.group("m"))) * 10 ** int(match.group("e"))
+
+
+def _cut(text: str, matches: list[re.Match[str]]) -> str:
+    """``text`` with every match removed."""
+    kept, start = [], 0
+    for match in matches:
+        kept.append(text[start : match.start()])
+        start = match.end()
+    kept.append(text[start:])
+    return " ".join(kept)
 
 
 def _plain(token: str) -> str:
@@ -361,10 +531,22 @@ CONVERTERS: dict[str, Converter] = {
     "Pa": _pressure,
 }
 
-# Fail at import time rather than with a KeyError buried in normalisation, field by field.
-_MISSING_CONVERTERS = {spec.canonical_unit for spec in FIELD_SPECS if spec.canonical_unit} - CONVERTERS.keys()
-if _MISSING_CONVERTERS:
-    raise RuntimeError(f"no converter registered for canonical unit(s): {sorted(_MISSING_CONVERTERS)}")
+
+def check_canonical_units(specs: tuple[FieldSpec, ...], source: Path) -> None:
+    """Refuse a field whose canonical unit nothing here can convert into, naming the field and the file.
+
+    Checked at import rather than as a KeyError buried in normalisation, field by field. It lives here and
+    not in fields.py because the converters do, and fields.py cannot import this module.
+    """
+    for spec in specs:
+        if spec.canonical_unit and spec.canonical_unit not in CONVERTERS:
+            raise ConfigError(
+                f"{source}: field {spec.name!r}: canonical_unit {spec.canonical_unit!r} has no converter; "
+                f"known units are {', '.join(CONVERTERS)}"
+            )
+
+
+check_canonical_units(FIELD_SPECS, FIELDS_SOURCE)
 
 
 # A power-of-ten factor written into the unit: "×10^-4 Ω·cm", "x10-4Ω.cm", "10^-4Ω.cm" (normalize_text has
@@ -429,8 +611,10 @@ def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | Non
     canonical = spec.canonical_unit
     match spec.bare_number:
         case "percent_or_fraction":
-            if 0.0 <= value <= 1.0:
-                return value * 100.0, canonical, "no unit; value ≤ 1 read as a fraction"
+            # Strictly below 1: a bare "1" is far more often 1 % (1 % O2 in Ar) than a fraction of exactly
+            # one, and reading it as 100 % turns a trace admixture into the whole gas.
+            if 0.0 <= value < 1.0:
+                return value * 100.0, canonical, "no unit; value < 1 read as a fraction"
             return value, canonical, "no unit; read as percent"
         case "assume_canonical":
             return value, canonical, f"no unit; assumed {canonical}"
@@ -445,11 +629,14 @@ def normalize_field(field: FieldValue, spec: FieldSpec) -> FieldValue:
     if spec.kind != "numeric":
         # Text and composition fields are compared through normalize_key on the fly.
         return field
-    number, parse_note = parse_number(field.value_raw)
+    # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
+    spelled = spell_number_word(field.value_raw, field.unit_raw)
+    word_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    number, parse_note = parse_number(spelled)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
-    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, value_text=field.value_raw)
-    note = "; ".join(n for n in (parse_note, unit_note) if n) or None
+    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, value_text=spelled)
+    note = "; ".join(n for n in (word_note, parse_note, unit_note) if n) or None
     return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 
 

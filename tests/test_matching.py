@@ -1,4 +1,4 @@
-"""Sample identity matching: exact-pair by normalized sample_id first, then hand the rest to the model.
+"""Sample identity matching: exact-pair by sample_key first, then hand the rest to the model.
 
 The division of labor is fixed by the PRD — **sample identity is judged by the model, rules only do
 field-level comparison**. So this file guards two things: the deterministic part never calls the model
@@ -9,6 +9,8 @@ pairing whose ids don't check out gets discarded rather than trusted.
 from __future__ import annotations
 
 import json
+
+import pytest
 
 from paperfacts.matching import SampleMatching, match_samples
 from support.extraction import make_field, make_lane, make_sample
@@ -60,16 +62,27 @@ def test_ids_that_differ_only_in_case_spacing_or_decoration_still_pair_exactly()
     assert [(p.a_id, p.b_id) for p in matching.pairs] == [("Film #2", "film 2")]
 
 
-def test_a_hyphen_is_meaningful_and_keeps_two_ids_apart():
-    # Documenting current behavior: '-' is in the key whitelist, so "O2-100 sccm" and "O2 100sccm" do not
-    # pair exactly and fall through to model judgment.
+def test_a_hyphen_or_a_space_between_tokens_is_only_a_separator():
+    # sample_key reads "O2-100 sccm" and "O2 100sccm" as the same tokens, so the two lanes' spellings of one
+    # id pair without asking the model.
     lane_a, lane_b = lanes(["O2-100 sccm"], ["O2 100sccm"])
     client = FakeLlmClient([matching_json()])
 
     matching = match_samples(lane_a, lane_b, client)
 
+    assert [(p.a_id, p.b_id, p.method) for p in matching.pairs] == [("O2-100 sccm", "O2 100sccm", "exact")]
+    assert client.call_count == 0
+
+
+@pytest.mark.parametrize(("a", "b"), [("α-ITO", "β-ITO"), ("ITO-a", "ITO-A"), ("x=0.1", "x=0.01"), ("T=-5", "T=5")])
+def test_ids_that_name_different_samples_never_pair_exactly(a, b):
+    # A Greek letter, a case-distinguished suffix, a decimal and a sign are part of the id, not decoration.
+    lane_a, lane_b = lanes([a], [b])
+    client = FakeLlmClient([matching_json()])
+
+    matching = match_samples(lane_a, lane_b, client)
+
     assert matching.pairs == ()
-    assert client.call_count == 1
 
 
 def test_no_model_call_when_the_exact_pass_consumed_one_side_entirely():

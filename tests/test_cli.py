@@ -18,13 +18,14 @@ from paperfacts.cli import BackendOption, app
 from paperfacts.errors import ParserError
 from paperfacts.fields import FIELD_SPECS
 from paperfacts.models import Backend, DocumentInput, RawParseOutput
+from paperfacts.parsers import Parser
 from paperfacts.storage import DataLayout
 from support.factories import RawOutputFactory, paddle_page_entry
 
 runner = CliRunner()
 
 
-class FakeParser:
+class FakeParser(Parser):
     """Copies prepared native output into out_dir, standing in for the real parser."""
 
     def __init__(self, backend: Backend, source_dir: Path) -> None:
@@ -137,7 +138,7 @@ def test_parse_falls_back_to_the_data_root_environment_variable(
 
 
 def test_parse_exits_with_code_one_when_the_parser_fails(two_page_pdf: Path, data_root: Path, monkeypatch):
-    class ExplodingParser:
+    class ExplodingParser(Parser):
         backend: Backend = "mineru"
 
         def parse(self, document: DocumentInput, out_dir: Path, *, force: bool = False) -> RawParseOutput:

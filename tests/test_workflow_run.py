@@ -21,7 +21,7 @@ import pytest
 import paperfacts.workflow as workflow_module
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.errors import ParserError
+from paperfacts.errors import Cancelled, ParserError
 from paperfacts.matching import SampleMatching
 from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.records import LaneExtraction
@@ -238,29 +238,70 @@ def test_one_llm_client_is_shared_by_extraction_and_comparison_and_then_closed(
     assert spy.client.closed is True
 
 
-def test_the_running_stage_is_the_last_mark_when_a_step_blows_up(
+def test_each_failed_lane_is_marked_with_its_own_error_and_the_exception_propagates(
     monkeypatch, document: DocumentInput, settings: Settings
 ):
-    # The exception propagates as-is (the job layer marks the currently running stage failed on the
-    # strength of that); it is neither swallowed nor rewritten here.
+    # The exception propagates as-is; it is neither swallowed nor rewritten here.
     install_fake_pipeline(monkeypatch)
 
-    def exploding_extract(*args, **kwargs):
-        raise RuntimeError("the LLM did not return JSON")
+    def exploding_extract(document, backend, *args, **kwargs):
+        raise RuntimeError(f"{backend}: the LLM did not return JSON")
 
     monkeypatch.setattr("paperfacts.workflow.extract_document", exploding_extract)
     marks: list[tuple[str, str, str]] = []
 
-    with pytest.raises(RuntimeError, match="not return JSON"):
+    with pytest.raises(RuntimeError, match="mineru: the LLM did not return JSON"):
         run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
 
-    # Both lanes were announced and neither finished, so the job layer marks both failed -- which is
-    # right: the run stopped there.
     assert [m for m in marks if m[0].startswith("extract:")] == [
         ("extract:mineru", "running", ""),
         ("extract:paddleocr_vl", "running", ""),
+        ("extract:mineru", "failed", "RuntimeError: mineru: the LLM did not return JSON"),
+        ("extract:paddleocr_vl", "failed", "RuntimeError: paddleocr_vl: the LLM did not return JSON"),
     ]
-    assert marks[-1][1] == "running"
+
+
+def test_the_lane_that_succeeded_is_marked_done_when_the_other_fails(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    # The review's scenario: the UI said "extract:mineru failed: [paddleocr_vl] ..." for a mineru lane that
+    # had succeeded and was cached, because the job layer stamps every stage still running.
+    install_fake_pipeline(monkeypatch)
+
+    def one_lane_fails(document, backend, settings, client, *, force: bool = False):
+        if backend == "paddleocr_vl":
+            raise RuntimeError("paddle lane exploded")
+        return make_lane(backend=backend, samples=(make_sample("A"),))
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", one_lane_fails)
+    marks: list[tuple[str, str, str]] = []
+
+    with pytest.raises(RuntimeError, match="paddle lane exploded"):
+        run_document(document, settings, on_stage=lambda s, st, d: marks.append((s, st, d)))
+
+    final = {stage: (status, detail) for stage, status, detail in marks}
+    assert final["extract:mineru"] == ("done", "1 samples")
+    assert final["extract:paddleocr_vl"] == ("failed", "RuntimeError: paddle lane exploded")
+    assert not [stage for stage, (status, _) in final.items() if status == "running"]
+
+
+def test_a_callback_that_raises_while_failing_does_not_mask_the_failure(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    # A stopped batch raises Cancelled from its callback; the paper's own error must still be the one raised.
+    install_fake_pipeline(monkeypatch)
+
+    def one_lane_fails(document, backend, settings, client, *, force: bool = False):
+        raise RuntimeError(f"{backend} lane exploded")
+
+    def refusing(stage: str, status: str, detail: str) -> None:
+        if status in {"done", "failed"} and stage.startswith("extract:"):
+            raise Cancelled("the batch was stopped")
+
+    monkeypatch.setattr("paperfacts.workflow.extract_document", one_lane_fails)
+
+    with pytest.raises(RuntimeError, match="mineru lane exploded"):
+        run_document(document, settings, on_stage=refusing)
 
 
 def test_the_stage_callback_is_optional(monkeypatch, document: DocumentInput, settings: Settings):
@@ -459,7 +500,13 @@ def test_a_failed_parse_in_one_lane_fails_the_paper_after_both_have_ended(
     monkeypatch.setattr("paperfacts.workflow.parse_document", parse)
     settings = Settings(data_root=tmp_path / "data", mineru_url="http://gpu:8002", paddle_url="http://gpu:8080")
 
+    marks: list[tuple[str, str]] = []
+
     with pytest.raises(ParserError, match="service down"):
-        run_document(DocumentInput.from_path(two_page_pdf), settings)
+        run_document(DocumentInput.from_path(two_page_pdf), settings, on_stage=lambda s, st, d: marks.append((s, st)))
 
     assert sorted(ended) == ["mineru", "paddleocr_vl"]
+    assert [mark for mark in marks if mark[1] != "running"] == [
+        ("parse:mineru", "failed"),
+        ("parse:paddleocr_vl", "done"),
+    ]

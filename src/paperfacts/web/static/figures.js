@@ -3,8 +3,10 @@
 // section of their own in a neutral colour; blue and orange belong to the two lanes, and a chart belongs to
 // neither.
 
-import { escapeHtml, fmt, toast } from "./html.js";
+import { releaseFact } from "./facts.js";
+import { escapeHtml, fmt, onActivate, toast } from "./html.js";
 import { LANES, slot, state } from "./state.js";
+import { revealViewer } from "./viewer.js";
 
 export function renderFigures(root) {
   const rows = state.figures?.rows ?? [];
@@ -27,19 +29,23 @@ export function renderFigures(root) {
       + `<td class="val">${value}<span class="flag approx" title="从图上读出，不是论文写出的数">近似值 ${escapeHtml(row.precision)}</span></td>`
       + `<td class="mono">${escapeHtml(row.value_raw ?? "")}</td><td class="note">${escapeHtml(row.detail ?? "")}</td>`;
     tr.title = row.caption ?? "";
-    tr.addEventListener("click", () => locate(row));
+    tr.tabIndex = 0;
+    onActivate(tr, () => locate(row));
     body.append(tr);
   }
 }
 
-// The row cites the figure block; its page and box come from the artifact the page already loaded.
+// The row cites the figure block; its page and box come from the artifact the page already loaded. The row
+// is an untyped dict, so a reading without a source_id finds no block rather than breaking the page.
 function locate(row) {
-  const lane = LANES.find((l) => row.source_id.startsWith(`${l}_`));
-  const block = state.artifacts[lane]?.blocks?.find((b) => b.source_id === row.source_id);
+  const sourceId = String(row.source_id ?? "");
+  const lane = LANES.find((l) => sourceId.startsWith(`${l}_`));
+  const block = state.artifacts[lane]?.blocks?.find((b) => b.source_id === sourceId);
   if (!block || !state.viewer) {
     toast("找不到这张图在页面上的位置", true);
     return;
   }
-  state.viewer.showRegion({ page: block.page, bbox: block.bbox, label: row.figure ?? row.source_id });
-  slot("viewer")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  releaseFact();
+  state.viewer.showRegion({ page: block.page, bbox: block.bbox, label: row.figure ?? sourceId });
+  revealViewer();
 }

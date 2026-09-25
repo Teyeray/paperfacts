@@ -20,12 +20,13 @@ Endpoints (all under ``/api``, JSON)::
     GET  /api/documents/{id}/dataset.xlsx          the same data as the Excel workbook
     GET  /api/documents/{id}/figures               values read off the paper's charts (opt-in stage)
     GET  /api/documents/{id}/pages/{page}.png?dpi= rendered page image (cached)
-    GET  /api/documents/{id}/jobs                  this document's job list
-    GET  /api/jobs                                 every job of this process, newest first
+    GET  /api/documents/{id}/jobs                  this document's job list (with stages and logs)
+    GET  /api/jobs                                 the jobs this process holds, newest first, without logs
     GET  /api/jobs/{job_id}                        job snapshot (stages, log)
 
 All business logic lives in :mod:`paperfacts.workflow` (the job body is ``run_document``); this
-module only does the HTTP mapping.
+module only does the HTTP mapping, and guards its edge: the login, a same-origin check on every request
+that changes something, frame and sniffing headers, and an upload size counted as the body arrives.
 """
 
 from __future__ import annotations
@@ -34,36 +35,51 @@ import base64
 import binascii
 import logging
 import secrets
-import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
+from starlette.datastructures import UploadFile
+from starlette.types import Message
 
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
-from paperfacts.dataset import DatasetPayload, write_dataset
+from paperfacts.dataset import DatasetPayload
 from paperfacts.figures import FiguresView
+from paperfacts.keys import figure_key_for
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
+from paperfacts.readings import shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
-from paperfacts.web.jobs import Job, JobManager, JobRunner
-from paperfacts.workflow import run_document, shown_figures, stage_names
+from paperfacts.web.jobs import Job, JobBrief, JobManager, JobRunner
+from paperfacts.workflow import corpus_workbook, run_document, stage_names
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_CHUNK_BYTES = 1 << 20
+# Room for the multipart boundary and part headers around the one file an upload carries.
+UPLOAD_OVERHEAD_BYTES = 64 * 1024
 EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# On every response, the login prompt included: nothing here is meant to be framed (the run buttons could
+# otherwise be clickjacked), and no response should be sniffed into a type it was not served as.
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+}
 
 
 class UploadAccepted(BaseModel):
@@ -90,6 +106,32 @@ class RunAllAccepted(BaseModel):
     skipped: list[SkippedDocument]
 
 
+def same_origin(request: Request) -> bool:
+    """Did this request come from a page of this app, as far as the browser says?
+
+    A browser attaches cached Basic credentials to a cross-site form POST, so without this check any page
+    the operator visits could queue a forced rerun of the whole library. Browsers state where a request
+    came from (``Sec-Fetch-Site``, ``Origin``, ``Referer``); a request that states nothing is not from a
+    browser, and a client that is not a browser cannot be tricked into sending the operator's login.
+
+    ``Sec-Fetch-Site`` is the browser's own verdict, which page script cannot set, so when it is there it
+    decides alone (``none`` is the user typing the URL or following a bookmark). Comparing hosts instead
+    would refuse the real UI behind any proxy that rewrites ``Host``. Only a browser that sends no Fetch
+    Metadata falls back to the host comparison, and only the host: behind the tunnel the page is https
+    while this server sees plain http.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site in {"same-origin", "none"}
+    source = request.headers.get("origin") or request.headers.get("referer")
+    if source is None:
+        return True
+    if source == "null":  # a sandboxed frame or a local file: never this app's own page
+        return False
+    hosts = {request.headers.get("host"), (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()}
+    return urlsplit(source).netloc in hosts - {None, ""}
+
+
 def pipeline_runner(settings: Settings, library: Library) -> JobRunner:
     """Job body: hand the document to workflow.run_document; the stage callback is just mark."""
     return lambda job, mark: run_document(library.document(job.document_id), settings, force=job.force, on_stage=mark)
@@ -99,7 +141,9 @@ def login_accepted(header: str | None, settings: Settings) -> bool:
     """Is this ``Authorization`` header the configured HTTP Basic login?
 
     ``compare_digest`` rather than ``==``: a wrong password should take the same time to reject whoever
-    guesses it, so the check does not hand out the password's length or its matching prefix.
+    guesses it, so the check does not hand out the password's length or its matching prefix. It compares
+    UTF-8 bytes: given two ``str``, it raises on any non-ASCII character, which turned a Chinese password
+    into a 500 for everyone, the right login included.
     """
     scheme, _, credentials = (header or "").partition(" ")
     if scheme.lower() != "basic" or not settings.web_password:
@@ -111,9 +155,10 @@ def login_accepted(header: str | None, settings: Settings) -> bool:
     username, separator, password = decoded.partition(":")
     if not separator:
         return False
-    return secrets.compare_digest(username, settings.web_username) and secrets.compare_digest(
-        password, settings.web_password
-    )
+    # Both halves are always compared, so a right username does not answer faster than a wrong one.
+    user_ok = secrets.compare_digest(username.encode("utf-8"), settings.web_username.encode("utf-8"))
+    password_ok = secrets.compare_digest(password.encode("utf-8"), settings.web_password.encode("utf-8"))
+    return user_ok and password_ok
 
 
 def create_app(settings: Settings | None = None, *, jobs: JobManager | None = None) -> FastAPI:
@@ -139,30 +184,47 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
     app.state.jobs = manager
 
     @app.middleware("http")
-    async def require_login(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        """The password gate, over every route -- the static frontend and ``/api`` alike.
+    async def guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        """The edge of the app, over every route -- the static frontend and ``/api`` alike.
 
         The app is published through a tunnel on this machine, so this is all that stands between the
-        internet and a library that can upload PDFs and spend LLM tokens. Off unless a password is
-        configured, which is what a laptop wants. A 401 carrying ``WWW-Authenticate`` is what makes a
-        browser ask for the login instead of showing the app.
+        internet and a library that can upload PDFs and spend LLM tokens. The password gate is off unless a
+        password is configured, which is what a laptop wants; a 401 carrying ``WWW-Authenticate`` is what
+        makes a browser ask for the login instead of showing the app. The origin check applies either way.
         """
-        if not settings.web_password or login_accepted(request.headers.get("authorization"), settings):
-            return await call_next(request)
-        return PlainTextResponse(
-            "PaperFacts: login required",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="PaperFacts", charset="UTF-8"'},
-        )
+        response = _refusal(request)
+        if response is None:
+            response = await call_next(request)
+        response.headers.update(SECURITY_HEADERS)
+        return response
 
-    def require_document(document_id: str) -> DocumentSummary:
+    def _refusal(request: Request) -> Response | None:
+        if settings.web_password and not login_accepted(request.headers.get("authorization"), settings):
+            return PlainTextResponse(
+                "PaperFacts: login required",
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="PaperFacts", charset="UTF-8"'},
+            )
+        if request.method not in SAFE_METHODS and not same_origin(request):
+            logger.warning("refused a cross-origin %s %s", request.method, request.url.path)
+            return JSONResponse({"detail": "Cross-origin request refused"}, status_code=403)
+        return None
+
+    def require_document(document_id: str) -> None:
+        # A malformed id is as absent as an unknown one, and the detail says only that: the id convention
+        # is not the caller's business, and str(KeyError) would arrive wrapped in a second pair of quotes.
         try:
             exists = library.exists(document_id)
-        except KeyError as exc:  # malformed id shape: always 404 to callers, never leak the internal convention
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except KeyError:
+            exists = False
         if not exists:
             raise HTTPException(status_code=404, detail=f"No document {document_id}")
-        return library.summary(document_id)
+
+    def submit(document_id: str, *, force: bool) -> Job:
+        try:
+            return manager.submit(document_id, force=force)
+        except RuntimeError as exc:  # the manager has shut down: the server is on its way out
+            raise HTTPException(status_code=503, detail="The server is shutting down; try again shortly") from exc
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -185,30 +247,57 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         datasets = library.corpus_datasets()
         if not datasets:
             raise HTTPException(status_code=404, detail="No consolidated dataset yet")
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "paperfacts.xlsx"
-            figure_views = (shown_figures(d.document_id, d.filename, settings) for d in datasets)
-            write_dataset(datasets, path, figure_rows=[row for view in figure_views if view for row in view.rows])
-            content = path.read_bytes()
         return Response(
-            content=content,
+            content=corpus_workbook(datasets, settings),
             media_type=EXCEL_MEDIA_TYPE,
             headers={"content-disposition": 'attachment; filename="paperfacts-corpus.xlsx"'},
         )
 
-    @app.post("/api/documents", status_code=202)
-    async def upload_document(
-        file: Annotated[UploadFile, File()], force: Annotated[bool, Query()] = False
-    ) -> UploadAccepted:
-        if (file.size or 0) > settings.max_upload_bytes:
-            raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_bytes // (1024 * 1024)} MB")
-        data = await _read_limited(file, settings.max_upload_bytes)
+    @app.post(
+        "/api/documents",
+        status_code=202,
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "multipart/form-data": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["file"],
+                            "properties": {"file": {"type": "string", "format": "binary"}},
+                        }
+                    }
+                },
+            }
+        },
+    )
+    async def upload_document(request: Request, force: Annotated[bool, Query()] = False) -> UploadAccepted:
+        """One PDF per request. The form is parsed here rather than through a ``File()`` parameter because
+        only this call can cap the parts: left to the default, one request may carry a thousand files.
+
+        The size is checked before the body is parsed, because Starlette spools a multipart file to disk
+        without any limit. A declared length over the limit is refused unread; the bytes that actually
+        arrive are counted too, so a chunked body (which declares nothing) or one that lies is refused the
+        moment it passes the limit.
+        """
+        limit = settings.max_upload_bytes + UPLOAD_OVERHEAD_BYTES
+        declared = request.headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > limit):
+            raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
+        async with _capped(request, limit, settings.max_upload_bytes).form(max_files=1, max_fields=0) as form:
+            file = form.get("file")
+            if not isinstance(file, UploadFile):
+                raise HTTPException(status_code=422, detail="Expected one PDF in the multipart field 'file'")
+            if (file.size or 0) > settings.max_upload_bytes:
+                raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
+            data = await _read_limited(file, settings.max_upload_bytes)
+            filename = file.filename or "upload.pdf"
         if not data.startswith(b"%PDF"):
             raise HTTPException(status_code=400, detail="Only PDF files are accepted (missing %PDF header)")
         # writing to disk is sync IO; offload to the threadpool so a multi-hundred-MB write can't stall the event loop
-        document = await run_in_threadpool(library.register_upload, file.filename or "upload.pdf", data)
+        document = await run_in_threadpool(library.register_upload, filename, data)
         key = document_key(document.document_id)
-        job = manager.submit(key, force=force)
+        job = submit(key, force=force)
         return UploadAccepted(document=library.summary(key), job=job)
 
     # Registration order matters: FastAPI matches in order, so this literal route must stay above the
@@ -219,7 +308,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
 
         Same submission path as ``run_existing``, once per document in library order: a document
         already queued or running simply gets its existing job back, so pressing the button twice
-        costs nothing.
+        costs nothing. Finished means exported under the current keys (:func:`workflow.is_finished`).
         """
         submitted: list[Job] = []
         skipped: list[SkippedDocument] = []
@@ -231,14 +320,14 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
                     )
                 )
                 continue
-            if summary.compared and not force:
+            if not force and library.finished(summary.document_id):
                 skipped.append(
                     SkippedDocument(
                         document_id=summary.document_id, name=summary.name, reason="Already processed under these keys"
                     )
                 )
                 continue
-            submitted.append(manager.submit(summary.document_id, force=force))
+            submitted.append(submit(summary.document_id, force=force))
         logger.info("run-all force=%s submitted=%d skipped=%d", force, len(submitted), len(skipped))
         return RunAllAccepted(submitted=submitted, skipped=skipped)
 
@@ -250,11 +339,12 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
             raise HTTPException(
                 status_code=409, detail="No PDF and no cached parse for this document; re-upload it to process it"
             )
-        return manager.submit(document_id, force=force)
+        return submit(document_id, force=force)
 
     @app.get("/api/documents/{document_id}")
     def get_document(document_id: str) -> DocumentSummary:
-        return require_document(document_id)
+        require_document(document_id)
+        return library.summary(document_id)
 
     @app.get("/api/documents/{document_id}/report")
     def get_report(document_id: str) -> ComparisonReport:
@@ -290,16 +380,19 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
 
     @app.get("/api/documents/{document_id}/figures")
     def get_figures(document_id: str) -> FiguresView:
-        """The chart readings, read straight from their own file: they are never part of the dataset."""
-        summary = require_document(document_id)
-        figures = shown_figures(summary.document_id, summary.name, settings)
-        if figures is None:
-            raise HTTPException(status_code=404, detail="No figure readings")
-        return figures
+        """The chart readings, read straight from their own file: they are never part of the dataset.
+
+        Most papers have none, which is a normal state rather than a missing resource: an empty list, not a
+        404 that every document page would log as a failed request.
+        """
+        require_document(document_id)
+        identity = library.identity(document_id)
+        figures = shown_figures(document_id, identity.name if identity else document_id, settings)
+        return figures or FiguresView(document_id=document_id, figure_key=figure_key_for(settings), model="")
 
     @app.get("/api/documents/{document_id}/dataset.xlsx")
     def get_dataset_excel(document_id: str) -> FileResponse:
-        summary = require_document(document_id)
+        require_document(document_id)
         path = library.dataset_excel(document_id)
         if path is None:
             raise HTTPException(status_code=404, detail="No Excel export yet")
@@ -307,7 +400,7 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
             path,
             media_type=EXCEL_MEDIA_TYPE,
             # The upload name is user input; the id is the safe, stable download name.
-            filename=f"paperfacts-{summary.document_id}.xlsx",
+            filename=f"paperfacts-{document_id}.xlsx",
         )
 
     @app.get("/api/documents/{document_id}/pages/{page}.png")
@@ -335,10 +428,10 @@ def create_app(settings: Settings | None = None, *, jobs: JobManager | None = No
         return manager.for_document(document_id)
 
     @app.get("/api/jobs")
-    def list_all_jobs() -> list[Job]:
-        """Every job of this process, newest first: one request tells the library list which
-        documents are busy."""
-        return manager.all_jobs()
+    def list_all_jobs() -> list[JobBrief]:
+        """The jobs this process holds, newest first and without their logs: one small request tells the
+        library list which documents are busy. A job's stages and log are on ``/api/jobs/{job_id}``."""
+        return manager.briefs()
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> Job:
@@ -366,6 +459,22 @@ class _RevalidatedStaticFiles(StaticFiles):
         return response
 
 
+def _capped(request: Request, limit: int, max_upload_bytes: int) -> Request:
+    """The same request, whose body raises 413 once more than ``limit`` bytes of it have arrived."""
+    received = 0
+
+    async def receive() -> Message:
+        nonlocal received
+        message = await request.receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise HTTPException(status_code=413, detail=_too_large(max_upload_bytes))
+        return message
+
+    return Request(request.scope, receive)
+
+
 async def _read_limited(file: UploadFile, limit: int) -> bytes:
     """Read the upload body in chunks, raising 413 as soon as the limit is exceeded instead of
     buffering the whole file into memory before checking."""
@@ -374,6 +483,10 @@ async def _read_limited(file: UploadFile, limit: int) -> bytes:
     while chunk := await file.read(UPLOAD_CHUNK_BYTES):
         total += len(chunk)
         if total > limit:
-            raise HTTPException(status_code=413, detail=f"File exceeds {limit // (1024 * 1024)} MB")
+            raise HTTPException(status_code=413, detail=_too_large(limit))
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _too_large(limit: int) -> str:
+    return f"File exceeds {limit // (1024 * 1024)} MB"

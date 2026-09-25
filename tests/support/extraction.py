@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from paperfacts.keys import schema_fingerprint
+from paperfacts.keys import ExtractionOptions, extraction_schema_fingerprint
 from paperfacts.models import Backend, PageGeometry, ParsedArtifact, SourceBlock
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, TargetRecord
 from support.factories import DOC_ID, make_block
@@ -109,7 +109,7 @@ def make_lane(
         backend=backend,
         extractor_key=extractor_key,
         model=model,
-        schema_version=schema_fingerprint(),
+        schema_version=extraction_schema_fingerprint(),
         target=target,
         samples=tuple(samples),
         invalid_source_ids=tuple(invalid_source_ids),
@@ -117,4 +117,19 @@ def make_lane(
         unattributed=tuple(unattributed),
         usage=dict(usage or {}),
         raw_response=raw_response,
+    )
+
+
+def lane_options(client=None, *, mode, **overrides) -> ExtractionOptions:
+    """The options a caller builds for ``client``: its sampling settings, plus the extraction mode and any
+    other option a test moves off its default. Without a client, those of a default ``FakeLlmClient``."""
+    if client is None:
+        return ExtractionOptions(model=DEFAULT_MODEL, mode=mode, **overrides)
+    return ExtractionOptions(
+        model=client.model,
+        mode=mode,
+        temperature=client.temperature,
+        max_tokens=client.max_tokens,
+        reasoning_effort=client.reasoning_effort,
+        **overrides,
     )

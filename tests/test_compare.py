@@ -12,7 +12,14 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.compare import ComparisonReport, compare_lanes, compare_values
+from paperfacts import decide
+from paperfacts.compare import (
+    ComparisonReport,
+    compare_lanes,
+    compare_values,
+    condition_numbers,
+    conditions_measure_differently,
+)
 from paperfacts.fields import AMBIGUOUS_MATCH_CONFIDENCE, FIELD_BY_NAME
 from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key
 from paperfacts.matching import SampleMatch, SampleMatching
@@ -754,3 +761,71 @@ def test_the_report_round_trips_through_disk(tmp_path):
     report.write(path)
 
     assert ComparisonReport.read(path) == report
+
+
+# ---- The one definition of a condition's numbers ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("condition", "numbers"),
+    [
+        ("550 nm", (550.0,)),
+        ("400-800 nm", (400.0, 800.0)),
+        ("from 400 to 800 nm", (400.0, 800.0)),
+        ("800–400 nm", (800.0, 400.0)),
+        ("-20 °C", (-20.0,)),
+        ("AM1.5, 400-800 nm", (1.5, 400.0, 800.0)),
+        ("$4 0 0 ^ { \\circ } \\mathrm { C }$", (400.0,)),
+        ("", ()),
+        (None, ()),
+    ],
+)
+def test_condition_numbers_are_ordered_signed_and_range_aware(condition, numbers):
+    assert condition_numbers(condition) == numbers
+
+
+def test_the_same_numbers_in_another_order_are_the_same_condition_for_pairing():
+    assert not conditions_measure_differently("550 nm, 25 °C", "at 25 °C and 550 nm")
+    assert conditions_measure_differently("550 nm", "600 nm")
+
+
+def test_dataset_judges_conditions_by_the_same_definition_as_compare():
+    # Two definitions disagreed on ranges, signs and extra numbers, so compare could pair two values as
+    # one fact while dataset treated them as two conditions.
+    assert decide.condition_numbers is condition_numbers
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "one of the samples",
+        "five to ten",
+        "one or two",
+        "one-third",
+        "two thirds",
+        "ten-fold",
+        "one order of magnitude",
+        "two-step",
+    ],
+)
+def test_a_number_word_that_is_not_the_whole_value_is_never_read_as_a_number(raw):
+    # review-dataquality M3: "one of the samples" W against 100 W became a conflict with a made-up 1 W.
+    field = normalized(make_field("sputtering_power", raw, unit_raw="W"))
+
+    assert field.value is None
+    status, _ = compare_values(
+        field, normalized(make_field("sputtering_power", "100", unit_raw="W")), FIELD_BY_NAME["sputtering_power"]
+    )
+    assert status == "ambiguous"
+
+
+@pytest.mark.parametrize(("raw", "unit"), [("four", "inch"), ("four-inch", "inch"), ("Four inch", "inch")])
+def test_a_number_word_standing_alone_or_before_its_unit_is_read(raw, unit):
+    field = normalized(make_field("inch", raw, unit_raw=unit))
+
+    assert field.value == 4.0
+    assert "number word" in (field.normalization_note or "")
+
+
+def test_a_number_word_without_a_unit_is_not_read():
+    assert normalized(make_field("o2_ratio", "one")).value is None

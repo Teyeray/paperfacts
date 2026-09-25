@@ -75,6 +75,9 @@ export function fieldPicker(fields, onChange) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "chip" + (chosen === null ? "" : " on");
+  // `data-focus` keys: every control here rebuilds the table it sits in, and the caller's keepFocus puts
+  // the keyboard focus back on the control with the same key.
+  button.dataset.focus = "picker";
   button.setAttribute("aria-expanded", "false");
   button.setAttribute("aria-haspopup", "dialog");
   button.innerHTML = `选择字段<span class="n">${all.filter(isOn).length}/${all.length}</span>`;
@@ -97,8 +100,8 @@ export function fieldPicker(fields, onChange) {
   const actions = document.createElement("div");
   actions.className = "picker-actions";
   actions.append(
-    linkButton("全选", () => commit(new Set(all.map((field) => field.name)))),
-    linkButton("清空", () => commit(new Set())),
+    linkButton("全选", "pick-all", () => commit(new Set(all.map((field) => field.name)))),
+    linkButton("清空", "pick-none", () => commit(new Set())),
   );
   pop.append(actions);
 
@@ -120,6 +123,7 @@ export function fieldPicker(fields, onChange) {
     input.type = "checkbox";
     input.checked = on;
     input.value = field.name;
+    input.dataset.focus = `field:${field.name}`;
     input.addEventListener("change", () => {
       const boxes = [...pop.querySelectorAll("input[type=checkbox]")];
       commit(new Set(boxes.filter((box) => box.checked).map((box) => box.value)));
@@ -176,10 +180,11 @@ export function fieldPicker(fields, onChange) {
   return wrap;
 }
 
-function linkButton(text, onClick) {
+function linkButton(text, focusKey, onClick) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "picker-link";
+  button.dataset.focus = focusKey;
   button.textContent = text;
   button.addEventListener("click", onClick);
   return button;
@@ -189,6 +194,7 @@ export function toggleChip(fields, showAll, onToggle) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "chip" + (showAll ? " on" : "");
+  button.dataset.focus = "show-empty";
   button.setAttribute("aria-pressed", String(showAll));
   button.innerHTML = `显示空字段<span class="n">${(fields ?? []).length}</span>`;
   button.addEventListener("click", onToggle);

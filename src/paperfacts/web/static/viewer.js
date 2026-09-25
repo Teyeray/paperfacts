@@ -136,14 +136,7 @@ export class PageViewer {
       if (!this.show[lane]) continue;
       for (const block of this.blocks[lane] ?? []) {
         if (block.page !== this.page) continue;
-        const { x1, y1, x2, y2 } = block.bbox;
-        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-        rect.setAttribute("x", (x1 * width).toFixed(1));
-        rect.setAttribute("y", (y1 * height).toFixed(1));
-        rect.setAttribute("width", ((x2 - x1) * width).toFixed(1));
-        rect.setAttribute("height", ((y2 - y1) * height).toFixed(1));
-        rect.setAttribute("vector-effect", "non-scaling-stroke");
-        rect.setAttribute("class", `${LANE_CLASS[lane]}${this.highlighted.has(block.source_id) ? " hl" : ""}`);
+        const rect = rectFor(block.bbox, width, height, `${LANE_CLASS[lane]}${this.highlighted.has(block.source_id) ? " hl" : ""}`);
         rect.addEventListener("mouseenter", (event) => {
           tooltip = document.createElement("div");
           tooltip.className = "tooltip";
@@ -159,20 +152,41 @@ export class PageViewer {
     // draw the highlighted ones on top
     for (const hl of [...svg.querySelectorAll("rect.hl")]) svg.append(hl);
     if (this.region && this.region.page === this.page) {
-      const { x1, y1, x2, y2 } = this.region.bbox;
-      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      rect.setAttribute("x", (x1 * width).toFixed(1));
-      rect.setAttribute("y", (y1 * height).toFixed(1));
-      rect.setAttribute("width", ((x2 - x1) * width).toFixed(1));
-      rect.setAttribute("height", ((y2 - y1) * height).toFixed(1));
-      rect.setAttribute("vector-effect", "non-scaling-stroke");
-      rect.setAttribute("class", "region hl");
-      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-      title.textContent = this.region.label ?? "";
-      rect.append(title);
+      const rect = rectFor(this.region.bbox, width, height, "region hl");
+      rect.append(svgTitle(this.region.label ?? ""));
       svg.append(rect);
     }
   }
+}
+
+const SVG = "http://www.w3.org/2000/svg";
+
+// A normalized [0, 1] bbox as a rect in the image's pixel space, the same conversion as NormalizedBBox.to_pixels.
+function rectFor({ x1, y1, x2, y2 }, width, height, className) {
+  const rect = document.createElementNS(SVG, "rect");
+  rect.setAttribute("x", (x1 * width).toFixed(1));
+  rect.setAttribute("y", (y1 * height).toFixed(1));
+  rect.setAttribute("width", ((x2 - x1) * width).toFixed(1));
+  rect.setAttribute("height", ((y2 - y1) * height).toFixed(1));
+  rect.setAttribute("vector-effect", "non-scaling-stroke");
+  rect.setAttribute("class", className);
+  return rect;
+}
+
+function svgTitle(text) {
+  const title = document.createElementNS(SVG, "title");
+  title.textContent = text;
+  return title;
+}
+
+// In the stacked layout (and for the results table at any width) the viewer sits below what was clicked:
+// without this the highlight happens off-screen and the click looks like it did nothing.
+export function revealViewer() {
+  const viewer = document.querySelector('#document-view [data-slot="viewer"]');
+  if (!viewer) return;
+  const box = viewer.getBoundingClientRect();
+  const visible = box.bottom > 80 && box.top < window.innerHeight - 80;
+  if (!visible) viewer.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function button(text, onClick, disabled) {

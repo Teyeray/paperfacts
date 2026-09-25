@@ -558,6 +558,66 @@ def test_points_that_fit_no_axis_make_the_panel_unreadable_not_read_with_nothing
     assert panel.status == "unreadable" and "none of them on an axis" in panel.detail
 
 
+def _two_axes_without_ids(series: list[dict]) -> dict:
+    return {
+        "chart_type": "property_vs_condition",
+        "x_axis": {"quantity": "O2 flow", "unit": "sccm", "scale": "linear"},
+        "y_axes": [
+            {"field": "sheet_resistance", "unit": "ohm/sq", "scale": "linear"},
+            {"field": "transmittance", "unit": "%", "scale": "linear"},
+        ],
+        "series": series,
+        "points": [
+            {"series": "Rs", "x": 100, "y": 12000.0, "confidence": 0.9},
+            {"series": "T", "x": 100, "y": 85.0, "confidence": 0.9},
+        ],
+    }
+
+
+BOTH_FIELDS = (fig(0, 0), cap(0, 1, "Fig. 3 Sheet resistance and transmittance vs O2 flow"))
+
+
+@pytest.mark.parametrize(
+    "series",
+    [
+        [{"label": "Rs", "y_axis": "left"}, {"label": "T", "y_axis": "right"}],
+        [{"label": "Rs"}, {"label": "T"}],
+    ],
+)
+def test_two_axes_without_ids_do_not_collapse_into_one(series):
+    # The review's repro: both axes were keyed "left", the last one won, and 12000 ohm/sq was stored as a
+    # transmittance of 12000 %. Neither axis can be told apart now, so neither point is placed.
+    result = run(artifact(*BOTH_FIELDS), FakeVisionClient(_two_axes_without_ids(series)))
+
+    assert not [r for r in result.readings if r.field == "transmittance" and r.y_raw == 12000.0]
+    assert result.readings == ()
+    assert result.panels[0].status == "unreadable"
+
+
+def test_a_series_naming_an_unknown_axis_is_unplaced_not_put_on_the_only_axis():
+    answer = chart_answer()
+    answer["series"].append({"label": "T", "y_axis": "right"})
+    answer["points"].append({"series": "T", "x": 100, "y": 85.0, "confidence": 0.9})
+
+    result = run(artifact(*SELECTED), FakeVisionClient(answer))
+
+    assert result.readings
+    assert 85.0 not in [r.y_raw for r in result.readings]
+    assert result.panels[0].status == "read"
+    assert "1 points on no axis" in result.panels[0].detail
+
+
+def test_a_lone_axis_without_an_id_still_takes_series_on_the_left_or_on_no_axis():
+    answer = chart_answer()
+    del answer["y_axes"][0]["id"]
+    answer["series"] = [{"label": "Rs", "y_axis": "left"}, {"label": "Rs2"}]
+    answer["points"] = [{"series": "Rs", "x": 1, "y": 30.0}, {"series": "Rs2", "x": 2, "y": 40.0}]
+
+    readings = run(artifact(*SELECTED), FakeVisionClient(answer)).readings
+
+    assert [r.y_raw for r in readings] == [30.0, 40.0]
+
+
 # ---- More than one object in a reply ---------------------------------------------------------------------
 
 

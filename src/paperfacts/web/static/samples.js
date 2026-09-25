@@ -1,10 +1,14 @@
 // Sample records: each lane's own LaneExtraction (raw text -> normalized value <- source block); clicking a source id highlights it in the viewer.
 
+import { releaseFact } from "./facts.js";
 import { caveats, escapeHtml, fmt, toast } from "./html.js";
 import { LANES, LANE_LABEL, state } from "./state.js";
+import { revealViewer } from "./viewer.js";
 
-// The sid the paper-level record is rendered under; the results table's target row points at it.
-export const TARGET_SID = "靶材";
+// The paper-level record and the unplaced values are shown under these names, and told apart from real
+// samples by `data-kind`, never by the name: a model is free to call a sample 靶材 or 未归属 too.
+const TARGET_SID = "靶材";
+const UNATTRIBUTED_SID = "未归属";
 
 export function renderLanes(root) {
   root.innerHTML = "";
@@ -18,13 +22,13 @@ function laneNode(lane, data) {
   const meta = data ? `${data.samples.length} 样品 · ${data.usage?.total_tokens ?? "?"} tokens${reasoning} · key ${data.extractor_key}` : "";
   box.innerHTML = `<div class="lane-head ${lane === "mineru" ? "a" : "b"}"><span>${LANE_LABEL[lane]}</span><span class="meta">${escapeHtml(meta)}</span></div>`;
   if (!data) { box.append(note("还没有抽取结果。")); return box; }
-  if (data.target) box.append(sampleNode({ sample_id: TARGET_SID, label: "论文级", conditions: {}, fields: data.target.fields }));
+  if (data.target) box.append(sampleNode({ sample_id: TARGET_SID, label: "论文级", conditions: {}, fields: data.target.fields }, "target"));
   if (!data.samples.length) box.append(note("模型没有识别出样品。"));
   for (const sample of data.samples) box.append(sampleNode(sample));
   // Values the model found but could not place on any sample. Shown apart because nothing compares them:
   // hiding them would make the lane look emptier than it was.
   if (data.unattributed?.length) {
-    box.append(sampleNode({ sample_id: "未归属", label: "没能对应到任何样品", conditions: {}, fields: data.unattributed }));
+    box.append(sampleNode({ sample_id: UNATTRIBUTED_SID, label: "没能对应到任何样品", conditions: {}, fields: data.unattributed }, "unattributed"));
   }
   if (data.invalid_source_ids?.length || data.dropped?.length) {
     box.append(note(`清洗记录：${data.invalid_source_ids.length} 个编造的 source_id 被剔除；${data.dropped.length} 个取值被丢弃`));
@@ -39,9 +43,10 @@ function note(text) {
   return div;
 }
 
-function sampleNode(sample) {
+function sampleNode(sample, kind = "sample") {
   const div = document.createElement("div");
   div.className = "sample";
+  div.dataset.kind = kind;
   div.dataset.sample = sample.sample_id ?? "";
   const conditions = Object.entries(sample.conditions ?? {}).map(([k, v]) => `${k}: ${v}`).join(" · ");
   div.innerHTML = `<span class="sid">${escapeHtml(sample.sample_id)}</span><span class="label">${escapeHtml(sample.label ?? "")}</span>${conditions ? `<div class="cond">${escapeHtml(conditions)}</div>` : ""}`;
@@ -58,7 +63,11 @@ function fieldNode(f) {
   const series = f.series ? `<span class="flag series" title="论文对整个样品系列只写了一次，这里是按系列写到每个样品上的">全系列</span>` : "";
   const norm = f.value != null ? ` <small>= ${fmt(f.value)} ${escapeHtml(f.unit ?? "")}</small>` : (f.normalization_note ? ` <small>(${escapeHtml(f.normalization_note)})</small>` : "");
   row.innerHTML = `<span class="fname">${escapeHtml(f.field)}</span><span class="fval">${escapeHtml(f.value_raw)} ${escapeHtml(f.unit_raw ?? "")}${cond}${norm}${series}${caveats(f)}</span><button type="button" class="src">${escapeHtml(f.source_ids.join(", ") || "无来源")}</button>`;
-  row.querySelector(".src").addEventListener("click", () => state.viewer?.highlight(f.source_ids));
+  row.querySelector(".src").addEventListener("click", () => {
+    releaseFact();
+    state.viewer?.highlight(f.source_ids);
+    revealViewer();
+  });
   return row;
 }
 
@@ -77,13 +86,16 @@ export function clearEvidence(host) {
   for (const marked of host?.querySelectorAll(".field.evidence") ?? []) marked.classList.remove("evidence");
 }
 
-export function showEvidence(host, fieldName, rowSampleId) {
+// `kind` is "target" for the results table's paper-level row (it matches the lanes' paper-level records,
+// whatever their name) and "sample" for a sample row (matched by id among real samples only).
+export function showEvidence(host, fieldName, rowSampleId, kind = "sample") {
   if (!host) return;
   clearEvidence(host);
   const wanted = new Set(String(rowSampleId ?? "").split(ID_SEPARATOR).map((id) => id.trim()).filter(Boolean));
   const rows = [];
   for (const sample of host.querySelectorAll(".sample")) {
-    if (!wanted.has(sample.dataset.sample ?? "")) continue;
+    if (sample.dataset.kind !== kind) continue;
+    if (kind === "sample" && !wanted.has(sample.dataset.sample ?? "")) continue;
     for (const row of sample.querySelectorAll(".field")) {
       if ((row.dataset.field ?? "") === fieldName) rows.push(row);
     }

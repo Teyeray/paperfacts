@@ -32,21 +32,16 @@ from dataclasses import dataclass
 
 from paperfacts.adapters import render_markdown
 from paperfacts.config import (
-    DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_LLM_CONCURRENCY,
-    DEFAULT_LLM_CONTEXT_TOKENS,
-    DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     EXTRACTION_MODES,
-    ExtractionMode,
-    InventoryReasoningEffort,
 )
 from paperfacts.errors import ContextBudgetError
 from paperfacts.fields import FIELD_SPECS, FieldSpec
 from paperfacts.grounding import block_adjacency, ground_lane
-from paperfacts.keys import extractor_key, schema_fingerprint
+from paperfacts.keys import ExtractionOptions, extraction_schema_fingerprint, extractor_key
 from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
-from paperfacts.normalize import drop_implausible, normalize_key
+from paperfacts.normalize import drop_implausible
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from paperfacts.prompts import (
     extraction_system_prompt,
@@ -67,9 +62,11 @@ from paperfacts.records import (
     LaneExtraction,
     ResponseCleaning,
     ResponseValue,
-    SampleRecord,
     TargetRecord,
+    clean_samples,
+    place_on_every_sample,
     response_to_records,
+    sample_key,
 )
 from paperfacts.threads import ContextThreadPoolExecutor
 from paperfacts.voting import deduplicate, merge_passes
@@ -79,8 +76,20 @@ logger = logging.getLogger(__name__)
 # Block types that never hold an extractable value: page furniture and figure blocks (whose content is an
 # image path).
 NOISE_TYPES: frozenset[str] = frozenset({"unknown", "figure"})
-# Everything from this heading onwards is citations, not results.
-_END_SECTION = re.compile(r"^(references|reference|bibliography|literature cited)\b", re.IGNORECASE)
+# Everything from this heading onwards is citations, not results. The heading must be the whole block, with
+# at most a section number in front ("6. References", "VI. REFERENCES"): a prefix match cut a paper at a
+# section titled "Reference electrode", and without the number "6. References" kept the bibliography --
+# either way depending on how one parser wrote the heading, which is a lane asymmetry.
+_END_SECTION = re.compile(
+    r"(?:(?:\d+|[ivx]+)(?:\.\d+)*\.?\s+)?"
+    r"(?:references(?:\s+and\s+notes)?|notes\s+and\s+references|reference\s+list|bibliography|literature\s+cited)"
+    r"\s*:?",
+    re.IGNORECASE,
+)
+# The block types a heading arrives as: MinerU labels it a title, PaddleOCR-VL sometimes plain text. The
+# whole-block match is what makes admitting text safe, and the plural is required: a lone "Reference" is as
+# often a chart legend or a table column as a heading, and a false cut empties the rest of one lane only.
+_HEADING_TYPES = frozenset({"title", "text"})
 # Measured on a real 10-page paper: 71.9K characters billed as 21.4K tokens, rounded down so the guard
 # errs towards over-estimating.
 CHARS_PER_TOKEN = 3.0
@@ -126,16 +135,37 @@ def build_extraction_document(artifact: ParsedArtifact) -> ExtractionDocument:
     return document
 
 
+def bibliography_cut(blocks: Sequence[SourceBlock]) -> int | None:
+    """The index of the references heading everything from which is citations, or None."""
+    for index, block in enumerate(blocks):
+        if block.type in _HEADING_TYPES and _END_SECTION.fullmatch(block.content.strip().strip("#* ")):
+            return index
+    return None
+
+
 def informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
     """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography."""
-    kept: list[SourceBlock] = []
-    for block in blocks:
-        if block.type == "title" and _END_SECTION.match(block.content.lstrip("# ").strip()):
-            break  # the bibliography and everything after it
-        if block.type in NOISE_TYPES or not block.content.strip():
-            continue
-        kept.append(block)
-    return kept
+    cut = bibliography_cut(blocks)
+    if cut is not None and cut < len(blocks) / 2:
+        # A cut early in the paper is either a very short paper or a heading misread as the references.
+        logger.warning(
+            "references heading %r at block %d of %d: everything after it is left out",
+            blocks[cut].content.strip(),
+            cut,
+            len(blocks),
+        )
+    body = blocks if cut is None else blocks[:cut]
+    return [block for block in body if block.type not in NOISE_TYPES and block.content.strip()]
+
+
+def _bibliography_audit(blocks: tuple[SourceBlock, ...]) -> tuple[str, ...]:
+    """The cut, as the lane's audit states it: which heading, and how much of the parse it removed. The two
+    lanes cut at their own headings, so a cut that differs between them is visible where the values are."""
+    cut = bibliography_cut(blocks)
+    if cut is None:
+        return ()
+    heading = blocks[cut].content.strip()
+    return (f"bibliography: {len(blocks) - cut} of {len(blocks)} blocks from the heading {heading!r} on were not read",)
 
 
 # ---- Extraction ---------------------------------------------------------------------------------------------
@@ -150,32 +180,39 @@ def _add_usage(total: dict[str, int], part: Mapping[str, int]) -> None:
 def extract_lane(
     artifact: ParsedArtifact,
     client: LlmClient,
+    options: ExtractionOptions,
     *,
-    mode: ExtractionMode,
-    passes: int = 1,
-    context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS,
-    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
     concurrency: int = DEFAULT_LLM_CONCURRENCY,
-    inventory_reasoning_effort: InventoryReasoningEffort = DEFAULT_LLM_INVENTORY_REASONING_EFFORT,
     refresh: bool = False,
 ) -> LaneExtraction:
     """Extract one parser lane, whole-document or question by question.
 
+    ``options`` is everything that shapes a request, built once by the caller
+    (``ExtractionOptions.from_settings``); the key recorded on the lane is ``extractor_key(options)``, the
+    very key the caller stores the lane under and every reader looks it up by. The client sends the sampling
+    settings, so it must have been built from the same values; a mismatch is refused here rather than
+    stored under a key that does not describe the requests that produced it.
+
     ``concurrency`` only decides how many of passage mode's field questions wait on the network at once.
     Every request is the one the sequential loop would have sent, so it stays out of ``extractor_key``.
 
-    ``inventory_reasoning_effort`` overrides the client's effort for the inventory question alone -- the
-    one question that reasons for far longer than the field questions after it. ``INHERIT`` leaves the
-    request exactly as the client builds it, ``None`` sends that question with no such parameter at all,
-    a value sends that effort. It does change what is sent, so it is in ``extractor_key``. Both lanes get
-    the same value, so the disagreement signal stays a comparison of two identically-asked lanes.
+    ``options.inventory_reasoning_effort`` overrides the client's effort for the inventory question alone --
+    the one question that reasons for far longer than the field questions after it. ``INHERIT`` leaves the
+    request exactly as the client builds it, ``None`` sends that question with no such parameter at all, a
+    value sends that effort. Both lanes get the same value, so the disagreement signal stays a comparison of
+    two identically-asked lanes.
     """
-    if passes < 1:
-        raise ValueError(f"passes must be at least 1, got {passes}")
+    if options.passes < 1:
+        raise ValueError(f"passes must be at least 1, got {options.passes}")
     if concurrency < 1:
         raise ValueError(f"concurrency must be at least 1, got {concurrency}")
-    if mode not in EXTRACTION_MODES:
-        raise ValueError(f"unknown extraction mode: {mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
+    if options.mode not in EXTRACTION_MODES:
+        raise ValueError(f"unknown extraction mode: {options.mode!r}, expected one of {', '.join(EXTRACTION_MODES)}")
+    sent = (client.model, client.temperature, client.max_tokens, client.reasoning_effort)
+    described = (options.model, options.temperature, options.max_tokens, options.reasoning_effort)
+    if sent != described:
+        raise ValueError(f"the client asks with {sent} but the extraction options describe {described}")
+    mode, passes = options.mode, options.passes
     blocks = informative_blocks(artifact.blocks)
     document = build_extraction_document(artifact) if mode == "document" else None
 
@@ -194,14 +231,7 @@ def extract_lane(
     inventory = (
         None
         if document is not None
-        else _take_inventory(
-            blocks,
-            client,
-            backend=artifact.backend,
-            context_tokens=context_tokens,
-            inventory_reasoning_effort=inventory_reasoning_effort,
-            refresh=refresh,
-        )
+        else _take_inventory(blocks, client, options, backend=artifact.backend, refresh=refresh)
     )
     if inventory is not None:
         # One call, counted once: charging it to every pass would misreport what the lane cost.
@@ -213,15 +243,14 @@ def extract_lane(
         cache_salt = "" if index == 0 else f"pass-{index}"
         if inventory is None:
             records, pass_usage, text = _extract_whole_document(
-                document, client, context_tokens=context_tokens, refresh=refresh, cache_salt=cache_salt
+                document, client, options, refresh=refresh, cache_salt=cache_salt
             )
         else:
             records, pass_usage, text = _extract_passages(
                 blocks,
                 client,
+                options,
                 inventory=inventory,
-                context_tokens=context_tokens,
-                candidate_limit=candidate_limit,
                 concurrency=concurrency,
                 refresh=refresh,
                 cache_salt=cache_salt,
@@ -234,23 +263,17 @@ def extract_lane(
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,
-        extractor_key=extractor_key(
-            client.model,
-            passes=passes,
-            mode=mode,
-            temperature=client.temperature,
-            max_tokens=client.max_tokens,
-            reasoning_effort=client.reasoning_effort,
-            inventory_reasoning_effort=inventory_reasoning_effort,
-            candidate_limit=candidate_limit,
-        ),
+        extractor_key=extractor_key(options),
         model=client.model,
-        schema_version=schema_fingerprint(),
+        schema_version=extraction_schema_fingerprint(),
         target=records.target,
         samples=records.samples,
         invalid_source_ids=records.invalid_source_ids,
-        dropped=records.dropped,
+        dropped=(*_bibliography_audit(artifact.blocks), *records.dropped),
         unattributed=records.unattributed,
+        # Carried as data, not left to the audit text in `dropped`, so the web page can say why the lane is
+        # empty without matching prose. The same condition that skips the sample-level questions below.
+        no_tco_film=inventory is not None and _deposits_no_film(inventory.response),
         passes=passes,
         usage=usage,
         raw_response=raw_response,
@@ -263,15 +286,15 @@ def extract_lane(
 def _extract_whole_document(
     document: ExtractionDocument,
     client: LlmClient,
+    options: ExtractionOptions,
     *,
-    context_tokens: int,
     refresh: bool,
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
     """Document mode: one question carrying the whole filtered paper."""
     system = extraction_system_prompt()
     user = extraction_user_prompt(document.markdown)
-    _check_context_budget(system, user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+    _check_context_budget(system, user, options)
     response, text, usage = complete_validated(
         client,
         ExtractionResponse,
@@ -307,18 +330,17 @@ class SampleInventory:
     source_ids: frozenset[str]
 
 
-def _budget_chars(client: LlmClient, context_tokens: int) -> int:
+def _budget_chars(options: ExtractionOptions) -> int:
     """How much rendered markdown one question may carry, once the reply and the prompt are paid for."""
-    return int(max(context_tokens - client.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
+    return int(max(options.context_tokens - options.max_tokens - PROMPT_OVERHEAD_TOKENS, 0) * CHARS_PER_TOKEN)
 
 
 def _take_inventory(
     blocks: Sequence[SourceBlock],
     client: LlmClient,
+    options: ExtractionOptions,
     *,
     backend: Backend,
-    context_tokens: int,
-    inventory_reasoning_effort: InventoryReasoningEffort,
     refresh: bool,
 ) -> SampleInventory:
     """Ask which samples exist -- once per lane.
@@ -326,10 +348,10 @@ def _take_inventory(
     The salt is empty, the salt pass 0 would have used, so a lane re-run with more passes still hits the
     inventory entry the earlier run cached.
     """
-    selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(client, context_tokens))
+    selection = fit_budget(inventory_blocks(blocks), budget_chars=_budget_chars(options))
     system = inventory_system_prompt()
     user = inventory_user_prompt(render_markdown(selection))
-    _check_context_budget(system, user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+    _check_context_budget(system, user, options)
     response, raw_text, usage = complete_validated(
         client,
         InventoryResponse,
@@ -338,7 +360,7 @@ def _take_inventory(
         repair=lambda previous, error: repair_prompt(user, previous, error),
         refresh=refresh,
         cache_salt="",
-        reasoning_effort=inventory_reasoning_effort,
+        reasoning_effort=options.inventory_reasoning_effort,
     )
     logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(response.samples), len(selection))
     return SampleInventory(
@@ -352,16 +374,15 @@ def _take_inventory(
 def _extract_passages(
     blocks: Sequence[SourceBlock],
     client: LlmClient,
+    options: ExtractionOptions,
     *,
     inventory: SampleInventory,
-    context_tokens: int,
-    candidate_limit: int,
     concurrency: int,
     refresh: bool,
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
     """Passage mode, one pass: one question per field against the lane's single inventory."""
-    budget_chars = _budget_chars(client, context_tokens)
+    budget_chars = _budget_chars(options)
     usage: dict[str, int] = {}
 
     sample_list = _render_sample_list(inventory.response.samples)
@@ -375,7 +396,7 @@ def _extract_passages(
     questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
     for spec in FIELD_SPECS:
-        if spec.is_sample_level and inventory.response.no_tco_film and not inventory.response.samples:
+        if spec.is_sample_level and _deposits_no_film(inventory.response):
             # A device paper on purchased ITO glass: asking anyway only harvests the absorber's thickness and
             # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
             # empty for any other reason -- it missed the sample text -- still gets every question, so one
@@ -383,7 +404,7 @@ def _extract_passages(
             dropped.append(f"{spec.name}: the paper deposits no TCO film of its own, so it was not asked about")
             continue
         candidates = fit_budget(
-            candidate_blocks(spec, blocks, limit=candidate_limit, sample_blocks=sample_blocks),
+            candidate_blocks(spec, blocks, limit=options.candidate_limit, sample_blocks=sample_blocks),
             budget_chars=budget_chars,
         )
         if not candidates:
@@ -392,7 +413,7 @@ def _extract_passages(
             dropped.append(f"{spec.name}: no block in this lane mentions it, so it was not asked about")
             continue
         field_user = field_user_prompt(spec, sample_list, render_markdown(candidates))
-        _check_context_budget(field_system, field_user, context_tokens=context_tokens, reply_tokens=client.max_tokens)
+        _check_context_budget(field_system, field_user, options)
         questions.append((spec, tuple(candidates), field_user))
 
     def ask(question: tuple[FieldSpec, tuple[SourceBlock, ...], str]) -> tuple[FieldHarvest, str, dict[str, int]]:
@@ -445,6 +466,11 @@ def _extract_passages(
     return records, usage, "\n\n".join(raw_parts)
 
 
+def _deposits_no_film(inventory: InventoryResponse) -> bool:
+    """The inventory's verdict that the paper has no film of its own, trusted only when it named no sample."""
+    return inventory.no_tco_film and not inventory.samples
+
+
 def _render_sample_list(samples: Sequence[InventorySample]) -> str:
     """The sample list as the field questions see it: id, label and the conditions that tell samples apart."""
     if not samples:
@@ -465,11 +491,12 @@ def passage_records(
 ) -> ExtractedRecords:
     """Assemble one pass of passage answers into records, placing each value on the sample it names.
 
-    Attribution is by normalised sample id -- the same key that pairs samples across lanes -- so the model
-    only has to repeat an id it was given. A sample-level value naming no sample, or one the inventory does
-    not have, is kept in ``unattributed`` rather than attached to a plausible neighbour: an unplaced value
-    is visible in the report, a misplaced one is indistinguishable from a real measurement. The one
-    exception is a paper with a single sample, where a value naming no sample has only one possible owner.
+    Attribution is by :func:`~paperfacts.records.sample_key` -- the same key that pairs samples across
+    lanes -- so the model only has to repeat an id it was given. A sample-level value naming no sample, or
+    one the inventory does not have, is kept in ``unattributed`` rather than attached to a plausible
+    neighbour: an unplaced value is visible in the report, a misplaced one is indistinguishable from a real
+    measurement. The one exception is a paper with a single sample, where a value naming no sample has only
+    one possible owner.
 
     A value the model flagged ``applies_to_all_samples`` is the other kind of null id: the paper stated it
     once for the whole series ("all films were RF sputtered"), so it is written onto every sample with
@@ -478,30 +505,9 @@ def passage_records(
     cleaning = ResponseCleaning()
     cleaning.dropped.extend(dropped)
 
-    samples: list[SampleRecord] = []
-    sample_fields: list[list[FieldValue]] = []
-    index_by_key: dict[str, int] = {}
-    for item in inventory.samples:
-        sample_id = item.sample_id.strip()
-        key = normalize_key(sample_id)
-        # min_length still admits "  ". A repeat means the model listed one sample twice under one id, and
-        # every later value for it would land on the first: worth recording, not worth guessing about.
-        if not sample_id:
-            cleaning.dropped.append("inventory: a sample was listed with no usable id")
-            continue
-        if key in index_by_key:
-            cleaning.dropped.append(f"inventory: sample {sample_id!r} repeats an id already listed")
-            continue
-        index_by_key[key] = len(samples)
-        samples.append(
-            SampleRecord(
-                sample_id=sample_id,
-                label=item.label.strip(),
-                conditions={str(name).strip(): str(value).strip() for name, value in item.conditions.items()},
-                source_ids=cleaning.keep_ids(item.source_ids, inventory_ids),
-            )
-        )
-        sample_fields.append([])
+    samples, _ = clean_samples(inventory.samples, cleaning, inventory_ids)
+    sample_fields: list[list[FieldValue]] = [[] for _ in samples]
+    index_by_key = {sample_key(sample.sample_id): index for index, sample in enumerate(samples)}
 
     target_fields: list[FieldValue] = []
     target_ids: list[str] = []
@@ -518,17 +524,15 @@ def passage_records(
                 source_ids=item.source_ids,
                 note=item.note,
                 known_ids=harvest.known_ids,
-                series=bool(item.applies_to_all_samples) and not item.sample_id,
             )
             if value is None:
                 continue
             if not harvest.spec.is_sample_level:
-                # The question itself decided the scope, so a stray sample_id on a paper-level field is
-                # noise rather than the scope error document mode has to guard against.
+                # The question itself decided the scope, so a stray sample_id or series flag on a paper-level
+                # field is noise rather than the scope error document mode has to guard against.
                 target_fields.append(value)
                 target_ids.extend(value.source_ids)
                 continue
-            index = index_by_key.get(normalize_key(item.sample_id)) if item.sample_id else None
             if item.applies_to_all_samples and item.sample_id:
                 # An id and the series flag contradict each other. The id is the more specific claim and
                 # the one the prompt asks to be copied verbatim, so it wins; the flag is noise.
@@ -537,17 +541,10 @@ def passage_records(
                     harvest.spec.name,
                     item.sample_id,
                 )
-            elif value.series and not samples:
-                # Nothing to fan out to; the flag would claim a placement the record does not have.
-                value = value.model_copy(update={"series": False})
-            elif value.series:
-                # The paper states this once for the whole series ("all films were RF sputtered"). That is
-                # not an unplaceable value, it is a value the paper placed on every sample at once, so it
-                # is written onto each of them -- explicitly flagged, never inferred from the text by code.
-                for fields in sample_fields:
-                    fields.append(value)
-                series_fanned_out += 1
+            elif item.applies_to_all_samples:
+                series_fanned_out += place_on_every_sample(value, sample_fields, unattributed)
                 continue
+            index = index_by_key.get(sample_key(item.sample_id)) if item.sample_id else None
             if index is None and not item.sample_id and len(samples) == 1:
                 # The prompt allows a null sample_id when the excerpts do not say which sample a value
                 # belongs to. With exactly one sample in the inventory there is nothing to say: the lone
@@ -589,8 +586,9 @@ def passage_records(
     )
 
 
-def _check_context_budget(system: str, user: str, *, context_tokens: int, reply_tokens: int) -> None:
+def _check_context_budget(system: str, user: str, options: ExtractionOptions) -> None:
     """Fail before spending money when the prompt cannot fit, instead of letting the API truncate it."""
+    context_tokens, reply_tokens = options.context_tokens, options.max_tokens
     estimate = int((len(system) + len(user)) / CHARS_PER_TOKEN) + 1
     budget = context_tokens - reply_tokens
     if estimate > budget:

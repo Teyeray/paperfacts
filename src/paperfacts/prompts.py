@@ -45,6 +45,19 @@ _LAYER_SCOPE = (
     " a metal contact, the substrate) or to a whole device is not a value of this field, however well its"
     " name fits: leave it out."
 )
+# A value stated for part of the series. Left unsaid, the model reports "all films deposited at 100 °C" as one
+# value with no sample and the series flag off, and the value reaches none of the samples it names (the gold set
+# lost 36 substrate temperatures this way). Shared so the two modes place a subset the same way. Membership must
+# be stated, never inferred: a subset whose samples the text does not identify stays unplaced, which is where
+# each prompt says such a value goes (CLAUDE.md: never attach a value to a plausible neighbour).
+_SUBSET_SCOPE = (
+    'A value the paper states for a named subset of the listed samples -- "all films deposited at 100 °C",'
+    ' "the annealed films", "the samples on glass" -- belongs to each sample in that subset when the excerpts'
+    " or the sample list say exactly which listed samples form the subset: then report it once per sample of"
+    " the subset, each time under that sample's own id, never as one entry without a sample id. Never guess"
+    " which samples a subset holds. `applies_to_all_samples` stays reserved for a value that holds for the"
+    " whole list; a subset, however large, is reported sample by sample."
+)
 
 # The prompt is full of literal JSON braces, so the field table is substituted with str.replace rather
 # than str.format.
@@ -84,6 +97,8 @@ Rules:
 9. Every value is verified against the block you cite for it: if `value_raw` cannot be found in that
    block's text, the value is recorded as unverified. Cite the block that literally contains the
    characters you copied, and copy them exactly.
+10. `applies_to_all_samples` is true ONLY for a sample-level field (group "process" or "film") that the paper states once for the whole series -- "all films", "for all samples" -- and never ties to one sample. Report such a value once, under "target", with `applies_to_all_samples: true`; it is copied onto every sample. Never true for a value tied to only some of the samples, and false everywhere else, including every FIELD under a sample.
+    {subset_scope} If they do not say which samples form the subset, leave the value out rather than attach it to samples it may not belong to.
 
 Fields to extract:
 {fields}
@@ -138,6 +153,7 @@ Rules:
 3. `source_ids` must be copied from the `<!-- source: ... -->` markers shown here. Never invent ids and never cite an excerpt you were not shown. Prefer the most specific excerpt (a table over the surrounding paragraph).
 4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
 5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, "all films", "for all samples". Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ("the sputtered films", when one listed sample is not sputtered) is false: give the individual sample ids the excerpt names.
+   {subset_scope} If they do not, report it once with a null `sample_id`.
 6. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
    {layer_scope}
    For a numeric field `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
@@ -157,7 +173,11 @@ _PLAUSIBLE = (
 
 
 def _scoped(template: str) -> str:
-    return template.replace("{sample_scope}", _SAMPLE_SCOPE).replace("{layer_scope}", _LAYER_SCOPE)
+    return (
+        template.replace("{sample_scope}", _SAMPLE_SCOPE)
+        .replace("{layer_scope}", _LAYER_SCOPE)
+        .replace("{subset_scope}", _SUBSET_SCOPE)
+    )
 
 
 _EXTRACTION_SYSTEM = _scoped(_EXTRACTION_SYSTEM)

@@ -27,7 +27,7 @@
 # PAPERFACTS_DEPLOY_URL overrides http://127.0.0.1:8000 (staging servers, tests).
 #
 # Exit codes: 0 deployed/verified · 1 stale (--check) or a failed step · 2 restart refused
-#             (documents in flight) · 3 deployed but the paddle lane is down
+#             (jobs queued or running) · 3 deployed but the paddle lane is down
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -88,22 +88,63 @@ unit_started() {  # epoch of the running process, 0 when the unit is down
     echo $(( $(date +%s) - uptime_s + usec / 1000000 ))
 }
 
-WEB_PASSWORD="$(sed -n 's/^PAPERFACTS_WEB_PASSWORD=//p' .env | head -n1 | tr -d '"'"'"' ')"
+env_value() {  # $1 = key: its value in .env, parsed the way the service parses it
+    # The service reads .env with python-dotenv, so the same parser reads it here when the venv has it:
+    # quotes are the value's delimiters, not part of it, and spaces or quotes inside a quoted value are kept.
+    local py=python3
+    if [ -x .venv/bin/python ] && .venv/bin/python -c 'import dotenv' 2>/dev/null; then py=.venv/bin/python; fi
+    "$py" - "$1" <<'PY'
+import sys
+
+key = sys.argv[1]
+try:
+    from dotenv import dotenv_values
+
+    value = dotenv_values(".env").get(key)
+except ImportError:  # no venv yet: the common forms, the last assignment winning as in dotenv
+    value = None
+    for line in open(".env", encoding="utf-8"):
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        name, sep, raw = line.partition("=")
+        if not sep or name.strip() != key:
+            continue
+        raw = raw.strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+            value = raw[1:-1]
+            if raw[0] == '"':  # dotenv undoes backslash escapes inside double quotes
+                value = value.replace('\\"', '"').replace("\\\\", "\\")
+        else:
+            value = raw.split(" #", 1)[0].rstrip()
+sys.stdout.write(value or "")
+PY
+}
+
+WEB_PASSWORD="$(env_value PAPERFACTS_WEB_PASSWORD)"
 [ -n "$WEB_PASSWORD" ] || die "PAPERFACTS_WEB_PASSWORD is empty in .env"
 WEB_USERNAME="$(python3 -c 'import json;print(json.load(open("config.json"))["web"]["username"])')"
-AUTH="$WEB_USERNAME:$WEB_PASSWORD"
+# curl reads the credentials from a config on stdin (-K -), never from its argv: on a shared GPU host every
+# user can read every process's command line through ps. printf is a shell builtin, so it has no argv either.
+# Inside a quoted curl config value only backslash and double quote need escaping; python does it (fed on
+# stdin, so again no argv), because bash's own ${x//pattern/replacement} treats backslashes differently
+# from one bash version to the next.
+CURL_CONFIG="$(printf '%s:%s' "$WEB_USERNAME" "$WEB_PASSWORD" | python3 -c 'import sys; s = sys.stdin.read(); print("user = \"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"", end="")')"
+curl_auth() {  # curl with the web credentials; takes curl's own arguments
+    printf '%s\n' "$CURL_CONFIG" | curl -K - "$@"
+}
 
 # ---------------------------------------------------------------- re-run displaced documents
 # keys.py names every stored extraction/comparison after a fingerprint of the package's own source, so a
 # commit that touches the schema, the prompts or the comparison rules leaves each document's old artifacts
 # unreachable: the library then reports `compared: false` and /report answers 404 "No comparison report yet".
-# POST /api/documents/run-all queues exactly those documents (it skips the ones already compared) and returns
-# at once; the single job worker then re-parses from the parse cache and re-compares.
+# POST /api/documents/run-all queues exactly those documents (it skips the ones already exported under the
+# current keys) and returns at once; the job workers then re-parse from the parse cache and re-compare.
 rerun_pending_documents() {
     local tmp
     tmp="$(mktemp -d)"
     info "queueing every document the new keys displaced (POST /api/documents/run-all)"
-    if ! curl -sS --max-time 30 -u "$AUTH" -A "$UA" -X POST "$LOCAL_URL/api/documents/run-all" \
+    if ! curl_auth -sS --max-time 30 -A "$UA" -X POST "$LOCAL_URL/api/documents/run-all" \
         -o "$tmp/runall.json"; then
         rm -rf "$tmp"
         warn "run-all request failed — is paperfacts.service up?"
@@ -130,48 +171,84 @@ PY
 
     if [ ! -s "$tmp/ids" ]; then
         rm -rf "$tmp"
-        ok "nothing to re-run: every document already has a comparison under these keys"
+        ok "nothing to re-run: every document is already exported under these keys"
         return 0
     fi
 
-    local total deadline done_count failed_count states
+    # /api/jobs lists every job the service holds, without stages, which is enough to count outcomes. The
+    # stage a running job is in comes from /api/jobs/{id}, asked only for the few that are running. The
+    # service prunes old finished jobs, and a restart forgets them all: a queued id no longer listed has
+    # finished (or will never run) as far as waiting goes, so it is counted as gone rather than waited on.
+    local total deadline done_count failed_count gone_count states running job_id
     total="$(wc -l <"$tmp/ids" | tr -d ' ')"
     deadline=$((SECONDS + RERUN_TIMEOUT))
     info "waiting for $total document(s), budget ${RERUN_TIMEOUT}s (the service finishes them with or without this script)"
     while [ "$SECONDS" -lt "$deadline" ]; do
-        if curl -sS --max-time 20 -u "$AUTH" -A "$UA" "$LOCAL_URL/api/jobs" -o "$tmp/jobs.json" 2>/dev/null; then
-            IFS='|' read -r done_count failed_count states < <(python3 - "$tmp/jobs.json" "$tmp/ids" <<'PY'
+        if curl_auth -sS --max-time 20 -A "$UA" "$LOCAL_URL/api/jobs" -o "$tmp/jobs.json" 2>/dev/null; then
+            running="$(python3 - "$tmp/jobs.json" "$tmp/ids" <<'PY'
 import json, sys
-ids = [line.strip() for line in open(sys.argv[2]) if line.strip()]
+ids = {line.strip() for line in open(sys.argv[2]) if line.strip()}
 try:
-    jobs = {job["job_id"]: job for job in json.load(open(sys.argv[1]))}
+    jobs = json.load(open(sys.argv[1]))
+except Exception:
+    jobs = []
+print(" ".join(job["job_id"] for job in jobs if job.get("job_id") in ids and job.get("status") == "running"))
+PY
+)"
+            rm -f "$tmp"/job.*.json
+            for job_id in $running; do  # hex ids, safe as file names
+                curl_auth -sS --max-time 20 -A "$UA" "$LOCAL_URL/api/jobs/$job_id" \
+                    -o "$tmp/job.$job_id.json" 2>/dev/null || true
+            done
+            IFS='|' read -r done_count failed_count gone_count states < <(python3 - "$tmp" <<'PY'
+import json, os, sys
+tmp = sys.argv[1]
+ids = [line.strip() for line in open(os.path.join(tmp, "ids")) if line.strip()]
+try:
+    jobs = {job["job_id"]: job for job in json.load(open(os.path.join(tmp, "jobs.json")))}
 except Exception:
     jobs = {}
-done = failed = 0
+done = failed = gone = 0
 parts = []
 for job_id in ids:
-    job = jobs.get(job_id) or {}
-    status = job.get("status", "unknown")
+    status = jobs[job_id].get("status", "unknown") if job_id in jobs else "gone"
     done += status == "done"
     failed += status == "failed"
-    stage = next((s for s in job.get("stages", []) if s.get("status") == "running"), None)
-    parts.append(f"{status}:{stage['name'] if stage else ''}")
-print(f"{done}|{failed}|{' '.join(parts)}")
+    gone += status == "gone"
+    stage = ""
+    if status == "running":
+        try:
+            stages = json.load(open(os.path.join(tmp, f"job.{job_id}.json"))).get("stages", [])
+            stage = next((s["name"] for s in stages if s.get("status") == "running"), "")
+        except Exception:
+            pass
+    parts.append(f"{status}:{stage}")
+print(f"{done}|{failed}|{gone}|{' '.join(parts)}")
 PY
 )
-            printf '\r     %s done, %s failed of %s  [%s]   ' \
-                "${done_count:-0}" "${failed_count:-0}" "$total" "${states:0:90}"
+            printf '\r     %s done, %s failed, %s gone of %s  [%s]   ' \
+                "${done_count:-0}" "${failed_count:-0}" "${gone_count:-0}" "$total" "${states:0:90}"
             if [ "${done_count:-0}" -ge "$total" ]; then
                 printf '\n'
                 rm -rf "$tmp"
                 ok "all $total document(s) re-ran under the new keys"
                 return 0
             fi
-            if [ "$((${done_count:-0} + ${failed_count:-0}))" -ge "$total" ]; then
+            if [ "$((${done_count:-0} + ${failed_count:-0} + ${gone_count:-0}))" -ge "$total" ]; then
                 printf '\n'
                 rm -rf "$tmp"
-                warn "${failed_count:-0} job(s) failed — journalctl --user -u paperfacts.service -n 50"
-                return 1
+                # A job the service no longer holds has an unknown outcome (pruned after finishing, or the
+                # service restarted and dropped its queue); success cannot be claimed for it.
+                if [ "${gone_count:-0}" -gt 0 ]; then
+                    warn "${gone_count} job(s) no longer held by the service (pruned after finishing, or it restarted) — check $LOCAL_URL/api/documents"
+                fi
+                if [ "${failed_count:-0}" -gt 0 ]; then
+                    warn "${failed_count} job(s) failed — journalctl --user -u paperfacts.service -n 50"
+                fi
+                if [ "${failed_count:-0}" -gt 0 ] || [ "${gone_count:-0}" -gt 0 ]; then
+                    return 1
+                fi
+                return 0
             fi
         fi
         sleep 10
@@ -284,26 +361,26 @@ fi
 
 # ---------------------------------------------------------------- in-flight work
 # Jobs live only in the service's memory: a restart cancels everything queued and kills the
-# running job (its stage artifacts stay on disk, so a re-queue resumes from the cache).
+# running job (its stage artifacts stay on disk, so a re-queue resumes from the cache). Only a job
+# queued or running is at stake. A document that is merely not exported -- never run, or failed for
+# good -- loses nothing to a restart and must not block a deploy.
 PENDING=""
-DOCS_JSON="$(curl -sS --max-time 10 -u "$AUTH" -A "$UA" "$LOCAL_URL/api/documents" 2>/dev/null || true)"
-if [ -n "$DOCS_JSON" ]; then
-    PENDING="$(printf '%s' "$DOCS_JSON" | python3 -c '
+JOBS_JSON="$(curl_auth -sS --max-time 10 -A "$UA" "$LOCAL_URL/api/jobs" 2>/dev/null || true)"
+if [ -n "$JOBS_JSON" ]; then
+    PENDING="$(printf '%s' "$JOBS_JSON" | python3 -c '
 import json, sys
 try:
-    docs = json.load(sys.stdin)
+    jobs = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
-for d in docs:
-    if not d.get("compared"):
-        name = d.get("name", "?")
-        state = "/".join(k for k, v in (d.get("parsed") or {}).items() if v) or "not parsed"
-        print(f"      - {name} ({state})")
+for job in jobs if isinstance(jobs, list) else []:
+    if job.get("status") in ("queued", "running"):  # /api/jobs carries no stages; the status says enough here
+        print("      - job %s doc %s %s" % (job.get("job_id"), job.get("document_id"), job["status"]))
 ' 2>/dev/null || true)"
 fi
 
 if [ -n "$PENDING" ]; then
-    warn "documents uploaded but not finished — a restart drops their jobs:"
+    warn "jobs queued or running — a restart drops them:"
     printf '%s\n' "$PENDING" >&2
     if [ "$FORCE" != 1 ]; then
         cat >&2 <<EOF
@@ -390,7 +467,7 @@ done
 info "waiting for $LOCAL_URL/api/health (up to ${HEALTH_TIMEOUT}s)"
 HEALTH=""
 for _ in $(seq 1 "$HEALTH_TIMEOUT"); do
-    HEALTH="$(curl -sS --max-time 5 -u "$AUTH" -A "$UA" "$LOCAL_URL/api/health" 2>/dev/null || true)"
+    HEALTH="$(curl_auth -sS --max-time 5 -A "$UA" "$LOCAL_URL/api/health" 2>/dev/null || true)"
     case "$HEALTH" in *'"status"'*) break ;; esac
     if [ "$(unit_state paperfacts.service)" != active ]; then
         journalctl --user -u paperfacts.service -n 30 --no-pager >&2 || true
@@ -407,7 +484,7 @@ CODE_NOAUTH="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -A "$UA" "$
 [ "$CODE_NOAUTH" = 401 ] && ok "Basic gate still on (401 without credentials)" \
     || warn "expected 401 without credentials, got $CODE_NOAUTH"
 
-CODE_UI="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -u "$AUTH" -A "$UA" "$LOCAL_URL/" || echo 000)"
+CODE_UI="$(curl_auth -sS --max-time 10 -o /dev/null -w '%{http_code}' -A "$UA" "$LOCAL_URL/" || echo 000)"
 [ "$CODE_UI" = 200 ] && ok "web UI 200" || warn "web UI returned $CODE_UI"
 
 LANE_DOWN=0
@@ -425,7 +502,7 @@ if [ "$PADDLE_BACKEND" = "vllm-server" ]; then
 fi
 
 if [ "$PUBLIC" = 1 ]; then
-    PUB="$(curl -sS --max-time 20 -u "$AUTH" -A "$UA" "$PUBLIC_URL/api/health" 2>/dev/null || true)"
+    PUB="$(curl_auth -sS --max-time 20 -A "$UA" "$PUBLIC_URL/api/health" 2>/dev/null || true)"
     case "$PUB" in *'"status"'*) ok "public: $PUBLIC_URL/api/health" ;; *) warn "public endpoint did not answer: $PUB" ;; esac
 fi
 ok "service started at $(systemctl --user show paperfacts.service -p ExecMainStartTimestamp --value)"

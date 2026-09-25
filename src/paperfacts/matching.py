@@ -1,4 +1,4 @@
-"""Sample identity matching: exact-pair by normalized sample_id first, then hand the rest to the LLM
+"""Sample identity matching: exact-pair by sample_key first, then hand the rest to the LLM
 (which must supply justification and a confidence score).
 
 When the model fails to produce valid JSON on both attempts, this does **not** pretend "everything is
@@ -16,9 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.errors import LlmResponseError
 from paperfacts.llm import LlmClient, complete_validated
-from paperfacts.normalize import normalize_key
 from paperfacts.prompts import matching_system_prompt, matching_user_prompt, repair_prompt
-from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
+from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, sample_key
 
 logger = logging.getLogger(__name__)
 
@@ -123,14 +122,15 @@ def match_samples(
 def _exact_pairs(
     samples_a: tuple[SampleRecord, ...], samples_b: tuple[SampleRecord, ...]
 ) -> tuple[tuple[SampleMatch, ...], list[SampleRecord], list[SampleRecord]]:
-    """Pair samples directly when their normalized sample_id is identical (deterministic — costs nothing
+    """Pair samples directly when their sample_key is identical (deterministic — costs nothing
     and introduces no model noise)."""
-    by_key_b = {normalize_key(s.sample_id): s for s in samples_b}
+    by_key_b = {sample_key(s.sample_id): s for s in samples_b}
     pairs: list[SampleMatch] = []
     used_b: set[str] = set()
     rest_a: list[SampleRecord] = []
     for sample in samples_a:
-        match = by_key_b.get(normalize_key(sample.sample_id))
+        key = sample_key(sample.sample_id)
+        match = by_key_b.get(key) if key else None
         if match is not None and match.sample_id not in used_b:
             pairs.append(
                 SampleMatch(

@@ -22,9 +22,9 @@ import pytest
 from paperfacts.config import INHERIT, InventoryReasoningEffort
 from paperfacts.extract import extract_lane
 from paperfacts.fields import FIELD_SPECS
-from paperfacts.keys import extractor_key
-from paperfacts.prompts import field_system_prompt, inventory_system_prompt
-from support.extraction import make_artifact
+from paperfacts.keys import ExtractionOptions, extractor_key
+from paperfacts.prompts import extraction_system_prompt, field_system_prompt, inventory_system_prompt
+from support.extraction import lane_options, make_artifact
 from support.factories import make_block
 from support.llm import FakeLlmClient
 
@@ -117,10 +117,8 @@ def extract(
     return extract_lane(
         make_artifact(make_blocks(backend), backend=backend),
         client,
-        mode="passage",
-        passes=passes,
+        lane_options(client, mode="passage", passes=passes, inventory_reasoning_effort=inventory_reasoning_effort),
         concurrency=concurrency,
-        inventory_reasoning_effort=inventory_reasoning_effort,
     )
 
 
@@ -315,6 +313,8 @@ def test_a_paper_depositing_no_tco_film_is_asked_only_paper_level_fields():
     assert client.call_count == 1
     assert lane.samples == () and lane.unattributed == ()
     assert any(entry.startswith(f"{ASKED_FIELD}: the paper deposits no TCO film") for entry in lane.dropped)
+    # the verdict travels as data, so the web page never has to match the audit text above
+    assert lane.no_tco_film is True
 
 
 def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
@@ -327,6 +327,17 @@ def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
 
     assert client.call_count == 5
     assert [field.value_raw for field in lane.unattributed] == ["12.5"]
+    assert lane.no_tco_film is False
+
+
+def test_a_no_film_verdict_beside_named_samples_is_not_trusted():
+    # Contradictory: samples were named, so they are asked about and the lane does not claim "no film".
+    client = FakeLlmClient(responder(inventory=json.dumps({"samples": TWO_SAMPLES, "no_tco_film": True})))
+
+    lane = extract(client)
+
+    assert len(lane.samples) == 2
+    assert lane.no_tco_film is False
 
 
 def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattributed():
@@ -361,7 +372,7 @@ def test_a_paper_level_value_goes_to_the_target_even_when_it_names_a_sample():
     )
     client = FakeLlmClient(responder(inch=values_json({"sample_id": "A", "value_raw": "4", "unit_raw": "inch"})))
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert lane.target is not None
     assert [(field.field, field.value_raw) for field in lane.target.fields] == [("inch", "4")]
@@ -518,8 +529,10 @@ def test_the_inventory_effort_is_stored_in_the_extractor_key():
 
     lane = extract(client, inventory_reasoning_effort="none")
 
-    assert lane.extractor_key == extractor_key(client.model, mode="passage", inventory_reasoning_effort="none")
-    assert lane.extractor_key != extractor_key(client.model, mode="passage")
+    assert lane.extractor_key == extractor_key(
+        ExtractionOptions(client.model, mode="passage", inventory_reasoning_effort="none")
+    )
+    assert lane.extractor_key != extractor_key(ExtractionOptions(client.model, mode="passage"))
 
 
 # ---- the mode itself ------------------------------------------------------------------------------
@@ -532,15 +545,15 @@ def test_passage_mode_stores_a_different_extractor_key_than_document_mode():
 
     lane = extract(client)
 
-    assert lane.extractor_key == extractor_key(client.model, mode="passage")
-    assert lane.extractor_key != extractor_key(client.model, mode="document")
+    assert lane.extractor_key == extractor_key(ExtractionOptions(client.model, mode="passage"))
+    assert lane.extractor_key != extractor_key(ExtractionOptions(client.model, mode="document"))
 
 
 def test_an_unknown_mode_is_rejected_before_any_call_is_made():
     client = FakeLlmClient(responder())
 
     with pytest.raises(ValueError, match="unknown extraction mode"):
-        extract_lane(make_artifact(make_blocks()), client, mode="passages")  # type: ignore[arg-type]
+        extract_lane(make_artifact(make_blocks()), client, lane_options(client, mode="passages"))  # type: ignore[arg-type]
 
     assert client.call_count == 0
 
@@ -567,7 +580,7 @@ def test_the_same_value_quoted_twice_becomes_one_value_carrying_both_citations()
         )
     )
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     values = lane.samples[0].fields
     assert [value.value_raw for value in values] == ["12.5"]
@@ -588,12 +601,67 @@ def test_the_same_number_in_two_units_stays_two_values():
         )
     )
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert [value.unit_raw for value in lane.samples[0].fields] == ["ohm/sq", "kohm/sq"]
 
 
 # ---- The inventory's own mistakes ---------------------------------------------------------------------
+
+
+def test_a_paper_level_value_flagged_for_every_sample_is_not_stored_as_a_series_value():
+    # The flag only means something for a sample-level field; on the target it used to leave series=True.
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(TWO_SAMPLES),
+            component=values_json({"sample_id": None, "value_raw": "ITO", "applies_to_all_samples": True}),
+        )
+    )
+    blocks = (*make_blocks(), make_block(page=0, order=2, content="The target composition was ITO."))
+
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
+
+    assert lane.target.get("component").series is False
+    assert all(sample.fields == () for sample in lane.samples)
+
+
+def test_samples_distinguished_by_a_greek_letter_or_a_suffix_case_stay_separate():
+    # normalize_key merged "α-ITO" with "β-ITO" (and "ITO-a" with "ITO-A"): the second was dropped as a
+    # repeat and every value naming it landed on the first.
+    samples = [
+        {"sample_id": "α-ITO", "label": "", "conditions": {}},
+        {"sample_id": "β-ITO", "label": "", "conditions": {}},
+        {"sample_id": "ITO-a", "label": "", "conditions": {}},
+        {"sample_id": "ITO-A", "label": "", "conditions": {}},
+    ]
+    client = FakeLlmClient(
+        responder(
+            inventory=inventory_json(samples),
+            sheet_resistance=values_json(
+                {"sample_id": "β-ITO", "value_raw": "20"},
+                {"sample_id": "ITO-A", "value_raw": "30"},
+            ),
+        )
+    )
+
+    lane = extract(client)
+
+    assert [sample.sample_id for sample in lane.samples] == ["α-ITO", "β-ITO", "ITO-a", "ITO-A"]
+    assert lane.sample("β-ITO").get("sheet_resistance").value_raw == "20"
+    assert lane.sample("ITO-A").get("sheet_resistance").value_raw == "30"
+    assert lane.sample("α-ITO").fields == lane.sample("ITO-a").fields == ()
+    assert not any("repeats an id" in entry for entry in lane.dropped)
+
+
+def test_a_sample_whose_id_has_no_letter_or_digit_is_dropped_with_a_reason():
+    client = FakeLlmClient(
+        responder(inventory=inventory_json([{"sample_id": "#", "label": "", "conditions": {}}, *TWO_SAMPLES]))
+    )
+
+    lane = extract(client)
+
+    assert [sample.sample_id for sample in lane.samples] == ["A", "B"]
+    assert "inventory: a sample was listed with no usable id" in lane.dropped
 
 
 def test_a_sample_listed_twice_under_one_id_is_kept_once_and_audited():
@@ -611,7 +679,7 @@ def test_a_sample_listed_twice_under_one_id_is_kept_once_and_audited():
         )
     )
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert [sample.label for sample in lane.samples] == ["first"]
     assert any("repeats an id" in entry for entry in lane.dropped)
@@ -623,7 +691,7 @@ def test_a_sample_with_a_blank_id_is_dropped_with_a_reason():
     blocks = make_blocks()
     client = FakeLlmClient(responder(inventory=inventory_json([{"sample_id": "  ", "label": "nameless"}])))
 
-    lane = extract_lane(make_artifact(blocks), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
     assert lane.samples == ()
     assert any("no usable id" in entry for entry in lane.dropped)
@@ -732,6 +800,22 @@ def test_the_field_question_asks_for_the_series_flag_and_says_when_it_is_true():
     assert "`sample_id` must be null" in system
 
 
+def test_both_modes_ask_for_a_subset_value_once_per_sample_of_the_subset():
+    # s41598: "all films deposited at 100 °C" came back as one entry with no sample id and no series flag, and
+    # all 36 samples lost their substrate temperature. Both modes must say the same thing about a subset.
+    rule = "report it once per sample of the subset, each time under that sample's own id"
+
+    assert rule in field_system_prompt()
+    assert rule in extraction_system_prompt()
+    assert "{subset_scope}" not in field_system_prompt() + extraction_system_prompt()
+    # ... but only when the text says which samples form the subset; otherwise the value stays unplaced.
+    condition = "when the excerpts or the sample list say exactly which listed samples form the subset"
+    assert condition in field_system_prompt() and condition in extraction_system_prompt()
+    assert "If they do not, report it once with a null `sample_id`." in field_system_prompt()
+    # Document mode has no unplaced slot for a sample-level value, so its escape is to leave the value out.
+    assert "If they do not say which samples form the subset, leave the value out" in extraction_system_prompt()
+
+
 def test_a_series_value_is_written_onto_every_sample_keeping_its_citation():
     # "Ar flow 3 sccm (deposition of all GZO films)": the paper placed it on every sample at once, so
     # leaving it unattributed would compare real information with nothing.
@@ -835,7 +919,7 @@ def test_a_series_value_and_a_quote_naming_the_sample_become_one_sample_specific
     answer = values_json(*((series, specific) if series_first else (specific, series)))
     client = FakeLlmClient(responder(inventory=inventory_json(TWO_SAMPLES), sheet_resistance=answer))
 
-    lane = extract_lane(make_artifact(blocks, backend="mineru"), client, mode="passage")
+    lane = extract_lane(make_artifact(blocks, backend="mineru"), client, lane_options(client, mode="passage"))
 
     sample_b = lane.sample("B")
     assert [(field.value_raw, field.series) for field in sample_b.fields] == [("12.5", False)]

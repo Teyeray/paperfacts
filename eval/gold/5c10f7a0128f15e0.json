@@ -1,0 +1,245 @@
+{
+  "doc_id": "5c10f7a0128f15e0",
+  "sha256": "5c10f7a0128f15e06358cdfcb9fd2d36337fe35dafb670e31a00149274414fbd",
+  "title": "Bauden et al. 2026, Formation and Characterization of TCO SnO2:Ta Grown at Low Deposition Temperature (pss b)",
+  "notes": [
+    "Six films in an O2-flow series (12, 60, 80, 100, 120, 150 sccm); only 100 sccm is characterised in depth.",
+    "Two rectangular targets (pure Sn and Sn/Ta 95:5 wt.%) are co-sputtered; target size 40 × 10 cm is not a scalar.",
+    "Sputter power 1000 W is stated as 'typical' for both magnetrons.",
+    "The SnO2:Ta (1.25 at.% Ta) film grown at 570 °C is from previous work (XPS reference), not a sample of this paper.",
+    "Table 1 lists literature samples; they are not samples of this paper.",
+    "Deposition time is not stated (only a rate of ~1 µm/h)."
+  ],
+  "target": {
+    "component": [
+      {
+        "value": "Sn/Ta 95:5 wt.%",
+        "raw": "one equipped with a Sn target, the other with a Sn/Ta target 95:5 wt.%",
+        "page": 1,
+        "ambiguous": true,
+        "why": "two targets are co-sputtered (pure Sn plus Sn/Ta 95:5 wt.%); the field holds a single composition",
+        "accept": [
+          "95\\s*:\\s*5",
+          "Sn\\s*/\\s*Ta"
+        ]
+      }
+    ],
+    "inch": [
+      {
+        "value": null,
+        "raw": "two rectangular industrial-scale magnetrons (40 × 10 cm)",
+        "page": 1,
+        "ambiguous": true,
+        "why": "rectangular target, length × width"
+      }
+    ]
+  },
+  "series": {
+    "mode": [
+      {
+        "value": "DC",
+        "raw": "SnOx:Ta thin films were deposited by reactive DC–MS",
+        "page": 1
+      }
+    ],
+    "sputtering_power": [
+      {
+        "value": 1000,
+        "raw": "typical sputter powers were 1000 W for both magnetrons",
+        "page": 1
+      }
+    ],
+    "working_pressure": [
+      {
+        "value": 1.1,
+        "raw": "at a deposition temperature of 225°C with a working pressure of 1.1 Pa Ar",
+        "page": 1
+      }
+    ],
+    "substrate_temperature": [
+      {
+        "value": 225,
+        "raw": "at a deposition temperature of 225°C",
+        "page": 1
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "O2-12sccm",
+      "description": "SnOx:Ta film, reactive DC-MS at 225 °C, O2 flow 12 sccm",
+      "match": {
+        "fields": {
+          "o2_flow_rate": 12
+        }
+      },
+      "fields": {
+        "o2_flow_rate": [
+          {
+            "value": 12,
+            "raw": "The film grown with the lowest O2 flow rate of 12 sccm",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "O2-60sccm",
+      "description": "SnOx:Ta film, reactive DC-MS at 225 °C, O2 flow 60 sccm",
+      "match": {
+        "fields": {
+          "o2_flow_rate": 60
+        }
+      },
+      "fields": {
+        "o2_flow_rate": [
+          {
+            "value": 60,
+            "raw": "The film grown at 60 sccm is characterized by the dominance of ... SnO",
+            "page": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "O2-80sccm",
+      "description": "SnOx:Ta film, reactive DC-MS at 225 °C, O2 flow 80 sccm",
+      "match": {
+        "fields": {
+          "o2_flow_rate": 80
+        }
+      },
+      "fields": {
+        "o2_flow_rate": [
+          {
+            "value": 80,
+            "raw": "Table 3: O2 flow rate 80 sccm",
+            "page": 5
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 12000,
+            "raw": "Fig. 3a (~1.2e4 Ω/sq)",
+            "page": 5,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "O2-100sccm",
+      "description": "SnOx:Ta film, reactive DC-MS at 225 °C, O2 flow 100 sccm",
+      "match": {
+        "fields": {
+          "o2_flow_rate": 100
+        }
+      },
+      "fields": {
+        "o2_flow_rate": [
+          {
+            "value": 100,
+            "raw": "Table 3: O2 flow rate 100 sccm",
+            "page": 5
+          }
+        ],
+        "resistivity": [
+          {
+            "value": 0.3,
+            "raw": "a thickness of 2 µm, a specific resistivity of 0.3 Ω cm was estimated",
+            "page": 4
+          }
+        ],
+        "thickness": [
+          {
+            "value": 2000,
+            "raw": "presenting the lowest sheet resistance and a thickness of 2 µm",
+            "page": 4
+          },
+          {
+            "value": 2108,
+            "raw": "dividing the absorptance A by the film thickness d of 2108 nm",
+            "page": 5,
+            "condition": "ellipsometry"
+          }
+        ],
+        "transmittance": [
+          {
+            "value": 80.6,
+            "raw": "Its transmittance of 80.6 % in the visible range from 380 to 780 nm",
+            "page": 5,
+            "condition": "average 380-780 nm"
+          },
+          {
+            "value": null,
+            "raw": "exhibits a transmittance of >80% from 500 to 2500 nm",
+            "page": 0,
+            "condition": "500-2500 nm",
+            "ambiguous": true,
+            "why": "lower bound over a range, not a scalar"
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 1700,
+            "raw": "Fig. 3a, minimum near 100 sccm (~1.7e3 Ω/sq)",
+            "page": 5,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "O2-120sccm",
+      "description": "SnOx:Ta film, reactive DC-MS at 225 °C, O2 flow 120 sccm",
+      "match": {
+        "fields": {
+          "o2_flow_rate": 120
+        }
+      },
+      "fields": {
+        "o2_flow_rate": [
+          {
+            "value": 120,
+            "raw": "Table 3: O2 flow rate 120 sccm",
+            "page": 5
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 9000,
+            "raw": "Fig. 3a (~9e3 Ω/sq)",
+            "page": 5,
+            "figure_only": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "O2-150sccm",
+      "description": "SnOx:Ta film, reactive DC-MS at 225 °C, O2 flow 150 sccm",
+      "match": {
+        "fields": {
+          "o2_flow_rate": 150
+        }
+      },
+      "fields": {
+        "o2_flow_rate": [
+          {
+            "value": 150,
+            "raw": "Table 3: O2 flow rate 150 sccm",
+            "page": 5
+          }
+        ],
+        "sheet_resistance": [
+          {
+            "value": 60000,
+            "raw": "Fig. 3a (~6e4 Ω/sq)",
+            "page": 5,
+            "figure_only": true
+          }
+        ]
+      }
+    }
+  ]
+}

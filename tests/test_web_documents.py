@@ -16,13 +16,14 @@ own dedicated test case here:
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
 
 from paperfacts.compare import ComparisonCounts
 from paperfacts.config import Settings
-from paperfacts.keys import extractor_key
+from paperfacts.keys import ExtractionOptions, extractor_key
 from paperfacts.models import BACKENDS, DocumentInput
 from paperfacts.storage import write_text_atomic
 from paperfacts.web.documents import Library
@@ -248,7 +249,9 @@ def test_an_extraction_from_another_model_does_not_count_as_extracted(library: L
     If switching models still showed "already extracted", the user would be judging the old
     model's results without knowing it.
     """
-    seed_extraction(library, "mineru", extractor_key=extractor_key("some-other-model"))
+    seed_extraction(
+        library, "mineru", extractor_key=extractor_key(ExtractionOptions("some-other-model", mode="document"))
+    )
 
     assert library.summary(DOC_KEY).extracted["mineru"] is False
     assert library.extraction(DOC_KEY, "mineru") is None
@@ -264,9 +267,62 @@ def test_compared_and_counts_come_from_the_report(library: Library):
     assert (summary.counts.agree, summary.counts.conflict, summary.counts.total) == (7, 2, 13)
 
 
+def test_the_counts_follow_a_rewritten_report(library: Library):
+    # The tally is parsed once per version of the file; a rerun that rewrites the report must show.
+    seed_report(library, counts=ComparisonCounts(agree=1, total=1))
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(agree=1, total=1)
+
+    seed_report(library, counts=ComparisonCounts(agree=5, conflict=2, total=7))
+
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(agree=5, conflict=2, total=7)
+
+
+def test_the_counts_follow_a_same_size_rewrite_within_the_mtime_granularity(library: Library):
+    # A filesystem with 1-2 s timestamps can give the rewritten report the old mtime, and swapping agree for
+    # conflict keeps its size. The atomic rename still gives it a new inode, which is what the stamp notices.
+    first = seed_report(library, counts=ComparisonCounts(agree=1, total=1))
+    path = library.layout.comparison_path(DOC_SHA, first.extractor_key, first.comparison_key)
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(agree=1, total=1)
+    before = path.stat()
+
+    seed_report(library, counts=ComparisonCounts(conflict=1, total=1))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    assert path.stat().st_size == before.st_size
+    assert library.summary(DOC_KEY).counts == ComparisonCounts(conflict=1, total=1)
+
+
+def test_the_counts_are_not_reparsed_while_the_report_is_unchanged(library: Library, monkeypatch):
+    seed_report(library, counts=ComparisonCounts(agree=3, total=3))
+    library.summary(DOC_KEY)
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("the report was parsed again")
+
+    monkeypatch.setattr("paperfacts.web.documents.ComparisonReport.read", fail)
+
+    assert [summary.counts for summary in library.list()] == [ComparisonCounts(agree=3, total=3)]
+
+
 def test_a_report_written_under_another_comparison_key_does_not_count(library: Library):
     # comparison_key fingerprints the tolerance + normalization rules: change it and an old report must be recomputed.
     seed_report(library, comparison_key="0123456789ab")
+
+    assert library.summary(DOC_KEY).compared is False
+    assert library.report(DOC_KEY) is None
+
+
+def test_a_report_of_an_earlier_parse_does_not_count(library: Library):
+    # After `parse --force` the stored report cites blocks the new parse does not have; counted as compared,
+    # "run all" and `deploy.sh --rerun` would skip the paper for good.
+    old = seed_artifact(library, "mineru", blocks=(make_block(content="old"),))
+    report = seed_report(library)
+    report.model_copy(update={"artifact_sha256_a": old.content_hash()}).write(
+        library.layout.comparison_path(DOC_SHA, report.extractor_key, report.comparison_key)
+    )
+    assert library.summary(DOC_KEY).compared is True
+
+    seed_artifact(library, "mineru", blocks=(make_block(content="re-parsed"),))
 
     assert library.summary(DOC_KEY).compared is False
     assert library.report(DOC_KEY) is None

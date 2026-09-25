@@ -127,6 +127,30 @@ def test_blocks_matching_only_a_unit_fill_the_places_the_named_ones_left():
     assert ids(chosen) == ids([named, *by_unit[:2]])
 
 
+def test_a_table_or_caption_carrying_only_the_unit_is_capped_like_any_unit_only_block():
+    # A dense block that matches on its unit alone used to score as much as a keyword match and ride along
+    # uncapped: with limit=2, 19 of 20 blocks of a paper full of "%" captions went into every question.
+    named = text(0, "The average transmittance was 85.2%.")
+    captions = [
+        make_block(page=0, order=order, type="caption", content=f"Figure {order}: XRD at {order}0% power")
+        for order in range(1, 19)
+    ]
+    table = make_block(page=0, order=19, type="table", content="<table><tr><td>O2</td><td>5%</td></tr></table>")
+
+    chosen = candidate_blocks(TRANSMITTANCE, [named, *captions, table], limit=2)
+
+    # One place left under the limit: the first caption takes it, and its neighbour comes along by the
+    # dense-neighbour rule. The other sixteen captions and the table stay out.
+    assert ids(chosen) == ids([named, *captions[:2]])
+
+
+def test_among_unit_only_blocks_a_table_or_caption_outranks_prose():
+    prose = text(0, "Sample 1 measured 40 Ω/sq.")
+    table = make_block(page=1, order=0, type="table", content="<table><tr><td>S2</td><td>35 Ω/sq</td></tr></table>")
+
+    assert ids(candidate_blocks(SHEET_RESISTANCE, [prose, table], limit=1)) == [table.source_id]
+
+
 def test_a_keyword_matches_a_spelling_that_lost_one_of_a_doubled_letter():
     # MinerU writes "transmitance" on some papers; the other lane has "transmittance".
     block = text(0, "The average transmitance of the film was 88.6%.")

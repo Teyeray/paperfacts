@@ -236,7 +236,7 @@
       "label": "Ar 流量",
       "group": "process",
       "kind": "numeric",
-      "description": "Argon flow rate introduced into the vacuum chamber (sccm).",
+      "description": "Argon flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
       "description_zh": "所选样品的氩气流量（sccm）。",
       "keywords": [
         "Ar flow rate",
@@ -260,7 +260,7 @@
       "label": "O2 流量",
       "group": "process",
       "kind": "numeric",
-      "description": "Oxygen flow rate introduced into the vacuum chamber (sccm).",
+      "description": "Oxygen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
       "description_zh": "所选样品的氧气流量（sccm）。",
       "keywords": [
         "O2 flow rate",
@@ -284,7 +284,7 @@
       "label": "H2 流量",
       "group": "process",
       "kind": "numeric",
-      "description": "Hydrogen flow rate introduced into the vacuum chamber (sccm).",
+      "description": "Hydrogen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.",
       "description_zh": "所选样品的氢气流量（sccm）。",
       "keywords": [
         "H2 flow rate",
@@ -308,7 +308,7 @@
       "label": "O2 比例",
       "group": "process",
       "kind": "numeric",
-      "description": "Oxygen share of the sputtering gas as the paper states it, O2/(Ar+O2) or O2/Ar (%). Record which of the two in `condition`.",
+      "description": "Oxygen share of the SPUTTERING gas as the paper states it, O2/(Ar+O2) or O2/Ar (%). Record which of the two in `condition`. Never the gas of an annealing, forming-gas or other post-treatment step.",
       "description_zh": "溅射气体中氧气的比例（%），O2/(Ar+O2) 或 O2/Ar，具体口径见条件。",
       "keywords": [
         "O2/Ar",
@@ -331,7 +331,7 @@
       "label": "H2 比例",
       "group": "process",
       "kind": "numeric",
-      "description": "Hydrogen share of the sputtering gas as the paper states it, H2/(Ar+H2) or H2/Ar (%). Record which of the two in `condition`.",
+      "description": "Hydrogen share of the SPUTTERING gas as the paper states it, H2/(Ar+H2) or H2/Ar (%). Record which of the two in `condition`. Never the gas of an annealing, forming-gas or other post-treatment step: forming gas H2/N2 15/85 used to anneal the film is not h2_ratio.",
       "description_zh": "溅射气体中氢气的比例（%），H2/(Ar+H2) 或 H2/Ar，具体口径见条件。",
       "keywords": [
         "H2/Ar",
@@ -572,7 +572,8 @@
         "400-800",
         "380-780",
         "400-700",
-        "550"
+        "550",
+        "400-1100"
       ]
     },
     {

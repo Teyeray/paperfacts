@@ -467,3 +467,47 @@ def test_the_handler_is_removed_when_the_job_finishes():
     assert list(logger.handlers) == before
     logging.getLogger("paperfacts.test").info("log after the job finished")
     assert not any("log after the job finished" in line for line in job.log)
+
+
+# ---- bounded history ------------------------------------------------------------------------------------
+
+
+def test_only_the_most_recent_finished_jobs_are_kept(monkeypatch):
+    # Job status lives in memory for the life of the process; without a bound every submission since
+    # start-up would ride along on every /api/jobs request.
+    monkeypatch.setattr("paperfacts.web.jobs.MAX_FINISHED_JOBS", 3)
+    runner = RecordingRunner()
+    manager = manager_for(runner)
+
+    submitted = []
+    for index in range(5):
+        job = manager.submit(f"doc-{index}")
+        wait_for_status(manager, job.job_id, "done")
+        submitted.append(job.job_id)
+
+    assert {job.job_id for job in manager.all_jobs()} == set(submitted[-3:])
+    assert manager.get(submitted[0]) is None
+
+
+def test_an_active_job_is_never_pruned(monkeypatch):
+    monkeypatch.setattr("paperfacts.web.jobs.MAX_FINISHED_JOBS", 1)
+    gate = threading.Event()
+
+    def body(job: Job, mark) -> None:
+        if job.document_id == "slow-doc":
+            gate.wait(timeout=5)
+
+    runner = RecordingRunner(body=body)
+    manager = JobManager(runner, STAGES, workers=2)
+    try:
+        slow = manager.submit("slow-doc")
+        wait_until(runner.entered.is_set, what="the slow job to start")
+        quick = [manager.submit(f"doc-{index}") for index in range(3)]
+        # one worker is held by the slow job, so the quick ones run one after another, in order
+        wait_for_status(manager, quick[-1].job_id, "done")
+
+        # the oldest submission is still running, so it stays; of the finished ones only the newest is kept
+        assert {job.job_id for job in manager.all_jobs()} == {slow.job_id, quick[-1].job_id}
+    finally:
+        gate.set()
+    wait_for_status(manager, slow.job_id, "done")

@@ -22,7 +22,7 @@ from paperfacts.figures import read_figures
 from paperfacts.models import DocumentInput
 from paperfacts.prompts import inventory_system_prompt
 from paperfacts.threads import ContextThreadPoolExecutor
-from support.extraction import make_artifact
+from support.extraction import lane_options, make_artifact
 from support.llm import FakeLlmClient
 from support.vision import FakeVisionClient, chart_answer
 from test_extract_passages import make_blocks, responder
@@ -72,7 +72,12 @@ def test_the_field_questions_run_in_the_callers_context():
         return answer(system, user)
 
     CALLER.set("job-1")
-    extract_lane(make_artifact(make_blocks()), FakeLlmClient(recording), mode="passage", concurrency=4)
+    extract_lane(
+        make_artifact(make_blocks()),
+        FakeLlmClient(recording),
+        lane_options(mode="passage"),
+        concurrency=4,
+    )
 
     assert seen and set(seen) == {"job-1"}
 

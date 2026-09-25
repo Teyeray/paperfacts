@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from paperfacts.extract import build_extraction_document
+from paperfacts.extract import build_extraction_document, extract_lane
 from paperfacts.keys import extraction_code_fingerprint
-from support.extraction import make_artifact
+from support.extraction import lane_options, make_artifact
 from support.factories import make_block
+from support.llm import FakeLlmClient
 
 # ---- Noise filtering ------------------------------------------------------------------
 
@@ -78,10 +79,17 @@ def test_kept_and_dropped_block_counts_add_up_to_the_total():
         "References",
         "REFERENCES",
         "# References",
-        "Reference",
         "Bibliography",
         "Literature cited",
         "References and Notes",
+        # Numbered, as MinerU and PaddleOCR-VL both keep a section number in the heading text.
+        "6. References",
+        "6 References",
+        "## 7. REFERENCES",
+        "VI. REFERENCES",
+        "**References**",
+        "References:",
+        "Notes and references",
     ],
 )
 def test_a_references_style_title_and_everything_after_it_is_dropped(heading):
@@ -111,9 +119,52 @@ def test_a_title_merely_mentioning_references_without_starting_with_it_is_kept()
     assert after.source_id in document.blocks
 
 
-def test_only_a_title_block_can_trigger_the_references_cutoff():
-    # The word "References" inside an ordinary paragraph is not a section heading; only a block typed
-    # "title" ends the document.
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Reference electrode",
+        "Reference samples",
+        "References to Table 2",
+        "2. Reference cells and substrates",
+        "Reference",  # a chart legend or a table column as often as a heading
+    ],
+)
+def test_a_title_that_merely_starts_with_reference_is_kept(heading):
+    # A prefix match cut the paper at these, dropping every result after them.
+    title = make_block(page=0, order=0, type="title", content=heading)
+    after = make_block(page=0, order=1, type="text", content="Sample A had a sheet resistance of 12.5 Ω/sq.")
+
+    document = build_extraction_document(make_artifact([title, after]))
+
+    assert title.source_id in document.blocks
+    assert after.source_id in document.blocks
+
+
+def test_a_references_heading_the_parser_labelled_as_text_also_ends_the_document():
+    # PaddleOCR-VL sometimes labels the heading as plain text. Only the whole block being the heading counts,
+    # so a lane is not left carrying the bibliography because of how its parser labelled one line.
+    body = make_block(page=0, order=0, type="text", content="Sample A had a sheet resistance of 12.5 Ω/sq.")
+    heading = make_block(page=1, order=0, type="text", content="References")
+    citation = make_block(page=1, order=1, type="text", content="[1] Smith et al., Journal of Materials, 2020.")
+
+    document = build_extraction_document(make_artifact([body, heading, citation]))
+
+    assert list(document.blocks) == [body.source_id]
+
+
+def test_an_early_references_cut_is_logged(caplog):
+    heading = make_block(page=0, order=0, type="title", content="References")
+    rest = [make_block(page=0, order=order, type="text", content=f"Result {order}") for order in range(1, 4)]
+
+    with caplog.at_level("WARNING", logger="paperfacts.extract"):
+        build_extraction_document(make_artifact([heading, *rest]))
+
+    assert "everything after it is left out" in caplog.text
+
+
+def test_a_paragraph_mentioning_references_does_not_trigger_the_cutoff():
+    # The word "References" inside an ordinary paragraph is not a section heading; only a block that is
+    # nothing but the heading ends the document.
     body = make_block(page=0, order=0, type="text", content="References to prior work are listed below.")
     after = make_block(page=0, order=1, type="text", content="Sample A had a sheet resistance of 12.5 Ω/sq.")
     artifact = make_artifact([body, after])
@@ -208,3 +259,16 @@ def test_extraction_code_fingerprint_is_a_stable_short_hex_string():
     assert first == second
     assert len(first) == 12
     assert all(ch in "0123456789abcdef" for ch in first)
+
+
+def test_the_cut_is_recorded_in_the_lanes_audit():
+    # A log line is gone after the run; the audit travels with the lane, so a lane that lost its tail to a
+    # misread heading shows it next to its values.
+    body = make_block(page=0, order=0, type="text", content="Sample A had a sheet resistance of 12.5 Ω/sq.")
+    heading = make_block(page=1, order=0, type="title", content="6. References")
+    citation = make_block(page=1, order=1, type="text", content="[1] Smith et al., Journal of Materials, 2020.")
+    client = FakeLlmClient(['{"target": null, "samples": []}'])
+
+    lane = extract_lane(make_artifact([body, heading, citation]), client, lane_options(mode="document"))
+
+    assert lane.dropped == ("bibliography: 2 of 3 blocks from the heading '6. References' on were not read",)

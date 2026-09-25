@@ -8,6 +8,7 @@ every route is behind it, and on a laptop without one nothing changes.
 from __future__ import annotations
 
 import base64
+import dataclasses
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -95,6 +96,19 @@ def test_a_header_that_is_not_a_basic_login_is_refused(client: TestClient, heade
     response = client.get("/", headers={"Authorization": header})
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(("username", "password"), [("é", "x"), (USERNAME, "密码"), ("用户", PASSWORD)])
+def test_a_non_ascii_login_that_is_wrong_is_refused_not_a_crash(client: TestClient, username: str, password: str):
+    # compare_digest on two str raises on any non-ASCII character: this used to be a 500 on demand
+    assert client.get("/", headers=basic(username, password)).status_code == 401
+
+
+def test_a_non_ascii_password_can_be_the_configured_one(tmp_path: Path):
+    settings = dataclasses.replace(settings_for(tmp_path), web_username="研究员", web_password="密码-秘密")
+    with TestClient(create_app(settings)) as chinese_client:
+        assert chinese_client.get("/", headers=basic("研究员", "密码-秘密")).status_code == 200
+        assert chinese_client.get("/", headers=basic("研究员", "密码")).status_code == 401
 
 
 def test_a_laptop_without_a_password_is_open(tmp_path: Path):

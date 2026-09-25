@@ -23,7 +23,7 @@ from paperfacts.config import (
     Inherit,
     ReasoningEffort,
 )
-from paperfacts.llm import LlmResult
+from paperfacts.llm import Accept, LlmResult
 
 # Fake token counts. The numbers mean nothing; they only prove usage is recorded and summed.
 DEFAULT_USAGE: dict[str, int] = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
@@ -88,7 +88,9 @@ class FakeLlmClient:
         refresh: bool = False,
         cache_salt: str = "",
         reasoning_effort: ReasoningEffort | Inherit | None = INHERIT,
+        accept: Accept | None = None,
     ) -> LlmResult:
+        # No cache here, so `accept` has nothing to gate; the real client's handling is tested in test_llm.
         with self._lock:
             self.calls.append(
                 LlmCall(

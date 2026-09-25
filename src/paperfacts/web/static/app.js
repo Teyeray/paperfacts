@@ -1,22 +1,34 @@
 // PaperFacts frontend entry point: wire up the upload zone, router, and document library, then
 // open whatever document the URL points at.
 // No build step; module breakdown: state (state & shared constants), api, html (small utilities),
-// router, library (left rail), document (document view), table (the results table), fieldpicker
-// (which field columns are shown), tsv (the clipboard copy), facts (fact comparison), samples
-// (sample records), job (job progress), viewer (page-level provenance), corpus (the home view's
-// library-wide results table).
+// router (routes and the view generation), library (left rail), document (document view, home view and
+// the missing-document state), table (the results table and the column model), fieldpicker (which field
+// columns are shown), tsv (the clipboard copy), corpus (the home view's library-wide results table), facts
+// (fact comparison), figures (chart readings), samples (sample records), job (job progress), viewer
+// (page-level provenance).
 
 import { api } from "./api.js";
-import { showDocument, showEmpty } from "./document.js";
+import { showDocument, showEmpty, showMissing } from "./document.js";
 import { toast } from "./html.js";
-import { loadLibrary, setupRunAll, setupUpload } from "./library.js";
-import { installRouter, route } from "./router.js";
+import { loadLibrary, setupLibraryDisclosure, setupRunAll, setupUpload } from "./library.js";
+import { installRouter, reloadView, route } from "./router.js";
+
+// The skip link cannot be a plain #content link: every hash here is a route, and that one would go home.
+function setupSkipLink() {
+  document.getElementById("skip-link").addEventListener("click", (event) => {
+    event.preventDefault();
+    document.getElementById("content").focus();
+  });
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
+  setupSkipLink();
   setupUpload();
   setupRunAll();
+  setupLibraryDisclosure();
   document.getElementById("refresh-library").addEventListener("click", loadLibrary);
-  installRouter({ onDocument: showDocument, onEmpty: showEmpty });
+  document.querySelector('#missing-view [data-action="retry"]').addEventListener("click", reloadView);
+  installRouter({ onDocument: showDocument, onEmpty: showEmpty, onMissing: showMissing });
   try {
     const health = await api("/api/health");
     document.getElementById("health").textContent = `model ${health.model}`;

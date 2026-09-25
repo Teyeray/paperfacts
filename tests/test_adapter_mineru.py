@@ -243,6 +243,22 @@ def test_a_block_without_bbox_is_skipped(
     assert artifact.blocks == ()
 
 
+@pytest.mark.parametrize("page_idx", [None, "1", -1, True])
+def test_a_block_without_a_usable_page_is_skipped_with_a_warning_not_filed_on_page_0(
+    raw_output_factory: RawOutputFactory, document: DocumentInput, geometry: DocumentGeometry, caplog, page_idx
+):
+    item = {"type": "text", "bbox": [0, 0, 500, 100], "text": "where am I"}
+    if page_idx is not None:
+        item["page_idx"] = page_idx
+    raw = raw_output_factory.mineru([item, {"type": "text", "page_idx": 0, "bbox": [0, 0, 500, 100], "text": "ok"}])
+
+    with caplog.at_level("WARNING", logger="paperfacts.adapters"):
+        artifact = convert(raw, document, geometry)
+
+    assert [block.content for block in artifact.blocks] == ["ok"]
+    assert any("page_idx" in record.getMessage() for record in caplog.records)
+
+
 def test_list_items_are_joined_into_one_text_block(
     raw_output_factory: RawOutputFactory, document: DocumentInput, geometry: DocumentGeometry
 ):

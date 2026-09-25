@@ -25,6 +25,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
+from pathlib import Path
 from typing import Any, Literal, get_args
 
 from paperfacts.config import ConfigDocument, configuration
@@ -118,10 +119,11 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
             raise ConfigError(f"{where}: {key} must be one of {', '.join(allowed)}, got {value!r}")
         return str(value)
 
-    def number(key: str, default: float) -> float:
-        value = entry.get(key, default)
-        if type(value) not in (int, float):
-            raise ConfigError(f"{where}: {key} must be a number, got {value!r}")
+    def tolerance(key: str) -> float:
+        # A negative tolerance makes |a - b| <= tol impossible even for a == b: every value would conflict.
+        value = entry.get(key, 0.0)
+        if type(value) not in (int, float) or value < 0:
+            raise ConfigError(f"{where}: {key} must be a number of at least 0, got {value!r}")
         return float(value)
 
     def text_or_none(key: str) -> str | None:
@@ -161,6 +163,14 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
     if categories and entry.get("kind") != "text":
         raise ConfigError(f"{where}: categories is only meaningful for a text field, not a {entry.get('kind')!r} one")
 
+    bare_number = choice("bare_number", get_args(BareNumberPolicy)) if "bare_number" in entry else "reject"
+    if bare_number == "percent_or_fraction" and entry.get("canonical_unit") != "%":
+        # The policy reads a bare 0.8 as 80: meaningful for a percentage, an invented number for anything
+        # else (0.8 would become 80 nm).
+        raise ConfigError(
+            f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {entry.get('canonical_unit')!r}"
+        )
+
     return FieldSpec(
         name=name,
         group=choice("group", get_args(FieldGroup)),  # type: ignore[arg-type]
@@ -170,10 +180,10 @@ def _field_spec(entry: Any, position: int, source: str) -> FieldSpec:
         canonical_unit=text_or_none("canonical_unit"),
         label=label,
         description_zh=description_zh,
-        rel_tol=number("rel_tol", 0.0),
-        abs_tol=number("abs_tol", 0.0),
+        rel_tol=tolerance("rel_tol"),
+        abs_tol=tolerance("abs_tol"),
         condition_hint=text_or_none("condition_hint"),
-        bare_number=choice("bare_number", get_args(BareNumberPolicy)) if "bare_number" in entry else "reject",  # type: ignore[arg-type]
+        bare_number=bare_number,  # type: ignore[arg-type]
         categories=tuple(categories),
         valid_range=_valid_range(entry, where),
         condition_preference=tuple(preference),
@@ -221,6 +231,8 @@ def load_condition_keywords(document: ConfigDocument) -> tuple[str, ...]:
 _CONFIG = configuration()
 
 FIELD_SPECS: tuple[FieldSpec, ...] = load_field_specs(_CONFIG)
+# Where the table came from, for errors raised about it elsewhere (normalize.py checks the units).
+FIELDS_SOURCE: Path = _CONFIG.path
 
 # Words that mark a block as describing how a sample was made, used to choose what the sample inventory
 # question is shown. Deliberately about the process, not about measured results: the inventory question is
