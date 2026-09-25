@@ -808,6 +808,12 @@ def test_both_modes_ask_for_a_subset_value_once_per_sample_of_the_subset():
     assert rule in field_system_prompt()
     assert rule in extraction_system_prompt()
     assert "{subset_scope}" not in field_system_prompt() + extraction_system_prompt()
+    # ... but only when the text says which samples form the subset; otherwise the value stays unplaced.
+    condition = "when the excerpts or the sample list say exactly which listed samples form the subset"
+    assert condition in field_system_prompt() and condition in extraction_system_prompt()
+    assert "If they do not, report it once with a null `sample_id`." in field_system_prompt()
+    # Document mode has no unplaced slot for a sample-level value, so its escape is to leave the value out.
+    assert "If they do not say which samples form the subset, leave the value out" in extraction_system_prompt()
 
 
 def test_a_series_value_is_written_onto_every_sample_keeping_its_citation():
