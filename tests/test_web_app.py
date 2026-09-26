@@ -740,7 +740,7 @@ def test_an_app_can_be_built_from_the_environment_alone(monkeypatch, tmp_path: P
     app = create_app()
 
     assert app.state.settings.data_root == tmp_path / "from-env"
-    assert isinstance(app.state.library, Library)
+    assert isinstance(app.state.profiles.library, Library)
     assert isinstance(app.state.jobs, JobManager)
 
 

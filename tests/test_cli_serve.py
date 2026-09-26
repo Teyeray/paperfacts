@@ -58,7 +58,7 @@ def test_serve_hands_uvicorn_an_app_wired_to_the_requested_data_root(
 
     assert result.exit_code == 0, result.output
     assert uvicorn_calls[0]["app"].state.settings.data_root == data_root
-    assert uvicorn_calls[0]["app"].state.library.layout.root == data_root
+    assert uvicorn_calls[0]["app"].state.profiles.library.layout.root == data_root
 
 
 def test_serve_prints_the_url_and_where_the_data_lives(uvicorn_calls: list[dict[str, Any]], tmp_path: Path):
