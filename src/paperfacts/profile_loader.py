@@ -583,8 +583,31 @@ def _backtracks(items: Any, *, repeated: bool) -> bool:
 CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # Attributes a field entry never states: the loader derives them.
 _DERIVED = {"level", "prompt_categories", "entity"}
-# The kinds a list field may have, and the attributes it refuses: a list of numbers would need its own tolerance,
-# condition and chart semantics, which do not exist yet.
+# What an entry that leaves an attribute out gets: the dataclass's own default, which is also what the keys omit.
+_FIELD_DEFAULTS = {
+    item.name: item.default for item in dataclass_fields(FieldSpec) if item.default is not dataclasses.MISSING
+}
+# The kinds that may give an attribute a value other than its default. At its default an attribute says nothing
+# (tco.json spells every attribute out), so it is accepted on any kind.
+_IN_A_UNIT = tuple(kind for kind in get_args(FieldKind) if kind in UNIT_KINDS)
+_KIND_ATTRIBUTES: Mapping[str, tuple[FieldKind, ...]] = {
+    # A unit, a plausible range and a tolerance are about numbers in a unit.
+    "canonical_unit": _IN_A_UNIT,
+    "valid_range": _IN_A_UNIT,
+    "rel_tol": _IN_A_UNIT,
+    "abs_tol": _IN_A_UNIT,
+    # An interval's two ends would have to be guessed into one unit; the model is asked for the unit instead.
+    "bare_number": ("numeric",),
+    "categories": ("text",),
+    # A yes/no is stated once; it has no condition to fill.
+    "condition_rule": tuple(kind for kind in get_args(FieldKind) if kind != "boolean"),
+    "figure_readable": ("numeric",),
+    "display_format": ("numeric",),
+    "range_policy": ("numeric",),
+    "after_clause": ("numeric",),
+}
+# The kinds a list field may have, and the attributes it must leave at their default: a list of numbers would need
+# its own tolerance, condition and chart semantics, which do not exist yet.
 _LIST_KINDS = ("text", "composition")
 _NOT_WITH_MANY = (
     "figure_readable",
@@ -599,10 +622,6 @@ _NOT_WITH_MANY = (
     "after_clause",
     "display_format",
 )
-# What an entry that leaves an attribute out gets: the dataclass's own default, which is also what the keys omit.
-_FIELD_DEFAULTS = {
-    item.name: item.default for item in dataclass_fields(FieldSpec) if item.default is not dataclasses.MISSING
-}
 
 
 def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, FieldLevel]) -> FieldSpec:
@@ -645,76 +664,68 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
             raise ConfigError(f"{where}: {key} must be a non-empty string when present, got {entry.get(key)!r}")
         return value
 
+    def words(key: str, valid: Callable[[str], object], message: str) -> tuple[str, ...]:
+        value = entry.get(key, list(_FIELD_DEFAULTS[key]))
+        if not isinstance(value, list) or not all(isinstance(word, str) and valid(word) for word in value):
+            raise ConfigError(f"{where}: {message}")
+        return tuple(value)
+
     keywords = entry.get("keywords", [])
     if not isinstance(keywords, list) or not all(isinstance(word, str) and word for word in keywords):
         raise ConfigError(f"{where}: keywords must be a list of non-empty strings")
     description = entry.get("description")
     if not isinstance(description, str) or not description.strip():
         raise ConfigError(f"{where} needs a non-empty 'description'; it is what the model is told to look for")
-    label, description_zh = nonempty_text("label"), nonempty_text("description_zh")
+    figure_readable = entry.get("figure_readable", _FIELD_DEFAULTS["figure_readable"])
+    if type(figure_readable) is not bool:
+        raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
+    kind = choice("kind", get_args(FieldKind))
+    group = choice("group", tuple(levels))
+    stated: dict[str, Any] = {
+        "canonical_unit": text_or_none("canonical_unit"),
+        "valid_range": _valid_range(entry, where),
+        "rel_tol": tolerance("rel_tol"),
+        "abs_tol": tolerance("abs_tol"),
+        "bare_number": choice("bare_number", get_args(BareNumberPolicy)),
+        "categories": words("categories", str.strip, "categories must be a list of non-empty strings"),
+        "condition_preference": words(
+            "condition_preference",
+            CONDITION_NUMBER.search,
+            "condition_preference must be a list of strings each naming a number, like '400-800'",
+        ),
+        "condition_rule": text_or_none("condition_rule"),
+        "figure_readable": figure_readable,
+        "display_format": choice("display_format", get_args(DisplayFormat)),
+        "range_policy": choice("range_policy", get_args(RangePolicy)),
+        "after_clause": choice("after_clause", get_args(AfterClause)),
+        "cardinality": choice("cardinality", get_args(Cardinality)),
+    }
+    changed = {key for key, value in stated.items() if value != _FIELD_DEFAULTS[key]}
 
-    preference = entry.get("condition_preference", list(_FIELD_DEFAULTS["condition_preference"]))
-    if not isinstance(preference, list) or not all(
-        isinstance(word, str) and CONDITION_NUMBER.search(word) for word in preference
-    ):
-        raise ConfigError(
-            f"{where}: condition_preference must be a list of strings each naming a number, like '400-800'"
-        )
-
-    categories = entry.get("categories", list(_FIELD_DEFAULTS["categories"]))
-    if not isinstance(categories, list) or not all(isinstance(word, str) and word.strip() for word in categories):
-        raise ConfigError(f"{where}: categories must be a list of non-empty strings")
-    if categories and entry.get("kind") != "text":
-        raise ConfigError(f"{where}: categories is only meaningful for a text field, not a {entry.get('kind')!r} one")
-    many = choice("cardinality", get_args(Cardinality)) == "many"
-    if many and entry.get("kind") not in _LIST_KINDS:
-        raise ConfigError(
-            f"{where}: cardinality 'many' needs a text or composition field, not a {entry.get('kind')!r} one"
-        )
-    if many and (refused := [key for key in _NOT_WITH_MANY if key in entry]):
+    many = stated["cardinality"] == "many"
+    if many and kind not in _LIST_KINDS:
+        raise ConfigError(f"{where}: cardinality 'many' needs a text or composition field, not a {kind!r} one")
+    if many and (refused := [key for key in _NOT_WITH_MANY if key in changed]):
         raise ConfigError(f"{where}: cardinality 'many' cannot be combined with {', '.join(refused)}")
-
-    bare_number = choice("bare_number", get_args(BareNumberPolicy))
-    if bare_number == "percent_or_fraction" and entry.get("canonical_unit") != "%":
+    for key, kinds in _KIND_ATTRIBUTES.items():
+        if key in changed and kind not in kinds:
+            named = " or ".join(filter(None, (", ".join(kinds[:-1]), kinds[-1])))
+            raise ConfigError(f"{where}: {key} is only meaningful for a {named} field, not a {kind!r} one")
+    if stated["bare_number"] == "percent_or_fraction" and stated["canonical_unit"] != "%":
         # The policy reads a bare 0.8 as 80: meaningful for a percentage, an invented number for anything
         # else (0.8 would become 80 nm).
         raise ConfigError(
-            f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {entry.get('canonical_unit')!r}"
+            f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {stated['canonical_unit']!r}"
         )
-
-    numeric = entry.get("kind") == "numeric"
-    kind = choice("kind", get_args(FieldKind))
-    canonical_unit, valid_range = text_or_none("canonical_unit"), _valid_range(entry, where)
-    unit_attributes = {"canonical_unit": canonical_unit, "valid_range": valid_range, "bare_number": bare_number}
-    for key, value in unit_attributes.items():
-        # A unit, a plausible range and a bare number's meaning are about numbers in a unit. Written at its default
-        # (tco.json spells every attribute out) it says nothing.
-        if value != _FIELD_DEFAULTS[key] and kind not in UNIT_KINDS:
-            raise ConfigError(f"{where}: {key} is only meaningful for a numeric or interval field, not a {kind!r} one")
-    if kind == "interval" and bare_number != "reject":
-        # Both ends of a range would have to be guessed into one unit; the model is asked for the unit instead.
-        raise ConfigError(f"{where}: bare_number must be 'reject' for an interval field, got {bare_number!r}")
-    condition_rule = text_or_none("condition_rule")
-    if condition_rule is not None and kind == "boolean":
-        raise ConfigError(f"{where}: condition_rule is not meaningful for a boolean field")
+    condition_rule = stated["condition_rule"]
     if condition_rule is not None and (not condition_rule.strip() or entry.get("condition_hint") is None):
         # The rule tells the model to fill a condition that the field line must first say the field has.
         raise ConfigError(f"{where}: condition_rule must be a non-empty string and needs a condition_hint")
     missing_note = text_or_none("missing_condition_note_zh")
     if missing_note is not None and not missing_note.strip():
         raise ConfigError(f"{where}: missing_condition_note_zh must be a non-empty string when present")
-    figure_readable = entry.get("figure_readable", _FIELD_DEFAULTS["figure_readable"])
-    if type(figure_readable) is not bool:
-        raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
-    if figure_readable and (not numeric or entry.get("canonical_unit") is None):
+    if figure_readable and stated["canonical_unit"] is None:
         raise ConfigError(f"{where}: figure_readable needs a numeric field with a canonical_unit")
-    for key in ("display_format", "range_policy", "after_clause"):
-        if key in entry and not numeric:
-            raise ConfigError(f"{where}: {key} is only meaningful for a numeric field, not a {entry.get('kind')!r} one")
-    display_format = choice("display_format", get_args(DisplayFormat))
-    range_policy = choice("range_policy", get_args(RangePolicy))
-    after_clause = choice("after_clause", get_args(AfterClause))
-    group = choice("group", tuple(levels))
 
     return FieldSpec(
         name=name,
@@ -722,25 +733,13 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         kind=kind,  # type: ignore[arg-type]
         description=description,
         keywords=tuple(keywords),
-        canonical_unit=canonical_unit,
-        label=label,
-        description_zh=description_zh,
-        rel_tol=tolerance("rel_tol"),
-        abs_tol=tolerance("abs_tol"),
+        label=nonempty_text("label"),
+        description_zh=nonempty_text("description_zh"),
         condition_hint=text_or_none("condition_hint"),
-        bare_number=bare_number,  # type: ignore[arg-type]
-        categories=tuple(categories),
-        valid_range=valid_range,
-        condition_preference=tuple(preference),
         level=levels[group],
-        condition_rule=condition_rule,
         missing_condition_note_zh=missing_note,
-        figure_readable=figure_readable,
-        display_format=display_format,  # type: ignore[arg-type]
-        range_policy=range_policy,  # type: ignore[arg-type]
-        after_clause=after_clause,  # type: ignore[arg-type]
-        cardinality="many" if many else "one",
-        prompt_categories=tuple(categories) if many else (),
+        prompt_categories=stated["categories"] if many else (),
+        **stated,
     )
 
 

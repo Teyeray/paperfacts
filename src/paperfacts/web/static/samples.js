@@ -1,8 +1,9 @@
 // Sample records: each lane's own LaneExtraction (raw text -> normalized value <- source block); clicking a source id highlights it in the viewer.
 
 import { releaseFact } from "./facts.js";
-import { caveats, escapeHtml, fmt, toast } from "./html.js";
+import { caveats, escapeHtml, toast } from "./html.js";
 import { LANES, LANE_LABEL, entityGroups, entityOf, inEntity, state, uiCopy } from "./state.js";
+import { readingText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
 // The paper-level record (under the profile's short name for it) and the unplaced values are told apart from
@@ -79,7 +80,8 @@ function fieldNode(f) {
   // Stated once for the whole series and written onto every sample: worth saying next to the number.
   const entity = escapeHtml(uiCopy("entity_label_zh"));
   const series = f.series ? `<span class="flag series" title="论文对整个${entity}系列只写了一次，这里是按系列写到每个${entity}上的">全系列</span>` : "";
-  const norm = f.value != null ? ` <small>= ${fmt(f.value)} ${escapeHtml(f.unit ?? "")}</small>` : (f.normalization_note ? ` <small>(${escapeHtml(f.normalization_note)})</small>` : "");
+  const reading = readingText(f);
+  const norm = reading ? ` <small>${escapeHtml(reading)}</small>` : "";
   row.innerHTML = `<span class="fname">${escapeHtml(f.field)}</span><span class="fval">${escapeHtml(f.value_raw)} ${escapeHtml(f.unit_raw ?? "")}${cond}${norm}${series}${caveats(f)}</span><button type="button" class="src">${escapeHtml(f.source_ids.join(", ") || "无来源")}</button>`;
   row.querySelector(".src").addEventListener("click", () => {
     releaseFact();

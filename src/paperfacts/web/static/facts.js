@@ -4,9 +4,10 @@
 // The selected fact is one value, `state.selectedFact`, mirrored in the URL: a filter that hides its row does
 // not unselect it, and anything else that takes over the viewer releases it (and the URL) explicitly.
 
-import { caveats, escapeHtml, fmt, keepFocus, onActivate, toast } from "./html.js";
+import { caveats, escapeHtml, keepFocus, onActivate, toast } from "./html.js";
 import { documentHash } from "./router.js";
 import { LANES, LANE_LABEL, STATUS, STATUS_ORDER, entityGroups, entityLabel, noSamplesReason, slot, state, uiCopy } from "./state.js";
+import { readingText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
 export function renderKpis(root) {
@@ -124,8 +125,7 @@ function scopeLabel(scope) {
 function valueCell(field) {
   if (!field) return `<span class="muted">—</span>`;
   const raw = `${field.value_raw} ${field.unit_raw ?? ""}`.trim();
-  const norm = field.value != null ? `= ${fmt(field.value)} ${field.unit ?? ""}` : (field.normalization_note ? `(${field.normalization_note})` : "");
-  return `${escapeHtml(raw)}<small>${escapeHtml(norm)}</small>${caveats(field)}`;
+  return `${escapeHtml(raw)}<small>${escapeHtml(readingText(field))}</small>${caveats(field)}`;
 }
 
 function markRows() {

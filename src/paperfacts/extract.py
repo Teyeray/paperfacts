@@ -326,8 +326,7 @@ def _extract_whole_document(
 def _response_models(profile: DomainProfile) -> ResponseModels:
     """The answer shapes under the JSON keys this profile's prompts tell the model to emit, with ``holds`` when
     some field is boolean."""
-    holds = any(spec.kind == "boolean" for spec in profile.fields)
-    return response_models(profile.prompt.paper_key, profile.prompt.no_samples_key, holds=holds)
+    return response_models(profile.prompt.paper_key, profile.prompt.no_samples_key, holds=profile.asks_holds)
 
 
 @dataclass(frozen=True)
@@ -617,8 +616,7 @@ def passage_records(
                 source_ids=item.source_ids,
                 note=item.note,
                 known_ids=harvest.known_ids,
-                # Only response_models(..., holds=True) has the key.
-                holds=getattr(item, "holds", None),
+                holds=item.stated_holds(),
             )
             if value is None:
                 continue

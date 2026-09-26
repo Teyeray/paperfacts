@@ -22,6 +22,7 @@ from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import NamedTuple
 
 from paperfacts.grounding import grounding_key
 from paperfacts.records import ExtractedRecords, FieldValue, PaperRecord, SampleRecord, sample_key
@@ -42,11 +43,29 @@ class Scope(Enum):
 # A sample's scope: its entity type and its sample_key, so two entities' samples named alike stay two samples.
 type SampleScope = tuple[str, str]
 type ScopeKey = SampleScope | Scope
-# (field, condition, quote, unit), then a boolean field's ``holds`` -- see ``_value_key``.
-type ValueKey = tuple[str, ...]
-# The identity the passes vote on: the same number, in the same unit, for the same field (and the same ``holds``).
-# The condition is deliberately absent -- see ``_vote_key``.
-type VoteKey = tuple[str, ...]
+
+
+class ValueKey(NamedTuple):
+    """A value's full identity within one pass -- see ``_value_key``. ``holds`` is a boolean field's alone; every
+    other value leaves it None, so two of their keys are equal exactly when the four parts are."""
+
+    field: str
+    condition: str
+    quote: str
+    unit: str
+    holds: bool | None = None
+
+
+class VoteKey(NamedTuple):
+    """The identity the passes vote on: the same number, in the same unit, for the same field (and the same
+    ``holds``). The condition is deliberately absent -- see ``_vote_key``."""
+
+    field: str
+    quote: str
+    unit: str
+    holds: bool | None = None
+
+
 # What a vote is actually cast for: the nth entry a pass gave one voted identity. Rank 1 is the first
 # condition a pass reported that number under, rank 2 the second, and so on -- see ``merge_passes``.
 type VoteSlot = tuple[ScopeKey, VoteKey, int]
@@ -175,11 +194,11 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
     # conditions in opposite orders. Merge only when the identity has a single entry everywhere -- there is
     # then no other condition the citation could belong to -- or when the two conditions normalise alike.
     for (scope, vote, _rank), tally in slots.items():
-        condition = _value_key(tally.exemplar)[1]
+        condition = _value_key(tally.exemplar).condition
         unambiguous = entry_counts[(scope, vote)] == 1
         cited = list(tally.exemplar.source_ids)
         for value_key, source_ids in tally.supporters:
-            if unambiguous or condition == value_key[1]:
+            if unambiguous or condition == value_key.condition:
                 cited.extend(source_ids)
         merged = tuple(dict.fromkeys(cited))
         if merged != tally.exemplar.source_ids:
@@ -234,12 +253,11 @@ def _value_key(value: FieldValue) -> ValueKey:
     Within a pass the condition belongs in the identity -- two conditions are two measurements and must not
     be merged. Across passes it does not; ``_vote_key`` is what the passes vote on.
 
-    A boolean field's ``holds`` is appended when set: "doped" quoted as true and as false are two answers, never
-    one fact. Every other value keeps the four-part key it always had.
+    A boolean field's ``holds`` is part of it: "doped" quoted as true and as false are two answers, never one
+    fact.
     """
     unit = clean_unit(value.unit_raw) if value.unit_raw else ""
-    key = (value.field, normalize_key(value.condition), grounding_key(value.value_raw), unit)
-    return key if value.holds is None else (*key, str(value.holds))
+    return ValueKey(value.field, normalize_key(value.condition), grounding_key(value.value_raw), unit, value.holds)
 
 
 def _vote_key(value: FieldValue) -> VoteKey:
@@ -251,4 +269,4 @@ def _vote_key(value: FieldValue) -> VoteKey:
     vote until nothing reached a majority.
     """
     key = _value_key(value)
-    return key[0], key[2], *key[3:]
+    return VoteKey(key.field, key.quote, key.unit, key.holds)

@@ -159,6 +159,11 @@ class DomainProfile:
         return tuple(spec for spec in self.fields if spec.figure_readable)
 
     @cached_property
+    def asks_holds(self) -> bool:
+        """Whether some field is a yes/no, so the prompts name the ``holds`` key and the answers carry it."""
+        return any(spec.kind == "boolean" for spec in self.fields)
+
+    @cached_property
     def paper_groups(self) -> tuple[GroupSpec, ...]:
         return tuple(group for group in self.groups if group.level == "paper")
 

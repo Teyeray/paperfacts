@@ -73,7 +73,7 @@ def text_key(spec: FieldSpec, raw: str | None) -> str:
 # A hyphen or a period one parser keeps and the other drops: MinerU read "rf-magnetron sputtering" as
 # "rfmagnetron sputtering", and "wt.%" is also written "wt%". Before a digit either is part of a number (a sign,
 # a range, a decimal point), so there it stays: "10-20" is not "1020", nor "1.5" "15".
-_LOOSE_PUNCTUATION = re.compile(r"[-.](?!\d)")
+LOOSE_PUNCTUATION = re.compile(r"[-.](?!\d)")
 
 
 def same_text(spec: FieldSpec, a: str | None, b: str | None) -> bool:
@@ -87,7 +87,7 @@ def same_text(spec: FieldSpec, a: str | None, b: str | None) -> bool:
         return True
     if canonical_category(spec.categories, a) is not None and canonical_category(spec.categories, b) is not None:
         return False
-    return _LOOSE_PUNCTUATION.sub("", normalize_key(a)) == _LOOSE_PUNCTUATION.sub("", normalize_key(b))
+    return LOOSE_PUNCTUATION.sub("", normalize_key(a)) == LOOSE_PUNCTUATION.sub("", normalize_key(b))
 
 
 # ---- Numbers ------------------------------------------------------------------------------------------------
@@ -116,9 +116,11 @@ _RANGE_SEP = r"(?:-|to|~)"
 _UNIT_TOKEN = r"(?:°?[a-zA-ZΩμ%]+(?:[./][a-zA-ZΩμ%]+)*)"
 _PLUS_MINUS_SIGN = re.compile(_PM)
 _RANGE_SEPARATOR = re.compile(_RANGE_SEP)
-# "10-20", "15.6 to 16.3 nm", "80%–85%", "500 °C to 530 °C": two bounds, each with an optional unit.
+# "10-20", "15.6 to 16.3 nm", "80%–85%", "500 °C to 530 °C", "-60 to -20", "between 450 and 500 °C": two bounds,
+# each with an optional unit. "to" is the separator, never the first bound's unit ("-60 to -20" is no -60 to, 20).
 _RANGE = re.compile(
-    rf"^(?P<a>{_NUM})\s*(?P<ua>{_UNIT_TOKEN})?\s*{_RANGE_SEP}\s*(?P<b>{_NUM})\s*(?P<ub>{_UNIT_TOKEN})?$"
+    rf"^(?:(?P<between>[Bb]etween)\s+)?(?P<a>{_NUM})\s*(?P<ua>(?!to\b){_UNIT_TOKEN})?"
+    rf"\s*(?(between)and|{_RANGE_SEP})\s*(?P<b>{_NUM})\s*(?P<ub>{_UNIT_TOKEN})?$"
 )
 # "(4.5 ± 0.2) × 10^-4": the parenthesis holds the mantissa and its uncertainty, the exponent applies to both.
 _MANTISSA = re.compile(rf"^\(\s*(?P<m>{_NUM})\s*(?:(?P<pm>{_PM})\s*{_UNSIGNED}\s*)?\)\s*x\s*10\s*\^?\s*(?P<e>[-+]?\d+)")
@@ -857,7 +859,10 @@ def read_date(raw: str) -> tuple[str | None, str | None]:
     Year-first numeric dates and dates naming their month are read. Refused, because each could be read two ways
     or names more than one date: a two-digit year ("Mar 21"), an all-numeric date that is not year first
     ("03/04/2021" is March or April), a range ("2019-2021", "March-May 2021"), and a year outside 1800-2100."""
-    text = normalize_text(raw).strip().casefold()
+    # A date quoted at the end of a sentence or in parentheses: "(March 2021)", "March 2021.".
+    text = normalize_text(raw).casefold().removesuffix(".").strip()
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
     numeric = _YEAR_FIRST.fullmatch(text)
     if numeric is not None and numeric.group("sep") == "." and numeric.group("d") is None:
         return None, "a year with one part after a point could be a decimal year; ambiguous"

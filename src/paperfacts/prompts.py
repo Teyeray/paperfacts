@@ -223,7 +223,7 @@ def _values(profile: DomainProfile, entity: EntitySpec | None = None) -> dict[st
         [spec for spec in profile.fields if profile.entity_of(spec).name == entity.name]
     )
     values["subset_scope"] = render(_SUBSET_SCOPE, values)
-    values["holds_key"] = _HOLDS_KEY if any(spec.kind == "boolean" for spec in profile.fields) else ""
+    values["holds_key"] = _HOLDS_KEY if profile.asks_holds else ""
     return values
 
 

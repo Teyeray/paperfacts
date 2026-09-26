@@ -35,6 +35,7 @@ from pathlib import Path
 
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import profile_comparison_fingerprint
+from paperfacts.kinds import rules_for
 from paperfacts.normalize import canonical_category
 from paperfacts.profile import DomainProfile
 from paperfacts.profile_loader import parse_profile
@@ -101,14 +102,8 @@ def value_matches(spec: Spec, got: object, cell: dict) -> bool:
     if spec.kind == "date":
         return str(got) == str(gold)
     if spec.kind == "interval":
-        # [low, high], null for an open end, which only an open end matches.
-        if not (isinstance(got, list) and isinstance(gold, list) and len(got) == len(gold) == 2):
-            return False
-        return all(
-            (a is None and b is None)
-            or (a is not None and b is not None and math.isclose(a, b, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol))
-            for a, b in zip(got, gold, strict=True)
-        )
+        # [low, high], null for an open end, which only an open end matches: the comparison's own judgement.
+        return rules_for(spec).within(got, gold, spec)
     # A field with closed categories: 'RF magnetron sputtering' is 'RF'. Text that names no category is
     # compared as text below, exactly as the pipeline falls back.
     wanted = canonical_category(spec.categories, str(gold))
