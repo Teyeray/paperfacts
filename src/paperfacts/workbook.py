@@ -36,15 +36,32 @@ def data_columns(profile: DomainProfile) -> tuple[tuple[str, str], ...]:
         ("conditions", "样品及测量条件"),
         ("available_fields", "可用字段数"),
         ("agree_fields", "双路一致字段数"),
-        *((spec.name, spec.name) for spec in profile.fields),
+        *(
+            (key, key)
+            for spec in profile.fields
+            for key in (_interval_keys(spec.name) if spec.kind == "interval" else (spec.name,))
+        ),
     )
+
+
+def _interval_keys(name: str) -> tuple[str, str]:
+    """The two numeric columns an interval field fills on a data sheet: its low end and its high end."""
+    return f"{name} 下限", f"{name} 上限"
 
 
 def format_cell(value: CellValue, column: FieldColumn) -> CellValue:
     """A field's cell as a sheet holds it, decided by the column rather than by the value's shape: the values of
-    a ``many`` column joined with "; ", every other value as it is."""
+    a ``many`` column joined with "; ", an interval as one text ("2.8–4.3", "≥ 80", "≤ 5"; a data sheet gives it
+    two numeric columns instead), every other value as it is (a boolean is written TRUE/FALSE)."""
     if column.cardinality == "many" and isinstance(value, list):
         return "; ".join("" if item is None else str(item) for item in value)
+    if column.kind == "interval" and isinstance(value, list):
+        low, high = value
+        if high is None:
+            return f"≥ {low:g}"
+        if low is None:
+            return f"≤ {high:g}"
+        return f"{low:g}–{high:g}"
     return value
 
 
@@ -58,12 +75,24 @@ def _formatted(rows: Sequence[Row], columns: dict[str, FieldColumn], *, quality:
             else row
             for row in rows
         ]
-    return [
-        {key: format_cell(value, columns[key]) if key in columns else value for key, value in row.items()}
-        for row in rows
-    ]
+    return [_data_row(row, columns) for row in rows]
 
 
+def _data_row(row: Row, columns: dict[str, FieldColumn]) -> Row:
+    """A data row's field cells through :func:`format_cell`, an interval's split into its two end columns."""
+    formatted: dict[str, CellValue] = {}
+    for key, value in row.items():
+        column = columns.get(key)
+        if column is not None and column.kind == "interval":
+            ends = value if isinstance(value, list) else [None, None]
+            formatted.update(zip(_interval_keys(key), ends, strict=True))
+        else:
+            formatted[key] = value if column is None else format_cell(value, column)
+    return formatted
+
+
+# What the 字段说明 sheet says of a field with no unit.
+_KIND_ZH = {"boolean": "是/否", "date": "日期（ISO）"}
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _QUALITY_COLUMNS = (
     ("document_id", "文档ID"),
@@ -187,7 +216,7 @@ def write_dataset(
         | {
             # The sheet says the same things in Chinese, for a reader who opens the workbook alone.
             "scope": f"{profile.ui.entity_label_zh}级" if column.scope == "sample" else profile.ui.paper_level_label_zh,
-            "unit": column.unit or "文本",
+            "unit": column.unit or _KIND_ZH.get(column.kind, "文本"),
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
         for column in by_name.values()

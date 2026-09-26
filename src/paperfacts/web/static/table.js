@@ -11,7 +11,7 @@ import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
 import { clearEvidence, showEvidence } from "./samples.js";
 import { LANE_LABEL, noSamplesReason, state, uiCopy } from "./state.js";
-import { copyTable, fieldText } from "./tsv.js";
+import { copyTable, fieldText, intervalText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
@@ -70,17 +70,21 @@ export function bodyRow(columns, item, className = "") {
 }
 
 // How a committed value is written out, decided by its column: the values of a `many` column joined with "；",
-// numbers through `fmt`, everything else as its own text.
+// an interval as its ends ("2.8–4.3", "≥ 80"), a boolean as 是/否, numbers through `fmt`, everything else as its
+// own text.
 const shownValue = (value, field) => {
   if (field?.cardinality === "many" && Array.isArray(value)) return value.map((item) => (item == null ? "" : shownValue(item))).join("；");
+  if (field?.kind === "interval" && Array.isArray(value)) return intervalText(value);
+  if (field?.kind === "boolean" && typeof value === "boolean") return value ? "是" : "否";
   return typeof value === "number" ? fmt(value) : String(value);
 };
 
-// A value as the reader sees it in a cell: the number and the field's canonical unit, e.g. `125 nm`.
-// Text fields have no unit, and a unitless number stays a bare number.
+// A value as the reader sees it in a cell: the number (or an interval's ends) and the field's canonical unit,
+// e.g. `125 nm`. Text fields have no unit, and a unitless number stays a bare number.
 export function valueHtml(value, field) {
   const shown = escapeHtml(shownValue(value, field));
-  const unit = typeof value === "number" && field?.unit ? field.unit : "";
+  const numeric = typeof value === "number" || (field?.kind === "interval" && Array.isArray(value));
+  const unit = numeric && field?.unit ? field.unit : "";
   return unit ? `${shown} <span class="unit">${escapeHtml(unit)}</span>` : shown;
 }
 

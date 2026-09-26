@@ -92,6 +92,19 @@ def value_matches(spec: Spec, got: object, cell: dict) -> bool:
             return math.isclose(float(got), float(gold), rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
         except (TypeError, ValueError):
             return False
+    if spec.kind == "boolean":
+        return isinstance(got, bool) and got == gold
+    if spec.kind == "date":
+        return str(got) == str(gold)
+    if spec.kind == "interval":
+        # [low, high], null for an open end, which only an open end matches.
+        if not (isinstance(got, list) and isinstance(gold, list) and len(got) == len(gold) == 2):
+            return False
+        return all(
+            (a is None and b is None)
+            or (a is not None and b is not None and math.isclose(a, b, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol))
+            for a, b in zip(got, gold, strict=True)
+        )
     # A field with closed categories: 'RF magnetron sputtering' is 'RF'. Text that names no category is
     # compared as text below, exactly as the pipeline falls back.
     wanted = canonical_category(spec.categories, str(gold))

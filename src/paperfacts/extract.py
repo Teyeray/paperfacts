@@ -56,7 +56,6 @@ from paperfacts.prompts import (
 from paperfacts.records import (
     ExtractedRecords,
     FailedQuestion,
-    FieldResponse,
     FieldValue,
     InventoryResponse,
     InventorySample,
@@ -319,8 +318,10 @@ def _extract_whole_document(
 
 
 def _response_models(profile: DomainProfile) -> ResponseModels:
-    """The answer shapes under the JSON keys this profile's prompts tell the model to emit."""
-    return response_models(profile.prompt.paper_key, profile.prompt.no_samples_key)
+    """The answer shapes under the JSON keys this profile's prompts tell the model to emit, with ``holds`` when
+    some field is boolean."""
+    holds = any(spec.kind == "boolean" for spec in profile.fields)
+    return response_models(profile.prompt.paper_key, profile.prompt.no_samples_key, holds=holds)
 
 
 @dataclass(frozen=True)
@@ -413,6 +414,7 @@ def _extract_passages(
     sample_blocks = frozenset(source_id for sample in inventory.response.samples for source_id in sample.source_ids)
     profile = options.profile
     field_system = field_system_prompt(profile)
+    field_response = _response_models(profile).field
 
     # Which fields get asked, and with which blocks, is decided here in the profile's field order and nowhere
     # else. Retrieval and the budget check stay on this thread, so the questions -- and the "never asked"
@@ -452,7 +454,7 @@ def _extract_passages(
         try:
             response, text, field_usage = complete_validated(
                 client,
-                FieldResponse,
+                field_response,
                 system=field_system,
                 user=field_user,
                 # The default argument binds this field's question; a bare closure would repair against the last.
@@ -563,6 +565,8 @@ def passage_records(
                 source_ids=item.source_ids,
                 note=item.note,
                 known_ids=harvest.known_ids,
+                # Only response_models(..., holds=True) has the key.
+                holds=getattr(item, "holds", None),
             )
             if value is None:
                 continue

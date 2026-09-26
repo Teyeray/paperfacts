@@ -24,7 +24,7 @@ from paperfacts.units import UnitRegistry
 
 # The markers a template fills in from computed values rather than from a slot, and the one pattern every
 # marker matches: prompts.py renders with it, and a slot may not contain a marker it would fill.
-COMPUTED_MARKERS = ("sample_groups", "paper_groups", "condition_rules", "subset_scope", "fields")
+COMPUTED_MARKERS = ("sample_groups", "paper_groups", "condition_rules", "subset_scope", "fields", "holds_key")
 MARKER = re.compile(r"\{([a-z_]+)\}")
 Maturity = Literal["production", "example"]
 

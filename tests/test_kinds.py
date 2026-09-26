@@ -20,9 +20,9 @@ def test_every_kind_has_a_row():
     assert set(RULES) == set(typing.get_args(FieldKind))
 
 
-def test_every_digit_kind_is_read_as_a_number():
+def test_every_digit_kind_is_quoted_with_digits():
     # records.py and passages.py sit below kinds.py and read DIGIT_KINDS; the rows must agree with it.
-    assert {kind for kind, rules in RULES.items() if isinstance(rules, NumericRules)} == DIGIT_KINDS
+    assert {kind for kind, rules in RULES.items() if rules.needs_digit} == DIGIT_KINDS
 
 
 def test_a_field_is_dispatched_by_its_kind(tco_profile: DomainProfile):

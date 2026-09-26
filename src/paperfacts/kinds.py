@@ -32,6 +32,8 @@ from paperfacts.normalize import (
     normalize_key,
     normalize_text,
     parse_number,
+    read_bound,
+    read_date,
     read_range,
     read_value,
     same_text,
@@ -42,7 +44,7 @@ from paperfacts.units import UnitRegistry
 if TYPE_CHECKING:
     from paperfacts.compare import FactStatus
 
-# A list is the cell of a field holding several values at once; no kind produces one yet.
+# A list is the cell of an interval ([low, high], None for an open end) or of a field holding several values.
 CellValue = str | float | int | bool | list[str | float | None] | None
 
 
@@ -53,6 +55,10 @@ def joined(values: Sequence[str]) -> str:
 
 class KindRules(Protocol):
     """The per-kind decisions. Every method is pure."""
+
+    # Whether a value of the kind is quoted with digits. Cleaning and retrieval read the same fact from
+    # fields.DIGIT_KINDS, which they can import; tests hold the two to each other.
+    needs_digit: bool
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         """``field`` with ``value`` / ``unit`` filled in, in ``units`` (``normalize.normalize_field``)."""
@@ -159,6 +165,8 @@ def _range_end(
 
 class NumericRules:
     """A number in the field's canonical unit, compared within the field's tolerances."""
+
+    needs_digit = True
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         reading = read_value(field, spec, units)
@@ -306,6 +314,8 @@ class TextRules:
     """Text as quoted, equal as :func:`paperfacts.normalize.same_text` judges it: across spacing, case and a
     lost hyphen, or by the category both name. A composition is compared the same way."""
 
+    needs_digit = False
+
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         # Compared through same_text on the fly.
         return field
@@ -343,8 +353,228 @@ class TextRules:
         return ""
 
 
+def _unparsed(a: FieldValue, b: FieldValue) -> tuple[FactStatus, str]:
+    return "ambiguous", f"unparsed: {a.normalization_note or a.value_raw!r} vs {b.normalization_note or b.value_raw!r}"
+
+
+# ---- boolean -----------------------------------------------------------------------------------------------
+
+
+class BooleanRules:
+    """A yes/no the paper states in words. The model quotes the words and says with ``holds`` whether they affirm
+    the field; the code never reads a negation itself. Cleaning drops an answer without ``holds``."""
+
+    needs_digit = False
+
+    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+        return field
+
+    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+        if a.holds is None or b.holds is None:
+            return "ambiguous", f"no yes/no: {a.holds} vs {b.holds}"
+        if a.holds == b.holds:
+            return "agree", f"both {'affirm' if a.holds else 'deny'} it"
+        return "conflict", f"{a.value_raw!r} ({a.holds}) vs {b.value_raw!r} ({b.holds})"
+
+    def distance(self, a: FieldValue, b: FieldValue) -> float | None:
+        # Equal answers pair first, so two lanes listing the same two answers in another order still agree.
+        return None if a.holds is None or b.holds is None else float(a.holds != b.holds)
+
+    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+        if value.holds is None:
+            return None, "原文未给出是/否"
+        return value.holds, None
+
+    def same(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+
+    def within(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return self.same(a, b, spec)
+
+    def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
+        return ()
+
+    def note(self, spec: FieldSpec) -> str:
+        return (
+            " A yes/no field: quote in value_raw the words that state it, and set holds to true when they affirm it,"
+            " false when they deny it. Report nothing when the paper does not say."
+        )
+
+
+# ---- date --------------------------------------------------------------------------------------------------
+
+
+class DateRules:
+    """A calendar date as ISO at the precision the paper wrote (:func:`paperfacts.normalize.read_date`)."""
+
+    needs_digit = True
+
+    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+        iso, note = read_date(field.value_raw)
+        return field.model_copy(update={"iso_date": iso, "normalization_note": note})
+
+    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+        if a.iso_date is None or b.iso_date is None:
+            return _unparsed(a, b)
+        if a.iso_date == b.iso_date:
+            return "agree", f"both {a.iso_date}"
+        shorter, longer = sorted((a.iso_date, b.iso_date), key=len)
+        if longer.startswith(f"{shorter}-"):
+            # "2021-03" against "2021-03-12": the same date at two precisions, or two dates in one month.
+            return "ambiguous", f"{a.iso_date} vs {b.iso_date}: one is stated more precisely"
+        return "conflict", f"{a.iso_date} vs {b.iso_date}"
+
+    def distance(self, a: FieldValue, b: FieldValue) -> float | None:
+        # Equal dates pair first, so two lanes listing the same dates in another order still agree.
+        return None if a.iso_date is None or b.iso_date is None else float(a.iso_date != b.iso_date)
+
+    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+        iso, note = read_date(value.value_raw)
+        return iso, None if iso is not None else note
+
+    def same(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return isinstance(a, str) and a == b
+
+    def within(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return self.same(a, b, spec)
+
+    def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
+        return ()
+
+    def note(self, spec: FieldSpec) -> str:
+        return " Quote the date exactly as written."
+
+
+# ---- interval ----------------------------------------------------------------------------------------------
+
+
+def _ends_close(a: Sequence[float | None], b: Sequence[float | None], rel_tol: float, abs_tol: float) -> bool:
+    """Each end within tolerance of the other's, an open end equal only to an open end."""
+    return all(
+        (x is None and y is None)
+        or (x is not None and y is not None and math.isclose(x, y, rel_tol=rel_tol, abs_tol=abs_tol))
+        for x, y in zip(a, b, strict=True)
+    )
+
+
+class IntervalRules:
+    """A range with two printed ends ("2.8-4.3 V"), or a one-sided bound (">80 %"), both ends in the canonical
+    unit. The quote is read through :func:`read_value`, so a bound grounding found before it counts: "80" quoted
+    out of "above 80 %" is (80, None). A bare number is no interval and is refused."""
+
+    needs_digit = True
+
+    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+        def refused(note: str | None) -> FieldValue:
+            return field.model_copy(update={"bounds": None, "unit": None, "normalization_note": note})
+
+        reading = read_value(field, spec, units)
+        own_units = _value_units(field, spec)
+        clean = read_range(reading.text, own_units)
+        if clean is not None:
+            low, high, unit = clean
+            # The model is asked for the unit in unit_raw; a range that writes it only in the quote still has one.
+            unit_raw = field.unit_raw or unit or None
+            ends = []
+            for end in (low, high):
+                converted, canonical, note = convert_to_canonical(
+                    spec, end, unit_raw, units, value_text=reading.text, range_ends=(low, high)
+                )
+                if converted is None:
+                    return refused(note)
+                ends.append(converted)
+            bounds: tuple[float | None, float | None] = (ends[0], ends[1])
+            note = f"range {low:g}-{high:g}"
+        else:
+            bound = read_bound(reading.text)
+            if bound is None:
+                number, parse_note = parse_number(reading.text, range_policy="reject")
+                why = "an interval field needs two ends or a bound"
+                return refused(why if number is not None else "; ".join(n for n in (parse_note, why) if n))
+            lower, number, parse_note = bound
+            if number is None:
+                return refused(parse_note)
+            # A unit written only in the quote (">80 %") counts, as it does for a range.
+            unit_raw = field.unit_raw or _trailing_unit(reading.text, own_units)
+            converted, canonical, unit_note = convert_to_canonical(
+                spec, number, unit_raw, units, value_text=reading.text
+            )
+            if converted is None:
+                return refused(unit_note)
+            bounds = (converted, None) if lower else (None, converted)
+            note = f"{'lower' if lower else 'upper'} bound {number:g}"
+        if reading.bound:
+            note = f"bound {reading.bound!r} stands before the quote in its cited block; {note}"
+        return field.model_copy(update={"bounds": bounds, "unit": canonical, "normalization_note": note})
+
+    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+        if a.bounds is None or b.bounds is None:
+            return _unparsed(a, b)
+        if a.unit != b.unit:
+            return "ambiguous", f"units differ after normalization: {a.unit} vs {b.unit}"
+        shown = f"{_interval_text(a.bounds)} vs {_interval_text(b.bounds)} {a.unit or ''}".rstrip()
+        if _ends_close(a.bounds, b.bounds, spec.rel_tol, spec.abs_tol):
+            return "agree", f"{shown} (rel_tol={spec.rel_tol:g}, abs_tol={spec.abs_tol:g})"
+        return "conflict", shown
+
+    def distance(self, a: FieldValue, b: FieldValue) -> float | None:
+        if a.bounds is None or b.bounds is None:
+            return None
+        if [end is None for end in a.bounds] != [end is None for end in b.bounds]:
+            return None
+        return sum(abs(x - y) for x, y in zip(a.bounds, b.bounds, strict=True) if x is not None and y is not None)
+
+    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+        # The comparison's reading, so the cell and the report agree on what the quote says.
+        read = self.read(value, spec, units)
+        if read.bounds is None:
+            return None, read.normalization_note or "不是区间或单侧界限"
+        return list(read.bounds), None
+
+    def same(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return _is_interval(a) and _is_interval(b) and _ends_close(a, b, 1e-12, 0.0)  # type: ignore[arg-type]
+
+    def within(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return _is_interval(a) and _is_interval(b) and _ends_close(a, b, spec.rel_tol, spec.abs_tol)  # type: ignore[arg-type]
+
+    def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
+        return ()
+
+    def note(self, spec: FieldSpec) -> str:
+        return (
+            ' Quote the whole range as written, both ends and the unit (e.g. "2.8-4.3 V"), or a one-sided bound'
+            ' (">80 %").'
+        )
+
+
+def _trailing_unit(text: str, allowed: Sequence[str]) -> str | None:
+    """The unit ``text`` ends with, when it is one of ``allowed`` (the field's own)."""
+    folded = clean_unit(normalize_text(text))
+    return next((unit for unit in allowed if clean_unit(unit) and folded.endswith(clean_unit(unit))), None)
+
+
+def _is_interval(value: CellValue) -> bool:
+    return isinstance(value, list) and len(value) == 2
+
+
+def _interval_text(bounds: tuple[float | None, float | None]) -> str:
+    low, high = bounds
+    if high is None:
+        return f"≥{low:g}"
+    if low is None:
+        return f"≤{high:g}"
+    return f"{low:g}-{high:g}"
+
+
 RULES: Mapping[FieldKind, KindRules] = MappingProxyType(
-    {"numeric": NumericRules(), "composition": TextRules(), "text": TextRules()}
+    {
+        "numeric": NumericRules(),
+        "composition": TextRules(),
+        "text": TextRules(),
+        "boolean": BooleanRules(),
+        "date": DateRules(),
+        "interval": IntervalRules(),
+    }
 )
 
 
