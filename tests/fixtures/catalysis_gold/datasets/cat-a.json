@@ -1,0 +1,22 @@
+{
+  "document_id": "cat-a",
+  "paper_row": {
+    "entity": "catalyst", "sample_id": "CZ-1 | Cat 1",
+    "characterization_techniques": ["XRD", "XPS", "BET"],
+    "precursors": ["Cu(NO3)2·3H2O", "Zn(NO3)2·6H2O", "ZrO(NO3)2"],
+    "received_date": "2021-03-12"
+  },
+  "sample_rows": [
+    {"entity": "catalyst", "sample_id": "CZ-1 | Cat 1", "calcination_temperature": 500.0, "bet_surface_area": 85.0},
+    {"entity": "catalyst", "sample_id": "CZ-2 | Cat 2", "calcination_temperature": 500.0, "bet_surface_area": 64.0},
+    {
+      "entity": "test", "sample_id": "T1 | run-1", "catalyst": "CZ-1 | Cat 1", "pre_reduced": true,
+      "temperature_window": [200.0, 300.0], "reaction_pressure": 3.0
+    },
+    {
+      "entity": "test", "sample_id": "T2 | run-2", "catalyst": null, "pre_reduced": true,
+      "temperature_window": [240.0, null], "reaction_pressure": 3.0
+    }
+  ],
+  "quality_rows": []
+}

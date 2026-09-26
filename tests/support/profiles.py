@@ -65,7 +65,10 @@ DELETE = object()
 def profile_data(changes: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """The demo profile's JSON with some dotted keys replaced (``"prompt.paper_key"``) or, for a value of
     :data:`DELETE`, removed. A list is indexed by position (``"fields.0.canonical_unit"``)."""
-    data = copy.deepcopy(_DEMO)
+    return _changed(copy.deepcopy(_DEMO), changes)
+
+
+def _changed(data: dict[str, Any], changes: Mapping[str, Any] | None) -> dict[str, Any]:
     for dotted, value in (changes or {}).items():
         *parents, leaf = dotted.split(".")
         node: Any = data
@@ -77,6 +80,95 @@ def profile_data(changes: Mapping[str, Any] | None = None) -> dict[str, Any]:
         else:
             node[key] = value
     return data
+
+
+def entity_profile_data() -> dict[str, Any]:
+    """The demo profile with two entity types: its coatings (the primary one, with the demo's coating fields) and
+    the wear tests run on them, each with its own wording, sample list heading and inventory retrieval."""
+    data = profile_data()
+    data["entities"] = [
+        {
+            "name": "coating",
+            "label_zh": "涂层",
+            "prompt": {
+                "sample_definition": "A coating is one film this paper deposits itself.",
+                "sample_plural": "coatings",
+                "sample_singular": "coating",
+                "sample_list_heading": "Coatings",
+            },
+        },
+        {
+            "name": "wear_test",
+            "label_zh": "磨损测试",
+            "prompt": {
+                "sample_definition": "A wear test is one set of test conditions applied to one coating.",
+                "sample_plural": "wear tests",
+                "sample_singular": "wear test",
+                "sample_list_heading": "Wear tests",
+                "matching_justification_example": "both are the test at 300 °C",
+            },
+            "retrieval": {"condition_keywords": ["tested", "wear"]},
+        },
+    ]
+    data["groups"][1]["entity"] = "coating"
+    data["groups"].append({"name": "wear", "level": "sample", "label_zh": "磨损", "entity": "wear_test"})
+    data["fields"] += [
+        {
+            "name": "test_temperature",
+            "group": "wear",
+            "kind": "numeric",
+            "description": "Temperature the wear test ran at.",
+            "keywords": ["tested"],
+            "canonical_unit": "℃",
+            "condition_rule": "the counter body",
+            "condition_hint": "the counter body",
+            "missing_condition_note_zh": "未注明对磨件",
+        },
+        {
+            "name": "wear_mode",
+            "group": "wear",
+            "kind": "text",
+            "description": "Sliding or rolling wear.",
+            "keywords": ["wear"],
+        },
+    ]
+    return data
+
+
+def make_entity_profile(changes: Mapping[str, Any] | None = None) -> DomainProfile:
+    """:func:`entity_profile_data`, validated, with ``changes`` applied as in :func:`profile_data`."""
+    return parse_profile(_changed(entity_profile_data(), changes), Path("profiles/demo.json"))
+
+
+def make_one_entity_profile() -> DomainProfile:
+    """:func:`entity_profile_data` declaring only its coatings: one declared entity type, which names its rows and
+    fields ("coating") although the page and the workbook group nothing."""
+    data = entity_profile_data()
+    data["entities"] = data["entities"][:1]
+    data["groups"] = [group for group in data["groups"] if group.get("entity") != "wear_test"]
+    data["fields"] = [field for field in data["fields"] if field["group"] != "wear"]
+    return parse_profile(data, Path("profiles/demo.json"))
+
+
+def reference_profile_data() -> dict[str, Any]:
+    """:func:`entity_profile_data` with a reference field: each wear test names the coating it was run on."""
+    data = entity_profile_data()
+    data["fields"].append(
+        {
+            "name": "tested_coating",
+            "group": "wear",
+            "kind": "reference",
+            "references": "coating",
+            "description": "The coating this wear test was run on.",
+            "keywords": ["tested"],
+        }
+    )
+    return data
+
+
+def make_reference_profile(changes: Mapping[str, Any] | None = None) -> DomainProfile:
+    """:func:`reference_profile_data`, validated, with ``changes`` applied as in :func:`profile_data`."""
+    return parse_profile(_changed(reference_profile_data(), changes), Path("profiles/demo.json"))
 
 
 # The shipped TCO profile's file. A test Settings with its own repo_root names it here, so an app or a CLI

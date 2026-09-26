@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from paperfacts.config import DEFAULT_REPO_ROOT
+from paperfacts.fields import FieldSpec
 
 SCRIPT = DEFAULT_REPO_ROOT / "eval" / "score.py"
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "score_b0"
@@ -112,3 +113,19 @@ def test_the_keys_reach_the_scored_sources(tmp_path, monkeypatch):
 
     assert f"`0000000000000002`: `{named}`" in text
     assert [cell["value"] for cell in cells if cell["field"] == "thickness"] == [1.0]
+
+
+def _spec(kind: str, *, rel_tol: float = 0.0) -> FieldSpec:
+    return FieldSpec(name="f", group="g", kind=kind, description="d", keywords=(), rel_tol=rel_tol)  # type: ignore[arg-type]
+
+
+def test_a_boolean_a_date_and_an_interval_are_scored_by_their_own_rule():
+    boolean, date, interval = _spec("boolean"), _spec("date"), _spec("interval", rel_tol=0.01)
+
+    assert score.value_matches(boolean, False, {"value": False})
+    assert not score.value_matches(boolean, "false", {"value": False})
+    assert score.value_matches(date, "2021-03", {"value": "2021-03"})
+    assert not score.value_matches(date, "2021-03-12", {"value": "2021-03"})
+    assert score.value_matches(interval, [451.0, None], {"value": [450, None]})
+    assert not score.value_matches(interval, [451.0, 500.0], {"value": [450, None]})
+    assert not score.value_matches(interval, 450.0, {"value": [450, None]})

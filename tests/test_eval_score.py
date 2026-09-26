@@ -77,3 +77,95 @@ def test_a_dataset_from_before_profiles_is_still_a_candidate(tmp_path: Path):
     old = _dataset(tmp_path, "aaaa.bbbb", None, mtime=1_000)
 
     assert score.find_dataset(tmp_path, "0000000000000001", None, "tco-fingerprint") == old
+
+
+def test_a_gold_sample_aligns_only_to_rows_of_its_entity_and_scores_its_fields():
+    from support.profiles import make_entity_profile
+
+    specs = make_entity_profile().by_name
+    gold = {
+        "doc_id": "d",
+        "paper": {},
+        "samples": [
+            {"id": "c", "entity": "coating", "match": {"label": "S1"}, "fields": {"solvent": [{"value": "ethanol"}]}},
+            {
+                "id": "t",
+                "entity": "wear_test",
+                "match": {"label": "S1"},
+                "fields": {"wear_mode": [{"value": "sliding"}]},
+            },
+        ],
+    }
+    rows = [
+        {"entity": "wear_test", "sample_id": "S1", "wear_mode": "sliding", "test_temperature": None},
+        {"entity": "coating", "sample_id": "S1", "solvent": "ethanol", "coating_thickness": None},
+    ]
+    dataset = {
+        "sample_rows": rows,
+        "quality_rows": [{"entity": "coating", "sample_id": "S1", "field": "solvent", "decision": "agree"}],
+    }
+
+    cells = score.score_document(specs, gold, dataset)
+
+    assert {(cell.sample, cell.field, cell.outcome) for cell in cells if cell.outcome != "missing"} == {
+        ("c", "solvent", "correct"),
+        ("t", "wear_mode", "correct"),
+    }
+    # The trace finds the quality row of the gold sample's entity.
+    assert next(cell.detail for cell in cells if cell.field == "solvent") == "agree"
+
+
+def test_a_profile_declaring_one_entity_scores_the_dataset_consolidation_wrote():
+    # With one declared entity the rows used to carry no `entity`, while the fields and the gold name it: every
+    # sample cell then aligned to nothing and came out missing.
+    from paperfacts.compare import compare_lanes
+    from paperfacts.dataset import consolidate_document
+    from paperfacts.keys import ComparisonOptions, profile_extraction_fingerprint
+    from paperfacts.matching import SampleMatch, SampleMatching
+    from paperfacts.models import DocumentInput
+    from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
+    from support.profiles import make_one_entity_profile
+
+    profile = make_one_entity_profile()
+    options = ComparisonOptions(profile=profile, ambiguous_match_confidence=0.6)
+
+    def lane(backend: str, sample_id: str) -> LaneExtraction:
+        solvent = FieldValue(field="solvent", value_raw="ethanol", source_ids=("b",), grounded=True)
+        return LaneExtraction(
+            document_id="d" * 64,
+            backend=backend,  # type: ignore[arg-type]
+            extractor_key="k" * 12,
+            model="m",
+            profile_fingerprint=profile_extraction_fingerprint(profile),
+            samples=(SampleRecord(sample_id=sample_id, entity="coating", fields=(solvent,)),),
+        )
+
+    lanes = {"mineru": lane("mineru", "S1"), "paddleocr_vl": lane("paddleocr_vl", "coat-1")}
+    matching = SampleMatching(
+        pairs=(SampleMatch(a_id="S1", b_id="coat-1", confidence=0.9, justification="j", method="llm"),)
+    )
+    report = compare_lanes(lanes["mineru"], lanes["paddleocr_vl"], {"coating": matching}, options)
+    document = DocumentInput(document_id="d" * 64, sha256="d" * 64, pdf_path=Path("paper.pdf"))
+    dataset = consolidate_document(document, lanes, report, options)
+    payload = {"sample_rows": [dict(row) for row in dataset.sample_rows], "quality_rows": list(dataset.quality_rows)}
+    gold = {
+        "doc_id": "d",
+        "samples": [
+            {"id": "c1", "entity": "coating", "match": {"label": "S1"}, "fields": {"solvent": [{"value": "ethanol"}]}}
+        ],
+    }
+
+    assert [row["entity"] for row in dataset.sample_rows] == ["coating"]
+    cells = score.score_document(profile.by_name, gold, payload)
+    assert [(cell.field, cell.outcome) for cell in cells if cell.field == "solvent"] == [("solvent", "correct")]
+
+
+@pytest.mark.parametrize("entity", [None, "coatings"])
+def test_a_gold_sample_must_name_a_declared_entity(entity):
+    from support.profiles import make_entity_profile
+
+    sample = {"id": "c1", "match": {"label": "S1"}, "fields": {}} | ({"entity": entity} if entity else {})
+    gold = {"doc_id": "doc-7", "samples": [sample]}
+
+    with pytest.raises(ValueError, match=r"doc-7: gold sample 'c1' names entity .*coating, wear_test"):
+        score.score_document(make_entity_profile().by_name, gold, {"sample_rows": [], "quality_rows": []})

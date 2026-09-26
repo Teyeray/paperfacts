@@ -34,13 +34,22 @@ from typing import Literal
 
 # Whether a field belongs to the paper as a whole or to each of its samples. A profile declares it per group.
 FieldLevel = Literal["paper", "sample"]
-# numeric: a number with a unit; composition: a chemical formula; text: anything else
-FieldKind = Literal["numeric", "composition", "text"]
-# The kinds whose value is quoted as a number, so an answer or a block without a digit cannot hold one. Here
+# numeric: a number with a unit; composition: a chemical formula; text: anything else; boolean: a yes/no the paper
+# states in words (the model says which with ``holds``); date: a calendar date, read to ISO at the precision
+# written; interval: a range with two ends, or a one-sided bound, in a unit; reference: the id of a sample of another
+# entity type (the catalyst a reaction test ran on), linking the two.
+FieldKind = Literal["numeric", "composition", "text", "boolean", "date", "interval", "reference"]
+# The kinds whose value is quoted with digits, so an answer or a block without a digit cannot hold one. Here
 # rather than in paperfacts.kinds because cleaning (records.py) and retrieval (passages.py) sit below that module.
-DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric"})
-# How many values of a field one sample (or the paper) holds. Only "one" exists yet; a dataset column carries it
-# so that the workbook and the web format a cell by its column.
+DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric", "date", "interval"})
+# The longest quote read as a number, date or interval. The number reader is quadratic in a run of digits (20 000
+# of them took seconds), and no quantity is written in 200 characters: the corpus's longest value is 68.
+MAX_NUMBER_QUOTE = 200
+# The kinds read as numbers in a canonical unit, so a unit, a plausible range and a tolerance mean something.
+UNIT_KINDS: frozenset[FieldKind] = frozenset({"numeric", "interval"})
+# How many values of a field one sample (or the paper) holds: one, or a list of several that hold at once (the
+# precursors of a sample). "many" is for text and composition only; a dataset column carries it so that the workbook
+# and the web format a cell by its column.
 Cardinality = Literal["one", "many"]
 # What a bare number with no unit means. Declared per field so normalisation never special-cases a name.
 BareNumberPolicy = Literal["reject", "assume_canonical", "percent_or_fraction"]
@@ -137,6 +146,23 @@ class FieldSpec:
     # annealing" is not the as-deposited thickness); "condition" suits one that is only ever stated after
     # something (a capacity retention after N cycles), where the clause is what the value was measured under.
     after_clause: AfterClause = field(default="refuse", metadata=_roles(FieldRole.CLEANING, FieldRole.VERDICT))
+    # PROMPT: a list field's line asks for each value as its own entry. VERDICT: its values pair as a set, and its
+    # dataset cell is the union of both lanes' values rather than one value.
+    cardinality: Cardinality = field(default="one", metadata=_roles(FieldRole.PROMPT, FieldRole.VERDICT))
+    # The categories a list field's line names to the model ("Name each with one of: XRD, XPS."). Derived by the
+    # loader, never written in a field entry: ``categories`` when the field is ``many``, () otherwise, so a
+    # single-valued field with categories (whose line names none) keeps its extraction key.
+    prompt_categories: tuple[str, ...] = field(default=(), metadata=_roles(FieldRole.PROMPT))
+    # The entity type a sample-level field describes, from its group like ``level``; None for a paper-level field
+    # and for every field of a profile that declares no entity types. It decides which sample list and system
+    # prompt the field's question is asked with, which samples its values may land on, and which rows it fills.
+    entity: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT))
+    # The entity type a ``reference`` field names a sample of; None for every other kind. PROMPT: the question shows
+    # that entity's sample list. CLEANING: a value is grounded only when it resolves to one of them. VERDICT: two
+    # lanes agree when that entity's matching pairs the samples they name, and the cell is the named row's id.
+    references: str | None = field(
+        default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT)
+    )
 
     @property
     def is_sample_level(self) -> bool:

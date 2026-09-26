@@ -9,7 +9,7 @@
 import { api } from "./api.js";
 import { escapeHtml, keepFocus, toast } from "./html.js";
 import { documentHash } from "./router.js";
-import { state, uiCopy } from "./state.js";
+import { entityGroups, inEntity, state } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
 import { bodyRow, column, fieldColumn, headRow, plainCell } from "./table.js";
 import { copyButton, copyTable } from "./tsv.js";
@@ -28,9 +28,32 @@ export async function loadCorpus() {
   }
 }
 
+// With several entity types the corpus table shows the primary entity only -- its rows and fields beside the
+// paper-level ones -- an explicit limit of this view (the paper row is always one of its rows); every entity is in
+// each document's own page and in the workbook.
+function primaryOnly(data) {
+  const groups = entityGroups();
+  if (groups.length < 2) return { data, note: "" };
+  const [primary] = groups;
+  return {
+    data: {
+      ...data,
+      fields: (data?.fields ?? []).filter((field) => field.scope !== "sample" || inEntity(primary, field)),
+      rows: (data?.rows ?? []).map((row) => {
+        const samples = (row.sample_rows ?? []).filter((sample) => inEntity(primary, sample));
+        return { ...row, sample_rows: samples, sample_count: samples.length };
+      }),
+    },
+    note: `这里只列出${primary.label}；${groups.slice(1).map((group) => group.label).join("、")}见各论文页面或 Excel。`,
+  };
+}
+
+// What this table calls a row: the profile's entity, or with several entity types the primary one.
+const primaryLabel = () => entityGroups()[0].label;
+
 export function renderCorpus(root) {
   root.innerHTML = "";
-  const data = state.corpus;
+  const { data, note: entityNote } = primaryOnly(state.corpus);
   const rows = data?.rows ?? [];
   if (!rows.length) return;
 
@@ -70,10 +93,10 @@ export function renderCorpus(root) {
 
   const note = document.createElement("p");
   note.className = "results-note muted";
-  const entity = uiCopy("entity_label_zh");
+  const entity = primaryLabel();
   note.textContent =
     `${rows.length} 篇论文各取一个完整${entity}行，点${entity}数可展开该论文的全部${entity}；` +
-    "空白单元格是流水线拒绝猜测的取值，不是 0。";
+    "空白单元格是流水线拒绝猜测的取值，不是 0。" + entityNote;
 
   const table = document.createElement("table");
   table.className = "facts-table results-table";
@@ -125,7 +148,7 @@ function corpusColumns(fields) {
       name,
     ),
     column(
-      uiCopy("entity_label_zh"),
+      primaryLabel(),
       (item) => `<td class="mono">${escapeHtml(item.source.sample_id ?? "")}${isPaper(item) ? sampleCount(item.row) : chosenMark(item)}</td>`,
       (item) => item.source.sample_id ?? "",
     ),
@@ -141,7 +164,7 @@ function corpusColumns(fields) {
 // Only a paper with more than one sample has anything to expand into.
 function sampleCount(row) {
   const count = (row.sample_rows ?? []).length || row.sample_count || 0;
-  const entity = escapeHtml(uiCopy("entity_label_zh"));
+  const entity = escapeHtml(primaryLabel());
   if (count <= 1) return `<small>${escapeHtml(count)} 个${entity}</small>`;
   const open = expanded.has(row.document_id);
   const id = escapeHtml(row.document_id);
@@ -152,7 +175,7 @@ function sampleCount(row) {
 }
 
 const chosenMark = (item) =>
-  item.source.sample_id === item.row.paper_row?.sample_id ? `<small class="chosen">论文行取自此${escapeHtml(uiCopy("entity_label_zh"))}</small>` : "";
+  item.source.sample_id === item.row.paper_row?.sample_id ? `<small class="chosen">论文行取自此${escapeHtml(primaryLabel())}</small>` : "";
 
 // One chip that expands every expandable paper, or collapses them all once they are all open.
 function expandAllChip(expandable, rerender) {
@@ -161,7 +184,7 @@ function expandAllChip(expandable, rerender) {
   chip.type = "button";
   chip.className = `chip${allOpen ? " on" : ""}`;
   chip.dataset.focus = "expand-all";
-  chip.textContent = `${allOpen ? "收起" : "展开"}全部${uiCopy("entity_label_zh")}`;
+  chip.textContent = `${allOpen ? "收起" : "展开"}全部${primaryLabel()}`;
   chip.addEventListener("click", () => {
     for (const row of expandable) {
       if (allOpen) expanded.delete(row.document_id);

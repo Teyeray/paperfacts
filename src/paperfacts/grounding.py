@@ -17,7 +17,8 @@ from collections.abc import Mapping, Sequence
 
 from paperfacts.continuation import continuation_pairs
 from paperfacts.models import SourceBlock
-from paperfacts.records import FieldValue, LaneExtraction
+from paperfacts.profile import DomainProfile
+from paperfacts.records import FieldValue, LaneExtraction, resolve_reference
 from paperfacts.text import KEY_CHARACTERS, LATEX_WRAPPERS, delatex, normalize_text
 
 # LaTeX expands to " x ", Unicode papers use "×"; fold both so the two spellings compare equal.
@@ -238,10 +239,25 @@ _BOUND_SIGNS = {"geq": "≥", "ge": "≥", "leq": "≤", "le": "≤", "gt": ">",
 # LaTeX ("\geq", not "\left") and HTML ("&gt;") spellings of the signs.
 _BOUND_SIGN = re.compile(r"\\(geq|ge|leq|le|gt|lt)(?![A-Za-z])|&(gt|lt);")
 _BOUND_DECORATION = re.compile(f"[^^<>≥≤{KEY_CHARACTERS}]+")
-_BOUND_BEFORE = re.compile(
-    r"(?:^|[^a-z])(above|over|more than|greater than|higher than|exceeding|at least|below|less than|lower than"
-    r"|up to|at most|[<>≥≤])\s*$"
-)
+# The words that make the number after them a one-sided bound, lower then upper. normalize reads a quote's own
+# bound with the same words, so a bound found before a quote and one quoted with it read alike.
+LOWER_BOUND_WORDS = ("above", "over", "more than", "greater than", "higher than", "exceeding", "at least")
+UPPER_BOUND_WORDS = ("below", "less than", "lower than", "up to", "at most")
+_BOUND_BEFORE = re.compile(rf"(?:^|[^a-z])({'|'.join((*LOWER_BOUND_WORDS, *UPPER_BOUND_WORDS))}|[<>≥≤])\s*$")
+
+
+# How far before its trailing whitespace a match of _BOUND_BEFORE reaches: the longest bound word and the character
+# before it.
+_BOUND_REACH = max(len(word) for word in (*LOWER_BOUND_WORDS, *UPPER_BOUND_WORDS)) + 1
+
+
+def _bound_before(haystack: str, start: int) -> re.Match[str] | None:
+    """:data:`_BOUND_BEFORE` over ``haystack[:start]``, searched only within its reach of the whitespace before
+    ``start``: searching the block from its beginning for every occurrence of the quote was quadratic in the block."""
+    end = start
+    while end and haystack[end - 1].isspace():
+        end -= 1
+    return _BOUND_BEFORE.search(haystack, max(0, end - _BOUND_REACH), start)
 
 
 def _bound_key(text: str) -> str:
@@ -265,7 +281,7 @@ def quoted_bound(value: FieldValue, blocks: Mapping[str, str]) -> str | None:
         for match in re.finditer(re.escape(needle), haystack):
             if _continues_before(haystack, match.start()) or _continues_after(haystack, match.end()):
                 continue
-            bound = _BOUND_BEFORE.search(haystack, 0, match.start())
+            bound = _bound_before(haystack, match.start())
             if bound is not None:
                 return bound.group(1)
     return None
@@ -294,23 +310,39 @@ def ground_lane(
     blocks: Mapping[str, str],
     *,
     adjacency: Mapping[str, tuple[str | None, str | None]] | None = None,
+    profile: DomainProfile,
 ) -> LaneExtraction:
-    """Re-check every value in ``lane`` against ``blocks``.
+    """Re-check every value in ``lane`` against ``blocks``, a reference field's against the lane's samples.
 
     Grounding needs no model, so it is redone whenever a lane is read rather than trusted from the stored
     file. Improving the matcher therefore costs nothing and never leaves a stale verdict behind -- the same
     bargain normalisation makes.
+
+    A ``reference`` field quotes the id of a sample of another entity type, which the question showed in a list
+    rather than in an excerpt. Its value is grounded when it resolves to one of the lane's samples of that entity
+    (:func:`~paperfacts.records.resolve_reference`), and no bound applies. Resolving here rather than once at
+    extraction is what keeps it: every read re-grounds, and a text check would refuse every reference again.
     """
+    references = {spec.name: spec.references for spec in profile.fields if spec.references is not None}
+    listed = lane.listed() if references else {}
+
+    def resolved(value: FieldValue) -> FieldValue:
+        found = resolve_reference(listed.get(references[value.field], {}), value.value_raw)
+        return value.model_copy(update={"grounded": found is not None, "bound": None})
+
+    def grounded(values: tuple[FieldValue, ...]) -> tuple[FieldValue, ...]:
+        return tuple(
+            resolved(value) if value.field in references else ground_values((value,), blocks, adjacency=adjacency)[0]
+            for value in values
+        )
+
     paper = lane.paper
     if paper is not None:
-        paper = paper.model_copy(update={"fields": ground_values(paper.fields, blocks, adjacency=adjacency)})
+        paper = paper.model_copy(update={"fields": grounded(paper.fields)})
     return lane.model_copy(
         update={
             "paper": paper,
-            "samples": tuple(
-                sample.model_copy(update={"fields": ground_values(sample.fields, blocks, adjacency=adjacency)})
-                for sample in lane.samples
-            ),
-            "unattributed": ground_values(lane.unattributed, blocks, adjacency=adjacency),
+            "samples": tuple(sample.model_copy(update={"fields": grounded(sample.fields)}) for sample in lane.samples),
+            "unattributed": grounded(lane.unattributed),
         }
     )

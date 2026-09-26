@@ -9,7 +9,7 @@ requires-python = ">=3.13,<3.14"
 # The main package is pure Python. MinerU and PaddleOCR live in their own environments under runners/
 # and are never imported from here; see CLAUDE.md for why they cannot share one.
 dependencies = [
-    "pydantic>=2.11,<3",
+    "pydantic>=2.12,<3",  # exclude_if keeps a boolean-only attribute out of stored files
     "pypdfium2>=4.30,<6",
     # Lower bound excludes the Pillow 11.x line, which carries ~35 known advisories fixed by 12.1.1-12.3.0.
     "pillow>=12.3,<13",

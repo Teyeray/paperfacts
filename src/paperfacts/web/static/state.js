@@ -74,6 +74,34 @@ export function applyUiCopy(root) {
   for (const element of root.querySelectorAll("[data-ui]")) element.textContent = uiCopy(element.dataset.ui);
 }
 
+// ---------- entity types ----------
+//
+// A profile may declare several kinds of sample (profile.entities, the primary first): each has its own rows,
+// records and matching, and the page groups by them under their own labels. A profile without entity types -- and a
+// page whose profile has not loaded -- has one group, `name: null`, holding everything; nothing on the page names it,
+// so such a page looks exactly as it did before entity types existed.
+
+// The name a lane sample, a dataset row or a comparison scope has when it carries none: the implicit entity's.
+const IMPLICIT_ENTITY = "sample";
+
+export function entityGroups() {
+  const declared = state.profile?.entities ?? [];
+  if (declared.length < 2) return [{ name: null, label: uiCopy("entity_label_zh") }];
+  return declared.map((entity) => ({ name: entity.name, label: entity.label_zh || entity.name }));
+}
+
+// Whether a lane sample, a dataset row or a quality row is one of `group`'s. Only a sample-level field column is
+// asked (a paper-level one belongs to no entity).
+export const inEntity = (group, item) => group.name === null || entityOf(item) === group.name;
+export const entityOf = (item) => item?.entity ?? IMPLICIT_ENTITY;
+
+// The label of an entity by its name, or "" when the page has only the one group (and so names none).
+export function entityLabel(name) {
+  const groups = entityGroups();
+  if (groups.length < 2) return "";
+  return groups.find((group) => group.name === name)?.label ?? name;
+}
+
 // Only a job belonging to the current document is used to draw progress; after switching
 // documents, a stale job snapshot must not carry over onto the new one
 export const currentJob = () => (state.job && state.job.document_id === state.current ? state.job : null);

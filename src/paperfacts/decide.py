@@ -24,20 +24,23 @@ counts: a conflict between the lanes' 400-1100 nm averages is about a measuremen
 their preferred 550 nm values agree. Any other troubled comparison still refuses.
 
 Conditions and source ids of a committed cell are derived from the final candidates, in one place.
+
+A list field (``cardinality: many``) is decided by :func:`decide_many` instead: the same refusals, then the
+union of both lanes' elements rather than one value.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from paperfacts.compare import FieldComparison, condition_numbers, conditions_measure_differently
 from paperfacts.fields import FieldSpec
-from paperfacts.kinds import CellValue, joined, rules_for
+from paperfacts.kinds import CellValue, element_key, joined, rules_for
 from paperfacts.models import BACKENDS, Backend
 from paperfacts.normalize import normalize_key, normalize_text
-from paperfacts.records import FieldValue
+from paperfacts.records import FieldValue, KindContext
 from paperfacts.units import UnitRegistry
 
 # How a condition says it is an average; used only to break a tie inside one preference entry.
@@ -78,6 +81,7 @@ def decide(
     blocked: str | None = None,
     unanswered: bool = False,
     row_sources: frozenset[str] = frozenset(),
+    ctx: KindContext,
 ) -> Decision:
     """The cell for ``spec`` given every lane's candidates for it, converted in ``units`` (the profile's).
 
@@ -85,24 +89,20 @@ def decide(
     None. ``unanswered`` says some lane's question about this field got no valid answer: the other lane's value
     would then pass as single_source, as if that lane had read the paper and found nothing, so the cell is
     refused in both. ``row_sources`` are the blocks the rest of the sample's row cites, for
-    :func:`_one_condition`.
+    :func:`_one_condition`. ``ctx`` holds the dataset's row ids, which a reference field's cell names.
     """
 
     def reject(status: str, reason: str) -> Decision:
-        raw = joined([f"{backend}: {_quote(value)}" for backend, value in evidence])
-        conditions = joined([value.condition or "" for _, value in evidence])
-        sources = joined(sorted({source for _, value in evidence for source in value.source_ids}))
-        return Decision(None, status, conditions, sources, joined([reason, raw]))
+        return _rejection(evidence, status, reason)
 
-    if unanswered:
-        return reject("unanswered", "某一解析通道对该字段的提问未得到有效回答；下次运行会重新提问")
-    if not evidence:
-        return reject("missing", "未提取到该字段；留空，不填 0")
-    if blocked:
-        return reject("ambiguous", blocked)
-    trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
+    if (refused := _opening_refusal(evidence, blocked=blocked, unanswered=unanswered)) is not None:
+        return refused
+    trusted = _trusted(evidence)
     rules = rules_for(spec)
-    candidates = [_Candidate(backend, value, *rules.cell(value, spec, units)) for backend, value in trusted]
+    candidates = [
+        _Candidate(backend, value, *rules.cell(value, spec, units, replace(ctx, backend=backend)))
+        for backend, value in trusted
+    ]
     # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
     # let it take its own condition out of the running, so the scalar's condition would win although no rule
     # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
@@ -113,16 +113,9 @@ def decide(
         # One whose values match no candidate (a stale report, say) still refuses the cell.
         aside = {_identity(c.value) for c in candidates} - {_identity(c.value) for c in narrowed[0]}
         troubled = [c for c in troubled if not _only_about(c, aside)]
-    if troubled:
-        status = "conflict" if any(c.status == "conflict" for c in troubled) else "ambiguous"
-        return reject(status, "双路比较存在冲突或歧义，需人工复核")
-    if not comparisons:
-        return reject("unreviewed", "比较报告没有覆盖该字段")
-    if not trusted:
-        return reject("ungrounded", "没有同时通过原文定位且包含有效引用的证据")
-    details: list[str] = []
-    if len(trusted) != len(evidence):
-        details.append("已排除未定位到原文或缺少有效引用的候选")
+    if (refused := _review_refusal(evidence, troubled, comparisons, trusted)) is not None:
+        return refused
+    details = [_UNTRUSTED_NOTE] if len(trusted) != len(evidence) else []
     several = _several_conditions(candidates)
     if narrowed is None:
         return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
@@ -150,15 +143,7 @@ def decide(
     if (_numbers_matter(spec) or not exactly_equal) and _lanes_measure_differently(final, strict=several):
         return reject("multiple_conditions", "两个解析通道的数值来自不同的测量条件")
     # Of spellings judged the same, the kind may prefer one (text: the one naming the field's category).
-    chosen = min(
-        final,
-        key=lambda c: (
-            *rules.prefer(c.value, spec),
-            -c.value.agreement,
-            BACKENDS.index(c.backend),
-            c.value.value_raw,
-        ),
-    )
+    chosen = min(final, key=lambda c: _preference(spec, c.backend, c.value))
     agreed = len({c.backend for c in final}) == 2 and all(rules.within(chosen.scalar, c.scalar, spec) for c in final)
     if not agreed and any(not rules.same(chosen.scalar, c.scalar, spec) for c in final):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
@@ -188,6 +173,175 @@ def _commit(
     )
 
 
+def _rejection(evidence: Sequence[tuple[Backend, FieldValue]], status: str, reason: str) -> Decision:
+    """A refused cell: no value, with every candidate's quote, condition and blocks in the audit trail."""
+    raw = joined([f"{backend}: {_quote(value)}" for backend, value in evidence])
+    conditions = joined([value.condition or "" for _, value in evidence])
+    sources = joined(sorted({source for _, value in evidence for source in value.source_ids}))
+    return Decision(None, status, conditions, sources, joined([reason, raw]))
+
+
+def decide_cell(
+    spec: FieldSpec,
+    evidence: Sequence[tuple[Backend, FieldValue]],
+    comparisons: Sequence[FieldComparison],
+    *,
+    units: UnitRegistry,
+    blocked: str | None = None,
+    unanswered: bool = False,
+    row_sources: frozenset[str] = frozenset(),
+    ctx: KindContext,
+) -> Decision:
+    """The cell of ``spec``: :func:`decide_many` for a list field, :func:`decide` for every other."""
+    if spec.cardinality == "many":
+        return decide_many(spec, evidence, comparisons, blocked=blocked, unanswered=unanswered)
+    return decide(
+        spec,
+        evidence,
+        comparisons,
+        units=units,
+        blocked=blocked,
+        unanswered=unanswered,
+        row_sources=row_sources,
+        ctx=ctx,
+    )
+
+
+def _opening_refusal(
+    evidence: Sequence[tuple[Backend, FieldValue]], *, blocked: str | None, unanswered: bool
+) -> Decision | None:
+    """The refusals every cell starts with, in order: a lane's question went unanswered, nothing was extracted,
+    or the sample match forbids committing anything."""
+    if unanswered:
+        return _rejection(evidence, "unanswered", "某一解析通道对该字段的提问未得到有效回答；下次运行会重新提问")
+    if not evidence:
+        return _rejection(evidence, "missing", "未提取到该字段；留空，不填 0")
+    if blocked:
+        return _rejection(evidence, "ambiguous", blocked)
+    return None
+
+
+def _review_refusal(
+    evidence: Sequence[tuple[Backend, FieldValue]],
+    troubled: Sequence[FieldComparison],
+    comparisons: Sequence[FieldComparison],
+    trusted: Sequence[tuple[Backend, FieldValue]],
+) -> Decision | None:
+    """The refusals that follow, in order: a troubled comparison, none at all, or no trusted evidence."""
+    if troubled:
+        status = "conflict" if any(c.status == "conflict" for c in troubled) else "ambiguous"
+        return _rejection(evidence, status, "双路比较存在冲突或歧义，需人工复核")
+    if not comparisons:
+        return _rejection(evidence, "unreviewed", "比较报告没有覆盖该字段")
+    if not trusted:
+        return _rejection(evidence, "ungrounded", "没有同时通过原文定位且包含有效引用的证据")
+    return None
+
+
+_UNTRUSTED_NOTE = "已排除未定位到原文或缺少有效引用的候选"
+
+
+def _trusted(evidence: Sequence[tuple[Backend, FieldValue]]) -> list[tuple[Backend, FieldValue]]:
+    """The candidates a cell may rest on: located in the text and carrying a citation."""
+    return [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
+
+
+def _preference(spec: FieldSpec, backend: Backend, value: FieldValue) -> tuple[object, ...]:
+    """The chooser among spellings judged the same, smallest first: the kind's preference (text: the one naming
+    the field's category), then the most repeated, then MinerU, then the text."""
+    return (*rules_for(spec).prefer(value, spec), -value.agreement, BACKENDS.index(backend), value.value_raw)
+
+
+# ---- A list field ------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Element:
+    """One trusted value of a list field, as the element it contributes."""
+
+    backend: Backend
+    value: FieldValue
+    # kinds.element_key: what makes two values one element.
+    key: str
+
+
+def decide_many(
+    spec: FieldSpec,
+    evidence: Sequence[tuple[Backend, FieldValue]],
+    comparisons: Sequence[FieldComparison],
+    *,
+    blocked: str | None = None,
+    unanswered: bool = False,
+) -> Decision:
+    """The cell of a list field (``cardinality: many``): the union of the elements either lane grounded, each
+    traceable to the lanes that read it.
+
+    The refusals are :func:`decide`'s, in its order, and nothing else: a list has no condition to narrow and no
+    one value to agree on. The comparison pairs a list as a set (:func:`paperfacts.compare._set_pairs`), so a
+    ``conflict`` cannot arise; an ``ambiguous`` one (a one-sided element whose sample match failed) still refuses,
+    and refuses the whole list: a union without the doubted element, or with a stray one, is no answer either.
+
+    An element is one trusted value, identified by :func:`~paperfacts.kinds.element_key` -- the comparison's
+    identity too. A field with categories keeps the category a value names and refuses as an element a value
+    naming none: "XRD and XPS" is two categories, which reads as none, so the field line asks for one entry
+    each. Of an element's spellings the cell writes the one :func:`decide`'s chooser prefers. The list follows
+    the categories' declared order, or else the order first seen, MinerU first. The cell is ``agree`` when both
+    lanes hold every element and ``single_source`` otherwise; the detail names each element's lanes, so a union
+    never hides which lane an element rests on. Unlike the comparison, grouping ignores conditions: one element
+    under two conditions naming different numbers is still one element of the list, even where the report shows
+    it one-sided in each lane.
+    """
+    if (refused := _opening_refusal(evidence, blocked=blocked, unanswered=unanswered)) is not None:
+        return refused
+    troubled = [c for c in comparisons if c.status in {"conflict", "ambiguous"}]
+    trusted = _trusted(evidence)
+    if (refused := _review_refusal(evidence, troubled, comparisons, trusted)) is not None:
+        return refused
+    details = [_UNTRUSTED_NOTE] if len(trusted) != len(evidence) else []
+    groups, refused_quotes = _elements(spec, trusted)
+    if refused_quotes:
+        details.append(f"已排除未对应唯一类别的元素（{joined(refused_quotes)}）：每个元素须单独引用一个类别")
+    if not groups:
+        return _rejection(evidence, "non_scalar", joined([*details, "没有可作为列表元素的证据"]))
+    written = [min(group, key=lambda e: _preference(spec, e.backend, e.value)) for group in groups]
+    lanes = [tuple(backend for backend in BACKENDS if any(e.backend == backend for e in group)) for group in groups]
+    # A category is written as declared; any other element as its lane quoted it.
+    names = [element.key if spec.categories else " ".join(element.value.value_raw.split()) for element in written]
+    details.append("列表为两路已定位证据的并集")
+    details.append(
+        "元素来源：" + "；".join(f"{name}（{', '.join(held)}）" for name, held in zip(names, lanes, strict=True))
+    )
+    kept = [element.value for group in groups for element in group]
+    return Decision(
+        names,
+        "agree" if all(len(held) == len(BACKENDS) for held in lanes) else "single_source",
+        joined([value.condition or "" for value in kept]),
+        joined(sorted({source for value in kept for source in value.source_ids})),
+        joined(details),
+        series=all(value.series for value in kept),
+        lanes=tuple(backend for backend in BACKENDS if any(backend in held for held in lanes)),
+    )
+
+
+def _elements(spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]]) -> tuple[list[list[_Element]], list[str]]:
+    """The trusted values grouped into elements, in the cell's order, and the quotes refused as an element."""
+    groups: dict[str, list[_Element]] = {}
+    refused: list[str] = []
+    for backend, value in sorted(trusted, key=lambda item: BACKENDS.index(item[0])):
+        text = " ".join(value.value_raw.split())
+        if not text:
+            continue
+        key = element_key(spec, text)
+        if key is None:
+            refused.append(f"{backend}: {text}")
+        else:
+            groups.setdefault(key, []).append(_Element(backend, value, key))
+    ordered = list(groups.values())
+    if spec.categories:
+        ordered.sort(key=lambda group: spec.categories.index(group[0].key))
+    return ordered, refused
+
+
 def _quote(value: FieldValue) -> str:
     """The quote and its unit for an audit note. A unit the quote already ends with is not written twice: "3
     wt.%" with unit "wt.%" read "3 wt.% wt.%", as if the paper had repeated it."""
@@ -207,7 +361,8 @@ def _only_about(comparison: FieldComparison, aside: set[tuple[object, ...]]) -> 
 def _identity(value: FieldValue) -> tuple[object, ...]:
     """What identifies one extracted value between the lane and a comparison of it. Not the whole model: a
     stored report may carry grounding verdicts older than the lane's re-derived ones."""
-    return (value.field, value.value_raw, value.unit_raw, value.condition, tuple(value.source_ids))
+    # ``holds`` too: two quotes of the same words, one read as true and one as false, are two values.
+    return (value.field, value.value_raw, value.unit_raw, value.condition, tuple(value.source_ids), value.holds)
 
 
 # ---- Narrowing ---------------------------------------------------------------------------------------------

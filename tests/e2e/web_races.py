@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/, for the 
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport, FieldComparison
 from paperfacts.config import Settings
-from paperfacts.matching import SampleMatching
+from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import BACKENDS, PageGeometry, ParsedArtifact
 from paperfacts.storage import document_key
 from paperfacts.web.app import create_app
@@ -46,7 +46,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_blank_pdf, make_block
-from support.profiles import shipped_profile
+from support.profiles import make_one_entity_profile, make_reference_profile, shipped_profile
 
 STAGE_SECONDS = 0.3  # the stub job takes len(stage_names()) * this
 # As long as the model's condition prose gets on real papers: the text that pushed the second lane off screen.
@@ -165,6 +165,144 @@ def seed_document(library: Library, root: Path, index: int, name: str, *, sample
     return document_key(sha)
 
 
+def seed_entity_document(library: Library, root: Path) -> str:
+    """A paper of a two-entity profile (coatings, the primary one, and the wear tests run on them): each entity
+    has a sample named S1, its own rows, records, comparisons and matching; the wear test names the coating it ran
+    on (a reference field)."""
+    pdf = make_blank_pdf(root / "entities.pdf", [(400.0, 600.0)])
+    sha = library.register_upload("E 两种实体.pdf", pdf.read_bytes()).sha256
+    for backend in BACKENDS:
+        blocks = tuple(
+            make_block(page=0, order=order, backend=backend, document_id=sha, content=f"block {order}")
+            for order in (0, 1)
+        )
+        ParsedArtifact(
+            document_id=sha,
+            backend=backend,
+            backend_version="stub",
+            pages=(PageGeometry(index=0, width_pt=400.0, height_pt=600.0),),
+            blocks=blocks,
+        ).write(library.layout.artifact_path(sha, backend))
+        source = [f"{backend}_p0_b1"]
+        samples = [
+            make_sample("S1", [make_field("coating_thickness", "100", unit_raw="nm", value=100.0, unit="nm")]),
+            make_sample("S2", [make_field("coating_thickness", "200", unit_raw="nm", value=200.0, unit="nm")]),
+            make_sample(
+                "S1",
+                [
+                    make_field("test_temperature", "300", unit_raw="℃", value=300.0, unit="℃", source_ids=source),
+                    make_field("wear_mode", "sliding" if backend == "mineru" else "rolling", source_ids=source),
+                    make_field("tested_coating", "S1", source_ids=source),
+                ],
+            ).model_copy(update={"entity": "wear_test"}),
+        ]
+        samples[:2] = [sample.model_copy(update={"entity": "coating"}) for sample in samples[:2]]
+        make_lane(backend=backend, samples=samples, document_id=sha, extractor_key=library.extractor_key).write(
+            library.layout.extraction_path(sha, backend, library.extractor_key)
+        )
+
+    def matched(*ids: str) -> SampleMatching:
+        return SampleMatching(
+            pairs=tuple(SampleMatch(a_id=i, b_id=i, confidence=1.0, justification="", method="exact") for i in ids)
+        )
+
+    field = make_field("wear_mode", "sliding", source_ids=["mineru_p0_b1"])
+    ComparisonReport(
+        document_id=sha,
+        extractor_key=library.extractor_key,
+        comparison_key=library.comparison_key,
+        backend_a="mineru",
+        backend_b="paddleocr_vl",
+        matchings={"coating": matched("S1", "S2"), "wear_test": matched("S1")},
+        counts=ComparisonCounts(total=2, agree=1, conflict=1),
+        comparisons=(
+            FieldComparison(scope="coating:S1|S1", field="coating_thickness", status="agree", a=field, b=field),
+            FieldComparison(scope="wear_test:S1|S1", field="wear_mode", status="conflict", a=field, b=field),
+        ),
+    ).write(library.layout.comparison_path(sha, library.extractor_key, library.comparison_key))
+    identity = {"document_id": sha, "filename": "E 两种实体.pdf", "available_fields": 2, "agree_fields": 1}
+    coatings = [
+        {
+            **identity,
+            "entity": "coating",
+            "sample_id": f"S{n}",
+            "precursor_purity": 99.9,
+            "coating_thickness": 100.0 * n,
+        }
+        for n in (1, 2)
+    ]
+    test = {
+        **identity,
+        "entity": "wear_test",
+        "sample_id": "S1",
+        "precursor_purity": 99.9,
+        "test_temperature": 300.0,
+        "tested_coating": "S1",
+    }
+    path = library.layout.dataset_json_path(sha, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    quality = [
+        {"entity": "wear_test", "sample_id": "S1", "field": "test_temperature", "decision": "agree"},
+        {"entity": "wear_test", "sample_id": "S1", "field": "tested_coating", "decision": "agree"},
+        {"entity": "wear_test", "sample_id": "S1", "field": "wear_mode", "decision": "conflict", "detail": "两路冲突"},
+    ]
+    payload = {"document_id": sha, "filename": "E", "paper_row": coatings[0], "sample_rows": [*coatings, test]}
+    path.write_text(json.dumps({**payload, "quality_rows": quality}, ensure_ascii=False), encoding="utf-8")
+    return document_key(sha)
+
+
+def seed_one_entity_document(library: Library, root: Path) -> str:
+    """A paper of a profile declaring one entity type (coatings): its lane records name the entity, its dataset rows
+    were written before rows named a lone declared entity, so they name none."""
+    pdf = make_blank_pdf(root / "one-entity.pdf", [(400.0, 600.0)])
+    sha = library.register_upload("O 一种实体.pdf", pdf.read_bytes()).sha256
+    for backend in BACKENDS:
+        blocks = tuple(
+            make_block(page=0, order=order, backend=backend, document_id=sha, content=f"block {order}")
+            for order in (0, 1)
+        )
+        ParsedArtifact(
+            document_id=sha,
+            backend=backend,
+            backend_version="stub",
+            pages=(PageGeometry(index=0, width_pt=400.0, height_pt=600.0),),
+            blocks=blocks,
+        ).write(library.layout.artifact_path(sha, backend))
+        solvent = make_field("solvent", "water" if backend == "mineru" else "ethanol", source_ids=[f"{backend}_p0_b1"])
+        sample = make_sample("S1", [solvent]).model_copy(update={"entity": "coating"})
+        make_lane(backend=backend, samples=[sample], document_id=sha, extractor_key=library.extractor_key).write(
+            library.layout.extraction_path(sha, backend, library.extractor_key)
+        )
+    field = make_field("solvent", "water", source_ids=["mineru_p0_b1"])
+    ComparisonReport(
+        document_id=sha,
+        extractor_key=library.extractor_key,
+        comparison_key=library.comparison_key,
+        backend_a="mineru",
+        backend_b="paddleocr_vl",
+        matchings={
+            "coating": SampleMatching(
+                pairs=(SampleMatch(a_id="S1", b_id="S1", confidence=1.0, justification="", method="exact"),)
+            )
+        },
+        counts=ComparisonCounts(total=1, conflict=1),
+        comparisons=(FieldComparison(scope="coating:S1|S1", field="solvent", status="conflict", a=field, b=field),),
+    ).write(library.layout.comparison_path(sha, library.extractor_key, library.comparison_key))
+    row = {
+        "document_id": sha,
+        "filename": "O 一种实体.pdf",
+        "sample_id": "S1",
+        "solvent": None,
+        "precursor_purity": None,
+    }
+    quality = [{"sample_id": "S1", "field": "solvent", "decision": "conflict", "detail": "两路冲突"}]
+    path = library.layout.dataset_json_path(sha, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"document_id": sha, "filename": "O", "paper_row": row, "sample_rows": [row], "quality_rows": quality}
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return document_key(sha)
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -191,14 +329,36 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     for index in range(3, 28):  # a long library, as on the real server
         seed_document(library, root, index, f"filler paper {index}.pdf", samples=1, comparisons=1)
     app = create_app(settings, profile=profile, jobs=JobManager(stub_runner, stage_names(), workers=2))
+    # A second server under a profile with two entity types, one seeded paper: the page groups by entity there. Its
+    # address travels in `docs` beside that paper's id, so every check keeps the one signature.
+    entity_settings = Settings(data_root=root / "entities", repo_root=root, llm_api_key="sk-test", llm_model="fake")
+    entity_profile = make_reference_profile()
+    entity_library = Library(entity_settings, entity_profile)
+    docs["E"] = seed_entity_document(entity_library, root)
+    entity_app = create_app(
+        entity_settings, profile=entity_profile, jobs=JobManager(stub_runner, stage_names(), workers=1)
+    )
+    # A third under a profile declaring a single entity type: the page groups nothing, the records name the entity.
+    one_settings = Settings(data_root=root / "one-entity", repo_root=root, llm_api_key="sk-test", llm_model="fake")
+    one_profile = make_one_entity_profile()
+    docs["O"] = seed_one_entity_document(Library(one_settings, one_profile), root)
+    one_app = create_app(one_settings, profile=one_profile, jobs=JobManager(stub_runner, stage_names(), workers=1))
+    with running(app) as base, running(entity_app) as entity_base, running(one_app) as one_base:
+        docs["entities"] = entity_base
+        docs["one-entity"] = one_base
+        yield base, docs, root / "0.pdf"
+
+
+@contextlib.contextmanager
+def running(app: object) -> Iterator[str]:
     port = free_port()
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))  # type: ignore[arg-type]
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     while not server.started:
         time.sleep(0.05)
     try:
-        yield f"http://127.0.0.1:{port}", docs, root / "0.pdf"
+        yield f"http://127.0.0.1:{port}"
     finally:
         server.should_exit = True
         thread.join(timeout=10)
@@ -475,6 +635,29 @@ async def quiet_console(page: Page, base: str, docs: dict[str, str], _: Path) ->
     expect(not errors, f"console errors: {errors}")
 
 
+@check("a list column is joined by its column, on the page and in the clipboard copy")
+async def list_cell(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    async def as_list(route: Route) -> None:
+        # The shipped profile has no list field, so one sample column is turned into one on the wire.
+        response = await route.fetch()
+        data = await response.json()
+        field = next(field for field in data["fields"] if field["name"] == "thickness")
+        field["cardinality"] = "many"
+        for row in data["sample_rows"]:
+            row["thickness"] = ["LiOH", "NiSO4"]
+        await route.fulfill(response=response, json=data)
+
+    await page.route(f"**/api/documents/{docs['B']}/dataset", as_list)
+    await open_doc(page, base, docs["B"])
+    await page.wait_for_selector('[data-slot="results-rows"] tr')
+    shown = await page.text_content('[data-slot="results-rows"]') or ""
+    expect("LiOH；NiSO4" in shown, f"the list cell reads {shown!r}")
+    copied = await page.evaluate(
+        "import('/tsv.js').then((tsv) => tsv.fieldText(['LiOH', 'NiSO4'], {cardinality: 'many'}))"
+    )
+    expect(copied == "LiOH; NiSO4", f"the clipboard copy of a list reads {copied!r}")
+
+
 @check("both lanes of 事实对照 fit side by side at 1440 px", width=1440)
 async def facts_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
@@ -567,6 +750,81 @@ async def keyboard(page: Page, base: str, docs: dict[str, str], _: Path) -> None
     await page.keyboard.press("Enter")
     expect(await page.evaluate("document.activeElement.id") == "content", "the skip link does not reach the content")
     expect((await page.evaluate("location.hash")).startswith(f"#/doc/{docs['A']}"), "the skip link navigated away")
+
+
+@check("a paper of two entity types has one results table and one records group per entity")
+async def entity_tables(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await open_doc(page, docs["entities"], docs["E"])
+    await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr')
+    first = await page.text_content('[data-slot="results-head"] th')
+    expect(first == "涂层", f"the primary table's first column is {first!r}")
+    expect(await page.text_content('[data-slot="results-entity"]') == "涂层", "the primary table is not named")
+    main = await page.text_content('[data-slot="results-table"]') or ""
+    expect("test_temperature" not in main, "the primary table shows another entity's field")
+    expect(main.count("S1") == 1 and "S2" in main, f"the primary table rows read {main!r}")
+    other = await page.text_content('.entity-table[data-entity="wear_test"]') or ""
+    expect("磨损测试" in other and "test_temperature" in other, f"the wear test table reads {other!r}")
+    expect("coating_thickness" not in other, "the wear test table shows the coatings' field")
+    heads = await page.locator("#document-view .lane .lane-entity").all_text_contents()
+    expect(heads == ["涂层 · 2", "磨损测试 · 1"] * 2, f"the lanes' entity groups read {heads}")
+    scopes = await page.locator('[data-slot="rows"] td.mono').all_text_contents()
+    expect(scopes == ["涂层 · S1", "磨损测试 · S1"], f"the comparison scopes read {scopes}")
+    tiles = await page.locator(".kpi.samples .label").all_text_contents()
+    expect(tiles == ["涂层配对", "磨损测试配对"], f"the matching tiles read {tiles}")
+    # A reference names the coating's row by its id, labelled with the entity it is a row of.
+    labelled = page.locator('.entity-table[data-entity="wear_test"] tbody td.cell', has=page.locator(".unit"))
+    reference = await labelled.all_text_contents()
+    expect(any(text.startswith("S1 涂层") for text in reference), f"the reference cell reads {reference!r}")
+
+
+@check("an empty cell of the second entity marks that entity's records, not another's S1")
+async def entity_evidence(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await open_doc(page, docs["entities"], docs["E"])
+    await page.click('[data-slot="results-chips"] [data-focus="show-empty"]')  # wear_mode is empty on every row
+    await page.wait_for_selector('.entity-table[data-entity="wear_test"] td.cell.empty[data-field="wear_mode"]')
+    empty = page.locator('.entity-table[data-entity="wear_test"] td.cell.empty[data-field="wear_mode"]')
+    expect(await empty.get_attribute("aria-label") == "两路冲突", "the refused cell lost its quality row")
+    await empty.click()
+    marked = await page.evaluate(
+        "[...document.querySelectorAll('.field.evidence')].map((row) => row.closest('.sample').dataset.entity)"
+    )
+    expect(marked == ["wear_test", "wear_test"], f"the marked records belong to {marked}")
+
+
+@check("an empty cell under a single declared entity marks both lanes' records")
+async def one_entity_evidence(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await open_doc(page, docs["one-entity"], docs["O"])
+    await page.wait_for_selector('[data-slot="results-rows"] tr')
+    expect(await page.locator(".entity-table, .lane-entity").count() == 0, "an entity group is shown")
+    await page.click('[data-slot="results-chips"] [data-focus="show-empty"]')
+    empty = page.locator('td.cell.empty[data-field="solvent"]')
+    await empty.first.wait_for()
+    await empty.first.click()
+    marked = await page.evaluate(
+        "[...document.querySelectorAll('.field.evidence')].map((row) => row.closest('.sample').dataset.entity)"
+    )
+    expect(marked == ["coating", "coating"], f"the marked records belong to {marked}")
+
+
+@check("the home table of a two-entity library shows the primary entity only")
+async def entity_corpus(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['entities']}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    text = await page.text_content("#corpus-view") or ""
+    expect("coating_thickness" in text and "test_temperature" not in text, f"the corpus table reads {text!r}")
+    expect("这里只列出涂层" in text, "the corpus view does not say it shows the primary entity only")
+    expect("2 个涂层" in text, f"the sample count counts another entity's rows: {text!r}")
+
+
+@check("a profile without entity types names no entity on the page")
+async def implicit_entity(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_selector('[data-slot="results-rows"] tr')
+    expect(await page.locator(".entity-table, .lane-entity").count() == 0, "an entity group is shown")
+    expect(await page.is_hidden('[data-slot="results-entity"]'), "the only table is named")
+    expect(await page.locator(".kpi.samples").count() == 1, "more than one matching tile")
+    scopes = await page.locator('[data-slot="rows"] td.mono').all_text_contents()
+    expect(all("·" not in scope for scope in scopes), f"a scope names its entity: {scopes}")
 
 
 async def main() -> int:

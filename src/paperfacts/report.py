@@ -38,15 +38,19 @@ def render_lane(lane: LaneExtraction) -> Iterator[str]:
 
 def render_report(report: ComparisonReport) -> Iterator[str]:
     yield f"counts: {report.counts.model_dump()}"
-    matching = report.sample_matching()
-    for pair in matching.pairs:
-        yield f"  match {pair.a_id} ↔ {pair.b_id}  conf={pair.confidence:.2f} ({pair.method}): {pair.justification}"
-    for sample_id in matching.unmatched_a:
-        yield f"  only in {report.backend_a}: {sample_id}"
-    for sample_id in matching.unmatched_b:
-        yield f"  only in {report.backend_b}: {sample_id}"
-    if matching.failed:
-        yield f"  sample matching FAILED: {matching.failure}"
+    several = len(report.matchings) > 1
+    for entity, matching in report.matchings.items():
+        if several:
+            # Each entity's samples were matched on their own; a header keeps two entities' ids apart.
+            yield f"  [{entity}]"
+        for pair in matching.pairs:
+            yield f"  match {pair.a_id} ↔ {pair.b_id}  conf={pair.confidence:.2f} ({pair.method}): {pair.justification}"
+        for sample_id in matching.unmatched_a:
+            yield f"  only in {report.backend_a}: {sample_id}"
+        for sample_id in matching.unmatched_b:
+            yield f"  only in {report.backend_b}: {sample_id}"
+        if matching.failed:
+            yield f"  sample matching FAILED: {matching.failure}"
     for comparison in report.comparisons:
         yield _comparison_line(comparison)
 

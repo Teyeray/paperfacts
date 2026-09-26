@@ -1,0 +1,17 @@
+{
+  "doc_id": "cat-b",
+  "paper": {
+    "characterization_techniques": [{"value": "XRD"}, {"value": "TEM"}],
+    "received_date": [{"value": "2020-11"}]
+  },
+  "samples": [
+    {
+      "id": "p1", "entity": "catalyst", "match": {"label": "Pd"},
+      "fields": {"metal_loading": [{"value": 5}], "support": [{"value": "ZrO2"}]}
+    },
+    {
+      "id": "r1", "entity": "test", "match": {"label": "^R1"},
+      "fields": {"catalyst": [{"value": "p1"}], "pre_reduced": [{"value": false}], "co2_conversion": [{"value": 8.2}]}
+    }
+  ]
+}

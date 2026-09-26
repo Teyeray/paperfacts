@@ -23,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -95,11 +96,15 @@ def _field_material(spec: FieldSpec, *roles: FieldRole) -> dict[str, object]:
 def _schema_material(profile: DomainProfile, *roles: FieldRole) -> dict[str, object]:
     material: dict[str, object] = {
         "fields": [_field_material(spec, *roles) for spec in profile.fields],
-        # A group's level decides the scope rules; its Chinese label is display text.
-        "groups": [[group.name, group.level] for group in profile.groups],
+        # A group's level decides the scope rules and its entity which samples its fields describe (written only
+        # when set, so a profile without entity types keeps its material); its Chinese label is display text.
+        "groups": [[group.name, group.level, *([group.entity] if group.entity else [])] for group in profile.groups],
     }
     if profile.units.material():
         material["units"] = profile.units.material()
+    if profile.declared_entities:
+        # In order: the first is the primary entity, which the paper-level questions are asked beside.
+        material["entities"] = [entity.name for entity in profile.declared_entities]
     return material
 
 
@@ -143,6 +148,11 @@ def retrieval_fingerprint(profile: DomainProfile) -> str:
     ]
     if unit_patterns:
         material["units"] = unit_patterns
+    if profile.declared_entities:
+        # Each entity's inventory is shown the blocks its own condition words and unit pattern find.
+        material["entities"] = {
+            entity.name: dataclasses.asdict(entity.retrieval) for entity in profile.declared_entities
+        }
     return content_fingerprint(_dumps(material))
 
 
@@ -155,9 +165,9 @@ def extraction_code_fingerprint() -> str:
     of every question (the plausible-range sentence) and decides which fields are sample-level, which
     gates the questions asked; ``normalize.py`` and ``grounding.py`` fold the text that decides which values
     are duplicates of each other and which sample a value lands on, and ``normalize.py`` converts the value
-    ``drop_implausible`` judges (``continuation.py`` decides which blocks grounding joins across a page
-    break); ``voting.py`` decides which of the model's repeated claims survive the majority vote.
-    ``text.py`` and ``units.py`` hold the folding and the unit tables ``normalize.py`` applies, and
+    ``drop_implausible`` judges, ``readers.py`` an interval's ends (``continuation.py`` decides which blocks
+    grounding joins across a page break); ``voting.py`` decides which of the model's repeated claims survive the
+    majority vote. ``text.py`` and ``units.py`` hold the folding and the unit tables ``normalize.py`` applies, and
     ``profile.py`` the prompt-slot defaults a profile falls back on. ``kinds.py`` reads a numeric value (which
     ``drop_implausible`` judges) and adds its kind's note to a field line. ``profile_loader.py`` is left out: what it
     reads from a file reaches this key as values (the schema fingerprint and the rendered prompts), and a
@@ -179,6 +189,7 @@ def extraction_code_fingerprint() -> str:
         "adapters.py",
         "prompts.py",
         "normalize.py",
+        "readers.py",
         "grounding.py",
         "continuation.py",
         "kinds.py",
@@ -187,8 +198,8 @@ def extraction_code_fingerprint() -> str:
 
 @cache
 def normalization_fingerprint() -> str:
-    # kinds.py: normalize_field reads a value as its kind's row says.
-    return source_fingerprint("normalize.py", "units.py", "text.py", "kinds.py")
+    # kinds.py: normalize_field reads a value as its kind's row says; readers.py: a range, an interval and a date.
+    return source_fingerprint("normalize.py", "readers.py", "units.py", "text.py", "kinds.py")
 
 
 @cache
@@ -235,6 +246,11 @@ class ExtractionOptions:
 
     @classmethod
     def from_settings(cls, settings: Settings, profile: DomainProfile, model: str | None = None) -> ExtractionOptions:
+        # Refused with a ConfigError where a profile is loaded to run (workflow.check_mode); only asserted here,
+        # where readers pass too.
+        assert not (profile.declared_entities and settings.extraction_mode == "document"), (
+            f"{profile.name} declares entity types, which document mode cannot ask about"
+        )
         return cls(
             profile=profile,
             model=model or settings.llm_model,
@@ -250,17 +266,37 @@ class ExtractionOptions:
 
 
 def _slot_material(profile: DomainProfile, *, matching: bool) -> dict[str, object]:
-    """The prompt slots that differ from their :class:`PromptSlots` default: the matching ones or all the others.
+    """The prompt slots that differ from their :class:`PromptSlots` default: the matching ones or all the others,
+    plus, per declared entity, the ones it overrides (under ``"entities"``, only when an entity overrides one).
 
     Hashed by value because a slot may reach only a user prompt (``implausible_origin`` in a passage-mode field
-    line), which no system-prompt hash sees; a slot at its default is left out like a field attribute, and a
-    required slot (no default) is always in."""
-    return {
+    line, an entity's ``sample_list_heading``), which no system-prompt hash sees; a slot at its default is left
+    out like a field attribute, and a required slot (no default) is always in. An entity's override is hashed
+    whatever its value: it is what that entity's requests are rendered from."""
+
+    def wanted(name: str) -> bool:
+        return name.startswith(_MATCHING_SLOT_PREFIX) == matching
+
+    material: dict[str, object] = {
         name: value
         for name, value in dataclasses.asdict(profile.prompt).items()
-        if name.startswith(_MATCHING_SLOT_PREFIX) == matching
-        and value != _PROMPT_SLOT_DEFAULTS.get(name, dataclasses.MISSING)
+        if wanted(name) and value != _PROMPT_SLOT_DEFAULTS.get(name, dataclasses.MISSING)
     }
+    overrides = {
+        entity.name: {name: getattr(entity.prompt, name) for name in sorted(entity.overrides) if wanted(name)}
+        for entity in profile.declared_entities
+    }
+    if any(overrides.values()):
+        material["entities"] = overrides
+    return material
+
+
+def _per_entity(profile: DomainProfile, render: Callable[..., str]) -> str | dict[str, str]:
+    """A system prompt as key material: the one text of a profile with one entity (rendered for the primary one,
+    which for a profile without entity types is ``profile.prompt`` itself), or each entity's text by name."""
+    if len(profile.entities) == 1:
+        return render(profile)
+    return {entity.name: render(profile, entity) for entity in profile.entities}
 
 
 def extractor_key(options: ExtractionOptions) -> str:
@@ -284,8 +320,8 @@ def extractor_key(options: ExtractionOptions) -> str:
     passage = options.mode != "document"
     if passage:
         material["mode"] = options.mode
-        material["inventory_system"] = inventory_system_prompt(profile)
-        material["field_system"] = field_system_prompt(profile)
+        material["inventory_system"] = _per_entity(profile, inventory_system_prompt)
+        material["field_system"] = _per_entity(profile, field_system_prompt)
         material["retrieval"] = retrieval_fingerprint(profile)
     for option in dataclasses.fields(ExtractionOptions):
         if (
@@ -329,7 +365,7 @@ def comparison_key(options: ComparisonOptions) -> str:
         "ambiguous_confidence": options.ambiguous_match_confidence,
         "normalization": normalization_fingerprint(),
         "code": comparison_code_fingerprint(),
-        "matching_system": matching_system_prompt(profile),
+        "matching_system": _per_entity(profile, matching_system_prompt),
         "matching_slots": _slot_material(profile, matching=True),
     }
     return content_fingerprint(_dumps(material))
@@ -379,8 +415,8 @@ def figure_key(
 
     ``dpi`` and ``max_pixels`` change the image the model is shown; ``max_per_document`` which charts are
     read. ``figures.py`` holds the prompt template, the selection and the conversion into readings;
-    ``normalize.py``, ``units.py`` and ``text.py`` the unit arithmetic; ``passages.py`` the keyword matching
-    that selects a chart; ``fields.py`` the attribute defaults the profile material leaves out and
+    ``normalize.py``, ``readers.py``, ``units.py`` and ``text.py`` the unit arithmetic; ``passages.py`` the keyword
+    matching that selects a chart; ``fields.py`` the attribute defaults the profile material leaves out and
     ``profile.py`` which fields are figure-readable.
     """
     material = {
@@ -392,7 +428,14 @@ def figure_key(
         "max_per_document": max_per_document,
         "fields": figure_profile_fingerprint(profile),
         "code": source_fingerprint(
-            "figures.py", "normalize.py", "passages.py", "units.py", "text.py", "fields.py", "profile.py"
+            "figures.py",
+            "normalize.py",
+            "readers.py",
+            "passages.py",
+            "units.py",
+            "text.py",
+            "fields.py",
+            "profile.py",
         ),
     }
     return content_fingerprint(_dumps(material))

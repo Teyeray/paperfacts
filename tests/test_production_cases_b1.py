@@ -9,13 +9,15 @@ from paperfacts.compare import compare_values
 from paperfacts.grounding import ground_lane, quoted_bound
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import canonical_category, normalize_field, read_value, same_text
-from paperfacts.records import FieldValue, PaperRecord
+from paperfacts.records import NO_CONTEXT, FieldValue, PaperRecord
 from support.extraction import make_lane, make_sample
+from support.profiles import shipped_profile
 from test_dataset import FIELD_BY_NAME, dataset, decision, paired, value
 
 MODE = FIELD_BY_NAME["mode"]
 COMPONENT = FIELD_BY_NAME["component"]
 TRANSMITTANCE = FIELD_BY_NAME["transmittance"]
+PROFILE = shipped_profile()
 
 
 # ---- 1. Guillén (08562126…): MinerU dropped the hyphen of "rf-magnetron" -----------------------------------
@@ -25,7 +27,7 @@ def test_a_text_value_that_lost_its_hyphen_is_the_same_mode():
     mineru, paddle = "rfmagnetron sputtering", "rf-magnetron sputtering"
 
     assert same_text(MODE, mineru, paddle)
-    assert compare_values(value("mode", mineru), value("mode", paddle), MODE) == ("agree", "both name RF")
+    assert compare_values(value("mode", mineru), value("mode", paddle), MODE, NO_CONTEXT) == ("agree", "both name RF")
 
 
 @pytest.mark.parametrize(
@@ -39,7 +41,7 @@ def test_a_text_value_that_lost_its_hyphen_is_the_same_mode():
 )
 def test_distinct_modes_still_conflict(a, b):
     assert not same_text(MODE, a, b)
-    assert compare_values(value("mode", a), value("mode", b), MODE)[0] == "conflict"
+    assert compare_values(value("mode", a), value("mode", b), MODE, NO_CONTEXT)[0] == "conflict"
 
 
 @pytest.mark.parametrize(
@@ -111,6 +113,32 @@ def test_the_bound_right_before_a_quote_in_its_block(raw, block, bound):
     assert quoted_bound(_cited(raw), {"b": block}) == bound
 
 
+def test_a_long_block_is_searched_for_a_bound_in_linear_time():
+    import time
+
+    # Every occurrence used to rescan the block from its start: 20 000 occurrences took seconds.
+    block = "90 % " * 20_000 + "and above      90 % at last"
+    started = time.perf_counter()
+    assert quoted_bound(_cited("90"), {"b": block}) == "above"
+    assert quoted_bound(_cited("90"), {"b": "90 % " * 20_000}) is None
+    assert time.perf_counter() - started < 1.0
+
+
+def test_the_bound_window_finds_what_the_whole_block_search_found():
+    import random
+
+    from paperfacts.grounding import _BOUND_BEFORE, _bound_before
+
+    pieces = ["above", "at most", "up to", ">", "≤", " ", "  ", "x", "moreover", "90", "\n"]
+    rng = random.Random(7)
+    for _ in range(3000):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(0, 12)))
+        for start in range(len(text) + 1):
+            whole = _BOUND_BEFORE.search(text, 0, start)
+            window = _bound_before(text, start)
+            assert (whole and whole.group(1)) == (window and window.group(1)), (text, start)
+
+
 def test_any_bounded_occurrence_makes_the_quote_a_bound():
     # Which occurrence the model copied is unknown; a bound read as a scalar is a wrong number, a refused one a blank.
     block = "transmittance above 90 % (400-800 nm), and 90 % at 550 nm"
@@ -121,8 +149,8 @@ def test_a_bound_before_the_quote_is_read_exactly_like_a_quoted_bound(tco_profil
     field = _cited("90").model_copy(update={"bound": "above"})
 
     reading = read_value(field, TRANSMITTANCE, tco_profile.units)
-    normalized = normalize_field(field, TRANSMITTANCE, tco_profile.units)
-    quoted = normalize_field(_cited("above 90"), TRANSMITTANCE, tco_profile.units)
+    normalized = normalize_field(field, TRANSMITTANCE, tco_profile.units, NO_CONTEXT)
+    quoted = normalize_field(_cited("above 90"), TRANSMITTANCE, tco_profile.units, NO_CONTEXT)
 
     assert reading.text == "above 90"
     assert (normalized.value, normalized.unit) == (quoted.value, quoted.unit) == (90.0, "%")
@@ -133,9 +161,11 @@ def test_the_gzo_transmittance_fills_no_cell_when_one_lane_quoted_the_number_out
     mineru = value("transmittance", "above 90 %", condition="400 nm to 800 nm")
     paddle = value("transmittance", "90", "%", condition="400 nm to 800 nm", backend="paddleocr_vl")
     lanes = [
-        ground_lane(make_lane(samples=[make_sample("A", [mineru])]), {"mineru_p0_b1": GZO_BLOCK}),
+        ground_lane(make_lane(samples=[make_sample("A", [mineru])]), {"mineru_p0_b1": GZO_BLOCK}, profile=PROFILE),
         ground_lane(
-            make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]), {"paddleocr_vl_p0_b1": GZO_BLOCK}
+            make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]),
+            {"paddleocr_vl_p0_b1": GZO_BLOCK},
+            profile=PROFILE,
         ),
     ]
     assert lanes[1].samples[0].fields[0].bound == "above"
@@ -152,7 +182,9 @@ def test_without_the_bound_the_same_quote_still_fills_the_cell():
     block = "The average transmittance in the visible region (400 nm to 800 nm) is 90 %."
     paddle = value("transmittance", "90", "%", condition="400 nm to 800 nm", backend="paddleocr_vl")
     lane = ground_lane(
-        make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]), {"paddleocr_vl_p0_b1": block}
+        make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]),
+        {"paddleocr_vl_p0_b1": block},
+        profile=PROFILE,
     )
     row = decision(dataset(make_lane(), lane), "transmittance")
 

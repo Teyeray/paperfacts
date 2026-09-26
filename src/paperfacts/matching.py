@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paperfacts.errors import LlmResponseError
 from paperfacts.llm import LlmClient, complete_validated
-from paperfacts.profile import DomainProfile
+from paperfacts.profile import DomainProfile, EntitySpec
 from paperfacts.prompts import matching_system_prompt, matching_user_prompt, repair_prompt
 from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, sample_key
 
@@ -85,9 +85,16 @@ def match_samples(
     client: LlmClient,
     profile: DomainProfile,
     *,
+    entity: EntitySpec | None = None,
     refresh: bool = False,
 ) -> SampleMatching:
-    exact, rest_a, rest_b = _exact_pairs(lane_a.samples, lane_b.samples)
+    """Pair the two lanes' samples of ``entity`` (the primary entity by default): a sample is only ever the same
+    as a sample of its own entity type, so each entity is matched on its own, with its own prompt."""
+    entity = entity or profile.primary
+    exact, rest_a, rest_b = _exact_pairs(
+        tuple(s for s in lane_a.samples if s.entity == entity.name),
+        tuple(s for s in lane_b.samples if s.entity == entity.name),
+    )
     if not rest_a or not rest_b:
         return SampleMatching.trivial(exact, rest_a, rest_b)
 
@@ -96,7 +103,7 @@ def match_samples(
         response, raw_text, usage = complete_validated(
             client,
             _MatchingResponse,
-            system=matching_system_prompt(profile),
+            system=matching_system_prompt(profile, entity),
             user=user,
             repair=lambda previous, error: repair_prompt(user, previous, error),
             refresh=refresh,

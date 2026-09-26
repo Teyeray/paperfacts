@@ -30,8 +30,10 @@ from typing import Any, get_args
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError
 from paperfacts.fields import (
+    UNIT_KINDS,
     AfterClause,
     BareNumberPolicy,
+    Cardinality,
     DisplayFormat,
     FieldKind,
     FieldLevel,
@@ -44,6 +46,7 @@ from paperfacts.profile import (
     COMPUTED_MARKERS,
     MARKER,
     DomainProfile,
+    EntitySpec,
     FigureSlots,
     GroupSpec,
     Maturity,
@@ -82,12 +85,40 @@ RESERVED_FIELD_NAMES = frozenset(
         "paper",
         "unattributed",
         "samples",
+        "entity",
     }
 )
 # Every field is one question per lane in passage mode: past this many a run costs noticeably more.
 FIELD_WARNING_COUNT = 40
 MAX_FIELDS = 100
 MAX_SLOT_LENGTH = 2000
+# Every entity is one inventory question per lane plus its own matching: past this many a profile describes a
+# database schema rather than what a paper reports.
+MAX_ENTITIES = 5
+# What an entity's samples mean may be reworded per entity; the rules around them, the answer keys and the
+# domain are the profile's. ``matching_*`` slots are overridable too (checked by prefix).
+ENTITY_SLOTS = (
+    "sample_definition",
+    "field_scope",
+    "sample_plural",
+    "sample_singular",
+    "sample_unit",
+    "sample_examples",
+    "sample_id_example",
+    "condition_noun",
+    "condition_examples",
+    "no_samples_clause",
+    "no_samples_condition",
+    "samples_present_condition",
+    "subset_examples",
+    "whole_series_examples",
+    "partial_collective_example",
+    "multi_condition_example",
+    "sample_list_heading",
+)
+_ENTITY_KEYS = ("name", "label_zh", "prompt", "retrieval")
+# Names an entity may not take: the paper-level and unplaced scopes of a comparison and a vote.
+_RESERVED_ENTITY_NAMES = frozenset({"paper", "unattributed"})
 
 
 def profile_path(settings: Settings) -> Path:
@@ -149,6 +180,7 @@ _TOP_KEYS = (
     "ignored_unit_suffixes",
     "ui",
     "fields",
+    "entities",
 )
 _REQUIRED_KEYS = ("format", "name", "groups", "prompt", "retrieval", "fields")
 
@@ -183,12 +215,14 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     if maturity not in get_args(Maturity):
         errors.append(f"{where}: maturity must be one of {', '.join(get_args(Maturity))}, got {maturity!r}")
 
-    groups = checked(lambda: _groups(data["groups"], where)) if "groups" in data else None
+    entity_names = checked(lambda: _entity_names(data["entities"], where)) if "entities" in data else ()
+    groups = None
+    if "groups" in data and entity_names is not None:
+        groups = checked(lambda: _groups(data["groups"], entity_names, where))
     units = checked(lambda: load_units(data.get("units", {}), where, data.get("ignored_unit_suffixes", [])))
     fields = None
     if groups is not None and "fields" in data:
-        levels = {group.name: group.level for group in groups}
-        fields = checked(lambda: _fields(data["fields"], levels, units, where, errors))
+        fields = checked(lambda: _fields(data["fields"], groups, units, where, errors))
     prompt = None
     if "prompt" in data:
         prompt = checked(lambda: _text_record(PromptSlots, data["prompt"], f"{where}: prompt", slot=True))
@@ -200,6 +234,9 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     if fields is not None and any(spec.figure_readable for spec in fields) != (data.get("figures") is not None):
         errors.append(f"{where}: figures must be given exactly when some field is figure_readable")
     retrieval = checked(lambda: _retrieval(data["retrieval"], f"{where}: retrieval")) if "retrieval" in data else None
+    entities: tuple[EntitySpec, ...] | None = ()
+    if entity_names and prompt is not None and retrieval is not None:
+        entities = checked(lambda: _entities(data["entities"], prompt, retrieval, where))
     ui = checked(lambda: _text_record(UiCopy, data.get("ui", {}), f"{where}: ui", slot=False))
     title_zh = checked(lambda: _display_text(data, "title_zh", name, where))
     description_zh = checked(lambda: _display_text(data, "description_zh", "", where))
@@ -208,15 +245,25 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     # Every step above succeeded, so none of these is None; the asserts only tell the type checker so.
     assert groups is not None and units is not None and fields is not None and prompt is not None
     assert retrieval is not None and ui is not None and title_zh is not None and description_zh is not None
+    assert entities is not None
 
     material = {
-        "groups": [[group.name, group.level] for group in groups],
+        "groups": [[group.name, group.level, *([group.entity] if group.entity else [])] for group in groups],
         "fields": [_hashed_attributes(spec) for spec in fields],
         "prompt": dataclasses.asdict(prompt),
         "figures": None if figures is None else dataclasses.asdict(figures),
         "retrieval": dataclasses.asdict(retrieval),
         "units": units.material(),
     }
+    if entities:
+        material["entities"] = [
+            {
+                "name": entity.name,
+                "prompt": {name: getattr(entity.prompt, name) for name in sorted(entity.overrides)},
+                "retrieval": dataclasses.asdict(entity.retrieval),
+            }
+            for entity in entities
+        ]
     return DomainProfile(
         name=name,
         title_zh=title_zh,
@@ -231,6 +278,7 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
         ui=ui,
         content_hash=hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
         source=source,
+        declared_entities=entities,
     )
 
 
@@ -247,7 +295,8 @@ def _display_text(data: Mapping[str, Any], key: str, default: str, where: str) -
     return value
 
 
-def _groups(entries: Any, where: str) -> tuple[GroupSpec, ...]:
+def _groups(entries: Any, entity_names: tuple[str, ...], where: str) -> tuple[GroupSpec, ...]:
+    """The groups; with ``entity_names`` (the profile declares entity types) each sample group names one of them."""
     if not isinstance(entries, list):
         raise ConfigError(f"{where}: groups must be a list, got {type(entries).__name__}")
     groups: list[GroupSpec] = []
@@ -257,23 +306,123 @@ def _groups(entries: Any, where: str) -> tuple[GroupSpec, ...]:
         if not isinstance(entry, Mapping):
             raise ConfigError(f"{at} must be an object, got {type(entry).__name__}")
         _refuse_unknown(entry, valid, at)
-        name, level, label = entry.get("name"), entry.get("level"), entry.get("label_zh", "")
+        name, level, label = entry.get("name"), entry.get("level"), _label_zh(entry, at)
         if not isinstance(name, str) or not IDENTIFIER.fullmatch(name):
             raise ConfigError(f"{at}: name must match {IDENTIFIER.pattern}, got {name!r}")
         if level not in get_args(FieldLevel):
             raise ConfigError(f"{at}: level must be one of {', '.join(get_args(FieldLevel))}, got {level!r}")
-        if not isinstance(label, str):
-            raise ConfigError(f"{at}: label_zh must be a string, got {label!r}")
         if any(group.name == name for group in groups):
             raise ConfigError(f"{where}: groups has more than one group named {name!r}")
-        groups.append(GroupSpec(name=name, level=level, label_zh=label))
+        entity = entry.get("entity")
+        if entity is not None and not entity_names:
+            raise ConfigError(f"{at}: entity names an entity type, but the profile declares no entities")
+        if entity is not None and level == "paper":
+            raise ConfigError(f"{at}: a paper-level group belongs to the paper, so it names no entity")
+        if level == "sample" and entity_names and entity not in entity_names:
+            raise ConfigError(f"{at}: entity must name one of the declared entities ({', '.join(entity_names)})")
+        groups.append(GroupSpec(name=name, level=level, label_zh=label, entity=entity))
     if not any(group.level == "sample" for group in groups):
         raise ConfigError(f"{where}: groups needs at least one group with level 'sample'")
+    idle = [name for name in entity_names if not any(group.entity == name for group in groups)]
+    if idle:
+        # Its inventory would be asked for samples no question ever fills.
+        raise ConfigError(f"{where}: entity {idle[0]!r} has no sample group; name it in one or remove it")
     return tuple(groups)
 
 
+# A group's or an entity's label_zh names a column header's scope and a workbook sheet ("催化剂数据"): a control
+# character there corrupts the .xlsx, and a sheet title holds 31 characters.
+_LABEL_MAX = 40
+# Every C0 control character and DEL: stricter than workbook._CONTROL, which the export strips from every string and
+# which spares tab, newline and carriage return because a quoted cell may carry them. A label is one line of display
+# text, so it is refused here, with its key named, rather than silently changed in the workbook.
+_CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _label_zh(entry: Mapping[str, Any], at: str) -> str:
+    label = entry.get("label_zh", "")
+    if not isinstance(label, str):
+        raise ConfigError(f"{at}: label_zh must be a string, got {label!r}")
+    if _CONTROL_CHARACTER.search(label):
+        raise ConfigError(f"{at}: label_zh may not contain a control character, got {label!r}")
+    if len(label) > _LABEL_MAX:
+        raise ConfigError(f"{at}: label_zh is at most {_LABEL_MAX} characters, got {len(label)}")
+    return label
+
+
+def _entity_names(entries: Any, where: str) -> tuple[str, ...]:
+    """The declared entity names, checked before the groups that name them."""
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENTITIES:
+        raise ConfigError(f"{where}: entities must be a list of 1 to {MAX_ENTITIES} entity types")
+    names: list[str] = []
+    for index, entry in enumerate(entries):
+        at = f"{where}: entities[{index}]"
+        if not isinstance(entry, Mapping):
+            raise ConfigError(f"{at} must be an object, got {type(entry).__name__}")
+        name = entry.get("name")
+        if not isinstance(name, str) or not IDENTIFIER.fullmatch(name):
+            raise ConfigError(f"{at}: name must match {IDENTIFIER.pattern}, got {name!r}")
+        if name in _RESERVED_ENTITY_NAMES:
+            raise ConfigError(f"{at}: the name {name!r} is reserved; reserved names are paper, unattributed")
+        if name in names:
+            raise ConfigError(f"{where}: entities has more than one entity named {name!r}")
+        names.append(name)
+    return tuple(names)
+
+
+def _entities(entries: list[Any], prompt: PromptSlots, retrieval: RetrievalSpec, where: str) -> tuple[EntitySpec, ...]:
+    """The declared entity types, each with the profile's slots and retrieval under its own overrides."""
+    entities: list[EntitySpec] = []
+    for index, entry in enumerate(entries):
+        at = f"{where}: entities[{index}]"
+        _refuse_unknown(entry, _ENTITY_KEYS, at)
+        label = _label_zh(entry, at)
+        overrides = entry.get("prompt", {})
+        if not isinstance(overrides, Mapping):
+            raise ConfigError(f"{at}: prompt must be an object, got {type(overrides).__name__}")
+        refused = sorted(key for key in overrides if key not in ENTITY_SLOTS and not key.startswith("matching_"))
+        if refused:
+            raise ConfigError(
+                f"{at}: prompt may not override {', '.join(refused)}; an entity overrides only"
+                f" {', '.join(ENTITY_SLOTS)} and the matching_* slots"
+            )
+        if len(entries) > 1 and "sample_definition" not in overrides:
+            # Two entities under one definition would be asked for the same samples twice.
+            raise ConfigError(f"{at}: prompt needs its own sample_definition when a profile has several entities")
+        # Validated as the profile's own slots are (strings, bounded, no template marker), over the whole record
+        # so an unknown matching_* key is refused by name.
+        resolved = _text_record(PromptSlots, {**_slot_values(prompt), **overrides}, f"{at}: prompt", slot=True)
+        entities.append(
+            EntitySpec(
+                name=entry["name"],
+                label_zh=label,
+                prompt=resolved,
+                retrieval=_entity_retrieval(entry.get("retrieval", {}), retrieval, f"{at}: retrieval"),
+                overrides=frozenset(overrides),
+            )
+        )
+    return tuple(entities)
+
+
+def _slot_values(prompt: PromptSlots) -> dict[str, str]:
+    """The profile's slots as a slot record's input: the ones it set, and every slot left at a default (a None
+    ``paper_level_rule`` stays unset, so the entity's record keeps generating it)."""
+    return {name: value for name, value in dataclasses.asdict(prompt).items() if value is not None}
+
+
+def _entity_retrieval(data: Any, profile: RetrievalSpec, where: str) -> RetrievalSpec:
+    """An entity's retrieval: the profile's, with whichever of its two keys the entity gives replaced."""
+    if not isinstance(data, Mapping):
+        raise ConfigError(f"{where} must be an object, got {type(data).__name__}")
+    inherited = {
+        "condition_keywords": list(profile.condition_keywords),
+        "condition_unit_pattern": profile.condition_unit_pattern,
+    }
+    return _retrieval({**inherited, **data}, where)
+
+
 def _fields(
-    entries: Any, levels: Mapping[str, FieldLevel], units: UnitRegistry | None, where: str, errors: list[str]
+    entries: Any, groups: tuple[GroupSpec, ...], units: UnitRegistry | None, where: str, errors: list[str]
 ) -> tuple[FieldSpec, ...] | None:
     """The field table, or None when some entry is invalid; each invalid entry adds its own line to ``errors``.
     Without ``units`` (their section failed) canonical units are not checked against them."""
@@ -289,9 +438,16 @@ def _fields(
         )
     specs: list[FieldSpec] = []
     failed = False
+    levels = {group.name: group.level for group in groups}
+    entities = {group.name: group.entity for group in groups}
     for index, entry in enumerate(entries):
         try:
             spec = _field(entry, index, levels, units, where)
+            if entities.get(spec.group) is not None:
+                # Derived from the group like the level, never written in a field entry.
+                spec = dataclasses.replace(spec, entity=entities[spec.group])
+            if spec.references is not None:
+                _check_reference(spec, {entity for entity in entities.values() if entity is not None}, where)
         except ConfigError as exc:
             errors.append(str(exc))
             failed = True
@@ -303,6 +459,19 @@ def _fields(
     if not any(spec.is_sample_level for spec in specs) and not failed:
         raise ConfigError(f"{where}: fields needs at least one field in a group with level 'sample'")
     return None if failed else tuple(specs)
+
+
+def _check_reference(spec: FieldSpec, entity_names: set[str], where: str) -> None:
+    """A reference links a sample of one entity type to a sample of another: it describes a sample of a declared
+    entity and names a different declared one."""
+    at = f"{where}: field {spec.name!r}"
+    if spec.entity is None:
+        raise ConfigError(f"{at}: a reference field belongs to a sample group of a declared entity type")
+    if spec.references not in entity_names:
+        named = ", ".join(sorted(entity_names))
+        raise ConfigError(f"{at}: references must name one of the declared entities ({named})")
+    if spec.references == spec.entity:
+        raise ConfigError(f"{at}: references must name another entity type than the field's own, {spec.entity!r}")
 
 
 def _field(
@@ -318,7 +487,7 @@ def _field(
         # The note is what a dataset cell without the condition says. Built from the label instead, it would be
         # display text stored inside a verdict, which no key covers.
         raise ConfigError(f"{at}: condition_rule needs missing_condition_note_zh, the note a cell without it gets")
-    if spec.kind == "numeric" and spec.canonical_unit is not None and units is not None:
+    if spec.kind in UNIT_KINDS and spec.canonical_unit is not None and units is not None:
         units.check(spec.canonical_unit, at)
     return spec
 
@@ -444,11 +613,46 @@ def _backtracks(items: Any, *, repeated: bool) -> bool:
 # A number as a measurement condition states it: "550", "400" and "800" in "average 400–800 nm".
 CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # Attributes a field entry never states: the loader derives them.
-_DERIVED = {"level"}
+_DERIVED = {"level", "prompt_categories", "entity"}
 # What an entry that leaves an attribute out gets: the dataclass's own default, which is also what the keys omit.
 _FIELD_DEFAULTS = {
     item.name: item.default for item in dataclass_fields(FieldSpec) if item.default is not dataclasses.MISSING
 }
+# The kinds that may give an attribute a value other than its default. At its default an attribute says nothing
+# (tco.json spells every attribute out), so it is accepted on any kind.
+_IN_A_UNIT = tuple(kind for kind in get_args(FieldKind) if kind in UNIT_KINDS)
+_KIND_ATTRIBUTES: Mapping[str, tuple[FieldKind, ...]] = {
+    # A unit, a plausible range and a tolerance are about numbers in a unit.
+    "canonical_unit": _IN_A_UNIT,
+    "valid_range": _IN_A_UNIT,
+    "rel_tol": _IN_A_UNIT,
+    "abs_tol": _IN_A_UNIT,
+    # An interval's two ends would have to be guessed into one unit; the model is asked for the unit instead.
+    "bare_number": ("numeric",),
+    "categories": ("text",),
+    # A yes/no is stated once, and a reference names a sample: neither has a condition to fill.
+    "condition_rule": tuple(kind for kind in get_args(FieldKind) if kind not in ("boolean", "reference")),
+    "figure_readable": ("numeric",),
+    "display_format": ("numeric",),
+    "range_policy": ("numeric",),
+    "after_clause": ("numeric",),
+}
+# The kinds a list field may have, and the attributes it must leave at their default: a list of numbers would need
+# its own tolerance, condition and chart semantics, which do not exist yet.
+_LIST_KINDS = ("text", "composition")
+_NOT_WITH_MANY = (
+    "figure_readable",
+    "condition_preference",
+    "condition_rule",
+    "canonical_unit",
+    "rel_tol",
+    "abs_tol",
+    "bare_number",
+    "valid_range",
+    "range_policy",
+    "after_clause",
+    "display_format",
+)
 
 
 def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, FieldLevel]) -> FieldSpec:
@@ -491,80 +695,87 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
             raise ConfigError(f"{where}: {key} must be a non-empty string when present, got {entry.get(key)!r}")
         return value
 
+    def words(key: str, valid: Callable[[str], object], message: str) -> tuple[str, ...]:
+        value = entry.get(key, list(_FIELD_DEFAULTS[key]))
+        if not isinstance(value, list) or not all(isinstance(word, str) and valid(word) for word in value):
+            raise ConfigError(f"{where}: {message}")
+        return tuple(value)
+
     keywords = entry.get("keywords", [])
     if not isinstance(keywords, list) or not all(isinstance(word, str) and word for word in keywords):
         raise ConfigError(f"{where}: keywords must be a list of non-empty strings")
     description = entry.get("description")
     if not isinstance(description, str) or not description.strip():
         raise ConfigError(f"{where} needs a non-empty 'description'; it is what the model is told to look for")
-    label, description_zh = nonempty_text("label"), nonempty_text("description_zh")
+    figure_readable = entry.get("figure_readable", _FIELD_DEFAULTS["figure_readable"])
+    if type(figure_readable) is not bool:
+        raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
+    kind = choice("kind", get_args(FieldKind))
+    group = choice("group", tuple(levels))
+    stated: dict[str, Any] = {
+        "canonical_unit": text_or_none("canonical_unit"),
+        "valid_range": _valid_range(entry, where),
+        "rel_tol": tolerance("rel_tol"),
+        "abs_tol": tolerance("abs_tol"),
+        "bare_number": choice("bare_number", get_args(BareNumberPolicy)),
+        "categories": words("categories", str.strip, "categories must be a list of non-empty strings"),
+        "condition_preference": words(
+            "condition_preference",
+            CONDITION_NUMBER.search,
+            "condition_preference must be a list of strings each naming a number, like '400-800'",
+        ),
+        "condition_rule": text_or_none("condition_rule"),
+        "figure_readable": figure_readable,
+        "display_format": choice("display_format", get_args(DisplayFormat)),
+        "range_policy": choice("range_policy", get_args(RangePolicy)),
+        "after_clause": choice("after_clause", get_args(AfterClause)),
+        "cardinality": choice("cardinality", get_args(Cardinality)),
+    }
+    changed = {key for key, value in stated.items() if value != _FIELD_DEFAULTS[key]}
 
-    preference = entry.get("condition_preference", list(_FIELD_DEFAULTS["condition_preference"]))
-    if not isinstance(preference, list) or not all(
-        isinstance(word, str) and CONDITION_NUMBER.search(word) for word in preference
-    ):
-        raise ConfigError(
-            f"{where}: condition_preference must be a list of strings each naming a number, like '400-800'"
-        )
-
-    categories = entry.get("categories", list(_FIELD_DEFAULTS["categories"]))
-    if not isinstance(categories, list) or not all(isinstance(word, str) and word.strip() for word in categories):
-        raise ConfigError(f"{where}: categories must be a list of non-empty strings")
-    if categories and entry.get("kind") != "text":
-        raise ConfigError(f"{where}: categories is only meaningful for a text field, not a {entry.get('kind')!r} one")
-
-    bare_number = choice("bare_number", get_args(BareNumberPolicy))
-    if bare_number == "percent_or_fraction" and entry.get("canonical_unit") != "%":
+    many = stated["cardinality"] == "many"
+    if many and kind not in _LIST_KINDS:
+        raise ConfigError(f"{where}: cardinality 'many' needs a text or composition field, not a {kind!r} one")
+    if many and (refused := [key for key in _NOT_WITH_MANY if key in changed]):
+        raise ConfigError(f"{where}: cardinality 'many' cannot be combined with {', '.join(refused)}")
+    for key, kinds in _KIND_ATTRIBUTES.items():
+        if key in changed and kind not in kinds:
+            named = " or ".join(filter(None, (", ".join(kinds[:-1]), kinds[-1])))
+            raise ConfigError(f"{where}: {key} is only meaningful for a {named} field, not a {kind!r} one")
+    if stated["bare_number"] == "percent_or_fraction" and stated["canonical_unit"] != "%":
         # The policy reads a bare 0.8 as 80: meaningful for a percentage, an invented number for anything
         # else (0.8 would become 80 nm).
         raise ConfigError(
-            f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {entry.get('canonical_unit')!r}"
+            f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {stated['canonical_unit']!r}"
         )
-
-    numeric = entry.get("kind") == "numeric"
-    condition_rule = text_or_none("condition_rule")
+    condition_rule = stated["condition_rule"]
     if condition_rule is not None and (not condition_rule.strip() or entry.get("condition_hint") is None):
         # The rule tells the model to fill a condition that the field line must first say the field has.
         raise ConfigError(f"{where}: condition_rule must be a non-empty string and needs a condition_hint")
     missing_note = text_or_none("missing_condition_note_zh")
     if missing_note is not None and not missing_note.strip():
         raise ConfigError(f"{where}: missing_condition_note_zh must be a non-empty string when present")
-    figure_readable = entry.get("figure_readable", _FIELD_DEFAULTS["figure_readable"])
-    if type(figure_readable) is not bool:
-        raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
-    if figure_readable and (not numeric or entry.get("canonical_unit") is None):
+    if figure_readable and stated["canonical_unit"] is None:
         raise ConfigError(f"{where}: figure_readable needs a numeric field with a canonical_unit")
-    for key in ("display_format", "range_policy", "after_clause"):
-        if key in entry and not numeric:
-            raise ConfigError(f"{where}: {key} is only meaningful for a numeric field, not a {entry.get('kind')!r} one")
-    display_format = choice("display_format", get_args(DisplayFormat))
-    range_policy = choice("range_policy", get_args(RangePolicy))
-    after_clause = choice("after_clause", get_args(AfterClause))
-    group = choice("group", tuple(levels))
+    references = text_or_none("references")
+    if (kind == "reference") != (references is not None):
+        # Which entity a reference names is the field's whole meaning; any other kind names none.
+        raise ConfigError(f"{where}: references names the entity type of a reference field, and only of one")
 
     return FieldSpec(
         name=name,
         group=group,
-        kind=choice("kind", get_args(FieldKind)),  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]
         description=description,
         keywords=tuple(keywords),
-        canonical_unit=text_or_none("canonical_unit"),
-        label=label,
-        description_zh=description_zh,
-        rel_tol=tolerance("rel_tol"),
-        abs_tol=tolerance("abs_tol"),
+        label=nonempty_text("label"),
+        description_zh=nonempty_text("description_zh"),
         condition_hint=text_or_none("condition_hint"),
-        bare_number=bare_number,  # type: ignore[arg-type]
-        categories=tuple(categories),
-        valid_range=_valid_range(entry, where),
-        condition_preference=tuple(preference),
         level=levels[group],
-        condition_rule=condition_rule,
         missing_condition_note_zh=missing_note,
-        figure_readable=figure_readable,
-        display_format=display_format,  # type: ignore[arg-type]
-        range_policy=range_policy,  # type: ignore[arg-type]
-        after_clause=after_clause,  # type: ignore[arg-type]
+        prompt_categories=stated["categories"] if many else (),
+        references=references,
+        **stated,
     )
 
 
@@ -574,8 +785,6 @@ def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, fl
     bounds = entry["valid_range"]
     if not isinstance(bounds, Mapping) or not set(bounds) <= {"min", "max"}:
         raise ConfigError(f"{where}: valid_range must be an object with 'min' and/or 'max', got {bounds!r}")
-    if entry.get("kind") != "numeric":
-        raise ConfigError(f"{where}: valid_range is only meaningful for a numeric field, not a {entry.get('kind')!r}")
     low, high = bounds.get("min"), bounds.get("max")
     for key, value in (("min", low), ("max", high)):
         if value is not None and type(value) not in (int, float):

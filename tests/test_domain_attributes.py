@@ -17,7 +17,7 @@ from paperfacts.kinds import RULES
 from paperfacts.normalize import drop_implausible, normalize_field, parse_number, split_after_clause
 from paperfacts.profile import DomainProfile, PromptSlots
 from paperfacts.profile_loader import load_profile
-from paperfacts.records import ExtractedRecords, SampleRecord
+from paperfacts.records import NO_CONTEXT, ExtractedRecords, SampleRecord
 from support.extraction import make_field
 from support.profiles import SHIPPED_PROFILE_PATH, make_profile
 
@@ -86,7 +86,7 @@ def test_under_condition_the_number_is_read_and_the_clause_becomes_the_condition
     assert spec.after_clause == "condition"
 
     field = normalize_field(
-        make_field("capacity_retention", "92.5% after 100 cycles", unit_raw="%"), spec, battery.units
+        make_field("capacity_retention", "92.5% after 100 cycles", unit_raw="%"), spec, battery.units, NO_CONTEXT
     )
 
     assert (field.value, field.unit) == (92.5, "%")
@@ -98,8 +98,8 @@ def test_the_clause_joins_a_condition_the_model_gave_once_only(battery):
     spec = battery.by_name["capacity_retention"]
     raw = make_field("capacity_retention", "92.5% after 100 cycles", unit_raw="%", condition="at 1 C")
 
-    once = normalize_field(raw, spec, battery.units)
-    twice = normalize_field(once, spec, battery.units)
+    once = normalize_field(raw, spec, battery.units, NO_CONTEXT)
+    twice = normalize_field(once, spec, battery.units, NO_CONTEXT)
 
     assert once.condition == "at 1 C; after 100 cycles"
     assert twice == once
@@ -109,7 +109,7 @@ def test_the_dataset_cell_reads_the_same_number(battery):
     spec = battery.by_name["capacity_retention"]
 
     value, note = RULES["numeric"].cell(
-        make_field("capacity_retention", "92.5% after 100 cycles", unit_raw="%"), spec, battery.units
+        make_field("capacity_retention", "92.5% after 100 cycles", unit_raw="%"), spec, battery.units, NO_CONTEXT
     )
 
     assert value == 92.5
@@ -122,11 +122,11 @@ def test_the_dataset_cell_reads_the_same_number(battery):
 def test_tco_sets_a_gas_name_aside_and_other_profiles_do_not(tco_profile):
     pressure = tco_profile.by_name["working_pressure"]
     field = make_field("working_pressure", "1.1", unit_raw="Pa Ar")
-    assert normalize_field(field, pressure, tco_profile.units).value == pytest.approx(1.1)
+    assert normalize_field(field, pressure, tco_profile.units, NO_CONTEXT).value == pytest.approx(1.1)
 
     other = make_profile({"fields.1.canonical_unit": "Pa"})
     thickness = other.by_name["coating_thickness"]
-    read = normalize_field(make_field("coating_thickness", "1.1", unit_raw="Pa Ar"), thickness, other.units)
+    read = normalize_field(make_field("coating_thickness", "1.1", unit_raw="Pa Ar"), thickness, other.units, NO_CONTEXT)
     assert read.value is None and "unknown unit" in read.normalization_note
 
 

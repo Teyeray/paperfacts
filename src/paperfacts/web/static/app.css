@@ -257,6 +257,10 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .results-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .results-head h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.003em; }
 .results-note { font-size: 12px; margin: 0 0 10px; }
+/* Only a profile with several entity types names them: one table (and one group of records) per entity. */
+.entity-head { font-size: 13px; font-weight: 600; margin: 12px 0 6px; color: var(--ink-2); }
+.entity-table { margin-top: 14px; }
+.entity-table .results-head .entity-head { margin: 0; }
 /* The copy button sits beside the download link and shares its look; both push to the right, and the
    first of them takes the free space so the pair stays together when one is hidden. */
 .download, .copy-table {
@@ -354,6 +358,7 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .field .src { background: none; border: 0; padding: 0; color: var(--accent); font-family: var(--font-mono); font-size: 11px; text-decoration: underline dotted; text-align: right; max-width: 220px; overflow-wrap: anywhere; }
 .field .src:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
 .lane-empty { padding: 18px 12px; color: var(--ink-3); }
+.lane-entity { margin: 0; padding: 8px 12px 4px; border-bottom: 1px solid var(--line); }
 
 .joblog { margin-top: var(--gap-section); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
 .joblog summary { padding: 8px 12px; cursor: pointer; font-weight: 600; }

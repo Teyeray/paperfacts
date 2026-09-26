@@ -37,7 +37,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_sample
 from support.factories import make_blank_pdf
-from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data
+from support.profiles import SHIPPED_PROFILE_PATH, make_entity_profile, make_profile, profile_data
 from support.web import (
     DOC_KEY,
     DOC_SHA,
@@ -154,11 +154,23 @@ def test_the_profile_gives_the_page_tcos_own_copy(client: TestClient, tco_profil
         "entity_label_zh": "样品",
         "no_samples_message_zh": "该论文没有自己沉积的 TCO 膜，所以没有样品级数据。",
     }
-    assert body["groups"][0] == {"name": "target", "level": "paper", "label_zh": "靶材"}
+    assert body["groups"][0] == {"name": "target", "level": "paper", "label_zh": "靶材", "entity": None}
+    # One implicit entity, unnamed on the page, holding every sample-level field.
+    assert body["entities"] == [
+        {"name": "sample", "label_zh": "", "fields": [spec.name for spec in tco_profile.sample_fields]}
+    ]
     assert body["field_count"] == {"paper": len(tco_profile.paper_fields), "sample": len(tco_profile.sample_fields)}
     assert [field["name"] for field in body["fields"]] == [spec.name for spec in tco_profile.fields]
     thickness = next(field for field in body["fields"] if field["name"] == "thickness")
-    assert thickness == {"name": "thickness", "label": "厚度", "group": "film", "level": "sample", "unit": "nm"}
+    assert thickness == {
+        "name": "thickness",
+        "label": "厚度",
+        "group": "film",
+        "level": "sample",
+        "unit": "nm",
+        "entity": None,
+        "references": None,
+    }
 
 
 def test_a_profile_name_that_could_break_the_download_header_is_refused(settings: Settings, jobs: JobManager):
@@ -185,10 +197,28 @@ def test_another_profile_serves_its_own_copy_over_the_defaults(settings: Setting
         "no_samples_message_zh": "该论文没有范围内的样品，所以没有样品级数据。",
     }
     assert body["groups"] == [
-        {"name": "precursor", "level": "paper", "label_zh": "前驱体"},
-        {"name": "coating", "level": "sample", "label_zh": "涂层"},
+        {"name": "precursor", "level": "paper", "label_zh": "前驱体", "entity": None},
+        {"name": "coating", "level": "sample", "label_zh": "涂层", "entity": None},
     ]
     assert body["field_count"] == {"paper": 1, "sample": 2}
+
+
+def test_a_profile_with_entity_types_names_each_with_its_fields(settings: Settings, jobs: JobManager):
+    with TestClient(create_app(settings, profile=make_entity_profile(), jobs=jobs)) as other:
+        body = other.get("/api/profile").json()
+
+    assert body["entities"] == [
+        {"name": "coating", "label_zh": "涂层", "fields": ["coating_thickness", "solvent"]},
+        {"name": "wear_test", "label_zh": "磨损测试", "fields": ["test_temperature", "wear_mode"]},
+    ]
+    assert [group["entity"] for group in body["groups"]] == [None, "coating", "wear_test"]
+    assert {field["name"]: field["entity"] for field in body["fields"]} == {
+        "precursor_purity": None,
+        "coating_thickness": "coating",
+        "solvent": "coating",
+        "test_temperature": "wear_test",
+        "wear_mode": "wear_test",
+    }
 
 
 def test_a_b0_lane_with_no_film_still_carries_the_flag_the_no_samples_message_keys_on(
