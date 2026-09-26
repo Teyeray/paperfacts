@@ -64,7 +64,8 @@ this file is the part that is easy to get wrong.
   and `web/static/` stay domain-free (`tests/test_domain_free.py`): a domain word belongs in a profile slot or in
   `ui`. Every profile error is a `ConfigError` naming the file and the key; `parse_profile` checks every section
   and every field before raising one error with a line per problem.
-- One server per `data_root`, one profile per server (see Web interface).
+- One server per `data_root`; a server serves every profile under `profiles/`, the configured one as the default
+  (see Web interface).
 - Secrets only in `.env` (gitignored, loaded without overriding what the environment already has) and only
   the API key. `config.json` has nowhere to put a key, which is the point.
 - A new setting means: a key in `config.json`, a field on `Settings`, a `PAPERFACTS_*` override, and a line
@@ -189,8 +190,10 @@ this file is the part that is easy to get wrong.
   `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
   `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading
   a profile file is `profile_loader.py`. `workbook`, `columns`, `readings`, `ui_copy`, `profile_loader`, `llm`,
-  `config`, `cli`, `workflow` and `batch` are in no key list, and `tests/test_keys_unhashed.py` holds that. Do not
-  move display, storage or loading code into a hashed module.
+  `config`, `cli`, `workflow`, `batch` and `profile_view` are in no key list, and `tests/test_keys_unhashed.py`
+  holds that. Do not move display, storage or loading code into a hashed module. The prompt preview
+  (`profile_view.prompt_sections`, what `paperfacts prompts` prints and `/api/profiles/<name>/prompts` returns) is
+  assembled in `profile_view.py`, never in `prompts.py`; `tests/fixtures/cli_prompts/` pins its output.
 
 ## Figures
 
@@ -247,14 +250,25 @@ this file is the part that is easy to get wrong.
 - Background jobs run on `web.max_parallel_documents` workers, never two on the same document; a worker
   takes the oldest queued job whose document is free. A `Job` is a frozen value in a lock-guarded dict,
   replaced whole on every transition, so a poller never sees a half-applied state. Submitting the same
-  document twice while it is active returns the same job. A job's log is attributed by a context variable:
+  document twice under one profile while it is active returns the same job. A job's log is attributed by a context variable:
   every pool in the pipeline is `threads.ContextThreadPoolExecutor`, which runs each task in a copy of the
   caller's context; a plain `ThreadPoolExecutor` would drop its records from the log.
-- One server per data root. The per-document and per-parser locks are process-local, so two servers (say,
-  under two profiles) over one `data_root` can parse the same document at once. A server's profile is read
-  once; `pipeline_runner` refuses a job once the file's bytes on disk (re-resolved from the path it was named
-  by) differ from the ones loaded. That sha256 is `profile.loaded_file_sha256`, kept beside the profile, never in
-  `content_hash` or a key.
+- One server per data root. The per-document and per-parser locks are process-local, so two servers over one
+  `data_root` can parse the same document at once. A server serves several profiles through
+  `web/registry.py`'s `ProfileRegistry`, built once in `create_app`: the default is the one the settings select
+  (fatal when it does not load or its mode cannot ask it), every other `profiles/*.json` that `web.profiles`
+  allows is loaded with `load_run_profile(..., to_run=False)` (a failure, or a link that loads as another
+  profile, lists it in `invalid`, file name only, never fatal), keyed by `profile.name`. Each served profile has
+  its own `Library`, except one `check_mode` refuses, whose keys cannot be computed (`library is None`). A route
+  whose answer depends on a profile takes `?profile=` through the `Served` / `ProfileLibrary` dependencies
+  (absent = the default, so old URLs are unchanged; malformed 422, unknown 404, invalid 409, no library 409) and
+  its response carries `X-PaperFacts-Profile`; the parse artifact and page images are profile-free and read
+  through the default's library. `Job.profile` names the
+  profile; a resubmission is deduped on (document, profile), but `_take` stays busy by document, so one document
+  never has two running jobs whatever their profiles (they share `parsed/`, `raw/`, `identity.json`). Each
+  profile is read once; `pipeline_runner` refuses a job once *its* profile file's bytes on disk (re-resolved from
+  the path it was named by) differ from the ones loaded. That sha256 is `profile.loaded_file_sha256`, kept
+  beside the profile, never in `content_hash` or a key.
 - Parallel documents are bounded twice: `parsers.py` holds one lock per parser around the actual parse
   (not around a cache hit), and every model request takes a slot of `llm.IN_FLIGHT` around the HTTP call
   only -- never while waiting on a future or a backoff, which is what keeps the nested pools deadlock-free.

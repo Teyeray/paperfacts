@@ -308,13 +308,16 @@ The flags worth knowing:
   under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
   after the profile, so a profile file given by path whose name is also a different `profiles/<name>.json` is
   refused unless the two files are byte-identical, and the name `paperfacts` (the pre-profile workbook) is
-  reserved. `serve` reads its profile once:
-  `/api/health` reports its name and hash, `/api/profile` gives the page its title and copy (the header shows
-  the title, and the paper-level record is named the profile's way), and after any edit to the file on disk --
-  display text included, or a symlink pointed at another file -- every new job is refused until the server is
-  restarted; `/api/health`'s `profile_on_disk_changed` says so first. A file that cannot be read (deleted, or
-  caught mid-save) refuses the job with its own message. Run **one server per data root**: two servers under different profiles
-  over the same `data_root` can parse the same document at the same time.
+  reserved. On `serve`, `--profile` picks the **default** profile: the server serves every profile under
+  `profiles/` (see "A second profile beside the first"), and the default answers every request that names none.
+  Each profile is read once: `/api/health` reports the default's name and hash (and, under `profiles`, every
+  served profile's), `/api/profile` gives the page its title and copy (the header shows the title, and the
+  paper-level record is named the profile's way), and after any edit to a profile's file on disk -- display text
+  included, or a symlink pointed at another file -- every new job under that profile is refused until the server
+  is restarted; `/api/health`'s `profile_on_disk_changed` (the default) and `profiles.<name>.on_disk_changed`
+  say so first. A file that cannot be read (deleted, or caught mid-save) refuses the job with its own message.
+  Run **one server per data root**: two servers over the same `data_root` can parse the same document at the
+  same time.
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
   `--jobs 1` is the old one-after-another run.
 - `--offline` on `run` and `batch` answers every model request from the LLM cache and fails on a miss; see
@@ -479,10 +482,11 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `server.page_dpi.default` / `.min` / `.max` | Page renders for the viewer. Defaults 110, 50, 220 |
 | `web.username` | HTTP Basic username. Default `paperfacts`. The password is never here |
 | `web.max_parallel_documents` | Documents processed at once, by the web job queue and by `batch` (unless `--jobs` says otherwise). Default 3 |
+| `web.profiles` | The profiles under `profiles/` a server serves beside its default, as a list of names (`["battery_cathode"]`); `null` serves every one that loads, `[]` only the default. The default profile is always served. A name with no file is listed among the invalid profiles. Default `null` |
 | `overlay.dpi` | Default 150 |
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
 | `data_root` | Where everything is written. Default `data` |
-| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields, condition keywords and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). Default `tco` |
+| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields, condition keywords and domain wording, and every run, batch and export reads them from it, and `serve` makes it the default of the profiles it serves (`--profile NAME_OR_PATH` overrides it for one command). Default `tco` |
 
 `config.json` no longer holds `fields` or `condition_keywords`: they live in the profile (`fields` and
 `retrieval.condition_keywords`). A `config.json` that still has either is refused with an error naming the key,
@@ -504,7 +508,7 @@ points at its own services without editing the shared file:
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_WEB_MAX_PARALLEL_DOCUMENTS`,
-`PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
+`PAPERFACTS_WEB_PROFILES` (comma-separated names), `PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
 `PAPERFACTS_FIGURES_MAX_PER_DOCUMENT`, `PAPERFACTS_FIGURES_DPI`, `PAPERFACTS_FIGURES_MAX_PIXELS`,
 `PAPERFACTS_FIGURES_TIMEOUT_S`.
 
@@ -1087,19 +1091,41 @@ slowly than the call count. A re-run is free: every answer is cached by request 
 
 ### A second profile beside the first
 
-One server serves one profile. To offer another, start a second server with its own port **and its own data
-root**:
+One server serves every profile under `profiles/`. The one `profile` / `PAPERFACTS_PROFILE` / `--profile`
+selects is the **default**: it must load or the server does not start, and every request that names no profile
+is answered under it, so every link and bookmark from before keeps its meaning. `PAPERFACTS_PROFILE=battery_cathode uv run paperfacts serve`
+serves the same profiles with `battery_cathode` as the default; `web.profiles` narrows the others (see Configuration). Every other `profiles/*.json` is
+loaded beside it at start-up; one that does not load is listed with its errors (`GET /api/profiles`, `invalid`)
+and never stops the others, and so is a file that is a link to another profile's file (it loads as that
+profile). `web.profiles` names the ones to serve beside the default when not all of them should be (every run
+costs tokens). A profile with entity types under `extraction.mode: document` is listed and described but not
+runnable: its keys cannot be computed under that mode, so every read and write under it answers 409.
 
-```bash
-PAPERFACTS_PROFILE=battery_cathode PAPERFACTS_DATA_ROOT=data-battery uv run paperfacts serve --port 8001
-```
+The HTTP interface names the profile with `?profile=<name>` on every route whose answer depends on one:
+`/api/profile`, `/api/documents` (upload, run, run-all, and every per-document read but the parse artifact and
+the page images, which are the document's under every profile), `/api/dataset` and `/api/dataset.xlsx`. Absent
+means the default, and every such response names the profile that answered in an `X-PaperFacts-Profile` header,
+so a caller that forgot the parameter can tell. `GET /api/profiles` lists the served profiles (with how many documents each has finished,
+whether each is runnable and whether its file changed on disk) and the invalid files; `GET /api/profiles/<name>`
+is one profile's full read-only definition (groups, entities, every field attribute, declared units, retrieval);
+`GET /api/profiles/<name>/prompts?field=` is what `paperfacts prompts` prints, from the same function. A
+document summary names in `profiles_done` every profile it is finished under.
+
+A document is shared: its PDF, parses and identity belong to it under every profile, so the server never runs
+two jobs on one document at once, whatever their profiles; a job under a second profile waits for the first.
+Submitting a document again under the same profile while it is queued or running returns the same job. Results
+need no separating: every derived file is named by keys that follow the profile's content, workbooks and chart
+readings by the profile's name. Two profiles of identical content share their results by design: both list a
+finished document in `profiles_done` and both show its results, but its workbook download
+(`/api/documents/<id>/dataset.xlsx`) is named after the profile a run was made under and is missing under the
+other until a run under it writes one.
 
 Run one server per data root: the per-document and per-parser locks live in one process, so two servers over
 one `data_root` can parse the same document at once. Profiles may still share a data root outside a server --
-`paperfacts batch papers/ --profile battery_cathode` over the library a `tco` server uses, while it is idle --
-and then share the parses and the LLM cache: every derived file is named by keys that differ between the two,
-and the workbooks by profile name. A server reads its profile once; after the file changes on disk it refuses
-new jobs until it is restarted (`/api/health` reports `profile_on_disk_changed`).
+`paperfacts batch papers/ --profile battery_cathode` over the library a server uses, while it is idle -- and
+then share the parses and the LLM cache. A server reads its profiles once; a file added to `profiles/` is served
+after a restart, and after a served file changes on disk its jobs are refused until the restart
+(`/api/health` reports it per profile).
 
 ### Proving a refactor free
 

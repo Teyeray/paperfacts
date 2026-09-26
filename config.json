@@ -14,7 +14,8 @@
   },
   "web": {
     "username": "paperfacts",
-    "max_parallel_documents": 3
+    "max_parallel_documents": 3,
+    "profiles": null
   },
   "llm": {
     "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",

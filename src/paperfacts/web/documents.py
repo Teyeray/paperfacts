@@ -63,6 +63,10 @@ class DocumentSummary(BaseModel):
     )
     counts: ComparisonCounts | None = None
     uploaded_at: str | None = None
+    # Set by the route, which knows every served profile; the library knows only its own.
+    profiles_done: tuple[str, ...] = Field(
+        default=(), description="the served profiles this document is finished under, the one asked about included"
+    )
 
 
 def _file_stamp(path: Path) -> tuple[int, int, int] | None:
@@ -119,6 +123,10 @@ class Library:
     # ---- listing and detail ----------------------------------------------------------------
 
     def list(self) -> list[DocumentSummary]:
+        summaries = [self.summary(key) for key in self.document_ids()]
+        return sorted(summaries, key=lambda s: (s.uploaded_at or "", s.name), reverse=True)
+
+    def document_ids(self) -> list[str]:
         root = self.layout.docs_root()
         if not root.is_dir():
             return []
@@ -132,8 +140,7 @@ class Library:
                 logger.warning("ignoring non-document directory under docs/: %s", path.name)
                 continue
             keys.append(path.name)
-        summaries = [self.summary(key) for key in keys]
-        return sorted(summaries, key=lambda s: (s.uploaded_at or "", s.name), reverse=True)
+        return keys
 
     def exists(self, document_id: str) -> bool:
         """Whether this document's directory exists; a malformed id raises ``KeyError`` (also the

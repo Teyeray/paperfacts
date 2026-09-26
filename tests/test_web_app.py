@@ -33,7 +33,8 @@ from paperfacts.profile_loader import load_profile
 from paperfacts.records import LaneExtraction
 from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
-from paperfacts.web.jobs import Job, JobManager
+from paperfacts.web.jobs import Job, JobManager, JobRunner
+from paperfacts.web.registry import ProfileRegistry
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_sample
 from support.factories import make_blank_pdf
@@ -137,6 +138,7 @@ def test_health_reports_the_model_and_the_profile_that_will_be_used(client: Test
         "profile": "tco",
         "profile_hash": tco_profile.content_hash[:12],
         "profile_on_disk_changed": False,
+        "profiles": {"tco": {"hash": tco_profile.content_hash[:12], "on_disk_changed": False}},
     }
 
 
@@ -728,7 +730,7 @@ def test_the_job_worker_is_shut_down_with_the_app(settings: Settings, runner: Re
         pass
 
     with pytest.raises(RuntimeError):
-        manager.submit("0123456789abcdef")
+        manager.submit("0123456789abcdef", profile="tco")
 
 
 def test_an_app_can_be_built_from_the_environment_alone(monkeypatch, tmp_path: Path):
@@ -743,6 +745,10 @@ def test_an_app_can_be_built_from_the_environment_alone(monkeypatch, tmp_path: P
 
 
 # ---- pipeline_runner ---------------------------------------------------------------------
+
+
+def _runner(settings: Settings, profile: DomainProfile) -> JobRunner:
+    return pipeline_runner(settings, ProfileRegistry.build(settings, profile=profile, profiles=()))
 
 
 @pytest.fixture
@@ -761,12 +767,12 @@ def test_the_pipeline_runner_hands_the_job_to_run_document(
         received.update(document=document, settings=settings_seen, profile=profile, force=force, on_stage=on_stage)
 
     monkeypatch.setattr("paperfacts.web.app.run_document", fake_run_document)
-    job = Job(job_id="job-1", document_id=registered, force=True, created_at="2026-01-01T00:00:00+00:00")
+    job = Job(job_id="job-1", document_id=registered, profile="tco", force=True, created_at="2026-01-01T00:00:00+00:00")
 
     def mark(stage: str, status: str, detail: str = "") -> None:
         pass
 
-    pipeline_runner(settings, library.profile, library)(job, mark)
+    _runner(settings, library.profile)(job, mark)
 
     assert received == {
         "document": library.document(registered),
@@ -781,10 +787,10 @@ def test_the_pipeline_fails_loudly_when_the_pdf_is_gone(monkeypatch, settings: S
     calls: list[object] = []
     monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: calls.append(args))
     seed_artifact(library, "mineru")
-    job = Job(job_id="job-1", document_id=DOC_KEY, force=False, created_at="2026-01-01T00:00:00+00:00")
+    job = Job(job_id="job-1", document_id=DOC_KEY, profile="tco", force=False, created_at="2026-01-01T00:00:00+00:00")
 
     with pytest.raises(FileNotFoundError):
-        pipeline_runner(settings, library.profile, library)(job, lambda stage, status, detail="": None)
+        _runner(settings, library.profile)(job, lambda stage, status, detail="": None)
     assert calls == []
 
 
@@ -797,11 +803,12 @@ def test_the_pipeline_runner_refuses_a_job_once_the_profile_file_changed_on_disk
     path.parent.mkdir()
     path.write_text(json.dumps(profile_data(), ensure_ascii=False), encoding="utf-8")
     profile = load_profile(path)
-    library = Library(settings, profile)
     calls: list[object] = []
     monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: calls.append(args))
-    job = Job(job_id="job-1", document_id=registered, force=False, created_at="2026-01-01T00:00:00+00:00")
-    run = pipeline_runner(settings, profile, library)
+    job = Job(
+        job_id="job-1", document_id=registered, profile="demo", force=False, created_at="2026-01-01T00:00:00+00:00"
+    )
+    run = _runner(settings, profile)
 
     run(job, lambda stage, status, detail="": None)
     path.write_text(json.dumps(profile_data({"prompt.domain_subject": "edited"}), ensure_ascii=False), "utf-8")
@@ -819,7 +826,9 @@ def _demo_file(path: Path, changes: dict | None = None) -> Path:
 
 
 def _job(document_id: str) -> Job:
-    return Job(job_id="job-1", document_id=document_id, force=False, created_at="2026-01-01T00:00:00+00:00")
+    return Job(
+        job_id="job-1", document_id=document_id, profile="demo", force=False, created_at="2026-01-01T00:00:00+00:00"
+    )
 
 
 def _no_mark(stage: str, status: str, detail: str = "") -> None:
@@ -832,7 +841,7 @@ def test_a_display_only_edit_is_refused_too(monkeypatch, settings: Settings, tmp
     path = _demo_file(tmp_path / "profiles" / "demo.json")
     profile = load_profile(path)
     monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: None)
-    run = pipeline_runner(settings, profile, Library(settings, profile))
+    run = _runner(settings, profile)
     _demo_file(path, {"title_zh": "改过的标题"})
 
     assert load_profile(path) is profile  # the process still holds the text it started with
@@ -848,7 +857,7 @@ def test_a_profile_file_that_cannot_be_read_refuses_the_job_with_its_own_message
     profile = load_profile(path)
     calls: list[object] = []
     monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: calls.append(args))
-    run = pipeline_runner(settings, profile, Library(settings, profile))
+    run = _runner(settings, profile)
     if damage == "delete":
         path.unlink()
     else:
@@ -875,7 +884,7 @@ def test_a_retargeted_symlink_is_noticed(monkeypatch, settings: Settings, tmp_pa
     linked = dataclasses.replace(settings, profile=str(link))
     profile = load_profile(link)
     monkeypatch.setattr("paperfacts.web.app.run_document", lambda *args, **kwargs: None)
-    run = pipeline_runner(linked, profile, Library(linked, profile))
+    run = _runner(linked, profile)
     run(_job(registered), _no_mark)
 
     link.unlink()

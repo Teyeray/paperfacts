@@ -22,6 +22,7 @@ Flat modules, in pipeline order:
 - ``extract``     the document the model reads and the extraction itself
 - ``figures``     a vision model reads property-vs-condition charts; paper-level, never compared
 - ``readings``    the figures stage on disk: stored readings, the ones shown (and their rows), reading anew
+- ``profile_view`` a profile as a reader sees it: its definition and the prompts it renders; in no cache key
 - ``voting``      repeats collapsed within a pass, majority vote across passes
 - ``grounding``   the quoted text must occur in the block it cites
 - ``normalize``   number parsing, unit conversion
