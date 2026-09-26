@@ -31,7 +31,7 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 
 from paperfacts.fields import FieldSpec
-from paperfacts.kinds import rules_for
+from paperfacts.kinds import NO_CONTEXT, KindContext, rules_for
 from paperfacts.profile import MARKER, DomainProfile, EntitySpec, GroupSpec, PromptSlots
 
 # A value stated for part of the series. Left unsaid, the model reports "all films deposited at 100 °C" as one
@@ -227,8 +227,9 @@ def _values(profile: DomainProfile, entity: EntitySpec | None = None) -> dict[st
     return values
 
 
-def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> str:
-    """One line per field. ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`."""
+def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str, ctx: KindContext = NO_CONTEXT) -> str:
+    """One line per field. ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`; ``ctx``
+    holds the entity types a reference field's note names."""
     lines = []
     for spec in specs:
         unit = f", canonical unit: {spec.canonical_unit}" if spec.canonical_unit else ""
@@ -242,7 +243,7 @@ def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> s
                 kind=spec.kind,
                 unit=unit,
                 description=spec.description,
-                note=rules_for(spec).note(spec),
+                note=rules_for(spec).note(spec, ctx),
                 condition=condition,
                 plausible=plausible,
             )
@@ -251,7 +252,8 @@ def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> s
 
 
 def extraction_system_prompt(profile: DomainProfile) -> str:
-    fields = render_field_table(profile.fields, profile.prompt.implausible_origin)
+    ctx = KindContext(entities={entity.name: entity for entity in profile.entities})
+    fields = render_field_table(profile.fields, profile.prompt.implausible_origin, ctx)
     return render(_EXTRACTION_SYSTEM, {**_values(profile), "fields": fields})
 
 
@@ -280,13 +282,21 @@ def field_user_prompt(
     markdown: str,
     implausible_origin: str,
     heading: str = PromptSlots.sample_list_heading,
+    referenced: tuple[EntitySpec, str] | None = None,
 ) -> str:
     """``sample_list`` is rendered by the caller, which owns the record types; this module stays free of them.
     ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`, ``heading`` the
-    :attr:`PromptSlots.sample_list_heading` of the entity whose samples the list holds."""
+    :attr:`PromptSlots.sample_list_heading` of the entity whose samples the list holds. ``referenced`` is a
+    reference field's: the entity type it names a sample of and that entity's list, shown after the first, whose
+    ids the answer copies."""
+    ctx, second = NO_CONTEXT, ""
+    if referenced is not None:
+        entity, listed = referenced
+        ctx = KindContext(entities={entity.name: entity})
+        second = f"{entity.prompt.sample_list_heading} this paper reports:\n{listed}\n\n"
     return (
-        f"Field to extract:\n{render_field_table((spec,), implausible_origin)}\n\n"
-        f"{heading} this paper reports:\n{sample_list}\n\n"
+        f"Field to extract:\n{render_field_table((spec,), implausible_origin, ctx)}\n\n"
+        f"{heading} this paper reports:\n{sample_list}\n\n{second}"
         f"Excerpts (Markdown with provenance markers):\n\n{markdown}\n\n"
         "Return the JSON object now."
     )

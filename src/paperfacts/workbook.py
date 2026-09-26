@@ -96,6 +96,10 @@ _KIND_ZH = {"boolean": "是/否", "date": "日期（ISO）"}
 
 # The 字段说明 rule of an interval column, and of a list column (cardinality "many").
 _INTERVAL_RULE = "区间：下限、上限各占一列，开口一端留空；冲突、多条件或无引用定位时两列都留空。"
+_REFERENCE_RULE = (
+    "引用：所引样品的样品ID，与该实体数据表的样品ID一列一致；"
+    "两路所引样品未被匹配为同一样品或引用未定位到列表中的样品时留空。"
+)
 _LIST_RULE = "多值：两路已定位证据的并集，以“; ”分隔，每个元素的来源通道见数据质量说明；有分类时按分类顺序排列。"
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # What Excel refuses in a sheet title, and its length limit.
@@ -266,6 +270,12 @@ def write_dataset(
             {"unit": "文本（多值）", "rule": _LIST_RULE} if column.cardinality == "many" else {}
         )
         | ({"rule": _INTERVAL_RULE} if column.kind == "interval" else {})
+        | (
+            # A reference cell is the sample_id of a row on the referenced entity's sheet.
+            {"unit": f"{entity_labels.get(column.references, column.references)}样品ID", "rule": _REFERENCE_RULE}
+            if column.references is not None
+            else {}
+        )
         | ({"entity": entity_labels.get(column.entity or "", "")} if several else {})
         for column in by_name.values()
     ]

@@ -36,8 +36,9 @@ from typing import Literal
 FieldLevel = Literal["paper", "sample"]
 # numeric: a number with a unit; composition: a chemical formula; text: anything else; boolean: a yes/no the paper
 # states in words (the model says which with ``holds``); date: a calendar date, read to ISO at the precision
-# written; interval: a range with two ends, or a one-sided bound, in a unit.
-FieldKind = Literal["numeric", "composition", "text", "boolean", "date", "interval"]
+# written; interval: a range with two ends, or a one-sided bound, in a unit; reference: the id of a sample of another
+# entity type (the catalyst a reaction test ran on), linking the two.
+FieldKind = Literal["numeric", "composition", "text", "boolean", "date", "interval", "reference"]
 # The kinds whose value is quoted with digits, so an answer or a block without a digit cannot hold one. Here
 # rather than in paperfacts.kinds because cleaning (records.py) and retrieval (passages.py) sit below that module.
 DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric", "date", "interval"})
@@ -153,6 +154,12 @@ class FieldSpec:
     # and for every field of a profile that declares no entity types. It decides which sample list and system
     # prompt the field's question is asked with, which samples its values may land on, and which rows it fills.
     entity: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT))
+    # The entity type a ``reference`` field names a sample of; None for every other kind. PROMPT: the question shows
+    # that entity's sample list. CLEANING: a value is grounded only when it resolves to one of them. VERDICT: two
+    # lanes agree when that entity's matching pairs the samples they name, and the cell is the named row's id.
+    references: str | None = field(
+        default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT)
+    )
 
     @property
     def is_sample_level(self) -> bool:

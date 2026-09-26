@@ -430,6 +430,8 @@ def _fields(
             if entities.get(spec.group) is not None:
                 # Derived from the group like the level, never written in a field entry.
                 spec = dataclasses.replace(spec, entity=entities[spec.group])
+            if spec.references is not None:
+                _check_reference(spec, {entity for entity in entities.values() if entity is not None}, where)
         except ConfigError as exc:
             errors.append(str(exc))
             failed = True
@@ -441,6 +443,19 @@ def _fields(
     if not any(spec.is_sample_level for spec in specs) and not failed:
         raise ConfigError(f"{where}: fields needs at least one field in a group with level 'sample'")
     return None if failed else tuple(specs)
+
+
+def _check_reference(spec: FieldSpec, entity_names: set[str], where: str) -> None:
+    """A reference links a sample of one entity type to a sample of another: it describes a sample of a declared
+    entity and names a different declared one."""
+    at = f"{where}: field {spec.name!r}"
+    if spec.entity is None:
+        raise ConfigError(f"{at}: a reference field belongs to a sample group of a declared entity type")
+    if spec.references not in entity_names:
+        named = ", ".join(sorted(entity_names))
+        raise ConfigError(f"{at}: references must name one of the declared entities ({named})")
+    if spec.references == spec.entity:
+        raise ConfigError(f"{at}: references must name another entity type than the field's own, {spec.entity!r}")
 
 
 def _field(
@@ -599,8 +614,8 @@ _KIND_ATTRIBUTES: Mapping[str, tuple[FieldKind, ...]] = {
     # An interval's two ends would have to be guessed into one unit; the model is asked for the unit instead.
     "bare_number": ("numeric",),
     "categories": ("text",),
-    # A yes/no is stated once; it has no condition to fill.
-    "condition_rule": tuple(kind for kind in get_args(FieldKind) if kind != "boolean"),
+    # A yes/no is stated once, and a reference names a sample: neither has a condition to fill.
+    "condition_rule": tuple(kind for kind in get_args(FieldKind) if kind not in ("boolean", "reference")),
     "figure_readable": ("numeric",),
     "display_format": ("numeric",),
     "range_policy": ("numeric",),
@@ -726,6 +741,10 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         raise ConfigError(f"{where}: missing_condition_note_zh must be a non-empty string when present")
     if figure_readable and stated["canonical_unit"] is None:
         raise ConfigError(f"{where}: figure_readable needs a numeric field with a canonical_unit")
+    references = text_or_none("references")
+    if (kind == "reference") != (references is not None):
+        # Which entity a reference names is the field's whole meaning; any other kind names none.
+        raise ConfigError(f"{where}: references names the entity type of a reference field, and only of one")
 
     return FieldSpec(
         name=name,
@@ -739,6 +758,7 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         level=levels[group],
         missing_condition_note_zh=missing_note,
         prompt_categories=stated["categories"] if many else (),
+        references=references,
         **stated,
     )
 

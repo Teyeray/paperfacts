@@ -46,7 +46,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_blank_pdf, make_block
-from support.profiles import make_entity_profile, shipped_profile
+from support.profiles import make_reference_profile, shipped_profile
 
 STAGE_SECONDS = 0.3  # the stub job takes len(stage_names()) * this
 # As long as the model's condition prose gets on real papers: the text that pushed the second lane off screen.
@@ -167,7 +167,8 @@ def seed_document(library: Library, root: Path, index: int, name: str, *, sample
 
 def seed_entity_document(library: Library, root: Path) -> str:
     """A paper of a two-entity profile (coatings, the primary one, and the wear tests run on them): each entity
-    has a sample named S1, its own rows, records, comparisons and matching."""
+    has a sample named S1, its own rows, records, comparisons and matching; the wear test names the coating it ran
+    on (a reference field)."""
     pdf = make_blank_pdf(root / "entities.pdf", [(400.0, 600.0)])
     sha = library.register_upload("E 两种实体.pdf", pdf.read_bytes()).sha256
     for backend in BACKENDS:
@@ -191,6 +192,7 @@ def seed_entity_document(library: Library, root: Path) -> str:
                 [
                     make_field("test_temperature", "300", unit_raw="℃", value=300.0, unit="℃", source_ids=source),
                     make_field("wear_mode", "sliding" if backend == "mineru" else "rolling", source_ids=source),
+                    make_field("tested_coating", "S1", source_ids=source),
                 ],
             ).model_copy(update={"entity": "wear_test"}),
         ]
@@ -229,11 +231,19 @@ def seed_entity_document(library: Library, root: Path) -> str:
         }
         for n in (1, 2)
     ]
-    test = {**identity, "entity": "wear_test", "sample_id": "S1", "precursor_purity": 99.9, "test_temperature": 300.0}
+    test = {
+        **identity,
+        "entity": "wear_test",
+        "sample_id": "S1",
+        "precursor_purity": 99.9,
+        "test_temperature": 300.0,
+        "tested_coating": "S1",
+    }
     path = library.layout.dataset_json_path(sha, library.extractor_key, library.comparison_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     quality = [
         {"entity": "wear_test", "sample_id": "S1", "field": "test_temperature", "decision": "agree"},
+        {"entity": "wear_test", "sample_id": "S1", "field": "tested_coating", "decision": "agree"},
         {"entity": "wear_test", "sample_id": "S1", "field": "wear_mode", "decision": "conflict", "detail": "两路冲突"},
     ]
     payload = {"document_id": sha, "filename": "E", "paper_row": coatings[0], "sample_rows": [*coatings, test]}
@@ -270,7 +280,7 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     # A second server under a profile with two entity types, one seeded paper: the page groups by entity there. Its
     # address travels in `docs` beside that paper's id, so every check keeps the one signature.
     entity_settings = Settings(data_root=root / "entities", repo_root=root, llm_api_key="sk-test", llm_model="fake")
-    entity_profile = make_entity_profile()
+    entity_profile = make_reference_profile()
     entity_library = Library(entity_settings, entity_profile)
     docs["E"] = seed_entity_document(entity_library, root)
     entity_app = create_app(
@@ -703,6 +713,10 @@ async def entity_tables(page: Page, _: str, docs: dict[str, str], __: Path) -> N
     expect(scopes == ["涂层 · S1", "磨损测试 · S1"], f"the comparison scopes read {scopes}")
     tiles = await page.locator(".kpi.samples .label").all_text_contents()
     expect(tiles == ["涂层配对", "磨损测试配对"], f"the matching tiles read {tiles}")
+    # A reference names the coating's row by its id, labelled with the entity it is a row of.
+    labelled = page.locator('.entity-table[data-entity="wear_test"] tbody td.cell', has=page.locator(".unit"))
+    reference = await labelled.all_text_contents()
+    expect(any(text.startswith("S1 涂层") for text in reference), f"the reference cell reads {reference!r}")
 
 
 @check("an empty cell of the second entity marks that entity's records, not another's S1")

@@ -833,6 +833,7 @@ names from the LLM cache.
 | `cardinality` | `one` | prompt, verdict | `one` or `many`: a list of values that hold at once (the precursors of a sample, the techniques a paper applies). Text or composition only, at either level; refused together with `figure_readable`, `condition_preference`, `condition_rule` and every numeric attribute. See [List fields](#list-fields) |
 | `prompt_categories` | derived | prompt | Never written: a `many` field's `categories`, named in its field line; empty for every other field, so a single-valued field's `categories` stay verdict only |
 | `entity` | derived | prompt, cleaning, verdict | Never written: the entity type of the field's group, none for a paper-level field and in a profile without `entities` |
+| `references` | none | prompt, cleaning, verdict | Required with `kind: reference` and refused otherwise: the other [entity type](#entity-types) whose sample the field names (the catalyst a reaction test ran on). The field is sample-level of a declared entity, `one`, with no unit, categories or `condition_rule`. Its question shows that entity's sample list too; a value is grounded when its id resolves to one of the lane's samples of that entity; two lanes agree when that entity's matching pairs the samples they name; the cell is the `sample_id` of the referenced row |
 
 ### Entity types
 
@@ -876,7 +877,7 @@ A profile may declare several kinds of sample, each an **entity type**: heteroge
 - **Rows.** Each entity has its own rows, holding its own fields plus the paper-level decisions and an `entity`
   column; the paper row is chosen among the primary entity's rows.
 - **Not supported.** Document mode (refused when a run loads the profile: `paperfacts profiles --check` notes
-  it, `prompts` and `fields` still print it); links between entities; nesting or order (a layer stack);
+  it, `prompts` and `fields` still print it); links between entities other than a `reference` field; nesting or order (a layer stack);
   many-to-many or multi-hop relations; a series value across entities; figures bound to an entity; more than
   five entities.
 

@@ -257,6 +257,9 @@ class FieldValue(BaseModel):
     # unit, None for an open end.
     iso_date: str | None = Field(default=None, exclude_if=lambda iso_date: iso_date is None)
     bounds: tuple[float | None, float | None] | None = Field(default=None, exclude_if=lambda bounds: bounds is None)
+    # Filled in at read time for a reference field, and left out of every file when null: the id of the lane's sample
+    # of the referenced entity type the quote names (:func:`resolve_reference`), None when it names none.
+    ref_id: str | None = Field(default=None, exclude_if=lambda ref_id: ref_id is None)
 
 
 class PaperRecord(BaseModel):
@@ -336,6 +339,13 @@ def sample_key(sample_id: str | None) -> str:
     return key
 
 
+def resolve_reference(listed: Mapping[str, str], value_raw: str) -> str | None:
+    """The id of the sample ``value_raw`` names among ``listed`` (one entity type's samples of a lane, by
+    :func:`sample_key`, as :meth:`LaneExtraction.listed` gives them), or None. A reference is resolved by the key
+    that pairs and attributes samples, so the model only has to copy an id it was shown."""
+    return listed.get(sample_key(value_raw))
+
+
 class FailedQuestion(BaseModel):
     """A field question the model gave no valid answer to (invalid twice, or cut off at max_tokens).
 
@@ -412,6 +422,14 @@ class LaneExtraction(BaseModel):
 
     def sample(self, sample_id: str, entity: str = IMPLICIT_ENTITY) -> SampleRecord | None:
         return next((s for s in self.samples if s.sample_id == sample_id and s.entity == entity), None)
+
+    def listed(self) -> dict[str, dict[str, str]]:
+        """Each entity type's samples in this lane, ``sample_key`` -> ``sample_id``: what a reference field's value
+        resolves against (:func:`resolve_reference`)."""
+        listed: dict[str, dict[str, str]] = {}
+        for sample in self.samples:
+            listed.setdefault(sample.entity, {}).setdefault(sample_key(sample.sample_id), sample.sample_id)
+        return listed
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))

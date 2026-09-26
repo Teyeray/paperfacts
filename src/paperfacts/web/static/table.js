@@ -10,7 +10,7 @@ import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpic
 import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
 import { clearEvidence, showEvidence } from "./samples.js";
-import { LANE_LABEL, entityGroups, entityOf, inEntity, noSamplesReason, state, uiCopy } from "./state.js";
+import { LANE_LABEL, entityGroups, entityLabel, entityOf, inEntity, noSamplesReason, state, uiCopy } from "./state.js";
 import { copyButton, copyTable, fieldText, intervalText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
@@ -80,11 +80,12 @@ const shownValue = (value, field) => {
 };
 
 // A value as the reader sees it in a cell: the number (or an interval's ends) and the field's canonical unit,
-// e.g. `125 nm`. Text fields have no unit, and a unitless number stays a bare number.
+// e.g. `125 nm`. Text fields have no unit, and a unitless number stays a bare number. A reference is the id of a row
+// of another entity's table, followed by that entity's label where the unit would be.
 export function valueHtml(value, field) {
   const shown = escapeHtml(shownValue(value, field));
   const numeric = typeof value === "number" || (field?.kind === "interval" && Array.isArray(value));
-  const unit = numeric && field?.unit ? field.unit : "";
+  const unit = field?.references ? entityLabel(field.references) : numeric && field?.unit ? field.unit : "";
   return unit ? `${shown} <span class="unit">${escapeHtml(unit)}</span>` : shown;
 }
 

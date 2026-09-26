@@ -169,6 +169,7 @@ def test_the_profile_gives_the_page_tcos_own_copy(client: TestClient, tco_profil
         "level": "sample",
         "unit": "nm",
         "entity": None,
+        "references": None,
     }
 
 

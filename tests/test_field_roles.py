@@ -50,6 +50,7 @@ ROLES = {
     "cardinality": {P, V},
     "prompt_categories": {P},
     "entity": {P, C, V},
+    "references": {P, C, V},
 }
 # A value off each attribute's default, set on one field of the demo profile to see which fingerprints move.
 EDITS = {
@@ -78,6 +79,7 @@ EDITS = {
     "cardinality": "many",
     "prompt_categories": ("XRD", "XPS"),
     "entity": "catalyst",
+    "references": "catalyst",
 }
 
 

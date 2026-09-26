@@ -15,6 +15,9 @@ from paperfacts.grounding import block_adjacency, ground_lane, ground_values, gr
 from paperfacts.records import FieldValue, PaperRecord
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_block
+from support.profiles import shipped_profile
+
+PROFILE = shipped_profile()
 
 # ---- grounding_key: what gets folded away ----------------------------------------------
 
@@ -134,7 +137,7 @@ def test_ground_lane_updates_grounding_on_both_the_target_and_every_sample():
         ],
     )
 
-    grounded = ground_lane(lane, blocks)
+    grounded = ground_lane(lane, blocks, profile=PROFILE)
 
     assert grounded.paper.get("density").grounded is True
     assert grounded.sample("A").get("sheet_resistance").grounded is True
@@ -144,7 +147,7 @@ def test_ground_lane_updates_grounding_on_both_the_target_and_every_sample():
 def test_ground_lane_tolerates_a_lane_with_no_target():
     lane = make_lane(paper=None, samples=[make_sample("A", [make_field("thickness", "300", source_ids=("b1",))])])
 
-    grounded = ground_lane(lane, {"b1": "thickness of 300 nm"})
+    grounded = ground_lane(lane, {"b1": "thickness of 300 nm"}, profile=PROFILE)
 
     assert grounded.paper is None
     assert grounded.sample("A").get("thickness").grounded is True
@@ -153,7 +156,7 @@ def test_ground_lane_tolerates_a_lane_with_no_target():
 def test_ground_lane_leaves_everything_else_about_the_lane_unchanged():
     lane = make_lane(model="some-model", dropped=("x: not in schema",), invalid_source_ids=("ghost",))
 
-    grounded = ground_lane(lane, {})
+    grounded = ground_lane(lane, {}, profile=PROFILE)
 
     assert grounded.model == lane.model
     assert grounded.dropped == lane.dropped
@@ -348,8 +351,8 @@ def test_ground_lane_with_adjacency_flips_a_straddled_value_to_grounded_end_to_e
     cited = "mineru_p0_b0"
     lane = make_lane(samples=[make_sample("A", [make_field("component", "SnO2 and", source_ids=(cited,))])])
 
-    without = ground_lane(lane, blocks)
-    with_adjacency = ground_lane(lane, blocks, adjacency=adjacency)
+    without = ground_lane(lane, blocks, profile=PROFILE)
+    with_adjacency = ground_lane(lane, blocks, adjacency=adjacency, profile=PROFILE)
 
     assert without.sample("A").get("component").grounded is False
     assert with_adjacency.sample("A").get("component").grounded is True

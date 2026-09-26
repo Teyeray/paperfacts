@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from decimal import Decimal
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol
@@ -44,11 +45,12 @@ from paperfacts.normalize import (
     same_text,
     unit_of_value,
 )
-from paperfacts.records import FieldValue
+from paperfacts.records import FieldValue, resolve_reference
 from paperfacts.units import UnitRegistry
 
 if TYPE_CHECKING:
     from paperfacts.compare import FactStatus
+    from paperfacts.profile import EntitySpec
 
 # A list is the cell of an interval ([low, high], None for an open end) or of a field holding several values at
 # once (``cardinality: many``, paperfacts.decide.decide_many).
@@ -64,14 +66,41 @@ def joined(values: Sequence[str]) -> str:
     return "; ".join(dict.fromkeys(value for value in values if value))
 
 
+@dataclass(frozen=True)
+class KindContext:
+    """What a ``reference`` field is asked, read, compared and decided against beyond its own spec. Every other kind
+    ignores it, so a caller with nothing of the kind passes :data:`NO_CONTEXT`.
+
+    Each stage fills the part it holds: the question the entity types a field may name, a lane's normalisation that
+    lane's samples, the comparison every entity's matching, the dataset every row id and the lane of the value."""
+
+    # The profile's entity types by name: the referenced one's heading and noun, for the field line's note.
+    entities: Mapping[str, EntitySpec] = field(default_factory=dict)
+    # One lane's samples of each entity type, sample_key -> sample_id (LaneExtraction.listed).
+    samples: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    # Each entity type's matched pairs, (lane A's sample id, lane B's sample id).
+    pairs: Mapping[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # The dataset row id of a lane's sample: (backend, entity, the lane's sample id) -> the row's sample_id.
+    row_ids: Mapping[tuple[str, str, str], str] = field(default_factory=dict)
+    # The lane the value decided belongs to; set per candidate by paperfacts.decide.
+    backend: str | None = None
+
+
+NO_CONTEXT = KindContext()
+
+
 class KindRules(Protocol):
     """The per-kind decisions. Every method is pure."""
 
-    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+    def read(
+        self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> FieldValue:
         """``field`` with ``value`` / ``unit`` filled in, in ``units`` (``normalize.normalize_field``)."""
         ...
 
-    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+    def compare(
+        self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[FactStatus, str]:
         """The verdict on two read values that are both present."""
         ...
 
@@ -80,7 +109,9 @@ class KindRules(Protocol):
         there is no such measure and values under one condition pair in the order the paper gave."""
         ...
 
-    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+    def cell(
+        self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[CellValue, str | None]:
         """``(cell value, note)``, or ``(None, reason)`` when the quote states no single value for a cell."""
         ...
 
@@ -96,7 +127,7 @@ class KindRules(Protocol):
         """The leading sort key when the cell chooses among spellings judged the same (smallest first)."""
         ...
 
-    def note(self, spec: FieldSpec) -> str:
+    def note(self, spec: FieldSpec, ctx: KindContext = NO_CONTEXT) -> str:
         """Text appended to the field's description in its field line; "" when the kind adds nothing."""
         ...
 
@@ -185,7 +216,9 @@ def _own_unit_note(written: str, unit_raw: str | None) -> str:
 class NumericRules:
     """A number in the field's canonical unit, compared within the field's tolerances."""
 
-    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+    def read(
+        self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> FieldValue:
         reading = read_value(field, spec, units)
         lead_notes = []
         if reading.number_word is not None:
@@ -226,7 +259,9 @@ class NumericRules:
         note = "; ".join(n for n in (lead_note, parsed.note, own_note, unit_note) if n) or None
         return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 
-    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+    def compare(
+        self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[FactStatus, str]:
         if a.value is None or b.value is None:
             # At least one side failed to parse as a number: if the raw text (including unit, case-sensitive)
             # is identical on both sides, that still counts as agreement; otherwise there's no way to judge
@@ -252,7 +287,9 @@ class NumericRules:
             return None
         return abs(a.value - b.value)
 
-    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+    def cell(
+        self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[CellValue, str | None]:
         # The comparison's reading (normalize.read_value), so the cell and the report agree on what the quote says;
         # what follows is only the cell's stricter demand of one exact scalar.
         reading = read_value(value, spec, units)
@@ -331,7 +368,7 @@ class NumericRules:
     def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
         return ()
 
-    def note(self, spec: FieldSpec) -> str:
+    def note(self, spec: FieldSpec, ctx: KindContext = NO_CONTEXT) -> str:
         return ""
 
 
@@ -342,11 +379,15 @@ class TextRules:
     """Text as quoted, equal as :func:`paperfacts.normalize.same_text` judges it: across spacing, case and a
     lost hyphen, or by the category both name. A composition is compared the same way."""
 
-    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+    def read(
+        self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> FieldValue:
         # Compared through same_text on the fly.
         return field
 
-    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+    def compare(
+        self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[FactStatus, str]:
         if same_text(spec, a.value_raw, b.value_raw):
             category = canonical_category(spec.categories, a.value_raw) or canonical_category(
                 spec.categories, b.value_raw
@@ -357,7 +398,9 @@ class TextRules:
     def distance(self, a: FieldValue, b: FieldValue) -> float | None:
         return None
 
-    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+    def cell(
+        self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[CellValue, str | None]:
         return value.value_raw.strip(), None
 
     def same(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
@@ -375,7 +418,7 @@ class TextRules:
         # RF, its twin that lost the hyphen names nothing.
         return (canonical_category(spec.categories, value.value_raw) is None,)
 
-    def note(self, spec: FieldSpec) -> str:
+    def note(self, spec: FieldSpec, ctx: KindContext = NO_CONTEXT) -> str:
         if spec.cardinality != "many":
             return ""
         # One entry per value: a quote naming two categories ("XRD and XPS") names none, and is refused in the cell.
@@ -394,10 +437,14 @@ class BooleanRules:
     """A yes/no the paper states in words. The model quotes the words and says with ``holds`` whether they affirm
     the field; the code never reads a negation itself. Cleaning drops an answer without ``holds``."""
 
-    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+    def read(
+        self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> FieldValue:
         return field
 
-    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+    def compare(
+        self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[FactStatus, str]:
         if a.holds is None or b.holds is None:
             return "ambiguous", f"no yes/no: {a.holds} vs {b.holds}"
         if a.holds == b.holds:
@@ -408,7 +455,9 @@ class BooleanRules:
         # Equal answers pair first, so two lanes listing the same two answers in another order still agree.
         return None if a.holds is None or b.holds is None else float(a.holds != b.holds)
 
-    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+    def cell(
+        self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[CellValue, str | None]:
         if value.holds is None:
             return None, "原文未给出是/否"
         return value.holds, None
@@ -422,7 +471,7 @@ class BooleanRules:
     def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
         return ()
 
-    def note(self, spec: FieldSpec) -> str:
+    def note(self, spec: FieldSpec, ctx: KindContext = NO_CONTEXT) -> str:
         return (
             " A yes/no field: quote in value_raw the words that state it, and set holds to true when they affirm it,"
             " false when they deny it. Report nothing when the paper does not say."
@@ -435,7 +484,9 @@ class BooleanRules:
 class DateRules:
     """A calendar date as ISO at the precision the paper wrote (:func:`paperfacts.normalize.read_date`)."""
 
-    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+    def read(
+        self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> FieldValue:
         if field.bound:
             # "2021" quoted out of "up to 2021" is no exact date.
             note = f"bound {field.bound!r} stands before the date in its cited block; not one date"
@@ -443,7 +494,9 @@ class DateRules:
         iso, note = read_date(field.value_raw)
         return field.model_copy(update={"iso_date": iso, "normalization_note": note})
 
-    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+    def compare(
+        self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[FactStatus, str]:
         if a.iso_date is None or b.iso_date is None:
             return _unparsed(a, b)
         if a.iso_date == b.iso_date:
@@ -458,7 +511,9 @@ class DateRules:
         # Equal dates pair first, so two lanes listing the same dates in another order still agree.
         return None if a.iso_date is None or b.iso_date is None else float(a.iso_date != b.iso_date)
 
-    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+    def cell(
+        self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[CellValue, str | None]:
         if value.bound:
             return None, f"原文在所引日期前写有界限 {value.bound!r}，不是确切日期"
         iso, note = read_date(value.value_raw)
@@ -473,7 +528,7 @@ class DateRules:
     def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
         return ()
 
-    def note(self, spec: FieldSpec) -> str:
+    def note(self, spec: FieldSpec, ctx: KindContext = NO_CONTEXT) -> str:
         return " Quote the date exactly as written."
 
 
@@ -494,7 +549,9 @@ class IntervalRules:
     unit. The quote is read through :func:`read_value`, so a bound grounding found before it counts: "80" quoted
     out of "above 80 %" is (80, None). A bare number is no interval and is refused."""
 
-    def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+    def read(
+        self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> FieldValue:
         def refused(note: str | None) -> FieldValue:
             return field.model_copy(update={"bounds": None, "unit": None, "normalization_note": note})
 
@@ -528,7 +585,9 @@ class IntervalRules:
             note = f"bound {reading.bound!r} stands before the quote in its cited block; {note}"
         return field.model_copy(update={"bounds": bounds, "unit": canonical, "normalization_note": note})
 
-    def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
+    def compare(
+        self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[FactStatus, str]:
         if a.bounds is None or b.bounds is None:
             return _unparsed(a, b)
         if a.unit != b.unit:
@@ -545,7 +604,9 @@ class IntervalRules:
             return None
         return sum(abs(x - y) for x, y in zip(a.bounds, b.bounds, strict=True) if x is not None and y is not None)
 
-    def cell(self, value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
+    def cell(
+        self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[CellValue, str | None]:
         # The comparison's reading, so the cell and the report agree on what the quote says.
         read = self.read(value, spec, units)
         if read.bounds is None:
@@ -561,7 +622,7 @@ class IntervalRules:
     def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
         return ()
 
-    def note(self, spec: FieldSpec) -> str:
+    def note(self, spec: FieldSpec, ctx: KindContext = NO_CONTEXT) -> str:
         return (
             ' Quote the whole range as written, both ends and the unit (e.g. "2.8-4.3 V"), or a one-sided bound'
             ' (">80 %").'
@@ -597,6 +658,67 @@ def plain_number(number: float | None) -> str:
     return re.sub(r"e([+-])0*(\d)", r"e\1\2", text)
 
 
+# ---- reference ---------------------------------------------------------------------------------------------
+
+
+class ReferenceRules:
+    """The id of a sample of another entity type (``FieldSpec.references``): the catalyst a reaction test ran on.
+
+    The model copies the id from that entity's sample list, which its question shows; grounding resolves it among
+    the lane's samples (:func:`paperfacts.grounding.ground_lane`) and reading records which one (``ref_id``). Two
+    lanes agree when that entity's matching pairs the samples they name, and the cell is the id of the dataset row
+    those samples became, so it names a row of the referenced entity's sheet."""
+
+    def read(
+        self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> FieldValue:
+        ref_id = resolve_reference(ctx.samples.get(spec.references or "", {}), field.value_raw)
+        note = None if ref_id is not None else f"names no listed {spec.references} of this lane"
+        return field.model_copy(update={"ref_id": ref_id, "normalization_note": note})
+
+    def compare(
+        self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[FactStatus, str]:
+        if a.ref_id is None or b.ref_id is None:
+            return _unparsed(a, b)
+        pairs = ctx.pairs.get(spec.references or "", frozenset())
+        if (a.ref_id, b.ref_id) in pairs:
+            return "agree", f"both name {spec.references} {a.ref_id} | {b.ref_id}, which its matching pairs"
+        if any(pair_a == a.ref_id for pair_a, _ in pairs) and any(pair_b == b.ref_id for _, pair_b in pairs):
+            return "conflict", f"{a.ref_id!r} and {b.ref_id!r} are two {spec.references} samples"
+        # One of them was paired with nothing: whether it is the other's sample is not known.
+        return "ambiguous", f"{a.ref_id!r} vs {b.ref_id!r}: the {spec.references} matching does not pair them"
+
+    def distance(self, a: FieldValue, b: FieldValue) -> float | None:
+        return None
+
+    def cell(
+        self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext = NO_CONTEXT
+    ) -> tuple[CellValue, str | None]:
+        if value.ref_id is None:
+            return None, f"引用的样品 {value.value_raw!r} 不在本通道的{spec.references}列表中"
+        row_id = ctx.row_ids.get((ctx.backend or "", spec.references or "", value.ref_id))
+        if row_id is None:
+            return None, f"引用的{spec.references}样品 {value.ref_id!r} 没有数据行"
+        return row_id, None
+
+    def same(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return isinstance(a, str) and a == b
+
+    def within(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
+        return self.same(a, b, spec)
+
+    def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
+        return ()
+
+    def note(self, spec: FieldSpec, ctx: KindContext = NO_CONTEXT) -> str:
+        referenced = ctx.entities[spec.references or ""].prompt
+        return (
+            f" Copy the id of the referenced {referenced.sample_singular} exactly from the list"
+            f' "{referenced.sample_list_heading}" below.'
+        )
+
+
 RULES: Mapping[FieldKind, KindRules] = MappingProxyType(
     {
         "numeric": NumericRules(),
@@ -605,6 +727,7 @@ RULES: Mapping[FieldKind, KindRules] = MappingProxyType(
         "boolean": BooleanRules(),
         "date": DateRules(),
         "interval": IntervalRules(),
+        "reference": ReferenceRules(),
     }
 )
 

@@ -99,7 +99,8 @@ def value_matches(spec: Spec, got: object, cell: dict) -> bool:
             return False
     if spec.kind == "boolean":
         return isinstance(got, bool) and got == gold
-    if spec.kind == "date":
+    if spec.kind in ("date", "reference"):
+        # A reference's gold value is resolved to a dataset row id before scoring (resolve_references).
         return str(got) == str(gold)
     if spec.kind == "interval":
         # [low, high], null for an open end, which only an open end matches: the comparison's own judgement.
@@ -235,6 +236,32 @@ def align(specs: dict[str, Spec], gold: dict, rows: list[dict]) -> dict[int, int
     return result
 
 
+def resolve_references(specs: dict[str, Spec], gold: dict, rows: list[dict], mapping: dict[int, int]) -> dict:
+    """``gold`` with each reference cell's value -- the id of the gold sample it names -- replaced by the sample_id of
+    the dataset row aligned to that sample, which is what a reference cell holds. A named sample no row is aligned to
+    becomes a value no row id is, so the cell stays required and nothing matches it."""
+    references = {name for name, spec in specs.items() if spec.kind == "reference"}
+    row_ids = {
+        sample["id"]: rows[ri].get("sample_id")
+        for gi, sample in enumerate(gold["samples"])
+        if (ri := mapping.get(gi)) is not None
+    }
+
+    def resolved(fields: dict) -> dict:
+        return {
+            name: [
+                cell | {"value": row_ids.get(cell["value"], f"(unaligned) {cell['value']}")}
+                if name in references and cell.get("value") is not None
+                else cell
+                for cell in cells
+            ]
+            for name, cells in fields.items()
+        }
+
+    samples = [sample | {"fields": resolved(sample.get("fields", {}))} for sample in gold["samples"]]
+    return gold | {"samples": samples, "series": resolved(gold.get("series", {}))}
+
+
 # ---------------------------------------------------------------------------------------------- scoring
 
 
@@ -272,6 +299,12 @@ def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Ce
             cells.append(Cell(doc, PAPER, PAPER, name, outcome, got, render(gcells), detail))
 
     mapping = align(specs, gold, rows)
+    if any(spec.kind == "reference" for spec in specs.values()):
+        # A reference names a gold sample of another entity, and is right when the row it holds is the row aligned to
+        # that sample. The referenced samples align on their own fields; the samples holding the references then
+        # align again, now able to tell two rows apart by which one they name.
+        gold = resolve_references(specs, gold, rows, mapping)
+        mapping = align(specs, gold, rows)
     for gi, sample in enumerate(gold["samples"]):
         ri = mapping.get(gi)
         row = rows[ri] if ri is not None else {}

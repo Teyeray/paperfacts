@@ -33,11 +33,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from paperfacts.compare import FieldComparison, condition_numbers, conditions_measure_differently
 from paperfacts.fields import FieldSpec
-from paperfacts.kinds import CellValue, element_key, joined, rules_for
+from paperfacts.kinds import NO_CONTEXT, CellValue, KindContext, element_key, joined, rules_for
 from paperfacts.models import BACKENDS, Backend
 from paperfacts.normalize import normalize_key, normalize_text
 from paperfacts.records import FieldValue
@@ -81,6 +81,7 @@ def decide(
     blocked: str | None = None,
     unanswered: bool = False,
     row_sources: frozenset[str] = frozenset(),
+    ctx: KindContext = NO_CONTEXT,
 ) -> Decision:
     """The cell for ``spec`` given every lane's candidates for it, converted in ``units`` (the profile's).
 
@@ -88,7 +89,7 @@ def decide(
     None. ``unanswered`` says some lane's question about this field got no valid answer: the other lane's value
     would then pass as single_source, as if that lane had read the paper and found nothing, so the cell is
     refused in both. ``row_sources`` are the blocks the rest of the sample's row cites, for
-    :func:`_one_condition`.
+    :func:`_one_condition`. ``ctx`` holds the dataset's row ids, which a reference field's cell names.
     """
 
     def reject(status: str, reason: str) -> Decision:
@@ -98,7 +99,10 @@ def decide(
         return refused
     trusted = _trusted(evidence)
     rules = rules_for(spec)
-    candidates = [_Candidate(backend, value, *rules.cell(value, spec, units)) for backend, value in trusted]
+    candidates = [
+        _Candidate(backend, value, *rules.cell(value, spec, units, replace(ctx, backend=backend)))
+        for backend, value in trusted
+    ]
     # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
     # let it take its own condition out of the running, so the scalar's condition would win although no rule
     # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
@@ -186,12 +190,20 @@ def decide_cell(
     blocked: str | None = None,
     unanswered: bool = False,
     row_sources: frozenset[str] = frozenset(),
+    ctx: KindContext = NO_CONTEXT,
 ) -> Decision:
     """The cell of ``spec``: :func:`decide_many` for a list field, :func:`decide` for every other."""
     if spec.cardinality == "many":
         return decide_many(spec, evidence, comparisons, blocked=blocked, unanswered=unanswered)
     return decide(
-        spec, evidence, comparisons, units=units, blocked=blocked, unanswered=unanswered, row_sources=row_sources
+        spec,
+        evidence,
+        comparisons,
+        units=units,
+        blocked=blocked,
+        unanswered=unanswered,
+        row_sources=row_sources,
+        ctx=ctx,
     )
 
 

@@ -22,7 +22,7 @@ from paperfacts.compare import PAPER_SCOPE, ComparisonReport, FieldComparison, c
 from paperfacts.decide import Decision, decide_cell
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
-from paperfacts.kinds import CellValue, joined
+from paperfacts.kinds import CellValue, KindContext, joined
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.normalize import normalize_lane
 from paperfacts.records import LaneExtraction, SampleRecord
@@ -289,11 +289,22 @@ def consolidate_document(
     for spec in profile.paper_fields:
         record(PAPER_SCOPE, spec, paper[spec.name])
 
+    scopes = {entity.name: _scopes(lanes, report, entity.name) for entity in profile.entities}
+    # A reference field's cell is the id of the row its lane's sample became, in whichever entity's rows that is.
+    ctx = KindContext(
+        row_ids={
+            (backend, name, sample.sample_id): scope.sample_id
+            for name, entity_scopes in scopes.items()
+            for scope in entity_scopes
+            for backend, sample in ((report.backend_a, scope.a), (report.backend_b, scope.b))
+            if sample is not None
+        }
+    )
     sample_rows: list[Row] = []
     primary_rows: list[Row] = []
     for entity in profile.entities:
         entity_fields = profile.entity_fields(entity)
-        for scope in _scopes(lanes, report, entity.name):
+        for scope in scopes[entity.name]:
             scope_comparisons = _scope_comparisons(scope, report)
             decisions = dict(paper)
             for spec in entity_fields:
@@ -320,6 +331,7 @@ def consolidate_document(
                     blocked=_matching_blocked(scope, options.ambiguous_match_confidence),
                     unanswered=spec.name in unanswered,
                     row_sources=row_sources,
+                    ctx=ctx,
                 )
                 decisions[spec.name] = decision
                 record(scope.sample_id, spec, decision, entity.name)

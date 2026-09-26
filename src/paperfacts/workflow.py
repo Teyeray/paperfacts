@@ -297,7 +297,8 @@ def read_lane(
     Both are pure functions of the stored record, so they are redone on every read rather than trusted from
     the file: improving a rule costs nothing and never leaves a stale verdict behind. The artifact is read
     from disk unless the caller already holds it; without one the stored grounding verdicts are kept, since
-    they cannot be re-checked but are still the best answer.
+    they cannot be re-checked but are still the best answer. Grounding runs under ``profile``, which resolves a
+    reference field against the lane's samples instead of searching the blocks for it.
 
     A lane extracted from a different parse than the current artifact is a miss (``None``): its source ids
     would point at whatever block now has that ordinal. Re-deriving it is cheap whenever the rendered
@@ -318,7 +319,10 @@ def read_lane(
         # would put page furniture between two halves of a sentence.
         blocks = informative_blocks(artifact.blocks)
         lane = ground_lane(
-            lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks)
+            lane,
+            {block.source_id: block.content for block in blocks},
+            adjacency=block_adjacency(blocks),
+            profile=profile,
         )
     return normalize_lane(lane, profile)
 

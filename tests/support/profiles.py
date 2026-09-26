@@ -140,6 +140,27 @@ def make_entity_profile(changes: Mapping[str, Any] | None = None) -> DomainProfi
     return parse_profile(_changed(entity_profile_data(), changes), Path("profiles/demo.json"))
 
 
+def reference_profile_data() -> dict[str, Any]:
+    """:func:`entity_profile_data` with a reference field: each wear test names the coating it was run on."""
+    data = entity_profile_data()
+    data["fields"].append(
+        {
+            "name": "tested_coating",
+            "group": "wear",
+            "kind": "reference",
+            "references": "coating",
+            "description": "The coating this wear test was run on.",
+            "keywords": ["tested"],
+        }
+    )
+    return data
+
+
+def make_reference_profile(changes: Mapping[str, Any] | None = None) -> DomainProfile:
+    """:func:`reference_profile_data`, validated, with ``changes`` applied as in :func:`profile_data`."""
+    return parse_profile(_changed(reference_profile_data(), changes), Path("profiles/demo.json"))
+
+
 # The shipped TCO profile's file. A test Settings with its own repo_root names it here, so an app or a CLI
 # command that loads the profile from its settings finds the real one.
 SHIPPED_PROFILE_PATH = profile_path(Settings())

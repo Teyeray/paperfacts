@@ -183,6 +183,7 @@ def profile_view(profile: DomainProfile) -> dict[str, Any]:
                 "level": spec.level,
                 "unit": spec.canonical_unit,
                 "entity": spec.entity,
+                "references": spec.references,
             }
             for spec in profile.fields
         ],

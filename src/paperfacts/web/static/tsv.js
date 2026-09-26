@@ -25,13 +25,14 @@ export const intervalText = ([low, high]) =>
   high == null ? `≥ ${String(low)}` : low == null ? `≤ ${String(high)}` : `${String(low)}–${String(high)}`;
 
 // What the code read out of one lane value's quote, shown beside it in the evidence views: the canonical number, a
-// yes/no, the ISO date or an interval's ends -- or why nothing was read.
+// yes/no, the ISO date, an interval's ends or the sample a reference names -- or why nothing was read.
 export function readingText(field) {
   const unit = field.unit ?? "";
   if (field.value != null) return `= ${fmt(field.value)} ${unit}`.trim();
   if (field.holds != null) return `= ${field.holds ? "是" : "否"}`;
   if (field.iso_date != null) return `= ${field.iso_date}`;
   if (field.bounds != null) return `= ${intervalText(field.bounds)} ${unit}`.trim();
+  if (field.ref_id != null) return `→ ${field.ref_id}`;
   return field.normalization_note ? `(${field.normalization_note})` : "";
 }
 

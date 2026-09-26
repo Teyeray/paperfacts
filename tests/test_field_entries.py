@@ -302,6 +302,7 @@ EXTRACTION_CELLS = {
     "cardinality",
     "prompt_categories",
     "entity",
+    "references",
 }
 
 

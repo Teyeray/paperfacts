@@ -19,6 +19,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
+from typing import TYPE_CHECKING
 
 from paperfacts.fields import RANGE_ENDS, FieldSpec, RangePolicy
 from paperfacts.grounding import LOWER_BOUND_WORDS, UPPER_BOUND_WORDS
@@ -26,6 +27,9 @@ from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, PaperRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
 from paperfacts.units import UnitRegistry
+
+if TYPE_CHECKING:
+    from paperfacts.kinds import KindContext
 
 # ---- Closed category sets --------------------------------------------------------------------------------
 # A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
@@ -903,32 +907,40 @@ def read_date(raw: str) -> tuple[str | None, str | None]:
     return f"{year:04d}-{month:02d}-{day:02d}", None
 
 
-def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
-    """``field`` with ``value`` / ``unit`` filled in as its kind reads it (:mod:`paperfacts.kinds`)."""
+def normalize_field(
+    field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext | None = None
+) -> FieldValue:
+    """``field`` with ``value`` / ``unit`` filled in as its kind reads it (:mod:`paperfacts.kinds`). ``ctx`` holds the
+    lane's samples a reference field resolves against; no other kind reads it."""
     # Imported here, not at the top: the kind rows are built on this module's readers.
-    from paperfacts.kinds import rules_for
+    from paperfacts.kinds import NO_CONTEXT, rules_for
 
-    return rules_for(spec).read(field, spec, units)
+    return rules_for(spec).read(field, spec, units, ctx or NO_CONTEXT)
 
 
-def _normalize_fields(fields: tuple[FieldValue, ...], profile: DomainProfile) -> tuple[FieldValue, ...]:
+def _normalize_fields(
+    fields: tuple[FieldValue, ...], profile: DomainProfile, ctx: KindContext
+) -> tuple[FieldValue, ...]:
     # Fields outside the schema were dropped at extraction time; this is a defensive second check.
     specs = profile.by_name
-    return tuple(normalize_field(f, specs[f.field], profile.units) if f.field in specs else f for f in fields)
+    return tuple(normalize_field(f, specs[f.field], profile.units, ctx) if f.field in specs else f for f in fields)
 
 
 def normalize_lane(lane: LaneExtraction, profile: DomainProfile) -> LaneExtraction:
-    """Fill in ``value`` / ``unit`` for every field, in ``profile``'s units. Pure and idempotent: always returns
-    a new object."""
+    """Fill in ``value`` / ``unit`` for every field, in ``profile``'s units, and a reference field's ``ref_id``
+    among the lane's own samples. Pure and idempotent: always returns a new object."""
+    from paperfacts.kinds import KindContext
+
+    ctx = KindContext(samples=lane.listed())
     paper: PaperRecord | None = None
     if lane.paper is not None:
-        paper = lane.paper.model_copy(update={"fields": _normalize_fields(lane.paper.fields, profile)})
+        paper = lane.paper.model_copy(update={"fields": _normalize_fields(lane.paper.fields, profile, ctx)})
     samples = tuple(
-        sample.model_copy(update={"fields": _normalize_fields(sample.fields, profile)}) for sample in lane.samples
+        sample.model_copy(update={"fields": _normalize_fields(sample.fields, profile, ctx)}) for sample in lane.samples
     )
     # Unattributed values are compared now, so they need canonical values like every other; leaving them
     # raw would silently turn every such comparison into "unparsed" and bury real agreements.
-    unattributed = _normalize_fields(lane.unattributed, profile)
+    unattributed = _normalize_fields(lane.unattributed, profile, ctx)
     return lane.model_copy(update={"paper": paper, "samples": samples, "unattributed": unattributed})
 
 

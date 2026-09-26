@@ -33,7 +33,13 @@ from paperfacts.prompts import (
     matching_system_prompt,
 )
 from support.factories import make_block
-from support.profiles import SHIPPED_PROFILE_PATH, make_entity_profile, make_profile, profile_data
+from support.profiles import (
+    SHIPPED_PROFILE_PATH,
+    make_entity_profile,
+    make_profile,
+    make_reference_profile,
+    profile_data,
+)
 
 _REPOSITORY = Path(__file__).resolve().parents[1]
 # A few blocks every field can find something in: a title, prose with numbers and units, a table and its caption.
@@ -75,6 +81,7 @@ def _profiles() -> dict[str, DomainProfile]:
         "many": _list_profile(),
         "kinds": make_profile({"fields": [*profile_data()["fields"], *_KIND_FIELDS]}),
         "entities": make_entity_profile(),
+        "reference": make_reference_profile(),
     }
 
 
@@ -98,7 +105,9 @@ def _list_profile() -> DomainProfile:
 
 def _requests(profile: DomainProfile) -> dict[str, tuple[str, ...]]:
     """Every request text the pipeline can send under ``profile``, per key that must cover it: each entity type's
-    inventory, field and matching questions, and each field's question with its entity's sample list heading."""
+    inventory, field and matching questions, and each field's question with its entity's sample list heading (and a
+    reference field's with the referenced entity's list too)."""
+    entity_by_name = {entity.name: entity for entity in profile.entities}
     field_users = tuple(
         field_user_prompt(
             spec,
@@ -106,6 +115,7 @@ def _requests(profile: DomainProfile) -> dict[str, tuple[str, ...]]:
             render_markdown(candidate_blocks(spec, _BLOCKS, units=profile.units)),
             profile.prompt.implausible_origin,
             profile.entity_of(spec).prompt.sample_list_heading,
+            None if spec.references is None else (entity_by_name[spec.references], _SAMPLE_LIST),
         )
         for spec in profile.fields
     )
@@ -191,6 +201,11 @@ def _variants(profile: DomainProfile) -> Iterator[tuple[str, DomainProfile, bool
                 if not others:
                     continue
                 value: object = others[0]
+            elif attribute.name == "references":
+                # Only a reference field names an entity, and only one the profile declares.
+                if spec.references is None:
+                    continue
+                value = next(e.name for e in profile.declared_entities if e.name != spec.references)
             else:
                 value = _other(getattr(spec, attribute.name), _FIELD_TYPES[attribute.name])
             fields = list(profile.fields)
@@ -245,7 +260,7 @@ def _entity_variants(profile: DomainProfile) -> Iterator[tuple[str, DomainProfil
         yield label, with_entity(label, index, dataclasses.replace(entity, label_zh="改名")), True
 
 
-PROFILES = ["tco", "battery_cathode", "demo", "many", "kinds", "entities"]
+PROFILES = ["tco", "battery_cathode", "demo", "many", "kinds", "entities", "reference"]
 
 
 @pytest.mark.parametrize("name", PROFILES)

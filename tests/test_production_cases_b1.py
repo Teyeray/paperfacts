@@ -11,11 +11,13 @@ from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import canonical_category, normalize_field, read_value, same_text
 from paperfacts.records import FieldValue, PaperRecord
 from support.extraction import make_lane, make_sample
+from support.profiles import shipped_profile
 from test_dataset import FIELD_BY_NAME, dataset, decision, paired, value
 
 MODE = FIELD_BY_NAME["mode"]
 COMPONENT = FIELD_BY_NAME["component"]
 TRANSMITTANCE = FIELD_BY_NAME["transmittance"]
+PROFILE = shipped_profile()
 
 
 # ---- 1. Guillén (08562126…): MinerU dropped the hyphen of "rf-magnetron" -----------------------------------
@@ -133,9 +135,11 @@ def test_the_gzo_transmittance_fills_no_cell_when_one_lane_quoted_the_number_out
     mineru = value("transmittance", "above 90 %", condition="400 nm to 800 nm")
     paddle = value("transmittance", "90", "%", condition="400 nm to 800 nm", backend="paddleocr_vl")
     lanes = [
-        ground_lane(make_lane(samples=[make_sample("A", [mineru])]), {"mineru_p0_b1": GZO_BLOCK}),
+        ground_lane(make_lane(samples=[make_sample("A", [mineru])]), {"mineru_p0_b1": GZO_BLOCK}, profile=PROFILE),
         ground_lane(
-            make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]), {"paddleocr_vl_p0_b1": GZO_BLOCK}
+            make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]),
+            {"paddleocr_vl_p0_b1": GZO_BLOCK},
+            profile=PROFILE,
         ),
     ]
     assert lanes[1].samples[0].fields[0].bound == "above"
@@ -152,7 +156,9 @@ def test_without_the_bound_the_same_quote_still_fills_the_cell():
     block = "The average transmittance in the visible region (400 nm to 800 nm) is 90 %."
     paddle = value("transmittance", "90", "%", condition="400 nm to 800 nm", backend="paddleocr_vl")
     lane = ground_lane(
-        make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]), {"paddleocr_vl_p0_b1": block}
+        make_lane(backend="paddleocr_vl", samples=[make_sample("A", [paddle])]),
+        {"paddleocr_vl_p0_b1": block},
+        profile=PROFILE,
     )
     row = decision(dataset(make_lane(), lane), "transmittance")
 

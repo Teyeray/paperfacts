@@ -292,7 +292,9 @@ def extract_lane(
         usage=usage,
         raw_response=raw_response,
     )
-    lane = ground_lane(lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks))
+    lane = ground_lane(
+        lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks), profile=profile
+    )
     _log_outcome(lane)
     return lane
 
@@ -460,6 +462,11 @@ def _extract_passages(
             # missed inventory cannot cost the lane all its sample-level values.
             dropped.append(f"{spec.name}: the inventory found no in-scope sample, so it was not asked about")
             continue
+        referenced = by_entity[spec.references] if spec.references is not None else None
+        if referenced is not None and not referenced.response.samples:
+            # Its answer copies an id from that list; with none listed, nothing it says can resolve.
+            dropped.append(f"{spec.name}: no {spec.references} was listed, so it was not asked about")
+            continue
         entity = inventory.entity
         candidates = fit_budget(
             candidate_blocks(
@@ -482,6 +489,7 @@ def _extract_passages(
             render_markdown(candidates),
             profile.prompt.implausible_origin,
             entity.prompt.sample_list_heading,
+            None if referenced is None else (referenced.entity, sample_lists[referenced.entity.name]),
         )
         field_system = field_systems[entity.name]
         _check_context_budget(field_system, field_user, options)

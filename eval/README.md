@@ -90,6 +90,12 @@ hold, not alternatives. Each dataset element matching a required cell no other e
 ambiguous or figure-only one), any other element is *extra* (*disputed* when the gold has only ambiguous/null
 cells), and each required cell no element matches is *missing*. The gold format is unchanged.
 
+**Reference fields** (`kind: reference`, e.g. the catalyst a reaction test ran on) hold, as gold `value`, the `id`
+of the gold sample of the referenced entity. The dataset cell holds a row's `sample_id`, so each gold value is first
+replaced by the `sample_id` of the row aligned to the sample it names; a sample no row is aligned to leaves a value
+no row matches. The samples holding references are then aligned again with those values, and scored as usual:
+correct when the dataset names the row aligned to the gold sample.
+
 Precision = (correct + soft) / (correct + soft + wrong + extra); recall = correct / (correct + wrong + missing).
 The report gives micro totals, a macro average over papers (a 36-sample series otherwise dominates), per field
 group, per field, per paper, and every non-correct cell with the dataset's `quality_rows` decision, conditions,

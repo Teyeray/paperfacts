@@ -33,7 +33,7 @@ from paperfacts.keys import (
     profile_comparison_fingerprint,
     profile_extraction_fingerprint,
 )
-from paperfacts.kinds import element_key, rules_for
+from paperfacts.kinds import NO_CONTEXT, KindContext, element_key, rules_for
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
 from paperfacts.normalize import (
@@ -187,6 +187,9 @@ def compare_lanes(
     lane_a, lane_b = normalize_lane(lane_a, profile), normalize_lane(lane_b, profile)
     a_name, b_name = lane_a.backend, lane_b.backend
     comparisons: list[FieldComparison] = []
+    # A reference field's two samples are the same one when their entity's matching pairs them.
+    pairs = {name: frozenset((pair.a_id, pair.b_id) for pair in matching.pairs) for name, matching in matchings.items()}
+    ctx = KindContext(pairs=pairs)
 
     # Paper-level: does not go through sample pairing
     comparisons += _compare_records(
@@ -196,11 +199,12 @@ def compare_lanes(
         profile.paper_fields,
         a_name,
         b_name,
+        ctx=ctx,
     )
     # Each entity's samples, under that entity's matching and against its own fields only.
     for entity in profile.entities:
         comparisons += _compare_entity(
-            entity.name, lane_a, lane_b, matchings[entity.name], profile.entity_fields(entity)
+            entity.name, lane_a, lane_b, matchings[entity.name], profile.entity_fields(entity), ctx
         )
     # Unattributed values are extracted by both lanes yet placed on no sample. Where both lanes hold the
     # same unplaced value, agreement is real evidence about the parsers and disagreement a real signal;
@@ -217,6 +221,7 @@ def compare_lanes(
         emit_one_sided=False,
         pair_leftovers_ambiguous=True,
         detail_prefix="unattributed in both lanes; ",
+        ctx=ctx,
     )
 
     return ComparisonReport(
@@ -240,6 +245,7 @@ def _compare_entity(
     lane_b: LaneExtraction,
     matching: SampleMatching,
     specs: Sequence[FieldSpec],
+    ctx: KindContext = NO_CONTEXT,
 ) -> list[FieldComparison]:
     """One entity type's sample comparisons, each scoped ``"<entity>:..."``."""
     a_name, b_name = lane_a.backend, lane_b.backend
@@ -257,6 +263,7 @@ def _compare_entity(
             a_name,
             b_name,
             match_confidence=pair.confidence if pair.method == "llm" else None,
+            ctx=ctx,
         )
     # Unmatched samples: normally this just means the other lane doesn't have it; when the matching model
     # itself failed we can't tell whether it's really missing, so mark it ambiguous and send it for review
@@ -273,6 +280,7 @@ def _compare_entity(
                 b_name,
                 one_sided=one_sided,
                 one_sided_detail=reason,
+                ctx=ctx,
             )
     for sample_id in matching.unmatched_b:
         if (sample := lane_b.sample(sample_id, entity)) is not None:
@@ -285,6 +293,7 @@ def _compare_entity(
                 b_name,
                 one_sided=one_sided,
                 one_sided_detail=reason,
+                ctx=ctx,
             )
     return comparisons
 
@@ -314,9 +323,11 @@ def _check_lane_profiles(lane_a: LaneExtraction, lane_b: LaneExtraction, expecte
         check_profile(lane.profile_fingerprint, expected, f"the {lane.backend} lane")
 
 
-def compare_values(a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
-    """Decide the outcome when both sides have a value."""
-    return rules_for(spec).compare(a, b, spec)
+def compare_values(
+    a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+) -> tuple[FactStatus, str]:
+    """Decide the outcome when both sides have a value; ``ctx`` holds the matchings a reference field reads."""
+    return rules_for(spec).compare(a, b, spec, ctx)
 
 
 def _compare_records(
@@ -333,6 +344,7 @@ def _compare_records(
     emit_one_sided: bool = True,
     pair_leftovers_ambiguous: bool = False,
     detail_prefix: str = "",
+    ctx: KindContext = NO_CONTEXT,
 ) -> list[FieldComparison]:
     """Pair up both sides' values field by field and compare them. When ``fields_b`` is empty this
     naturally degenerates to "everything is only in lane a".
@@ -356,7 +368,7 @@ def _compare_records(
         spec = spec_by_name[name]
         values_a = [f for f in fields_a if f.field == name]
         values_b = [f for f in fields_b if f.field == name]
-        pairs = _pair_values(values_a, values_b, spec)
+        pairs = _pair_values(values_a, values_b, spec, ctx)
         # A list's leftovers are elements one lane did not read, never two readings of one value.
         positional = pair_leftovers_ambiguous and spec.cardinality != "many"
         leftover = _split_off_first_leftover_pair(pairs) if positional else None
@@ -381,7 +393,7 @@ def _compare_records(
                     )
                 )
                 continue
-            status, detail = compare_values(a, b, spec)
+            status, detail = compare_values(a, b, spec, ctx)
             if normalize_key(a.condition) != normalize_key(b.condition):
                 # Only an equal-value pair survives stage 2 (see _equal_pairs), so a differently worded
                 # condition never turns into a conflict here; it is an agreement with a note saying so.
@@ -438,7 +450,7 @@ def _split_off_first_leftover_pair(
 
 
 def _pair_values(
-    values_a: Sequence[FieldValue], values_b: Sequence[FieldValue], spec: FieldSpec
+    values_a: Sequence[FieldValue], values_b: Sequence[FieldValue], spec: FieldSpec, ctx: KindContext = NO_CONTEXT
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
     """Pair up both sides' values for one field, so that every value is accounted for.
 
@@ -474,7 +486,7 @@ def _pair_values(
             pairs.append((group_a.pop(0), group_b.pop(0)))
         rest_a += group_a
         rest_b += group_b
-    pairs += _equal_pairs(rest_a, rest_b, spec)
+    pairs += _equal_pairs(rest_a, rest_b, spec, ctx)
     pairs += [(a, None) for a in rest_a]
     pairs += [(None, b) for b in rest_b]
     return pairs
@@ -552,7 +564,7 @@ def condition_numbers(condition: str | None) -> tuple[float, ...]:
 
 
 def _equal_pairs(
-    rest_a: list[FieldValue], rest_b: list[FieldValue], spec: FieldSpec
+    rest_a: list[FieldValue], rest_b: list[FieldValue], spec: FieldSpec, ctx: KindContext = NO_CONTEXT
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
     """Stage 2: pair leftovers whose values are equal, whatever their conditions say.
 
@@ -572,7 +584,7 @@ def _equal_pairs(
         for j, b in enumerate(rest_b):
             if conditions_measure_differently(rest_a[i].condition, b.condition):
                 continue
-            if compare_values(rest_a[i], b, spec)[0] == "agree":
+            if compare_values(rest_a[i], b, spec, ctx)[0] == "agree":
                 pairs.append((rest_a.pop(i), rest_b.pop(j)))
                 break
         else:
