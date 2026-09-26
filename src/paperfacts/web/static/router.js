@@ -1,4 +1,4 @@
-// Router: (#/p/<profile>)?/doc/<id16>(/fact/<n>)?. The selected fact goes into the URL; refreshing or sharing the link
+// Router: (#/p/<profile>)?/doc/<id16>(/fact/<n>)?, and #/check (the profile check page). The selected fact goes into the URL; refreshing or sharing the link
 // returns to the same one. The profile prefix names the domain profile the view is shown under; it is left out for
 // the server's default, so every link written before profiles existed still opens as it did.
 //
@@ -13,8 +13,17 @@ import { state } from "./state.js";
 const PREFIX = /^#\/p\/([^/]*)(\/.*)?$/;
 const DOCUMENT = /^\/doc\/([^/]*)(?:\/fact\/(\d+))?\/?$/;
 const DOCUMENT_ID = /^[0-9a-f]{16}$/;
+// The check page is profile-free; under a prefix it is the same page.
+const CHECK = /^\/check\/?$/;
 const PROFILE_NAME = /^[a-z][a-z0-9_]{0,39}$/; // profile_loader.IDENTIFIER
-let handlers = { onDocument: () => {}, onEmpty: () => {}, onMissing: () => {}, onMissingProfile: () => {}, onProfile: () => {} };
+let handlers = {
+  onDocument: () => {},
+  onEmpty: () => {},
+  onMissing: () => {},
+  onMissingProfile: () => {},
+  onProfile: () => {},
+  onCheck: () => {},
+};
 let routed; // the view on screen: "<profile>\n<document id>" (undefined: nothing yet)
 let reloadNext = false;
 
@@ -35,12 +44,13 @@ function parse(hash) {
     profile: raw === state.defaultProfile ? null : raw,
     id: document ? decoded(document[1]) : null,
     fact: document?.[2] == null ? null : Number(document[2]),
+    check: CHECK.test(rest),
   };
 }
 
 export function route({ reload = false } = {}) {
   const view = parse(location.hash);
-  const key = `${view.profile ?? ""}\n${view.id ?? ""}`;
+  const key = `${view.profile ?? ""}\n${view.check ? "check" : view.id ?? ""}`;
   const fresh = reload || reloadNext || key !== routed;
   reloadNext = false;
   routed = key;
@@ -54,7 +64,8 @@ export function route({ reload = false } = {}) {
     state.profileName = view.profile;
     handlers.onProfile(view.profile);
   }
-  if (view.id === null) handlers.onEmpty();
+  if (view.check) handlers.onCheck();
+  else if (view.id === null) handlers.onEmpty();
   else if (!DOCUMENT_ID.test(view.id)) handlers.onMissing(view.id);
   else handlers.onDocument(view.id, view.fact, { reload: fresh });
 }

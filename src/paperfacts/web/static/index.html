@@ -19,6 +19,7 @@
       <span class="visually-hidden">领域配置</span>
       <select id="profile-select" aria-label="领域配置"></select>
     </label>
+    <a class="topbar-link" id="check-link" href="#/check" title="粘贴一份领域配置 JSON，检查它能否加载">检查配置</a>
     <div class="topbar-meta" id="health">…</div>
   </div>
 </header>
@@ -57,6 +58,18 @@
     </div>
     <div class="corpus-view hidden" id="corpus-view"></div>
     <div class="document hidden" id="document-view"></div>
+    <div class="check-view hidden" id="check-view">
+      <h1>检查领域配置</h1>
+      <p class="muted">粘贴一份领域配置 JSON（或选择本地文件），检查它能否加载：有问题时逐行列出，没问题时显示它的字段和会发给模型的系统提示词。只做检查，不会保存；要启用，请把文件放进 profiles/ 并重启服务器。</p>
+      <textarea id="check-text" spellcheck="false" autocomplete="off" aria-label="领域配置 JSON" placeholder="{ &quot;format&quot;: 1, &quot;name&quot;: … }"></textarea>
+      <div class="check-actions">
+        <button class="primary" id="check-run" type="button">检查</button>
+        <input type="file" id="check-file" accept="application/json,.json" hidden>
+        <button class="linklike" id="check-pick" type="button">读取本地文件</button>
+        <span class="muted" id="check-status" role="status"></span>
+      </div>
+      <div class="check-result" id="check-result"></div>
+    </div>
     <div class="missing-state hidden" id="missing-view" role="alert">
       <h1>找不到这篇文档</h1>
       <p data-slot="missing-message"></p>

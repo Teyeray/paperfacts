@@ -426,3 +426,29 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .results-table tr.paper-row > td:first-child { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
 .results-table tr.paper-row:hover > td:first-child { background: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
 .results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+
+/* ---------- the profile check page ---------- */
+.topbar-link { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.topbar-link:hover { color: var(--accent); }
+.check-view { max-width: 1100px; }
+.check-view h1 { font-family: var(--font-display); font-weight: 600; font-size: 24px; margin: 0 0 6px; }
+.check-view h2 { font-size: 15px; margin: 18px 0 6px; }
+.check-view textarea {
+  display: block; width: 100%; min-height: 280px; resize: vertical; margin: 12px 0 10px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--ink);
+  background: var(--paper); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 10px;
+}
+.check-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.check-verdict { font-weight: 600; margin: 16px 0 8px; }
+.check-verdict.ok { color: var(--ok); }
+.check-verdict.bad { color: var(--bad); }
+.check-errors, .check-notes { margin: 0; padding-left: 22px; line-height: 1.6; overflow-wrap: anywhere; }
+.check-errors li { font-family: var(--font-mono); font-size: 12px; }
+.check-same-name { color: var(--ink-2); }
+.check-fields td { vertical-align: top; overflow-wrap: anywhere; }
+.check-prompt { margin: 6px 0; }
+.check-prompt summary { cursor: pointer; font-family: var(--font-mono); font-size: 12.5px; }
+.check-prompt pre {
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; margin: 6px 0 0;
+  background: var(--paper-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px;
+}

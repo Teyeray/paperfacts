@@ -190,7 +190,7 @@ this file is the part that is easy to get wrong.
   `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
   `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading
   a profile file is `profile_loader.py`. `workbook`, `columns`, `readings`, `ui_copy`, `profile_loader`, `llm`,
-  `config`, `cli`, `workflow`, `batch` and `profile_view` are in no key list, and `tests/test_keys_unhashed.py`
+  `config`, `cli`, `workflow`, `batch`, `profile_view` and `profile_check` are in no key list, and `tests/test_keys_unhashed.py`
   holds that. Do not move display, storage or loading code into a hashed module. The prompt preview
   (`profile_view.prompt_sections`, what `paperfacts prompts` prints and `/api/profiles/<name>/prompts` returns) is
   assembled in `profile_view.py`, never in `prompts.py`; `tests/fixtures/cli_prompts/` pins its output.
@@ -231,7 +231,8 @@ this file is the part that is easy to get wrong.
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
   offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `library`, `document`, `table`,
-  `fieldpicker`, `tsv`, `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
+  `fieldpicker`, `tsv`, `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`, `check`; `app.js` is only the
+  entry point.
 - Profiles in the page: the router reads `#/p/<name>/…` (no prefix = the default, which is `null` in the frontend,
   never its name) into `state.profileName`; a profile change is a new view (bumps the generation, reloads the
   rail, drops `/fact/n` and the filter). Every per-profile request goes through `profileApi(profile, path)` /
@@ -256,6 +257,12 @@ this file is the part that is easy to get wrong.
   only the fallback), and frame/nosniff headers on every response. The upload size is the upload route's
   own first step: a declared `Content-Length` is the fast path, the bytes that arrive are counted anyway,
   so a chunked body is fine. `/api/jobs` is briefs without logs; finished jobs are pruned to the newest 200.
+- `POST /api/profile-check` takes untrusted profile JSON: 256 KiB counted as it arrives, at most two at once (429),
+  and parsed and rendered only in `profile_check.run_check`'s child process (10 s wall clock, RLIMIT_AS/CPU/FSIZE,
+  empty environment), because validation folds unit spellings through `text._HTML_SUB`, which backtracks
+  polynomially and holds the GIL, and fills unbounded caches (`units._compiled`). Never validate pasted text in the
+  server process, never pass it to `load_profile` or a key function, and never use its name as a path;
+  `tests/test_profile_check.py` snapshots every package cache and the data and profile trees around a check.
 - Background jobs run on `web.max_parallel_documents` workers, never two on the same document; a worker
   takes the oldest queued job whose document is free. A `Job` is a frozen value in a lock-guarded dict,
   replaced whole on every transition, so a poller never sees a half-applied state. Submitting the same

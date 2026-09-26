@@ -137,7 +137,10 @@ export function syncSwitcher() {
   const select = document.getElementById("profile-select");
   const name = state.profileName ?? state.defaultProfile;
   if (name != null && [...select.options].some((option) => option.value === name)) select.value = name;
-  document.querySelector(".brand").setAttribute("href", hashFor({ profile: state.profileName }));
+  const home = hashFor({ profile: state.profileName });
+  document.querySelector(".brand").setAttribute("href", home);
+  // The check page is profile-free; kept under the prefix, leaving it returns to the same profile.
+  document.getElementById("check-link").setAttribute("href", home === "#/" ? "#/check" : `${home}/check`);
 }
 
 // Switching keeps the reader on the same paper: "show me this one under the other domain" is the point. The fact

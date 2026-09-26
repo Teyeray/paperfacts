@@ -28,6 +28,8 @@ the default profile when absent, so a URL from before there were several keeps i
     GET  /api/documents/{id}/jobs                  this document's job list (with stages and logs)
     GET  /api/jobs                                 the jobs this process holds, newest first, without logs
     GET  /api/jobs/{job_id}                        job snapshot (stages, log)
+    POST /api/profile-check?field=                 check a pasted profile (raw JSON body): its errors, or
+                                                    its definition and prompts; nothing is stored
 
 All business logic lives in :mod:`paperfacts.workflow` (the job body is ``run_document``); this
 module only does the HTTP mapping, and guards its edge: the login, a same-origin check on every request
@@ -40,6 +42,7 @@ import base64
 import binascii
 import logging
 import secrets
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -57,11 +60,12 @@ from starlette.types import Message
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload
-from paperfacts.errors import ConfigError
+from paperfacts.errors import ConfigError, ProfileCheckError
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.profile import DomainProfile
+from paperfacts.profile_check import MAX_CHECK_BYTES, run_check
 from paperfacts.profile_loader import IDENTIFIER
 from paperfacts.profile_view import profile_definition, profile_view, prompt_sections
 from paperfacts.readings import FiguresView, shown_figures
@@ -79,6 +83,8 @@ UPLOAD_CHUNK_BYTES = 1 << 20
 # Room for the multipart boundary and part headers around the one file an upload carries.
 UPLOAD_OVERHEAD_BYTES = 64 * 1024
 EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+# A check is a child process of its own (profile_check); more than this many at once are refused, not queued.
+MAX_CONCURRENT_CHECKS = 2
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # On every response, the login prompt included: nothing here is meant to be framed (the run buttons could
 # otherwise be clickjacked), and no response should be sniffed into a type it was not served as.
@@ -274,6 +280,7 @@ def create_app(
     app.state.profiles = registry
     app.state.library = default_library
     app.state.jobs = manager
+    app.state.check_slots = check_slots = threading.BoundedSemaphore(MAX_CONCURRENT_CHECKS)
 
     @app.middleware("http")
     async def guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
@@ -459,7 +466,9 @@ def create_app(
         declared = request.headers.get("content-length")
         if declared is not None and (not declared.isdigit() or int(declared) > limit):
             raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
-        async with _capped(request, limit, settings.max_upload_bytes).form(max_files=1, max_fields=0) as form:
+        async with _capped(request, limit, _too_large(settings.max_upload_bytes)).form(
+            max_files=1, max_fields=0
+        ) as form:
             file = form.get("file")
             if not isinstance(file, UploadFile):
                 raise HTTPException(status_code=422, detail="Expected one PDF in the multipart field 'file'")
@@ -623,6 +632,31 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"No job {job_id}")
         return job
 
+    @app.post("/api/profile-check")
+    async def check_pasted_profile(request: Request, field: Annotated[str | None, Query()] = None) -> Response:
+        """Check a pasted profile: the errors ``paperfacts profiles --check`` prints, or, when it is valid, the
+        definition and system prompts it would get. The text is untrusted: its size is counted as it arrives, and it
+        is parsed and rendered only in a time- and memory-limited child process (``profile_check.run_check``), so
+        nothing it costs or caches stays in this one. Nothing is stored, and its name is never a path."""
+        if not check_slots.acquire(blocking=False):
+            raise HTTPException(status_code=429, detail="已有检查在进行，请稍后再试 (too many checks at once)")
+        try:
+            too_large = f"The profile exceeds {MAX_CHECK_BYTES // 1024} KiB"
+            declared = request.headers.get("content-length")
+            if declared is not None and (not declared.isdigit() or int(declared) > MAX_CHECK_BYTES):
+                raise HTTPException(status_code=413, detail=too_large)
+            raw = await _capped(request, MAX_CHECK_BYTES, too_large).body()
+            served = {name: entry.profile.content_hash for name, entry in registry.served.items()}
+            try:
+                answer = await run_in_threadpool(
+                    run_check, raw, served=served, extraction_mode=settings.extraction_mode, field=field
+                )
+            except ProfileCheckError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+            return Response(content=answer, media_type="application/json")
+        finally:
+            check_slots.release()
+
     app.mount("/", _RevalidatedStaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
 
@@ -642,8 +676,9 @@ class _RevalidatedStaticFiles(StaticFiles):
         return response
 
 
-def _capped(request: Request, limit: int, max_upload_bytes: int) -> Request:
-    """The same request, whose body raises 413 once more than ``limit`` bytes of it have arrived."""
+def _capped(request: Request, limit: int, detail: str) -> Request:
+    """The same request, whose body raises 413 (with ``detail``) once more than ``limit`` bytes of it have
+    arrived."""
     received = 0
 
     async def receive() -> Message:
@@ -652,7 +687,7 @@ def _capped(request: Request, limit: int, max_upload_bytes: int) -> Request:
         if message["type"] == "http.request":
             received += len(message.get("body", b""))
             if received > limit:
-                raise HTTPException(status_code=413, detail=_too_large(max_upload_bytes))
+                raise HTTPException(status_code=413, detail=detail)
         return message
 
     return Request(request.scope, receive)

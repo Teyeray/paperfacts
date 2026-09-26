@@ -5,9 +5,11 @@
 // view), library (left rail), document (document view, home view and the missing-document / missing-profile
 // states), table (the results table and the column model), fieldpicker (which field columns are shown), tsv (the
 // clipboard copy), corpus (the home view's library-wide results table), facts (fact comparison), figures (chart
-// readings), samples (sample records), job (job progress), viewer (page-level provenance).
+// readings), samples (sample records), job (job progress), viewer (page-level provenance), check (the page that
+// checks a pasted profile).
 
 import { api } from "./api.js";
+import { setupCheck, showCheck } from "./check.js";
 import { showDocument, showEmpty, showMissing, showMissingProfile } from "./document.js";
 import { toast } from "./html.js";
 import { loadLibrary, setupLibraryDisclosure, setupRunAll, setupUpload } from "./library.js";
@@ -37,6 +39,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupRunAll();
   setupLibraryDisclosure();
   setupSwitcher();
+  setupCheck();
   document.getElementById("refresh-library").addEventListener("click", loadLibrary);
   document.querySelector('#missing-view [data-action="retry"]').addEventListener("click", reloadView);
   applyUiCopy(document);
@@ -50,7 +53,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("health").textContent = "后端不可用";
     toast(health.reason.message, true);
   }
-  installRouter({ onDocument: showDocument, onEmpty: showEmpty, onMissing: showMissing, onMissingProfile: showMissingProfile, onProfile });
+  installRouter({ onDocument: showDocument, onEmpty: showEmpty, onMissing: showMissing, onMissingProfile: showMissingProfile, onProfile, onCheck: showCheck });
   route();
   // The router loads the rail itself when the URL names a profile; for the default it is loaded here.
   if (state.profileName === null) {
