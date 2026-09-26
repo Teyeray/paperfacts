@@ -12,7 +12,8 @@ candidate list, each narrowing it or refusing:
    scalar at the chosen condition is a weaker statement of it and is dropped with a note; a cell holding only
    such statements is ``non_scalar``. There is no second narrowing over the scalars alone, which would let a
    bound take its own condition out of the running. A quote the paper writes a bound before ("90" out of
-   "above 90 %", :attr:`FieldValue.bound`) is a bound like any other.
+   "above 90 %", :attr:`FieldValue.bound`) is a bound like any other. A range is a scalar only under
+   ``range_policy`` lower/upper, as the end the field asks for (:func:`_range_end`).
 4. **Agree.** Derived once, from the final candidates only: both lanes present, their values within the
    field's tolerance, and no pair across the lanes quoting conditions that measure differently. Never from
    the comparison report's statuses, which may be about a candidate an earlier step set aside.
@@ -36,6 +37,7 @@ from paperfacts.compare import FieldComparison, condition_numbers, conditions_me
 from paperfacts.fields import FieldSpec
 from paperfacts.models import BACKENDS, Backend
 from paperfacts.normalize import (
+    Reading,
     canonical_category,
     clean_unit,
     convert_to_canonical,
@@ -43,6 +45,7 @@ from paperfacts.normalize import (
     normalize_key,
     normalize_text,
     parse_number,
+    read_range,
     read_value,
     same_text,
 )
@@ -59,6 +62,7 @@ _PARENTHESISED_UNCERTAINTY = re.compile(
     rf"^(?P<center>{_ATOM})\s*(?P<unit>[^\d\s(±][^(±]*?)?\s*\(\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_ATOM})\s*(?P<again>[^)]*)\)$"
 )
 # The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
+_APPROX_NOTE = "原文为近似值，保留中心值"
 _APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 # How a condition says it is an average; used only to break a tie inside one preference entry.
 _AVERAGE_WORDS = re.compile(r"\b(?:average[ds]?|avg|mean|avt)\b", re.IGNORECASE)
@@ -436,7 +440,7 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
     if reading.number_word is not None:
         notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {reading.number_word}")
     if approx:
-        notes.append("原文为近似值，保留中心值")
+        notes.append(_APPROX_NOTE)
     if reading.clause:
         notes.append(f"{reading.clause!r} 已计入测量条件")
     if reading.compound is not None:
@@ -451,13 +455,16 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
             text = f"{center} ± {uncertainty} {unit or ''}"
     match = _SCALAR.fullmatch(text)
     if match is None:
-        return None, "不是唯一精确标量（含上下界、区间、尺寸组合或无法解析的文字）"
+        return _range_end(
+            value, spec, units, reading, notes, "不是唯一精确标量（含上下界、区间、尺寸组合或无法解析的文字）"
+        )
     tail = match.group("tail").strip()
     allowed_units = {clean_unit(unit) for unit in (value.unit_raw, spec.canonical_unit) if unit}
     if tail and clean_unit(tail) not in allowed_units:
-        return None, "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
-    # No range_policy: "center" is one number, so a dataset cell refuses a range under every policy (_SCALAR above):
-    # range_policy governs the lanes' values and the comparison; a dataset cell always needs a single scalar.
+        return _range_end(
+            value, spec, units, reading, notes, "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
+        )
+    # No range_policy: "center" is one number. A range reaches a cell only through _range_end.
     number, _ = parse_number(match.group("center"))
     if number is None or not math.isfinite(number):
         return None, "数值不可解析或非有限数"
@@ -468,6 +475,32 @@ def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[Ce
     if match.group("uncertainty"):
         notes.append(f"原文不确定度 ±{match.group('uncertainty')} {value.unit_raw or ''}；保留中心值")
     return canonical, joined(notes) or None
+
+
+def _range_end(
+    value: FieldValue, spec: FieldSpec, units: UnitRegistry, reading: Reading, notes: list[str], refusal: str
+) -> tuple[CellValue, str | None]:
+    """The end of a quoted range the field asks for (``range_policy`` lower/upper), or ``refusal``: why the text
+    is no single scalar.
+
+    An end is a number the paper printed, so it may fill a cell; a midpoint was never measured, so under
+    ``midpoint`` or ``reject`` a range stays out. A range followed by a condition is refused as a scalar is."""
+    if spec.range_policy not in ("lower", "upper") or reading.condition:
+        return None, refusal
+    ends = read_range(reading)
+    if ends is None:
+        return None, refusal
+    low, high, _ = ends
+    upper = spec.range_policy == "upper"
+    canonical, _, note = convert_to_canonical(
+        spec, high if upper else low, value.unit_raw, units, value_text=reading.text
+    )
+    if canonical is None or not math.isfinite(canonical):
+        return None, note or "单位无法转换为标准单位"
+    chosen = f"原文为区间 {low:g}–{high:g}，按字段配置取{'上限' if upper else '下限'}"
+    # An approximate range keeps an end, not a centre value.
+    kept = ["原文为近似值" if n == _APPROX_NOTE else n for n in notes]
+    return canonical, joined([note or "", *kept, chosen])
 
 
 def _same_value(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:

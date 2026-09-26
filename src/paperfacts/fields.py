@@ -40,8 +40,9 @@ FieldKind = Literal["numeric", "composition", "text"]
 BareNumberPolicy = Literal["reject", "assume_canonical", "percent_or_fraction"]
 # How a workbook prints a numeric cell: plainly, or in scientific notation for values spanning decades.
 DisplayFormat = Literal["plain", "scientific"]
-# What a range quoted as one value ("10-20") becomes: its midpoint, or no value at all.
-RangePolicy = Literal["midpoint", "reject"]
+# What a range quoted as one value ("10-20") becomes: its midpoint, no value at all, or the end the field asks
+# for. Only an end fills a dataset cell: it is a number the paper printed, a midpoint is not.
+RangePolicy = Literal["midpoint", "reject", "lower", "upper"]
 # What a value quoted with an "after ..." clause ("92.5% after 100 cycles") becomes: refused as the value of
 # another state of the sample, or read with the clause moved into its measurement condition.
 AfterClause = Literal["refuse", "condition"]

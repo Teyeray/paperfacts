@@ -566,10 +566,14 @@ survive, so it moves both cache keys; a field without one keeps the keys it had.
 `canonical_unit` (a count, such as the battery profile's `cycle_number`) may declare one too; it is judged on
 the number as parsed.
 
-Two more numeric attributes decide how a quoted value is read. `range_policy` (`midpoint`, the default, or
-`reject`) decides what a range quoted as one value ("10-20") becomes in the lanes and in the comparison: its
-midpoint, or no value. A **dataset cell** always needs a single scalar whatever the policy, so a range never
-fills one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
+Two more numeric attributes decide how a quoted value is read. `range_policy` (`midpoint`, the default,
+`reject`, `lower` or `upper`) decides what a range quoted as one value ("10-20") becomes in the lanes and in the
+comparison: its midpoint, no value, or its lower or upper end (a calcination "at 450-500 °C" reported by the
+temperature it reached: `upper`). Under `lower` / `upper` the chosen end also fills the **dataset cell**, with
+the note 原文为区间 a–b，按字段配置取上限/下限: an end is a number the paper printed. Under `midpoint` and
+`reject` a range never fills a cell: a midpoint is a number nobody measured. A bound (">80 %", or "80" quoted
+out of "above 80 %") is no range under any policy, and a descending pair or a range whose exponent is written
+once (`1.2-1.5 × 10⁻³`) is refused under every one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
 clause: by default "100 nm after annealing" is refused, since it describes another state of the sample; under
 `condition` ("92.5% after 100 cycles" for a capacity retention) the number is read and the clause is appended
 to the value's `condition` (`; `-joined when the model already gave one), so "after 50 cycles" and "after 100
@@ -698,8 +702,9 @@ A profile changes the words, never the shape of the answer. The shape is fixed i
   value.
 - **Paper-level fields are single-valued.** A paper-level field holds one value for the whole paper; a quantity
   that differs between samples must be sample-level.
-- **A range is a midpoint or nothing.** A value quoted as a range ("10-20") becomes its midpoint or, under
-  `range_policy: reject`, no value; a bound (">80 %") fills no dataset cell.
+- **A range is a midpoint, an end, or nothing.** A value quoted as a range ("10-20") becomes its midpoint, its
+  lower or upper end (`range_policy: lower` / `upper`) or, under `reject`, no value; only an end fills a
+  dataset cell, and a bound (">80 %") fills none.
 - **Charts are property-vs-condition only.** The opt-in figure reading reads a y value per marker off a chart
   whose caption names a `figure_readable` field; spectra, micrographs, maps and schematics are not read.
 - **The prompts are English.** The templates around the slots are English, so slots are written in English;
@@ -798,7 +803,7 @@ verdict) are kept in stored files and code for every profile; only the JSON keys
 | `categories` | `[]` | verdict | A text field's closed set of answers |
 | `valid_range` | none | prompt, cleaning | `{min, max}`, either end open, in `canonical_unit`: told to the model, and a converted value outside it is dropped |
 | `condition_preference` | `[]` | verdict | Which measurement fills the dataset cell when a sample has several |
-| `range_policy` | `midpoint` | cleaning, verdict | `midpoint` or `reject`: what a range quoted as one value becomes. Numeric only |
+| `range_policy` | `midpoint` | cleaning, verdict | `midpoint`, `reject`, `lower` or `upper`: what a range quoted as one value becomes; an end (`lower` / `upper`) also fills the dataset cell. Numeric only |
 | `after_clause` | `refuse` | cleaning, verdict | `refuse` or `condition`: what "92.5% after 100 cycles" becomes. Numeric only |
 | `figure_readable` | `false` | figure | Whether a chart's y axis may be read for this field; numeric with a unit only |
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
@@ -1175,7 +1180,7 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `unanswered` | One lane's question about this field got no valid answer. Refused in both lanes, so the other lane's value never passes as single-source; the next run asks that question again |
 | `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
-| `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
+| `non_scalar` | Every candidate is a range (under `range_policy` `midpoint` or `reject`), a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
 
 Two things are not refusals. A bound or range beside a scalar under the chosen condition (`>80 %` next to
 `80.6 %`) is set aside with a note and the scalar decides the cell. The condition is chosen over every

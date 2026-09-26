@@ -171,26 +171,35 @@ def parse_number(raw: str, *, range_policy: RangePolicy = "midpoint") -> tuple[f
 
     ``range_policy`` is the field's (``FieldSpec.range_policy``): ``"midpoint"`` reads a range as its midpoint,
     ``"reject"`` refuses it, for a quantity whose range is a window rather than a scatter around one value (a
-    cathode's "2.8–4.3 V" is the cycling window; its midpoint was never measured).
+    cathode's "2.8–4.3 V" is the cycling window; its midpoint was never measured). ``"lower"`` / ``"upper"``
+    read it as the end the field asks for (a calcination "at 450-500 °C" reported by its upper end): unlike
+    the midpoint, an end is a number the paper printed.
     """
+    text, notes, refusal = _prepare(raw)
+    if refusal is not None:
+        return None, _join([*notes, refusal])
+    value, reading, ends = _read(text)
+    if ends is None or range_policy == "midpoint":
+        return value, _join([*notes, *reading])
+    if range_policy == "reject":
+        suffix, value = " refused (range_policy 'reject')", None
+    else:
+        suffix, value = f" → {range_policy} bound", ends[0] if range_policy == "lower" else ends[1]
+    chosen = [f"{n.removesuffix(_MIDPOINT)}{suffix}" if n.endswith(_MIDPOINT) else n for n in reading]
+    return value, _join([*notes, *chosen])
+
+
+def _prepare(raw: str) -> tuple[str, list[str], str | None]:
+    """``(value text, notes, refusal)``: what :func:`parse_number` reads a spelling from, or why it reads none."""
     text, notes, _ = set_aside(raw)
     if _AFTER.search(text):
-        return None, _join(
-            [*notes, "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"]
-        )
+        return text, notes, "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"
     # The digits of a formula or a unit exponent are set aside before the value's own numbers are counted.
     unglued = _GLUED_DIGITS.sub(" ", text)
     if unglued != text:
         notes.append("digits of a formula or unit exponent ignored")
         text = unglued.strip()
-    value, reading, is_range = _read(text)
-    if range_policy == "reject" and is_range:
-        refused = [
-            f"{n.removesuffix(_MIDPOINT)} refused (range_policy 'reject')" if n.endswith(_MIDPOINT) else n
-            for n in reading
-        ]
-        return None, _join([*notes, *refused])
-    return value, _join([*notes, *reading])
+    return text, notes, None
 
 
 def split_after_clause(text: str) -> tuple[str, str]:
@@ -242,9 +251,9 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
     return text, notes, ""
 
 
-# (value, notes, is_range): is_range is set by the spellings that read a whole range as its midpoint, which is
-# what range_policy 'reject' refuses.
-_Reading = tuple[float | None, list[str], bool]
+# (value, notes, ends): ends is the (low, high) of a spelling that reads a whole range as its midpoint, which is
+# what range_policy picks from; None for every other reading.
+_Reading = tuple[float | None, list[str], tuple[float, float] | None]
 _MIDPOINT = " → midpoint"
 
 
@@ -257,7 +266,7 @@ def _read(text: str) -> _Reading:
 
 
 def _refuse(reason: str) -> _Reading:
-    return None, [reason], False
+    return None, [reason], None
 
 
 def _ratio(text: str) -> _Reading | None:
@@ -274,7 +283,7 @@ def _parenthesised_mantissa(text: str) -> _Reading | None:
     if NUMBER_RE.search(text[match.end() :]):
         return _refuse("numbers outside the scientific notation; ambiguous")
     value = float(_plain(match.group("m"))) * 10 ** int(match.group("e"))
-    return value, ["uncertainty dropped"] if match.group("pm") else [], False
+    return value, ["uncertainty dropped"] if match.group("pm") else [], None
 
 
 def _leading_parenthesis(text: str) -> _Reading | None:
@@ -292,8 +301,8 @@ def _parenthesised_alternative(text: str) -> _Reading | None:
     rest = _PARENTHESES.sub(" ", text).strip()
     if "(" in rest or ")" in rest:
         return _refuse("unbalanced or nested parentheses; ambiguous")
-    value, reading, is_range = _read(rest)
-    return value, ["parenthesized alternative ignored", *reading], is_range
+    value, reading, ends = _read(rest)
+    return value, ["parenthesized alternative ignored", *reading], ends
 
 
 def _scientific(text: str) -> _Reading | None:
@@ -307,20 +316,20 @@ def _scientific(text: str) -> _Reading | None:
     if len(matches) == 2:
         between = text[matches[0].end() : matches[1].start()].strip()
         if not NUMBER_RE.search(rest) and _PLUS_MINUS_SIGN.fullmatch(between):
-            return values[0], ["uncertainty dropped"], False
+            return values[0], ["uncertainty dropped"], None
         if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
             low, high = values
             if low < high:
-                return (low + high) / 2, [f"range {low:g}-{high:g}{_MIDPOINT}"], True
+                return (low + high) / 2, [f"range {low:g}-{high:g}{_MIDPOINT}"], (low, high)
             return _refuse("descending range in scientific notation; ambiguous")
     if len(matches) > 1 or NUMBER_RE.search(rest):
         return _refuse("numbers outside the scientific notation; ambiguous")
-    return values[0], [], False
+    return values[0], [], None
 
 
 def _uncertainty(text: str) -> _Reading | None:
     match = _PLUS_MINUS.match(text)
-    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"], False)
+    return None if match is None else (float(_plain(match.group("a"))), ["uncertainty dropped"], None)
 
 
 def _range(text: str) -> _Reading | None:
@@ -338,7 +347,7 @@ def _range(text: str) -> _Reading | None:
         return _refuse("descending range, or an exponent without its caret; ambiguous")
     unit = second or first
     notes = [f"trailing unit {unit!r} in value ignored"] if unit else []
-    return (low + high) / 2, [*notes, f"range {low:g}-{high:g}{_MIDPOINT}"], True
+    return (low + high) / 2, [*notes, f"range {low:g}-{high:g}{_MIDPOINT}"], (low, high)
 
 
 def _first_number(text: str) -> _Reading:
@@ -350,7 +359,7 @@ def _first_number(text: str) -> _Reading:
     if not numbers:
         return _refuse("no number found")
     if len(numbers) == 1:
-        return float(_plain(numbers[0])), [], False
+        return float(_plain(numbers[0])), [], None
     if _JOINED.search(text):
         return _refuse("a range among other numbers; ambiguous")
     if _CONJOINED.search(text):
@@ -361,7 +370,7 @@ def _first_number(text: str) -> _Reading:
         return _refuse("numbers separated by ',', ';' or ':'; ambiguous")
     if _OWN_UNIT.match(gaps[0]):
         return _refuse("a number with its own unit followed by another number; ambiguous")
-    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"], False
+    return float(_plain(numbers[0])), [f"{len(numbers)} numbers found, first used"], None
 
 
 # Tried in order; the first to claim the text decides. The ratio and parenthesis checks come first because
@@ -647,6 +656,32 @@ def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Readi
         condition=condition,
         compound=compound_value(spec, bare, units),
     )
+
+
+# A qualifier that makes what follows a one-sided bound: "> 450-500" is no range with two printed ends.
+_BOUND_QUALIFIER = re.compile(r"^(?:>=|<=|[≥≤<>])")
+
+
+def read_range(reading: Reading) -> tuple[float, float, str | None] | None:
+    """``(low, high, note)`` when ``reading`` (:func:`read_value`'s, so number words, the "after" clause and a
+    bound apply exactly as in the comparison) is one two-ended range and nothing else, else None.
+
+    Only the two spellings that read a range claim it: a range behind a parenthesised alternative, a bound
+    ("above 450-500", or a bound grounding found before the quote), a descending pair and a range whose
+    exponent is written once ("1.2-1.5 × 10^-3") are no range with two printed ends."""
+    if reading.bound or reading.compound is not None:
+        return None
+    if _BOUND_QUALIFIER.match(delatex(normalize_text(reading.text)).strip()):
+        return None
+    text, notes, refusal = _prepare(reading.text)
+    if refusal is not None:
+        return None
+    for spelling in (_scientific, _range):
+        found = spelling(text)
+        if found is not None:
+            _, spelled, ends = found
+            return None if ends is None else (*ends, _join([*notes, *(n.removesuffix(_MIDPOINT) for n in spelled)]))
+    return None
 
 
 def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
