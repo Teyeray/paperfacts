@@ -6,8 +6,8 @@
 // There are no quality rows here -- those are per-document -- so a cell is just its value, and an
 // empty cell is "this paper has no committed value for this field".
 
-import { api } from "./api.js";
-import { escapeHtml, keepFocus, toast } from "./html.js";
+import { profileApi, profileHref } from "./api.js";
+import { escapeHtml, keepFocus } from "./html.js";
 import { documentHash } from "./router.js";
 import { entityGroups, inEntity, state } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
@@ -19,14 +19,8 @@ let showAllFields = false;
 // lives; a paper that left the library simply stops matching.
 const expanded = new Set();
 
-export async function loadCorpus() {
-  try {
-    state.corpus = await api("/api/dataset");
-  } catch (error) {
-    state.corpus = null;
-    toast(`读取结果总表失败：${error.message}`, true);
-  }
-}
+// The table under `profile`; the home view stores it (state.corpus) only once it knows the view is still current.
+export const loadCorpus = (profile) => profileApi(profile, "/api/dataset");
 
 // With several entity types the corpus table shows the primary entity only -- its rows and fields beside the
 // paper-level ones -- an explicit limit of this view (the paper row is always one of its rows); every entity is in
@@ -85,7 +79,7 @@ export function renderCorpus(root) {
   head.append(copyButton(() => copyTable(columns, items)));
   const download = document.createElement("a");
   download.className = "download";
-  download.href = "/api/dataset.xlsx";
+  download.href = profileHref(state.corpusProfile, "/api/dataset.xlsx");
   // Empty: the server's Content-Disposition names the file after the profile.
   download.setAttribute("download", "");
   download.textContent = "下载全部 Excel";

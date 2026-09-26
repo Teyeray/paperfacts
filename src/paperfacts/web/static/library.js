@@ -1,8 +1,10 @@
 // Left rail: the document library list and upload. On a successful upload, navigate to that
-// document; the document view takes over showing progress from there.
+// document; the document view takes over showing progress from there. The list, its progress and tallies, the
+// upload and the bulk run are all under the profile on screen; a document with results under other profiles says so.
 
-import { api } from "./api.js";
+import { api, profileApi } from "./api.js";
 import { escapeHtml, keepFocus, toast } from "./html.js";
+import { profileTitle, servedProfile } from "./profiles.js";
 import { documentHash, navigate, reloadView } from "./router.js";
 import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, isCurrent, state } from "./state.js";
 
@@ -20,8 +22,11 @@ let refreshToken = 0;
 // home table and every document ~3000 px down the page.
 const WIDE = window.matchMedia("(min-width: 961px)");
 
+// A profile switch reloads the list too (app.js): the refresh token, not the view generation, owns the rail, and a
+// newer refresh under the new profile retires any older one still on its way.
 export async function loadLibrary() {
   const token = ++refreshToken;
+  const profile = state.profileName;
   clearTimeout(refreshTimer);
   refreshTimer = null;
   let docs;
@@ -29,7 +34,7 @@ export async function loadLibrary() {
   try {
     // Both lists are part of one refresh: a failed /api/jobs would otherwise read as "nothing is running",
     // clear the busy markers and stop the timer mid-run.
-    [docs, activeDocs] = await Promise.all([api("/api/documents"), loadActiveDocs()]);
+    [docs, activeDocs] = await Promise.all([profileApi(profile, "/api/documents"), loadActiveDocs()]);
   } catch (error) {
     if (token !== refreshToken) return;
     refreshFailures += 1;
@@ -46,11 +51,15 @@ export async function loadLibrary() {
   refreshTimer = state.activeDocs.size ? setTimeout(loadLibrary, REFRESH_MS) : null;
 }
 
-// Which documents are busy right now. DocumentSummary knows nothing about jobs, so this is one
-// extra request for the whole list — never one per row, and without the jobs' logs.
+// Which documents are busy right now, and under which profiles: document id -> the profiles of its active jobs. Busy
+// is per document whatever the profile (one document never has two running jobs), and so is the rail's marker.
+// DocumentSummary knows nothing about jobs, so this is one extra request for the whole list — never one per row, and
+// without the jobs' logs.
 async function loadActiveDocs() {
   const jobs = await api("/api/jobs");
-  return new Set(jobs.filter(isActive).map((job) => job.document_id));
+  const active = new Map();
+  for (const job of jobs.filter(isActive)) active.set(job.document_id, [...(active.get(job.document_id) ?? []), job.profile]);
+  return active;
 }
 
 export function renderLibrary() {
@@ -77,7 +86,7 @@ function libraryItem(doc) {
   button.innerHTML = `
     <span class="name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</span>
     <span class="sub">${progressDots(doc)}${queuedMark(doc)}<code>${escapeHtml(doc.document_id.slice(0, 8))}</code></span>
-    ${miniCounts(doc)}`;
+    ${miniCounts(doc)}${otherProfilesMark(doc)}`;
   button.addEventListener("click", () => {
     if (!WIDE.matches) document.getElementById("doc-list-wrap").open = false;
     navigate(documentHash(doc.document_id));
@@ -103,9 +112,24 @@ function progressDots(doc) {
 }
 
 function queuedMark(doc) {
-  return state.activeDocs.has(doc.document_id)
-    ? `<span class="queued" role="img" title="排队或处理中" aria-label="排队或处理中">⏳</span>`
-    : "";
+  const profiles = state.activeDocs.get(doc.document_id);
+  if (!profiles) return "";
+  const named = manyProfiles() ? `（按${profiles.map((name) => `「${profileTitle(name)}」`).join("、")}）` : "";
+  const words = escapeHtml(`排队或处理中${named}`);
+  return `<span class="queued" role="img" title="${words}" aria-label="${words}">⏳</span>`;
+}
+
+const manyProfiles = () => (state.profiles?.profiles?.length ?? 0) > 1;
+
+// Results under the other served profiles, as a count in words with their titles beside it. Unknown while the
+// profile list has not loaded (the page cannot tell which name is its own).
+function otherProfilesMark(doc) {
+  const own = servedProfile(state.profileName)?.name;
+  if (!own) return "";
+  const others = (doc.profiles_done ?? []).filter((name) => name !== own);
+  if (!others.length) return "";
+  const titles = escapeHtml(others.map(profileTitle).join("、"));
+  return `<span class="other-profiles" title="${titles}">另有 ${others.length} 个领域的结果</span>`;
 }
 
 // The comparison tally as four small badges. Each keeps its status colour but always carries the
@@ -143,6 +167,7 @@ export function setupUpload() {
 async function uploadAll(files) {
   if (!files.length) return;
   const generation = state.generation;
+  const profile = state.profileName;
   const zone = document.getElementById("dropzone");
   const force = document.getElementById("upload-force").checked;
   let last = null;
@@ -152,7 +177,7 @@ async function uploadAll(files) {
       const form = new FormData();
       form.append("file", file, file.name);
       try {
-        const result = await api(`/api/documents?force=${force}`, { method: "POST", body: form });
+        const result = await profileApi(profile, `/api/documents?force=${force}`, { method: "POST", body: form });
         last = result.document.document_id;
         toast(`已上传 ${file.name}，开始处理`);
       } catch (error) {
@@ -163,6 +188,7 @@ async function uploadAll(files) {
     zone.classList.remove("busy");
   }
   await loadLibrary();
+  // The generation covers the profile too: a switch is a new view, so an upload made under the old one opens nothing.
   if (last && isCurrent(generation)) navigate(documentHash(last), { reload: true });
 }
 
@@ -172,16 +198,22 @@ export function setupRunAll() {
   const button = document.getElementById("run-all");
   button.addEventListener("click", async () => {
     const force = document.getElementById("upload-force").checked;
+    const profile = state.profileName;
+    const named = manyProfiles() ? `按「${profileTitle(profile)}」` : "";
     // A forced bulk run re-parses every PDF as well, which on a laptop without the MLX service is hours per
-    // paper on a single worker: worth one question before it is queued.
-    if (force && !window.confirm(`将忽略缓存、强制重跑全部 ${state.docs.length} 篇（含重新解析 PDF），确定？`)) return;
+    // paper on a single worker: worth one question before it is queued. So is any bulk run under a profile other
+    // than the default, which spends tokens on every paper not finished under it (an example profile, by accident).
+    if (force && !window.confirm(`将${named}忽略缓存、强制重跑全部 ${state.docs.length} 篇（含重新解析 PDF），确定？`)) return;
+    if (!force && profile !== null && !window.confirm(`将${named}处理文档库里全部未完成的文档（共 ${state.docs.length} 篇），确定？`)) return;
     button.disabled = true;
     try {
-      const result = await api(`/api/documents/run-all?force=${force}`, { method: "POST" });
-      toast(`已排队 ${result.submitted.length} 篇，跳过 ${result.skipped.length} 篇`);
+      const result = await profileApi(profile, `/api/documents/run-all?force=${force}`, { method: "POST" });
+      toast(`已${named}排队 ${result.submitted.length} 篇，跳过 ${result.skipped.length} 篇`);
       await loadLibrary();
-      // The open document may be one of them: re-read it so its view follows the new job.
-      if (state.current && result.submitted.some((job) => job.document_id === state.current)) reloadView();
+      // The open document may be one of them: re-read it so its view follows the new job -- only while it is still
+      // shown under the profile the jobs run under.
+      const shown = state.current && state.currentProfile === profile && state.profileName === profile;
+      if (shown && result.submitted.some((job) => job.document_id === state.current)) reloadView();
     } catch (error) {
       toast(`批量处理失败：${error.message}`, true);
     } finally {

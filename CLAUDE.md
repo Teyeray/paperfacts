@@ -230,8 +230,17 @@ this file is the part that is easy to get wrong.
 ## Web interface
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
-  offline). Modules are `state`, `api`, `html`, `router`, `library`, `document`, `table`, `fieldpicker`, `tsv`,
-  `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
+  offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `library`, `document`, `table`,
+  `fieldpicker`, `tsv`, `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
+- Profiles in the page: the router reads `#/p/<name>/…` (no prefix = the default, which is `null` in the frontend,
+  never its name) into `state.profileName`; a profile change is a new view (bumps the generation, reloads the
+  rail, drops `/fact/n` and the filter). Every per-profile request goes through `profileApi(profile, path)` /
+  `profileHref` (`api.js`) with the profile the load captured before its first await; plain `api()` refuses
+  any path outside its profile-free allowlist, `undefined` throws, a POST always names the profile when the
+  page knows the default's name, and a response whose `X-PaperFacts-Profile` differs is refused. `state.profile`
+  (the labels) is only set by `adoptProfile` inside a generation-guarded load that awaited `profileView(profile)`
+  beside its data, so labels and data always come from one profile. A job of another profile on the open paper is
+  only noted, never polled or drawn (`jobInProfile`).
 - Async ownership: the router bumps `state.generation` on every navigation to another view. Every load, poll
   and finish handler notes it before its first `await` and draws nothing once it has changed; do not add a
   per-feature "is this still the current document" check instead. Polling retries with backoff and a loop is
@@ -276,7 +285,7 @@ this file is the part that is easy to get wrong.
   and use the neutral colour. Status colours always accompany text,
   never carry meaning alone.
 - The UI copy is Chinese; code comments are English.
-- The selected fact is in the URL (`#/doc/<id>/fact/<n>`) so a link survives a reload.
+- The selected fact is in the URL (`(#/p/<profile>)/doc/<id>/fact/<n>`) so a link survives a reload.
 
 ## Deployment
 

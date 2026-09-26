@@ -14,7 +14,13 @@
     <span class="brand-mark">PF</span>
     <span class="brand-text"><b>PaperFacts</b><small class="profile-title" id="profile-title"></small></span>
   </a>
-  <div class="topbar-meta" id="health">…</div>
+  <div class="topbar-right">
+    <label class="profile-switch hidden" id="profile-switch">
+      <span class="visually-hidden">领域配置</span>
+      <select id="profile-select" aria-label="领域配置"></select>
+    </label>
+    <div class="topbar-meta" id="health">…</div>
+  </div>
 </header>
 
 <main class="shell">
@@ -23,6 +29,7 @@
       <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden>
       <div class="upload-title">拖入 PDF，或<button class="linklike" id="pick-file" type="button">选择文件</button></div>
       <div class="upload-hint">上传即开始：两路解析 → LLM 抽取 → 对齐比较</div>
+      <div class="upload-hint upload-profile hidden" id="upload-profile"></div>
       <label class="upload-force"><input type="checkbox" id="upload-force"> 忽略缓存，全部重跑</label>
     </section>
     <div class="rail-head">
@@ -69,6 +76,8 @@
       <button class="primary" data-action="run" type="button">重新处理</button>
     </div>
   </header>
+  <p class="doc-note hidden" data-slot="other-profiles"></p>
+  <p class="doc-note other-job hidden" data-slot="other-job" role="status"></p>
   <ol class="stages" data-slot="stages"></ol>
   <div class="kpis" data-slot="kpis"></div>
   <section class="results" aria-label="结果表">

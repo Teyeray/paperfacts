@@ -6,6 +6,7 @@
 // for one row, and the raw value the clipboard gets for that row. The rendered table and the copy are both
 // `columns.map(...)` over the same list, so they cannot disagree about which column holds what.
 
+import { profileHref } from "./api.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
 import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
@@ -126,7 +127,7 @@ export function renderResults(root) {
   empty.textContent = data ? noSamplesReason() : "还没有结果表，处理完成后会出现在这里。";
   empty.classList.toggle("hidden", Boolean(data) && samples.length > 0);
   if (!hasRows) return;
-  download.href = `/api/documents/${state.current}/dataset.xlsx`;
+  download.href = profileHref(state.currentProfile, `/api/documents/${state.current}/dataset.xlsx`);
 
   const rerender = () => keepFocus(root, () => renderResults(root));
   const chosen = chosenFields(data.fields);

@@ -253,8 +253,8 @@ downloads this document's workbook.
 The comparison table is one row per compared fact: 状态, 样品, 字段, 条件, the MinerU reading, the
 PaddleOCR-VL reading, and 说明. Click any row and both lanes' source blocks light up on the rendered page
 in the viewer beside it — blue for MinerU, orange for PaddleOCR-VL, always with text as well as colour.
-The selected fact is part of the URL (`#/doc/<id>/fact/<n>`), so a link to one disputed number survives a
-reload and can be sent to someone else.
+The selected fact is part of the URL (`#/doc/<id>/fact/<n>`, `#/p/<profile>/doc/<id>/fact/<n>` under a profile
+other than the default), so a link to one disputed number survives a reload and can be sent to someone else.
 
 ### 样品记录
 
@@ -1100,6 +1100,16 @@ and never stops the others, and so is a file that is a link to another profile's
 profile). `web.profiles` names the ones to serve beside the default when not all of them should be (every run
 costs tokens). A profile with entity types under `extraction.mode: document` is listed and described but not
 runnable: its keys cannot be computed under that mode, so every read and write under it answers 409.
+
+In the browser, a server with more than one profile shows a switcher in the header: each served profile by its
+title, marked （示例） for an example, （不可运行） for one this server cannot run and （文件已改动，需重启） for one
+whose file changed since start-up. The page is under one profile at a time, named in the URL as `#/p/<name>/…`
+(`#/p/battery_cathode/doc/<id>/fact/<n>`); the default has no prefix, so every old link opens as before.
+Switching keeps you on the same paper. The library, its progress dots and tallies, the home table, uploads and
+处理全部未完成 are all the current profile's (a bulk run under a profile other than the default asks first); a
+paper with results under other profiles says so in the library (另有 N 个领域的结果) and links to them from its
+page, and a paper busy under another profile says so above its stages -- your run queues behind it. A link to a
+profile the server does not serve, or one that did not load, says so instead of falling back to the default.
 
 The HTTP interface names the profile with `?profile=<name>` on every route whose answer depends on one:
 `/api/profile`, `/api/documents` (upload, run, run-all, and every per-document read but the parse artifact and
