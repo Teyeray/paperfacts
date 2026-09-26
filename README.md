@@ -215,7 +215,8 @@ paper that is already running waits for that run to end.
 
 **The home page** is 论文结果总表: one row per processed paper, showing the sample that paper selected
 across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
-library.
+library. Under a profile with several entity types, a chip per entity type picks what a row is: the primary one
+gives the table above, any other one row per sample of that type across the papers, with that type's fields.
 
 **A document page** reads top to bottom.
 
@@ -253,8 +254,8 @@ downloads this document's workbook.
 The comparison table is one row per compared fact: 状态, 样品, 字段, 条件, the MinerU reading, the
 PaddleOCR-VL reading, and 说明. Click any row and both lanes' source blocks light up on the rendered page
 in the viewer beside it — blue for MinerU, orange for PaddleOCR-VL, always with text as well as colour.
-The selected fact is part of the URL (`#/doc/<id>/fact/<n>`), so a link to one disputed number survives a
-reload and can be sent to someone else.
+The selected fact is part of the URL (`#/doc/<id>/fact/<n>`, `#/p/<profile>/doc/<id>/fact/<n>` under a profile
+other than the default), so a link to one disputed number survives a reload and can be sent to someone else.
 
 ### 样品记录
 
@@ -308,13 +309,16 @@ The flags worth knowing:
   under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
   after the profile, so a profile file given by path whose name is also a different `profiles/<name>.json` is
   refused unless the two files are byte-identical, and the name `paperfacts` (the pre-profile workbook) is
-  reserved. `serve` reads its profile once:
-  `/api/health` reports its name and hash, `/api/profile` gives the page its title and copy (the header shows
-  the title, and the paper-level record is named the profile's way), and after any edit to the file on disk --
-  display text included, or a symlink pointed at another file -- every new job is refused until the server is
-  restarted; `/api/health`'s `profile_on_disk_changed` says so first. A file that cannot be read (deleted, or
-  caught mid-save) refuses the job with its own message. Run **one server per data root**: two servers under different profiles
-  over the same `data_root` can parse the same document at the same time.
+  reserved. On `serve`, `--profile` picks the **default** profile: the server serves every profile under
+  `profiles/` (see "A second profile beside the first"), and the default answers every request that names none.
+  Each profile is read once: `/api/health` reports the default's name and hash (and, under `profiles`, every
+  served profile's), `/api/profile` gives the page its title and copy (the header shows the title, and the
+  paper-level record is named the profile's way), and after any edit to a profile's file on disk -- display text
+  included, or a symlink pointed at another file -- every new job under that profile is refused until the server
+  is restarted; `/api/health`'s `profile_on_disk_changed` (the default) and `profiles.<name>.on_disk_changed`
+  say so first. A file that cannot be read (deleted, or caught mid-save) refuses the job with its own message.
+  Run **one server per data root**: two servers over the same `data_root` can parse the same document at the
+  same time.
 - `--jobs N` / `-j N` on `batch` processes N papers at once (default `web.max_parallel_documents`, 3);
   `--jobs 1` is the old one-after-another run.
 - `--offline` on `run` and `batch` answers every model request from the LLM cache and fails on a miss; see
@@ -479,10 +483,11 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `server.page_dpi.default` / `.min` / `.max` | Page renders for the viewer. Defaults 110, 50, 220 |
 | `web.username` | HTTP Basic username. Default `paperfacts`. The password is never here |
 | `web.max_parallel_documents` | Documents processed at once, by the web job queue and by `batch` (unless `--jobs` says otherwise). Default 3 |
+| `web.profiles` | The profiles under `profiles/` a server serves beside its default, as a list of names (`["battery_cathode"]`); `null` serves every one that loads, `[]` only the default. The default profile is always served. A name with no file is listed among the invalid profiles. Default `null` |
 | `overlay.dpi` | Default 150 |
 | `comparison.ambiguous_match_confidence` | Below this, a sample match is AMBIGUOUS rather than accepted. Default 0.6 |
 | `data_root` | Where everything is written. Default `data` |
-| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields, condition keywords and domain wording, and every run, batch, export and `serve` reads them from it (`--profile NAME_OR_PATH` overrides it for one command). Default `tco` |
+| `profile` | The domain profile: a name, read from `profiles/<name>.json`, or a path to a profile file. It holds the groups, fields, condition keywords and domain wording, and every run, batch and export reads them from it, and `serve` makes it the default of the profiles it serves (`--profile NAME_OR_PATH` overrides it for one command). Default `tco` |
 
 `config.json` no longer holds `fields` or `condition_keywords`: they live in the profile (`fields` and
 `retrieval.condition_keywords`). A `config.json` that still has either is refused with an error naming the key,
@@ -504,7 +509,8 @@ points at its own services without editing the shared file:
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,
 `PAPERFACTS_SERVER_PORT`, `PAPERFACTS_MAX_UPLOAD_MB`, `PAPERFACTS_PAGE_DPI`, `PAPERFACTS_PAGE_DPI_MIN`,
 `PAPERFACTS_PAGE_DPI_MAX`, `PAPERFACTS_OVERLAY_DPI`, `PAPERFACTS_WEB_USERNAME`, `PAPERFACTS_WEB_MAX_PARALLEL_DOCUMENTS`,
-`PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
+`PAPERFACTS_WEB_PROFILES` (comma-separated names; `-` means only the default, since an empty string already
+means unset), `PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
 `PAPERFACTS_FIGURES_MAX_PER_DOCUMENT`, `PAPERFACTS_FIGURES_DPI`, `PAPERFACTS_FIGURES_MAX_PIXELS`,
 `PAPERFACTS_FIGURES_TIMEOUT_S`.
 
@@ -534,11 +540,11 @@ to count as the same fact.
   "description_zh": "所选样品的薄膜方块电阻。",   // Chinese explanation; display only
   "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
   "canonical_unit": "Ω/sq",
-  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol); both >= 0
+  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol); both finite, >= 0
   "abs_tol": 0.0,
   "condition_hint": null,                   // what to record alongside, e.g. a wavelength
   "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction (only with "%")
-  "valid_range": {"max": 500},              // optional plausible range in canonical_unit; min and/or max
+  "valid_range": {"max": 500},              // optional plausible range in canonical_unit; finite min and/or max
   "condition_preference": ["400-800", "550"] // optional: which measurement fills the dataset cell
 }
 ```
@@ -742,7 +748,7 @@ A profile changes the words, never the shape of the answer. The shape is fixed i
 Still not supported: a list of numbers, dates or references (`many` is text and composition only); a
 many-to-many or multi-hop link (a reference names one sample); nesting or order between samples (a layer stack);
 a value stated for a whole series across entity types; figures bound to an entity; more than five entity types;
-entity types in document mode; the home table (corpus view) beyond the primary entity. When a domain does not
+entity types in document mode. When a domain does not
 fit, narrow it until it does rather than stretch a slot: pick the entities the gold data is about, move a
 per-layer quantity into one field per layer that matters (`etl_thickness`, `absorber_thickness`), model a relation
 that belongs to no one entity as a third entity with two references, and leave curves and spectra to the charts
@@ -776,7 +782,14 @@ or out of scope. What still does not fit needs a code change, not a profile.
    configuration file: it prints the profile's line (name, maturity, paper/sample field counts, content hash,
    title) and any warnings then `ok`, or every error it found, one `error:` line each, and exits 1. It makes the
    checks a run makes too: the name `paperfacts` is reserved, and a file named like a repository profile but
-   differing from it is refused, since their workbooks would overwrite each other.
+   differing from it is refused, since their workbooks would overwrite each other. Without a shell, the web
+   page 检查配置 (`#/check`, linked from the header) does the same for pasted JSON: every error one per line, or,
+   when it is valid, the page the profile would get (fields, units, the system prompts and each field's question),
+   and whether a served profile of the same name has the same content hash (a display-only edit) or not (the edit
+   re-extracts). It stores nothing; to use the profile, put the file in `profiles/` and restart the server. The
+   text is checked in a short-lived child process with a 10 s timeout and a CPU limit (plus a 1 GiB memory limit on
+   Linux; macOS refuses it, and there the timeout and CPU limit bound the check), at most 256 KiB, sent within 15 s,
+   and two checks at a time (`POST /api/profile-check`; 503 when a check timed out, 502 when its process failed).
 7. **Read what the model will be asked.** `uv run paperfacts prompts --profile perovskite` prints the inventory,
    field, extraction and matching system prompts exactly as sent; `--field NAME` prints the per-field system
    prompt, that field's line, and the question around it with `<sample list>` and `<excerpts>` standing for what
@@ -1047,6 +1060,7 @@ beside the old. Two profiles with identical non-display content share every key 
   refused.
 - **Spaces.** A spelling is compared with its spaces removed, as a quoted unit is, so `mAh g-1` also reads
   `mAhg-1`; declaring both is refused as a duplicate.
+- **Length.** A unit name, alias, excluded spelling or ignored suffix is at most 64 characters.
 - **Retrieval.** Every canonical unit needs a pattern that finds a number in it in running text. By default it
   is derived from the spellings: a digit, then the spelling lower-cased with its spaces optional, then a word
   boundary when it ends in a letter or digit (so `V` does not match "Vis"). Give `retrieval` yourself when that
@@ -1087,19 +1101,57 @@ slowly than the call count. A re-run is free: every answer is cached by request 
 
 ### A second profile beside the first
 
-One server serves one profile. To offer another, start a second server with its own port **and its own data
-root**:
+One server serves every profile under `profiles/`. The one `profile` / `PAPERFACTS_PROFILE` / `--profile`
+selects is the **default**: it must load or the server does not start, and every request that names no profile
+is answered under it, so every link and bookmark from before keeps its meaning. `PAPERFACTS_PROFILE=battery_cathode uv run paperfacts serve`
+serves the same profiles with `battery_cathode` as the default; `web.profiles` narrows the others (see Configuration). Every other `profiles/*.json` is
+loaded beside it at start-up; one that does not load is listed with its errors (`GET /api/profiles`, `invalid`)
+and never stops the others, and so is a file that is a link to another profile's file (it loads as that
+profile). `web.profiles` names the ones to serve beside the default when not all of them should be (every run
+costs tokens). A profile with entity types under `extraction.mode: document` is listed and described but not
+runnable: its keys cannot be computed under that mode, so every read and write under it answers 409.
 
-```bash
-PAPERFACTS_PROFILE=battery_cathode PAPERFACTS_DATA_ROOT=data-battery uv run paperfacts serve --port 8001
-```
+In the browser, a server with more than one profile shows a switcher in the header: each served profile by its
+title, marked （示例） for an example, （不可运行） for one this server cannot run and （文件已改动，需重启） for one
+whose file changed since start-up. The page is under one profile at a time, named in the URL as `#/p/<name>/…`
+(`#/p/battery_cathode/doc/<id>/fact/<n>`); the default has no prefix, so every old link opens as before.
+Switching keeps you on the same paper. The library, its progress dots and tallies, the home table, uploads and
+处理全部未完成 are all the current profile's (a bulk run under a profile other than the default asks first); a
+paper with results under other profiles says so in the library (另有 N 个领域的结果) and links to them from its
+page, and a paper busy under another profile says so above its stages -- your run queues behind it. A link to a
+profile the server does not serve, or one that did not load, says so instead of falling back to the default.
+
+「配置说明」 in the header opens the current profile's read-only page (`#/profile`, `#/p/<name>/profile`): its
+title, maturity and content hash, its entity types and groups, a table of every field with every attribute a field
+sets (kind, level, entity, unit, categories, cardinality, range policy, reference, condition rule, valid range, …),
+its declared units and retrieval words, the papers with results under it, and a preview of the prompts it renders
+-- the same text `paperfacts prompts` prints, the system prompts or one field's question, fetched when opened.
+
+The HTTP interface names the profile with `?profile=<name>` on every route whose answer depends on one:
+`/api/profile`, `/api/documents` (upload, run, run-all, and every per-document read but the parse artifact and
+the page images, which are the document's under every profile), `/api/dataset` and `/api/dataset.xlsx`. Absent
+means the default, and every such response names the profile that answered in an `X-PaperFacts-Profile` header,
+so a caller that forgot the parameter can tell. `GET /api/profiles` lists the served profiles (with how many documents each has finished,
+whether each is runnable and whether its file changed on disk) and the invalid files; `GET /api/profiles/<name>`
+is one profile's full read-only definition (groups, entities, every field attribute, declared units, retrieval);
+`GET /api/profiles/<name>/prompts?field=` is what `paperfacts prompts` prints, from the same function. A
+document summary names in `profiles_done` every profile it is finished under.
+
+A document is shared: its PDF, parses and identity belong to it under every profile, so the server never runs
+two jobs on one document at once, whatever their profiles; a job under a second profile waits for the first.
+Submitting a document again under the same profile while it is queued or running returns the same job. Results
+need no separating: every derived file is named by keys that follow the profile's content, workbooks and chart
+readings by the profile's name. Two profiles of identical content share their results by design: both list a
+finished document in `profiles_done` and both show its results, but its workbook download
+(`/api/documents/<id>/dataset.xlsx`) is named after the profile a run was made under and is missing under the
+other until a run under it writes one.
 
 Run one server per data root: the per-document and per-parser locks live in one process, so two servers over
 one `data_root` can parse the same document at once. Profiles may still share a data root outside a server --
-`paperfacts batch papers/ --profile battery_cathode` over the library a `tco` server uses, while it is idle --
-and then share the parses and the LLM cache: every derived file is named by keys that differ between the two,
-and the workbooks by profile name. A server reads its profile once; after the file changes on disk it refuses
-new jobs until it is restarted (`/api/health` reports `profile_on_disk_changed`).
+`paperfacts batch papers/ --profile battery_cathode` over the library a server uses, while it is idle -- and
+then share the parses and the LLM cache. A server reads its profiles once; a file added to `profiles/` is served
+after a restart, and after a served file changes on disk its jobs are refused until the restart
+(`/api/health` reports it per profile).
 
 ### Proving a refactor free
 

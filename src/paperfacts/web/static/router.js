@@ -1,34 +1,90 @@
-// Router: #/doc/<id16>(/fact/<n>)?. The selected fact goes into the URL; refreshing or sharing the link returns to the same one.
+// Router: (#/p/<profile>)?(/doc/<id16>(/fact/<n>)? | /profile | /check)?. The selected fact goes into the URL; refreshing or
+// sharing the link returns to the same one. `/profile` is the read-only page of the profile itself; `/check` is the
+// profile check page, profile-free (under a prefix it is the same page, so leaving it returns to that profile). The
+// profile prefix names the domain profile the view is shown under; it is left out for
+// the server's default, so every link written before profiles existed still opens as it did.
 //
-// It also owns the view generation (state.generation): every navigation to another document or to home
-// bumps it, which retires every load, poll and finish handler still running for the view being left. Moving
+// It also owns the view generation (state.generation): every navigation to another document, to home or to another
+// profile bumps it, which retires every load, poll and finish handler still running for the view being left. Moving
 // between facts of the open document is not a new view and bumps nothing, so its job keeps being polled.
 
 import { state } from "./state.js";
 
-// Anything shaped like a document link is routed as one, so a malformed id gets a clear "no such document"
-// rather than silently falling back to home.
-const ROUTE = /^#\/doc\/([^/]*)(?:\/fact\/(\d+))?\/?$/;
+// Anything shaped like a profile prefix or a document link is routed as one, so a malformed name or id gets a clear
+// "no such profile / document" rather than silently falling back to the default's home.
+const PREFIX = /^#\/p\/([^/]*)(\/.*)?$/;
+const DOCUMENT = /^\/doc\/([^/]*)(?:\/fact\/(\d+))?\/?$/;
+const PAGE = /^\/(profile|check)\/?$/; // the pages beside the documents
 const DOCUMENT_ID = /^[0-9a-f]{16}$/;
-let handlers = { onDocument: () => {}, onEmpty: () => {}, onMissing: () => {} };
-let routed; // the document id the view on screen was routed to (null: home; undefined: nothing yet)
+const PROFILE_NAME = /^[a-z][a-z0-9_]{0,39}$/; // profile_loader.IDENTIFIER
+let handlers = {
+  onDocument: () => {},
+  onEmpty: () => {},
+  onMissing: () => {},
+  onMissingProfile: () => {},
+  onProfile: () => {},
+  onProfilePage: () => {},
+  onCheck: () => {},
+};
+let routed; // the view on screen: "<profile>\n<document id | page>" (undefined: nothing yet)
 let reloadNext = false;
 
 export function installRouter(next) {
-  handlers = next;
+  handlers = { ...handlers, ...next };
   window.addEventListener("hashchange", () => route());
 }
 
+// The hash split into the profile it names (null: none, the default) and the rest. A prefix naming the default is
+// accepted as the default and left as typed.
+function parse(hash) {
+  const prefix = hash.match(PREFIX);
+  const raw = prefix ? decoded(prefix[1]) : null;
+  const rest = prefix ? prefix[2] ?? "/" : hash.slice(1);
+  const document = rest.match(DOCUMENT);
+  return {
+    raw,
+    profile: raw === state.defaultProfile ? null : raw,
+    page: rest.match(PAGE)?.[1] ?? null,
+    id: document ? decoded(document[1]) : null,
+    fact: document?.[2] == null ? null : Number(document[2]),
+  };
+}
+
 export function route({ reload = false } = {}) {
-  const match = location.hash.match(ROUTE);
-  const id = match ? decoded(match[1]) : null;
-  const fresh = reload || reloadNext || id !== routed;
+  const view = parse(location.hash);
+  const key = `${view.profile ?? ""}\n${view.page ?? view.id ?? ""}`;
+  const fresh = reload || reloadNext || key !== routed;
   reloadNext = false;
-  routed = id;
+  routed = key;
   if (fresh) state.generation += 1;
-  if (id === null) handlers.onEmpty();
-  else if (!DOCUMENT_ID.test(id)) handlers.onMissing(id);
-  else handlers.onDocument(id, factFromHash(), { reload: fresh });
+  const refusal = view.raw === null ? null : profileRefusal(view.raw);
+  if (refusal) {
+    handlers.onMissingProfile(view.raw, refusal);
+    return;
+  }
+  if (view.profile !== state.profileName) {
+    state.profileName = view.profile;
+    handlers.onProfile(view.profile);
+  }
+  if (view.page === "profile") handlers.onProfilePage();
+  else if (view.page === "check") handlers.onCheck();
+  else if (view.id === null) handlers.onEmpty();
+  else if (!DOCUMENT_ID.test(view.id)) handlers.onMissing(view.id);
+  else handlers.onDocument(view.id, view.fact, { reload: fresh });
+}
+
+// Why a named profile cannot be shown, or null when it can. Without the server's list (it did not load) a well-formed
+// name is tried, and the server says whether it exists.
+function profileRefusal(name) {
+  if (!PROFILE_NAME.test(name)) return { reason: "missing" };
+  const list = state.profiles;
+  if (!list) return null;
+  const invalid = list.invalid?.find((entry) => entry.name === name);
+  if (invalid) return { reason: "invalid", errors: invalid.errors ?? [] };
+  const served = list.profiles?.find((entry) => entry.name === name);
+  if (!served) return { reason: "missing" };
+  if (!served.runnable) return { reason: "not_runnable", errors: [served.not_runnable ?? ""] };
+  return null;
 }
 
 // `reload` re-reads the view even when the hash says it is already on screen (a re-upload of the open
@@ -45,12 +101,15 @@ export const reloadView = () => route({ reload: true });
 
 // The fact index the URL asks for right now, read at the moment it is needed: a load that started earlier
 // must select what the address bar says when it lands, not what it said when it began.
-export function factFromHash() {
-  const match = location.hash.match(ROUTE);
-  return match?.[2] == null ? null : Number(match[2]);
-}
+export const factFromHash = () => parse(location.hash).fact;
 
-// A hand-typed link may hold a broken %-escape; it is still just an id that names no document.
+// The document the URL names right now (null: none), whether or not its view has landed yet.
+export const documentFromHash = () => parse(location.hash).id;
+
+// The page the URL names beside the documents ("profile": the profile page, "check": the check page), or null.
+export const pageFromHash = () => parse(location.hash).page;
+
+// A hand-typed link may hold a broken %-escape; it is still just a name that names nothing.
 function decoded(text) {
   try {
     return decodeURIComponent(text);
@@ -59,4 +118,13 @@ function decoded(text) {
   }
 }
 
-export const documentHash = (id, factIndex = null) => (factIndex == null ? `#/doc/${id}` : `#/doc/${id}/fact/${factIndex}`);
+// The address of a view: home (no `id`), a document, or a page (`page: "profile" | "check"`), under `profile` (null or the default's name: no prefix).
+export function hashFor({ profile = null, id = null, fact = null, page = null } = {}) {
+  const prefix = profile == null || profile === state.defaultProfile ? "" : `/p/${encodeURIComponent(profile)}`;
+  if (page != null) return `#${prefix}/${page}`;
+  if (id == null) return prefix ? `#${prefix}` : "#/";
+  return `#${prefix}/doc/${id}${fact == null ? "" : `/fact/${fact}`}`;
+}
+
+// A document of the profile on screen.
+export const documentHash = (id, factIndex = null) => hashFor({ profile: state.profileName, id, fact: factIndex });

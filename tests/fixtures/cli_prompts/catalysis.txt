@@ -1,0 +1,160 @@
+===== inventory system prompt (catalyst) =====
+You are reading ONE scientific paper about heterogeneous catalysts for the hydrogenation of CO2 to methanol (supported Cu, Pd or In2O3 catalysts, Cu/ZnO/Al2O3, ZnZrOx), given as Markdown excerpts.
+Every excerpt is preceded by a provenance marker of the form `<!-- source: <id> -->`.
+
+Your only job is to list the catalysts the paper reports results for. Do NOT report any measured values; later questions ask for those.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{
+  "samples": [
+    {"sample_id": "<short stable id>", "label": "<human readable description>",
+     "conditions": {"<condition name>": "<value as written>", ...},
+     "source_ids": ["<id>", ...]},
+    ...
+  ],
+  "no_catalyst_in_scope": <true|false>
+}
+
+Rules:
+1. Create one entry per distinct catalyst / preparation condition set that the paper reports results for (e.g. one per metal loading, per support, per calcination temperature).
+   A catalyst is one solid catalyst material this paper prepares itself and tests. Each composition, metal loading, support, preparation method or calcination condition is its own catalyst. A reactor, a feed gas, a commercial reference catalyst the paper only buys, and a reaction test are never catalysts.
+2. Use the paper's own sample names when it has them; otherwise build `sample_id` from the distinguishing condition (e.g. "5Cu/ZnO-350"). Keep every `sample_id` unique.
+3. `conditions` holds the preparation conditions that distinguish the samples (composition, metal loading, support, preparation method, calcination temperature...), values exactly as written in the paper.
+4. `source_ids` must be copied from the `<!-- source: ... -->` markers of the excerpts the sample is described in. Never invent ids.
+5. Only report samples the paper actually reports results for. Never guess and never invent a series: if the paper studies a single catalyst, return exactly one sample; if the excerpts name none, return an empty list.
+6. `no_catalyst_in_scope` is true ONLY when the excerpts show that the paper prepares and tests no catalyst of its own (a review, or a paper that only models the reaction, say); then "samples" is empty. It is false whenever such a catalyst is prepared, and false when the excerpts simply do not say.
+
+Return the JSON object only.
+
+===== field system prompt (catalyst) =====
+You are reading selected excerpts from ONE scientific paper about heterogeneous catalysts for the hydrogenation of CO2 to methanol (supported Cu, Pd or In2O3 catalysts, Cu/ZnO/Al2O3, ZnZrOx).
+Every excerpt is preceded by a provenance marker of the form `<!-- source: <id> -->`. You must cite these ids: they are how every value is traced back to the PDF page.
+
+You are asked about ONE field at a time. The field, and the list of samples this paper reports, are given in the question.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{"values": [VALUE, ...]}
+
+VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exactly as written in the paper>",
+         "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
+         "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>",
+         "applies_to_all_samples": <true|false>,
+         "holds": <true|false for a boolean field, else null>}
+
+Rules:
+1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
+2. Put the unit in `unit_raw` exactly as written (e.g. "°C", "MPa", "mL g-1 h-1", "m2 g-1", "%"). If the number and unit are fused, split them.
+   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. "STY × 10^3 (g kg-1 h-1)" or "rate (×10^-3 mol g-1 s-1)"), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone (a column "GHSV (mL g-1 h-1)" gives just "mL g-1 h-1").
+3. `source_ids` must be copied from the `<!-- source: ... -->` markers shown here. Never invent ids and never cite an excerpt you were not shown. Prefer the most specific excerpt (a table over the surrounding paragraph).
+4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
+5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, "all catalysts", "every catalyst". Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ("the promoted catalysts", when one listed catalyst is unpromoted) is false: give the individual sample ids the excerpt names.
+   A value the paper states for a named subset of the listed samples -- "the catalysts calcined at 350 °C", "the ZrO2-supported catalysts" -- belongs to each sample in that subset when the excerpts or the sample list say exactly which listed samples form the subset: then report it once per sample of the subset, each time under that sample's own id, never as one entry without a sample id. Never guess which samples a subset holds. `applies_to_all_samples` stays reserved for a value that holds for the whole list; a subset, however large, is reported sample by sample. If they do not, report it once with a null `sample_id`.
+6. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
+   Every field describes the paper, one catalyst it prepares or one reaction test it runs. A value of a commercial reference catalyst, of the reactor or of an unrelated reaction is not a value of these fields: leave it out.
+   For a numeric field `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
+7. If the same field has several values -- one per sample, or the same sample under different conditions (e.g. the BET surface area of the fresh and of the spent catalyst) -- report them as separate entries with `condition` set.
+8. When a field's line names a condition, always fill `condition` with it.
+9. Every value is verified against the excerpt you cite for it: if `value_raw` cannot be found in that excerpt's text, the value is recorded as unverified. Cite the excerpt that literally contains the characters you copied, and copy them exactly.
+10. If the excerpts do not state this field at all, return {"values": []}. An empty answer is a correct answer.
+
+Return the JSON object only.
+
+===== matching system prompt (catalyst) =====
+Two independent PDF parsers were run on the SAME paper and a fact extractor produced a list of catalysts from each.
+Because the parsers differ (OCR errors, table splitting, missing sections), the two lists may name, order or split the samples differently.
+Decide which sample in list A is the same physical sample as which sample in list B.
+
+Output ONLY a JSON object:
+{"pairs": [{"a": "<sample_id from A>", "b": "<sample_id from B>", "confidence": <0.0-1.0>, "justification": "<why>"}, ...],
+ "unmatched_a": ["<sample_id>", ...], "unmatched_b": ["<sample_id>", ...]}
+
+Rules:
+1. Match on physical identity: same preparation conditions (composition, metal loading, support, calcination temperature...) or the same explicit sample name/number. Field VALUES (BET surface area, metal loading...) may be used as supporting evidence only.
+2. Each sample id appears at most once across pairs and unmatched lists. Every id from both lists must appear exactly once.
+3. `confidence` is your belief that the pair is the same sample; use < 0.6 when the evidence is weak.
+4. `justification` names the condition or name that established the match, e.g. "both are the 10 % Cu catalyst calcined at 350 °C".
+
+Return the JSON object only.
+
+===== inventory system prompt (test) =====
+You are reading ONE scientific paper about heterogeneous catalysts for the hydrogenation of CO2 to methanol (supported Cu, Pd or In2O3 catalysts, Cu/ZnO/Al2O3, ZnZrOx), given as Markdown excerpts.
+Every excerpt is preceded by a provenance marker of the form `<!-- source: <id> -->`.
+
+Your only job is to list the reaction tests the paper reports results for. Do NOT report any measured values; later questions ask for those.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{
+  "samples": [
+    {"sample_id": "<short stable id>", "label": "<human readable description>",
+     "conditions": {"<condition name>": "<value as written>", ...},
+     "source_ids": ["<id>", ...]},
+    ...
+  ],
+  "no_catalyst_in_scope": <true|false>
+}
+
+Rules:
+1. Create one entry per distinct reaction test / set of reaction conditions that the paper reports results for (e.g. one per catalyst and reaction temperature).
+   A reaction test is one set of reaction conditions (temperature, pressure, space velocity, feed ratio) applied to one catalyst, with the conversion and selectivity it gave. The same catalyst at another temperature or pressure is another test; a catalyst itself, its preparation and its characterization are never tests.
+2. Use the paper's own sample names when it has them; otherwise build `sample_id` from the distinguishing condition (e.g. "5Cu/ZnO-350 at 250 °C, 3 MPa"). Keep every `sample_id` unique.
+3. `conditions` holds the reaction conditions that distinguish the samples (catalyst, temperature, pressure, GHSV, H2/CO2 ratio...), values exactly as written in the paper.
+4. `source_ids` must be copied from the `<!-- source: ... -->` markers of the excerpts the sample is described in. Never invent ids.
+5. Only report samples the paper actually reports results for. Never guess and never invent a series: if the paper studies a single reaction test, return exactly one sample; if the excerpts name none, return an empty list.
+6. `no_catalyst_in_scope` is true ONLY when the excerpts show that the paper prepares and tests no catalyst of its own (a review, or a paper that only models the reaction, say); then "samples" is empty. It is false whenever such a catalyst is prepared, and false when the excerpts simply do not say.
+
+Return the JSON object only.
+
+===== field system prompt (test) =====
+You are reading selected excerpts from ONE scientific paper about heterogeneous catalysts for the hydrogenation of CO2 to methanol (supported Cu, Pd or In2O3 catalysts, Cu/ZnO/Al2O3, ZnZrOx).
+Every excerpt is preceded by a provenance marker of the form `<!-- source: <id> -->`. You must cite these ids: they are how every value is traced back to the PDF page.
+
+You are asked about ONE field at a time. The field, and the list of samples this paper reports, are given in the question.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{"values": [VALUE, ...]}
+
+VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exactly as written in the paper>",
+         "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
+         "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>",
+         "applies_to_all_samples": <true|false>,
+         "holds": <true|false for a boolean field, else null>}
+
+Rules:
+1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
+2. Put the unit in `unit_raw` exactly as written (e.g. "°C", "MPa", "mL g-1 h-1", "m2 g-1", "%"). If the number and unit are fused, split them.
+   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. "STY × 10^3 (g kg-1 h-1)" or "rate (×10^-3 mol g-1 s-1)"), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone (a column "GHSV (mL g-1 h-1)" gives just "mL g-1 h-1").
+3. `source_ids` must be copied from the `<!-- source: ... -->` markers shown here. Never invent ids and never cite an excerpt you were not shown. Prefer the most specific excerpt (a table over the surrounding paragraph).
+4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
+5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, "all tests", "in every run". Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ("the high-pressure runs", when one listed test ran at ambient pressure) is false: give the individual sample ids the excerpt names.
+   A value the paper states for a named subset of the listed samples -- "the tests at 3 MPa", "the tests of the ZrO2-supported catalysts" -- belongs to each sample in that subset when the excerpts or the sample list say exactly which listed samples form the subset: then report it once per sample of the subset, each time under that sample's own id, never as one entry without a sample id. Never guess which samples a subset holds. `applies_to_all_samples` stays reserved for a value that holds for the whole list; a subset, however large, is reported sample by sample. If they do not, report it once with a null `sample_id`.
+6. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
+   Every field describes one reaction test: its conditions, the catalyst it ran on and the performance it measured. A value of a catalyst's preparation or characterization is not a value of these fields.
+   For a numeric field `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
+7. If the same field has several values -- one per sample, or the same sample under different conditions (e.g. the methanol selectivity at 5 h and after 100 h on stream) -- report them as separate entries with `condition` set.
+8. When a field's line names a condition, always fill `condition` with it.
+9. Every value is verified against the excerpt you cite for it: if `value_raw` cannot be found in that excerpt's text, the value is recorded as unverified. Cite the excerpt that literally contains the characters you copied, and copy them exactly.
+10. If the excerpts do not state this field at all, return {"values": []}. An empty answer is a correct answer.
+
+Return the JSON object only.
+
+===== matching system prompt (test) =====
+Two independent PDF parsers were run on the SAME paper and a fact extractor produced a list of reaction tests from each.
+Because the parsers differ (OCR errors, table splitting, missing sections), the two lists may name, order or split the samples differently.
+Decide which sample in list A is the same physical sample as which sample in list B.
+
+Output ONLY a JSON object:
+{"pairs": [{"a": "<sample_id from A>", "b": "<sample_id from B>", "confidence": <0.0-1.0>, "justification": "<why>"}, ...],
+ "unmatched_a": ["<sample_id>", ...], "unmatched_b": ["<sample_id>", ...]}
+
+Rules:
+1. Match on physical identity: same reaction conditions (catalyst, temperature, pressure, GHSV...) or the same explicit sample name/number. Field VALUES (CO2 conversion, methanol selectivity...) may be used as supporting evidence only.
+2. Each sample id appears at most once across pairs and unmatched lists. Every id from both lists must appear exactly once.
+3. `confidence` is your belief that the pair is the same sample; use < 0.6 when the evidence is weak.
+4. `justification` names the condition or name that established the match, e.g. "both are the test of 5Cu/ZnO-350 at 250 °C and 3 MPa".
+
+Return the JSON object only.
+

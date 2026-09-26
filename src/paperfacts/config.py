@@ -200,6 +200,15 @@ class ConfigDocument:
             raise ConfigError(f"{self.path}: {dotted} must be a string or null, got {value!r}")
         return value.strip() or None
 
+    def names_or_none(self, dotted: str) -> tuple[str, ...] | None:
+        """A list of names that may be ``null``, which is how "all of them" is written."""
+        value = self._node(dotted)
+        if value is None:
+            return None
+        if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+            raise ConfigError(f"{self.path}: {dotted} must be a list of names or null, got {value!r}")
+        return tuple(item.strip() for item in value)
+
     def entries(self, dotted: str) -> list[Any]:
         value = self._node(dotted)
         if not isinstance(value, list):
@@ -312,6 +321,9 @@ class Settings:
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_MB * 1024 * 1024
     # Documents processed at once, by the web job queue and by `batch` unless it is given --jobs.
     max_parallel_documents: int = DEFAULT_MAX_PARALLEL_DOCUMENTS
+    # The profiles under profiles/ a server serves beside its default, by name; None serves every one that loads.
+    # A deployment that does not want the example profiles runnable (each run costs tokens) names its own here.
+    web_profiles: tuple[str, ...] | None = None
     page_dpi: int = DEFAULT_PAGE_DPI
     page_dpi_min: int = 50
     page_dpi_max: int = 220
@@ -405,6 +417,7 @@ class Settings:
                 "web.max_parallel_documents",
                 file.path,
             ),
+            web_profiles=_parse_names(get("WEB_PROFILES"), file.names_or_none("web.profiles")),
             max_upload_bytes=number("MAX_UPLOAD_MB", file.get("server.max_upload_mb", int), int) * 1024 * 1024,
             page_dpi=number("PAGE_DPI", file.get("server.page_dpi.default", int), int),
             page_dpi_min=number("PAGE_DPI_MIN", file.get("server.page_dpi.min", int), int),
@@ -565,6 +578,17 @@ def _known_effort(raw: str, source: Path, *, dotted: str, variable: str, extra: 
             f"{dotted} is {raw!r}, expected {extra} or one of {efforts} (set in {source} or {ENV_PREFIX}{variable})"
         )
     return cast(ReasoningEffort, raw)
+
+
+def _parse_names(raw: str | None, default: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """A comma-separated list from the environment; unset (or only commas) leaves ``default`` -- the file's
+    value, always parsed and validated whether or not the environment goes on to override it, so a malformed
+    ``web.profiles`` is loud even behind an override. ``"-"`` is the one way this variable can spell "no extra
+    profiles" (only the default): an empty string already means unset, so it cannot."""
+    if raw is not None and raw.strip() == "-":
+        return ()
+    names = tuple(part.strip() for part in (raw or "").split(",") if part.strip())
+    return names or default
 
 
 def _parse_bool(name: str, raw: str | None, default: bool) -> bool:

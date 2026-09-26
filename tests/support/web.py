@@ -54,6 +54,7 @@ class RunnerCall:
 
     document_id: str
     force: bool
+    profile: str = ""
 
 
 class RecordingRunner:
@@ -79,7 +80,7 @@ class RecordingRunner:
         self.entered = threading.Event()  # the job body actually started running (not just submitted)
 
     def __call__(self, job: Job, mark: Mark) -> None:
-        self.calls.append(RunnerCall(document_id=job.document_id, force=job.force))
+        self.calls.append(RunnerCall(document_id=job.document_id, force=job.force, profile=job.profile))
         self.entered.set()
         if self.gate is not None and not self.gate.wait(timeout=WAIT_TIMEOUT_S):
             raise AssertionError("job body timed out waiting for the gate: the test forgot to call set()")

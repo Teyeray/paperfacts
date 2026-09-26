@@ -77,6 +77,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin-left: 6px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill);
   font-size: 10.5px; color: var(--ink-2);
 }
+.topbar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.profile-switch select {
+  max-width: 260px; font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 3px 6px;
+}
+/* On a phone the switcher and the profile page link take the model line's place. */
+@media (max-width: 520px) {
+  .profile-switch select { max-width: 150px; }
+  .topbar-meta { display: none; }
+}
 .topbar-meta {
   color: var(--ink-3); font-size: 11.5px; font-family: var(--font-mono);
   border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 2px 10px; background: var(--paper-2);
@@ -98,6 +108,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .upload.busy { opacity: .6; pointer-events: none; }
 .upload-title { font-family: var(--font-display); font-size: 17px; }
 .upload-hint { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
+.upload-profile { color: var(--ink-2); }
 .upload-force { display: inline-flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
 .linklike { background: none; border: 0; padding: 0 2px; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 
@@ -146,6 +157,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc-title h1 { overflow-wrap: anywhere; }
 .doc-title h1 { font-family: var(--font-display); font-weight: 600; font-size: 26px; line-height: 1.2; margin: 0 0 4px; letter-spacing: -.005em; }
 .doc-id { color: var(--ink-3); font-size: 12px; }
+.doc-note { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+.doc-note.other-job { padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--paper-2); }
+.doc-item .other-profiles { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); }
 .doc-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .force-label { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
 .primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: var(--radius); padding: 8px 14px; font-weight: 600; }
@@ -412,3 +426,55 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .results-table tr.paper-row > td:first-child { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
 .results-table tr.paper-row:hover > td:first-child { background: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
 .results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+
+/* ---------- the profile page (read-only) and the home table's entity chips ---------- */
+.topbar-link { font-size: 12px; color: var(--ink-2); white-space: nowrap; text-underline-offset: 3px; }
+.entity-switch { padding-right: 10px; border-right: 1px solid var(--line); }
+.profile-head h1 { font-family: var(--font-display); font-weight: 600; font-size: 28px; line-height: 1.2; margin: 0 0 6px; }
+.profile-head .profile-badge { font-family: var(--font-body); font-size: 12px; vertical-align: middle; }
+.profile-meta { margin: 0 0 8px; font-size: 12.5px; }
+.profile-description { margin: 0 0 8px; color: var(--ink-2); max-width: 80ch; }
+.profile-warning { margin: 6px 0; padding: 6px 10px; border: 1px solid var(--warn); border-radius: var(--radius); }
+.profile-section { margin-top: var(--gap-section); }
+.profile-section h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+/* Nothing here is clickable; a long value wraps at words, so a short one never breaks letter by letter. */
+.profile-table tr { cursor: default; }
+.profile-table th { white-space: nowrap; }
+.profile-table td.profile-cell { vertical-align: top; min-width: 5em; max-width: 32em; overflow-wrap: break-word; }
+.profile-table td.profile-cell.empty { color: var(--ink-3); }
+.profile-table th small { display: block; font-family: var(--font-mono); font-weight: 400; color: var(--ink-3); }
+.profile-entities, .profile-documents { margin: 0; padding-left: 20px; line-height: 1.8; }
+.profile-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 8px 0 0; }
+.profile-list dt { color: var(--ink-3); }
+.profile-list dd { margin: 0; overflow-wrap: anywhere; }
+.prompt-preview { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
+.prompt-preview > summary { padding: 8px 12px; cursor: pointer; font-weight: 600; }
+.prompt-sections { padding: 0 12px 10px; }
+.prompt-section h3 { font-size: 13px; margin: 10px 0 4px; font-family: var(--font-mono); font-weight: 500; color: var(--ink-2); }
+.prompt-section pre {
+  margin: 0; padding: 10px 12px; max-height: 480px; overflow: auto; font-size: 11.5px; line-height: 1.5;
+  white-space: pre-wrap; background: var(--paper-2); border-radius: var(--radius-sm);
+}
+.prompt-field-label { display: block; padding: 0 12px 6px; font-size: 12.5px; }
+.prompt-field {
+  font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper); max-width: 100%;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 3px 6px;
+}
+
+/* ---------- the profile check page ---------- */
+.topbar-link:hover { color: var(--accent); }
+.check-view { max-width: 1100px; }
+.check-view > h1 { font-family: var(--font-display); font-weight: 600; font-size: 24px; margin: 0 0 6px; }
+.check-result > h2 { font-size: 15px; margin: 18px 0 6px; }
+.check-view textarea {
+  display: block; width: 100%; min-height: 280px; resize: vertical; margin: 12px 0 10px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--ink);
+  background: var(--paper); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 10px;
+}
+.check-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.check-verdict { font-weight: 600; margin: 16px 0 8px; }
+.check-verdict.ok { color: var(--ok); }
+.check-verdict.bad { color: var(--bad); }
+.check-errors, .check-notes { margin: 0; padding-left: 22px; line-height: 1.6; overflow-wrap: anywhere; }
+.check-errors li { font-family: var(--font-mono); font-size: 12px; }
+.check-same-name { color: var(--ink-2); }

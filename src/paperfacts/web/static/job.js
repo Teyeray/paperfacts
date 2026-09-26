@@ -1,9 +1,9 @@
 // Background jobs: the stage progress bar, processing log, queuing, and polling. Depends only on
 // state / api; the document view's callbacks decide what happens once a job finishes.
 
-import { api } from "./api.js";
+import { api, profileApi } from "./api.js";
 import { escapeHtml, toast } from "./html.js";
-import { JOB_STATUS_LABEL, STAGE_LABEL, STAGE_STATUS, currentJob, isActive, isCurrent, state } from "./state.js";
+import { JOB_STATUS_LABEL, STAGE_LABEL, STAGE_STATUS, currentJob, isActive, isCurrent, jobInProfile, state } from "./state.js";
 
 export const POLL_MS = 1500;
 // A dropped request (a tunnel hiccup, a restarting server) is retried with a growing pause; only a run of
@@ -43,7 +43,8 @@ export function renderJobLog(details, pre, statusSpan) {
   if (isActive(job)) details.open = true;
 }
 
-export const submitRun = (documentId, force) => api(`/api/documents/${documentId}/run?force=${force}`, { method: "POST" });
+export const submitRun = (documentId, profile, force) =>
+  profileApi(profile, `/api/documents/${documentId}/run?force=${force}`, { method: "POST" });
 
 // Poll until the job ends: onUpdate(job) on every tick, onFinish(job) at the end, onLost() when the job can
 // no longer be read (the server restarted and forgot it, or the network stayed down). A loop belongs to the
@@ -74,7 +75,8 @@ export function startPolling(jobId, { onUpdate, onFinish, onLost }) {
     }
     if (!live()) return;
     failures = 0;
-    if (job.document_id !== state.current) { stopPolling(); return; }
+    // A job of another document, or of this one under another profile, never draws this view's progress.
+    if (job.document_id !== state.current || !jobInProfile(job, state.currentProfile)) { stopPolling(); return; }
     state.job = job;
     if (isActive(job)) {
       onUpdate(job);

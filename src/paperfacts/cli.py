@@ -29,7 +29,6 @@ from paperfacts.batch import run_batch
 from paperfacts.config import DEFAULT_REPO_ROOT, ENV_PREFIX, EXTRACTION_MODES, Settings
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.fields import UNIT_KINDS
-from paperfacts.figures import user_prompt as figure_user_prompt
 from paperfacts.keys import ComparisonOptions, ExtractionOptions
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
@@ -37,15 +36,7 @@ from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.profile import DomainProfile
 from paperfacts.profile_loader import PROFILES_DIRNAME, load_profile
-from paperfacts.prompts import (
-    extraction_system_prompt,
-    field_system_prompt,
-    field_user_prompt,
-    inventory_system_prompt,
-    matching_system_prompt,
-    render_field_table,
-)
-from paperfacts.records import KindContext
+from paperfacts.profile_view import prompt_sections
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout, write_text_atomic
 from paperfacts.workflow import (
@@ -576,59 +567,12 @@ def prompts(
     if profile_name is not None:
         settings = dataclasses.replace(settings, profile=profile_name)
     profile = _profile(settings, to_run=False)
-    if field is not None:
-        spec = profile.by_name.get(field)
-        if spec is None:
-            typer.secho(
-                f"no field {field!r} in {profile.name}; it has: {', '.join(profile.by_name)}", fg="red", err=True
-            )
-            raise typer.Exit(code=1)
-        # Asked with its entity's system prompt and sample list, and a reference field with the list of the entity
-        # it names too.
-        entity = profile.entity_of(spec)
-        entities = {declared.name: declared for declared in profile.entities}
-        referenced = None if spec.references is None else (entities[spec.references], "<referenced sample list>")
-        sections = {
-            "field system prompt (passage mode)": field_system_prompt(profile, entity),
-            f"field line ({field})": render_field_table(
-                (spec,), profile.prompt.implausible_origin, KindContext(entities=entities)
-            ),
-            # The question's framing; the placeholders are what a run fills from the paper.
-            f"field user prompt ({field}, passage mode)": field_user_prompt(
-                spec,
-                "<sample list>",
-                "<excerpts>",
-                profile.prompt.implausible_origin,
-                entity.prompt.sample_list_heading,
-                referenced,
-            ),
-        }
-    elif len(profile.entities) > 1:
-        # Passage mode only: each entity type has its own inventory, field and matching prompts.
-        sections = {
-            f"{title} ({entity.name})": render(profile, entity)
-            for entity in profile.entities
-            for title, render in (
-                ("inventory system prompt", inventory_system_prompt),
-                ("field system prompt", field_system_prompt),
-                ("matching system prompt", matching_system_prompt),
-            )
-        }
-    else:
-        # Passage mode (the default) sends the inventory and field prompts and never the extraction prompt;
-        # document mode sends only the extraction prompt. Matching is the compare stage's, under either mode.
-        sections = {
-            "inventory system prompt (passage mode)": inventory_system_prompt(profile),
-            "field system prompt (passage mode)": field_system_prompt(profile),
-            "extraction system prompt (document mode)": extraction_system_prompt(profile),
-            "matching system prompt (compare, both modes)": matching_system_prompt(profile),
-        }
-    if field is None and profile.figures is not None and profile.figure_fields:
-        # Sent once per chart panel, with that figure's own caption and only the fields the caption names.
-        sections["figure user prompt (figures stage, only when figures.enabled; one per chart panel)"] = (
-            figure_user_prompt("<caption>", profile.figure_fields, profile.figures)
-        )
-    for title, text in sections.items():
+    try:
+        sections = prompt_sections(profile, field)
+    except KeyError as exc:
+        typer.secho(exc.args[0], fg="red", err=True)
+        raise typer.Exit(code=1) from exc
+    for title, text in sections:
         typer.echo(f"===== {title} =====")
         typer.echo(text)
         typer.echo("")
