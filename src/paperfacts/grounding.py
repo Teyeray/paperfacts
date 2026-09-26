@@ -36,9 +36,13 @@ _EXPONENT = re.compile(r"[-+]?\d")
 
 def grounding_key(text: str) -> str:
     """Reduce text to the form used for the containment test: no LaTeX, no case, no decoration."""
+    return _fold(text, _DECORATION)
+
+
+def _fold(text: str, decoration: re.Pattern[str]) -> str:
     folded = LATEX_WRAPPERS.sub(" ", delatex(normalize_text(text)))
     folded = _MULTIPLICATION.sub("x", folded).lower().replace("ω", "Ω")
-    return _POWER_OF_TEN.sub(r"x 10^\1", _CARET.sub("^", _DECORATION.sub(" ", folded))).strip()
+    return _POWER_OF_TEN.sub(r"x 10^\1", _CARET.sub("^", decoration.sub(" ", folded))).strip()
 
 
 # A power of ten after a multiplication sign is an exponent whether or not the caret survived: a table writes
@@ -223,15 +227,65 @@ def _straddles(joined: str, needle: str, junction: int) -> bool:
     return False
 
 
+# ---- A bound outside the quote --------------------------------------------------------------------------
+# "above 90 %" quoted whole is a bound; "90" quoted out of the same sentence read as the scalar 90 and filled six
+# cells with a number the paper never stated. What stands right before the quote in its block settles which it
+# is, so grounding, the one step that locates the quote there, records it; normalize and decide then read the
+# value as if the bound had been quoted. "~" is no bound: an approximate value is still the value. Nor is "under",
+# which papers write as a condition ("sputtered under 0.5 Pa", "500 °C under N2"), as normalize's condition rule
+# reads it.
+_BOUND_SIGNS = {"geq": "≥", "ge": "≥", "leq": "≤", "le": "≤", "gt": ">", "lt": "<"}
+# LaTeX ("\geq", not "\left") and HTML ("&gt;") spellings of the signs.
+_BOUND_SIGN = re.compile(r"\\(geq|ge|leq|le|gt|lt)(?![A-Za-z])|&(gt|lt);")
+_BOUND_DECORATION = re.compile(f"[^^<>≥≤{KEY_CHARACTERS}]+")
+_BOUND_BEFORE = re.compile(
+    r"(?:^|[^a-z])(above|over|more than|greater than|higher than|exceeding|at least|below|less than|lower than"
+    r"|up to|at most|[<>≥≤])\s*$"
+)
+
+
+def _bound_key(text: str) -> str:
+    """:func:`grounding_key` keeping the comparison signs, which the containment test folds away."""
+    text = _BOUND_SIGN.sub(lambda match: f" {_BOUND_SIGNS[match.group(1) or match.group(2)]} ", text)
+    return _fold(text, _BOUND_DECORATION)
+
+
+def quoted_bound(value: FieldValue, blocks: Mapping[str, str]) -> str | None:
+    """The bound a cited block writes right before ``value.value_raw``, or None.
+
+    Any in-block occurrence carrying one is enough: the quote does not say which occurrence it copied, and a
+    bound read as a scalar is a wrong number where a bound refused is only a blank cell. The number-boundary rule
+    of :func:`_contains` applies, so "90" in "above 90.5 %" is no occurrence of it. A quote found only across a
+    block boundary is not looked at."""
+    needle = _bound_key(value.value_raw)
+    if not needle:
+        return None
+    for source_id in value.source_ids:
+        haystack = _bound_key(blocks.get(source_id, ""))
+        for match in re.finditer(re.escape(needle), haystack):
+            if _continues_before(haystack, match.start()) or _continues_after(haystack, match.end()):
+                continue
+            bound = _BOUND_BEFORE.search(haystack, 0, match.start())
+            if bound is not None:
+                return bound.group(1)
+    return None
+
+
 def ground_values(
     values: tuple[FieldValue, ...],
     blocks: Mapping[str, str],
     *,
     adjacency: Mapping[str, tuple[str | None, str | None]] | None = None,
 ) -> tuple[FieldValue, ...]:
-    """Return ``values`` with :attr:`FieldValue.grounded` filled in."""
+    """Return ``values`` with :attr:`FieldValue.grounded` and :attr:`FieldValue.bound` filled in."""
     return tuple(
-        value.model_copy(update={"grounded": is_grounded(value, blocks, adjacency=adjacency)}) for value in values
+        value.model_copy(
+            update={
+                "grounded": is_grounded(value, blocks, adjacency=adjacency),
+                "bound": quoted_bound(value, blocks),
+            }
+        )
+        for value in values
     )
 
 

@@ -189,6 +189,10 @@ class FieldValue(BaseModel):
     agreement: float = Field(
         default=1.0, ge=0.0, le=1.0, description="fraction of extraction passes that produced this value"
     )
+    bound: str | None = Field(
+        default=None,
+        description="a bound ('above', '<') the cited block writes right before value_raw; set by grounding",
+    )
     # Filled in by paperfacts.normalize at read time; always null in the stored file.
     value: float | None = None
     unit: str | None = None
