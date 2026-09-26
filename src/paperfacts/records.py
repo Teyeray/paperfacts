@@ -62,18 +62,17 @@ class ResponseSample(BaseModel):
     fields: list[ResponseField] = Field(default_factory=list)
 
 
-class _PaperBase(BaseModel):
+class ResponsePaper(BaseModel):
+    """The paper-level record as the model writes it.
+
+    Its class name appears in no text sent back to the model: answers are validated as JSON
+    (``model_validate_json``), whose errors name only the top-level model and the key path the model wrote
+    (``tests/test_records.py`` pins them)."""
+
     model_config = ConfigDict(extra="ignore")
 
     source_ids: list[str] = Field(default_factory=list)
     fields: list[ResponseField] = Field(default_factory=list)
-
-
-# The paper-level record as the model writes it. A rejected answer goes back to the model as
-# ``str(ValidationError)``, and a wrong-type error names the nested class by its ``__name__`` (a ``title`` is
-# ignored), so the class keeps the name it had when the corpus was extracted: renaming it would change the bytes
-# of every repair request that carries such an error, and those bytes are the LLM cache key.
-ResponsePaper = create_model("ResponseTarget", __base__=_PaperBase)
 
 
 class ExtractionResponse(BaseModel):
@@ -577,7 +576,7 @@ def response_to_records(
             if spec is None:
                 continue
             if spec.is_sample_level and not item.applies_to_all_samples:
-                cleaning.dropped.append(f"{item.field}: {spec.group}-level field reported under the target")
+                cleaning.dropped.append(f"{item.field}: {spec.group}-level field reported at paper level")
                 continue
             value = cleaned(item, spec)
             if value is None:

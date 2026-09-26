@@ -122,18 +122,60 @@ def test_under_keys_equal_to_the_attributes_a_rejected_answer_reads_as_the_base_
     assert str(actual.value) == str(expected.value)
 
 
-def test_a_rejected_answer_names_the_profile_s_key_and_the_paper_record_s_frozen_class_name():
-    # The key the model wrote, and the nested class by the name it had when the corpus was extracted: both are
-    # repair-request bytes (tests/fixtures/prompts/snapshot.json pins the TCO texts in full).
+_PYDANTIC_ERRORS = "    For further information visit https://errors.pydantic.dev/2.13/v/"
+
+
+@pytest.mark.parametrize(
+    ("model", "answer", "expected"),
+    [
+        (
+            "extraction",
+            '{"target": "12 nm"}',
+            "1 validation error for ExtractionResponse\ntarget\n  Input should be an object "
+            f"[type=model_type, input_value='12 nm', input_type=str]\n{_PYDANTIC_ERRORS}model_type",
+        ),
+        (
+            "extraction",
+            '{"target": {"fields": "12 nm"}}',
+            "1 validation error for ExtractionResponse\ntarget.fields\n  Input should be a valid array "
+            f"[type=list_type, input_value='12 nm', input_type=str]\n{_PYDANTIC_ERRORS}list_type",
+        ),
+        (
+            "extraction",
+            '{"target": {"fields": [{"value_raw": "1"}]}}',
+            "1 validation error for ExtractionResponse\ntarget.fields.0.field\n  Field required "
+            f"[type=missing, input_value={{'value_raw': '1'}}, input_type=dict]\n{_PYDANTIC_ERRORS}missing",
+        ),
+        (
+            "inventory",
+            '{"no_tco_film": "maybe"}',
+            "1 validation error for InventoryResponse\nno_tco_film\n  Input should be a valid boolean, unable to "
+            f"interpret input [type=bool_parsing, input_value='maybe', input_type=str]\n{_PYDANTIC_ERRORS}bool_parsing",
+        ),
+    ],
+    ids=["paper-not-object", "paper-fields-not-list", "paper-field-missing-key", "no-samples-not-bool"],
+)
+def test_the_json_mode_errors_under_the_tco_keys_are_pinned(model, answer, expected):
+    # What a repair request carries (llm.complete_validated validates JSON): the top-level class and the key path
+    # the model wrote, never the paper record's class name, so ResponsePaper may be named freely.
+    keyed = getattr(response_models("target", "no_tco_film"), model)
+
+    with pytest.raises(ValidationError) as error:
+        keyed.model_validate_json(answer)
+
+    assert str(error.value) == expected
+    assert "ResponsePaper" not in str(error.value)
+
+
+def test_a_rejected_answer_names_the_profile_s_key():
     keyed = response_models("paper_level", "nothing_here")
 
-    # Python-mode validation, where pydantic names the nested class; in JSON mode it says "an object".
     with pytest.raises(ValidationError) as paper:
-        keyed.extraction.model_validate({"paper_level": 5})
+        keyed.extraction.model_validate_json('{"paper_level": 5}')
     with pytest.raises(ValidationError) as inventory:
         keyed.inventory.model_validate_json('{"nothing_here": "maybe"}')
 
-    assert "\npaper_level\n  Input should be a valid dictionary or instance of ResponseTarget " in str(paper.value)
+    assert str(paper.value).startswith("1 validation error for ExtractionResponse\npaper_level\n")
     assert str(inventory.value).startswith("1 validation error for InventoryResponse\nnothing_here\n")
 
 
@@ -309,7 +351,7 @@ def test_a_target_level_field_reported_under_a_sample_is_dropped_and_logged():
     assert records.dropped == ("resistance: target-level field reported under a sample",)
 
 
-def test_a_sample_level_field_reported_under_the_target_is_dropped_and_logged():
+def test_a_sample_level_field_reported_at_paper_level_is_dropped_and_logged():
     response = ExtractionResponse.model_validate(
         {"paper": {"fields": [{"field": "thickness", "value_raw": "300", "unit_raw": "nm"}]}}
     )
@@ -317,7 +359,7 @@ def test_a_sample_level_field_reported_under_the_target_is_dropped_and_logged():
     records = to_records(response)
 
     assert records.paper is None
-    assert records.dropped == ("thickness: film-level field reported under the target",)
+    assert records.dropped == ("thickness: film-level field reported at paper level",)
 
 
 # ---- The sample list: the same audit and placement rules as passage mode --------------------------

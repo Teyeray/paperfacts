@@ -127,10 +127,11 @@ this file is the part that is easy to get wrong.
 - Internal names: the paper-level record is `paper` (`PaperRecord`, comparison scope and quality-row id
   `"paper"`) and the no-samples verdict `no_samples`, in code, stored files and the web for every profile. The
   model sees the profile's `paper_key` / `no_samples_key` (TCO: `target` / `no_tco_film`), mapped onto them by
-  `records.response_models` aliases; the response classes keep their names (`ResponseTarget` included) because
-  validation errors reach the model in repair requests. A report holds `matchings: {entity: SampleMatching}`
-  (`"sample"` for a profile without entity types). Files written before that rename are read through aliases
-  (`LaneExtraction`) and before-validators (`ComparisonReport`); `tests/fixtures/b0_formats` and `b1_formats` hold
+  `records.response_models` aliases; the top-level response classes keep their names because validation errors
+  (JSON mode: top-level class plus key path, `tests/test_records.py` pins them) reach the model in repair
+  requests. A report holds `matchings: {entity: SampleMatching}` and must hold `"sample"` (the implicit entity);
+  read it with `report.sample_matching()`. Files written before that rename are read through aliases
+  (`LaneExtraction`) and before-validators (`ComparisonReport`, `DatasetPayload`); `tests/fixtures/b0_formats` and `b1_formats` hold
   them. Every persisted model ignores unknown keys, so a rename without typed fixtures of every persisted type
   would load empty records silently.
 - Cache keys live in `keys.py`. `extractor_key(options)` is the only extraction key: it hashes one frozen

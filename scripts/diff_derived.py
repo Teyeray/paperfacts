@@ -12,8 +12,8 @@ usage counters).
 Round 2 renames the paper-level record ``target`` -> ``paper`` and the no-samples verdict ``no_tco_film`` ->
 ``no_samples`` in the stored files, and a report's ``matching`` becomes ``matchings: {"sample": ...}``. Across
 that rename the old side is read under the new names first (``--legacy-names``), so the proof still compares
-content rather than spelling. By default this happens for a document exactly when its old lanes use the old
-names and its new lanes do not, so B1 against B1 is untouched.
+content rather than spelling. By default this happens for a document exactly when one of its old files (lane,
+report or dataset) uses the old names and none of its new files does, so B1 against B1 is untouched.
 
 Standard library only, so it runs from any checkout against any data root.
 """
@@ -91,7 +91,7 @@ def current_names(kind: str, data: Any) -> Any:
             "matchings": {IMPLICIT_ENTITY: data["matching"]}
         }
     rows, id_key = RENAMED_ROW_IDS[kind]
-    if not isinstance(data.get(rows), list):
+    if not isinstance(data.get(rows), list) or (kind == "datasets" and _has_sample_named_target(data)):
         return data
     renamed = [
         row | {id_key: PAPER_ID} if isinstance(row, dict) and row.get(id_key) == LEGACY_PAPER_ID else row
@@ -100,13 +100,38 @@ def current_names(kind: str, data: Any) -> Any:
     return data | {rows: renamed}
 
 
-def uses_legacy_names(old_lanes: list[Path], new_lanes: list[Path]) -> bool:
-    """Whether a document straddles the rename: an old lane has the legacy keys and no new lane still has them."""
+def _has_sample_named_target(dataset: dict) -> bool:
+    # Every sample has a sample row, so a quality row "target" is the paper's only when no sample has that id.
+    rows = dataset.get("sample_rows")
+    return isinstance(rows, list) and any(
+        isinstance(row, dict) and row.get("sample_id") == LEGACY_PAPER_ID for row in rows
+    )
 
-    def legacy(path: Path) -> bool:
-        return path.is_file() and any(name in json.loads(path.read_text()) for name in LEGACY_LANE_KEYS)
 
-    return any(legacy(path) for path in old_lanes) and not any(legacy(path) for path in new_lanes)
+def has_legacy_names(kind: str, data: Any) -> bool:
+    """Whether a stored file of ``kind`` spells anything the way it was spelled before the round 2 rename."""
+    if not isinstance(data, dict):
+        return False
+    if kind.startswith("facts:"):
+        return any(name in data for name in LEGACY_LANE_KEYS)
+    if kind == "comparisons" and "matching" in data and "matchings" not in data:
+        return True
+    if kind == "datasets" and _has_sample_named_target(data):
+        return False
+    rows, id_key = RENAMED_ROW_IDS[kind]
+    return isinstance(data.get(rows), list) and any(
+        isinstance(row, dict) and row.get(id_key) == LEGACY_PAPER_ID for row in data[rows]
+    )
+
+
+def uses_legacy_names(old_files: list[tuple[str, Path]], new_files: list[tuple[str, Path]]) -> bool:
+    """Whether a document straddles the rename: one of its old ``(kind, path)`` files has the legacy names and
+    none of its new ones still has them."""
+
+    def legacy(kind: str, path: Path) -> bool:
+        return path.is_file() and has_legacy_names(kind, json.loads(path.read_text()))
+
+    return any(legacy(*file) for file in old_files) and not any(legacy(*file) for file in new_files)
 
 
 def compare_file(
@@ -137,23 +162,16 @@ def compare_library(
     (:func:`uses_legacy_names`); True or False reads every old file, or none, under the new names."""
     results: list[FileDiff] = []
     for document in sorted(path for path in (data_root / "docs").iterdir() if path.is_dir()):
-        name = document.name
-        old_lanes = [document / "facts" / f"{backend}.{old[0]}.json" for backend in BACKENDS]
-        new_lanes = [document / "facts" / f"{backend}.{new[0]}.json" for backend in BACKENDS]
-        rename = uses_legacy_names(old_lanes, new_lanes) if legacy_names is None else legacy_names
-        for backend, old_lane, new_lane in zip(BACKENDS, old_lanes, new_lanes, strict=True):
-            results.append(compare_file(name, f"facts:{backend}", old_lane, new_lane, ignored, legacy_names=rename))
-        for kind in ("comparisons", "datasets"):
-            results.append(
-                compare_file(
-                    name,
-                    kind,
-                    document / kind / f"{old[0]}.{old[1]}.json",
-                    document / kind / f"{new[0]}.{new[1]}.json",
-                    ignored,
-                    legacy_names=rename,
-                )
-            )
+
+        def files(key: tuple[str, str], document: Path = document) -> list[tuple[str, Path]]:
+            lanes = [(f"facts:{backend}", document / "facts" / f"{backend}.{key[0]}.json") for backend in BACKENDS]
+            derived = [(kind, document / kind / f"{key[0]}.{key[1]}.json") for kind in ("comparisons", "datasets")]
+            return lanes + derived
+
+        old_files, new_files = files(old), files(new)
+        rename = uses_legacy_names(old_files, new_files) if legacy_names is None else legacy_names
+        for (kind, old_path), (_, new_path) in zip(old_files, new_files, strict=True):
+            results.append(compare_file(document.name, kind, old_path, new_path, ignored, legacy_names=rename))
     return results
 
 

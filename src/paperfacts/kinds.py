@@ -22,7 +22,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol
 
-from paperfacts.fields import FieldKind, FieldSpec
+from paperfacts.fields import RANGE_ENDS, FieldKind, FieldSpec
 from paperfacts.normalize import (
     Reading,
     canonical_category,
@@ -102,6 +102,7 @@ _PARENTHESISED_UNCERTAINTY = re.compile(
 )
 # The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
 _APPROX_NOTE = "原文为近似值，保留中心值"
+_RANGE_APPROX_NOTE = "原文为近似值"
 _APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 
 
@@ -126,6 +127,11 @@ def _names_unit_of(spec: FieldSpec, text: str, units: UnitRegistry) -> bool:
     return any(units.convert(canonical, word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
 
 
+def _value_units(value: FieldValue, spec: FieldSpec) -> tuple[str, ...]:
+    """The units a quote may carry in its own text: the one the model transcribed and the field's canonical one."""
+    return tuple(unit for unit in (value.unit_raw, spec.canonical_unit) if unit)
+
+
 def _range_end(
     value: FieldValue, spec: FieldSpec, units: UnitRegistry, reading: Reading, notes: list[str], refusal: str
 ) -> tuple[CellValue, str | None]:
@@ -133,23 +139,22 @@ def _range_end(
     is no single scalar.
 
     An end is a number the paper printed, so it may fill a cell; a midpoint was never measured, so under
-    ``midpoint`` or ``reject`` a range stays out. A range followed by a condition is refused as a scalar is."""
-    if spec.range_policy not in ("lower", "upper") or reading.condition:
+    ``midpoint`` or ``reject`` a range stays out. Only a clean range has an end (:func:`read_range`, which the
+    lanes read ends with too)."""
+    if spec.range_policy not in RANGE_ENDS:
         return None, refusal
-    ends = read_range(reading)
-    if ends is None:
+    clean = read_range(reading.text, _value_units(value, spec))
+    if clean is None:
         return None, refusal
-    low, high, _ = ends
+    low, high, _ = clean
     upper = spec.range_policy == "upper"
     canonical, _, note = convert_to_canonical(
-        spec, high if upper else low, value.unit_raw, units, value_text=reading.text
+        spec, high if upper else low, value.unit_raw, units, value_text=reading.text, range_ends=(low, high)
     )
     if canonical is None or not math.isfinite(canonical):
         return None, note or "单位无法转换为标准单位"
     chosen = f"原文为区间 {low:g}–{high:g}，按字段配置取{'上限' if upper else '下限'}"
-    # An approximate range keeps an end, not a centre value.
-    kept = ["原文为近似值" if n == _APPROX_NOTE else n for n in notes]
-    return canonical, joined([note or "", *kept, chosen])
+    return canonical, joined([note or "", *notes, chosen])
 
 
 class NumericRules:
@@ -177,10 +182,15 @@ class NumericRules:
             return field.model_copy(
                 update={"value": reading.compound, "unit": spec.canonical_unit, "normalization_note": note}
             )
-        number, parse_note = parse_number(reading.text, range_policy=spec.range_policy)
+        own_units = _value_units(field, spec)
+        number, parse_note = parse_number(reading.text, range_policy=spec.range_policy, range_units=own_units)
         if number is None:
             return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
-        value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=reading.text)
+        # The range an end was taken from decides a bare number's unit for both ends at once.
+        clean = read_range(reading.text, own_units) if spec.range_policy in RANGE_ENDS else None
+        value, unit, unit_note = convert_to_canonical(
+            spec, number, field.unit_raw, units, value_text=reading.text, range_ends=clean[:2] if clean else None
+        )
         note = "; ".join(n for n in (lead_note, parse_note, unit_note) if n) or None
         return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 
@@ -220,13 +230,16 @@ class NumericRules:
         approx = _APPROX.match(text)
         if approx:
             text = text[approx.end() :].strip()
-        notes: list[str] = []
+        word = []
         if reading.number_word is not None:
-            notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {reading.number_word}")
-        if approx:
-            notes.append(_APPROX_NOTE)
-        if reading.clause:
-            notes.append(f"{reading.clause!r} 已计入测量条件")
+            word.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {reading.number_word}")
+        clause = [f"{reading.clause!r} 已计入测量条件"] if reading.clause else []
+
+        def context(approx_note: str) -> list[str]:
+            # A centre value is kept of an approximate scalar, an end of an approximate range.
+            return [*word, *([approx_note] if approx else []), *clause]
+
+        notes = context(_APPROX_NOTE)
         if reading.compound is not None:
             if reading.condition:
                 notes.append(f"条件 {reading.condition!r} 不计入数值")
@@ -240,13 +253,22 @@ class NumericRules:
         match = _SCALAR.fullmatch(text)
         if match is None:
             return _range_end(
-                value, spec, units, reading, notes, "不是唯一精确标量（含上下界、区间、尺寸组合或无法解析的文字）"
+                value,
+                spec,
+                units,
+                reading,
+                context(_RANGE_APPROX_NOTE),
+                "不是唯一精确标量（含上下界、区间、尺寸组合或无法解析的文字）",
             )
         tail = match.group("tail").strip()
-        allowed_units = {clean_unit(unit) for unit in (value.unit_raw, spec.canonical_unit) if unit}
-        if tail and clean_unit(tail) not in allowed_units:
+        if tail and clean_unit(tail) not in {clean_unit(unit) for unit in _value_units(value, spec)}:
             return _range_end(
-                value, spec, units, reading, notes, "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
+                value,
+                spec,
+                units,
+                reading,
+                context(_RANGE_APPROX_NOTE),
+                "含多个数值、范围、上下界或附加条件，不能取中点或第一个数",
             )
         # No range_policy: "center" is one number. A range reaches a cell only through _range_end.
         number, _ = parse_number(match.group("center"))

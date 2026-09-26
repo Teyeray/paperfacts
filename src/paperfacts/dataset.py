@@ -13,11 +13,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from paperfacts.columns import FieldColumn
-from paperfacts.compare import IMPLICIT_ENTITY, PAPER_SCOPE, ComparisonReport, FieldComparison, check_profile
+from paperfacts.compare import PAPER_SCOPE, ComparisonReport, FieldComparison, check_profile
 from paperfacts.decide import Decision, decide
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
@@ -28,6 +29,8 @@ from paperfacts.records import LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
 Row = Mapping[str, CellValue]
+# The paper-level quality rows' sample_id as files written before round 2 spell it.
+_LEGACY_PAPER_ID = "target"
 
 
 class DatasetPayload(BaseModel):
@@ -56,6 +59,24 @@ class DatasetPayload(BaseModel):
     quality_rows: tuple[dict[str, CellValue], ...] = ()
     # keys.profile_comparison_fingerprint of the profile the table was consolidated under (None: an older file).
     profile_fingerprint: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _current_paper_id(cls, data: Any) -> Any:
+        # A file written before round 2 ids its paper-level quality rows "target". Every sample has a sample
+        # row, so a quality row whose id no sample row has can only be the paper's.
+        if not isinstance(data, dict) or not isinstance(data.get("quality_rows"), list | tuple):
+            return data
+        samples = {row.get("sample_id") for row in data.get("sample_rows") or () if isinstance(row, dict)}
+        if _LEGACY_PAPER_ID in samples:
+            return data
+        rows = [
+            row | {"sample_id": PAPER_SCOPE}
+            if isinstance(row, dict) and row.get("sample_id") == _LEGACY_PAPER_ID
+            else row
+            for row in data["quality_rows"]
+        ]
+        return data | {"quality_rows": rows}
 
 
 @dataclass(frozen=True)
@@ -146,7 +167,7 @@ def _matching_blocked(scope: _Scope | None, ambiguous_match_confidence: float) -
 
 def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> tuple[_Scope, ...]:
     lane_a, lane_b = lanes[report.backend_a], lanes[report.backend_b]
-    matching = report.matchings[IMPLICIT_ENTITY]
+    matching = report.sample_matching()
     scopes: list[_Scope] = []
     for pair in matching.pairs:
         a, b = lane_a.sample(pair.a_id), lane_b.sample(pair.b_id)
@@ -192,7 +213,7 @@ def incomplete_reason(lanes: Mapping[Backend, LaneExtraction], report: Compariso
     never retry it; unstored, the next run asks again, and only the failed request reaches the model, since
     invalid answers are never cached (llm.complete_validated).
     """
-    if report.matchings[IMPLICIT_ENTITY].failed:
+    if report.sample_matching().failed:
         return "sample matching failed"
     unanswered = [f"{backend}:{q.field}" for backend, lane in lanes.items() for q in lane.failed_questions]
     return f"no valid answer to {', '.join(unanswered)}" if unanswered else ""

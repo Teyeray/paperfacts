@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from paperfacts.compare import IMPLICIT_ENTITY, ComparisonReport
 from paperfacts.dataset import DatasetPayload, DocumentDataset
@@ -76,8 +77,16 @@ def test_a_b1_report_loads_with_its_paper_comparison_and_unmatched_sample():
     assert report.counts.samples_matched == 2
     assert report.counts.samples_unmatched == 1
     assert list(report.matchings) == [IMPLICIT_ENTITY]
-    assert len(report.matchings[IMPLICIT_ENTITY].pairs) == 2
-    assert report.matchings[IMPLICIT_ENTITY].unmatched_b == ("SnO2:Ta reference",)
+    assert len(report.sample_matching().pairs) == 2
+    assert report.sample_matching().unmatched_b == ("SnO2:Ta reference",)
+
+
+def test_a_report_without_the_implicit_entity_s_matching_is_refused_at_load():
+    data = json.loads((FIXTURES / "report.json").read_text(encoding="utf-8"))
+    data["matchings"] = {"catalyst": data.pop("matching")}
+
+    with pytest.raises(ValidationError, match="matchings has no entry for the implicit entity 'sample'"):
+        ComparisonReport.model_validate(data)
 
 
 def test_a_b1_report_is_written_back_under_the_new_names():
@@ -104,8 +113,19 @@ def test_a_b1_dataset_loads_with_its_paper_level_cell():
     assert dataset.paper_row["component"] == PAPER_COMPONENT
     assert len(dataset.sample_rows) == 3
     paper_quality = [row for row in dataset.quality_rows if row["field"] == "component"]
-    # Quality rows are stored as plain rows, so a B1 dataset keeps its "target" id until it is rebuilt.
-    assert [(row["sample_id"], row["decision"]) for row in paper_quality] == [("target", "agree")]
+    # The paper-level quality rows' "target" id is read as "paper", as the report's scope is.
+    assert [(row["sample_id"], row["decision"]) for row in paper_quality] == [("paper", "agree")]
+    assert "target" not in {row["sample_id"] for row in dataset.quality_rows}
+
+
+def test_a_sample_named_target_keeps_its_quality_rows():
+    # Only the paper's rows were ever renamed: a sample really called "target" has a sample row, and keeps its id.
+    data = json.loads((FIXTURES / "dataset.json").read_text(encoding="utf-8"))
+    data["sample_rows"] = [*data["sample_rows"], {"sample_id": "target"}]
+
+    payload = DatasetPayload.model_validate(data)
+
+    assert "target" in {row["sample_id"] for row in payload.quality_rows}
 
 
 # ---- figure readings --------------------------------------------------------------------------------------

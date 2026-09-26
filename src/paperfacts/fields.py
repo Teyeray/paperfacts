@@ -49,6 +49,8 @@ DisplayFormat = Literal["plain", "scientific"]
 # What a range quoted as one value ("10-20") becomes: its midpoint, no value at all, or the end the field asks
 # for. Only an end fills a dataset cell: it is a number the paper printed, a midpoint is not.
 RangePolicy = Literal["midpoint", "reject", "lower", "upper"]
+# The policies that read a range as one of its printed ends.
+RANGE_ENDS: tuple[RangePolicy, ...] = ("lower", "upper")
 # What a value quoted with an "after ..." clause ("92.5% after 100 cycles") becomes: refused as the value of
 # another state of the sample, or read with the clause moved into its measurement condition.
 AfterClause = Literal["refuse", "condition"]

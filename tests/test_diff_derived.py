@@ -160,3 +160,30 @@ def test_only_the_renamed_spots_are_rewritten():
     }
     current = {"matchings": {"sample": {}}, "comparisons": []}
     assert diff_derived.current_names("comparisons", current) == current
+
+
+def test_the_rename_is_decided_from_reports_and_datasets_too(tmp_path: Path):
+    # Lanes already under the new names on both sides (re-derived first), but the old report and dataset still
+    # spell the paper "target" and keep one "matching": the old side is read under the new names all the same.
+    root = b1_library(tmp_path)
+    doc = root / "docs" / "abcd"
+    for backend in diff_derived.BACKENDS:
+        old_lane = doc / "facts" / f"{backend}.{OLD[0]}.json"
+        old_lane.write_text(renamed(old_lane.read_text(encoding="utf-8")), encoding="utf-8")
+
+    results = diff_derived.compare_library(root, OLD, NEW, diff_derived.DEFAULT_IGNORED)
+
+    assert {result.status for result in results} == {"identical"}
+
+
+def test_each_stored_kind_says_whether_it_has_the_legacy_names():
+    assert diff_derived.has_legacy_names("facts:mineru", {"target": None})
+    assert not diff_derived.has_legacy_names("facts:mineru", {"paper": None})
+    assert diff_derived.has_legacy_names("comparisons", {"matching": {}})
+    assert diff_derived.has_legacy_names("comparisons", {"matchings": {}, "comparisons": [{"scope": "target"}]})
+    assert not diff_derived.has_legacy_names("comparisons", {"matchings": {}, "comparisons": [{"scope": "paper"}]})
+    assert diff_derived.has_legacy_names("datasets", {"quality_rows": [{"sample_id": "target"}]})
+    # A sample really named "target" has a sample row: its quality rows were never the paper's.
+    named = {"sample_rows": [{"sample_id": "target"}], "quality_rows": [{"sample_id": "target"}]}
+    assert not diff_derived.has_legacy_names("datasets", named)
+    assert diff_derived.current_names("datasets", named) == named

@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import itertools
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from functools import cache
 
-from paperfacts.fields import FieldSpec, RangePolicy
+from paperfacts.fields import RANGE_ENDS, FieldSpec, RangePolicy
 from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, PaperRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
@@ -159,7 +159,9 @@ _QUALIFIERS = re.compile(
 )
 
 
-def parse_number(raw: str, *, range_policy: RangePolicy = "midpoint") -> tuple[float | None, str | None]:
+def parse_number(
+    raw: str, *, range_policy: RangePolicy = "midpoint", range_units: Collection[str] = ()
+) -> tuple[float | None, str | None]:
     """``(value, note)``: the number ``raw`` spells, or None with the reason it was refused.
 
     A qualifier ("~", ">", "about") is dropped and recorded first; what is left must then match one of the
@@ -171,20 +173,30 @@ def parse_number(raw: str, *, range_policy: RangePolicy = "midpoint") -> tuple[f
     ``"reject"`` refuses it, for a quantity whose range is a window rather than a scatter around one value (a
     cathode's "2.8–4.3 V" is the cycling window; its midpoint was never measured). ``"lower"`` / ``"upper"``
     read it as the end the field asks for (a calcination "at 450-500 °C" reported by its upper end): unlike
-    the midpoint, an end is a number the paper printed.
+    the midpoint, an end is a number the paper printed. Only a clean range has an end (:func:`read_range`, whose
+    unit must be one of ``range_units``, the field's); any other range is refused under them, exactly as the
+    dataset cell refuses it.
     """
     text, notes, refusal = _prepare(raw)
     if refusal is not None:
         return None, _join([*notes, refusal])
+    if range_policy in RANGE_ENDS:
+        clean = read_range(raw, range_units)
+        if clean is not None:
+            low, high, unit = clean
+            unit_note = [f"trailing unit {unit!r} in value ignored"] if unit else []
+            end = f"range {low:g}-{high:g} → {range_policy} end"
+            return (low if range_policy == "lower" else high), _join([*set_aside(raw)[1], *unit_note, end])
     value, reading, ends = _read(text)
-    if ends is None or range_policy == "midpoint":
+    if ends is None:
         return value, _join([*notes, *reading])
+    low, high = ends
+    if range_policy == "midpoint":
+        return value, _join([*notes, *reading, f"range {low:g}-{high:g} → midpoint"])
     if range_policy == "reject":
-        suffix, value = " refused (range_policy 'reject')", None
-    else:
-        suffix, value = f" → {range_policy} bound", ends[0] if range_policy == "lower" else ends[1]
-    chosen = [f"{n.removesuffix(_MIDPOINT)}{suffix}" if n.endswith(_MIDPOINT) else n for n in reading]
-    return value, _join([*notes, *chosen])
+        return None, _join([*notes, *reading, f"range {low:g}-{high:g} refused (range_policy 'reject')"])
+    unclean = f"range {low:g}-{high:g} has no {range_policy} end: not one clean range in the field's unit; ambiguous"
+    return None, _join([*notes, *reading, unclean])
 
 
 def _prepare(raw: str) -> tuple[str, list[str], str | None]:
@@ -210,6 +222,15 @@ def split_after_clause(text: str) -> tuple[str, str]:
     return text[: match.start()].strip(), text[match.start() :].strip()
 
 
+def _typeset(raw: str) -> str:
+    """``raw`` with its typesetting folded away, as every reader of a value sees it."""
+    # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
+    text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw)))
+    # A command delatex has no reading for is typesetting; left in place, its letters would glue to the
+    # digits after it ("\\sim82").
+    return _LATEX_COMMAND.sub(" ", text).strip()
+
+
 def set_aside(raw: str) -> tuple[str, list[str], str]:
     """``(value text, notes, condition)``: ``raw`` without what surrounds the value -- typesetting, a qualifier,
     a name before "=", a condition after it -- a note for each thing set aside, and the condition itself ("" when
@@ -218,11 +239,7 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
 
     A condition is set aside only where the value before it keeps a number: "deposited for 10 min" is the
     quote of a value that opens with its verb, not a condition with no value in front of it."""
-    # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
-    text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw)))
-    # A command delatex has no reading for is typesetting; left in place, its letters would glue to the
-    # digits after it ("\\sim82").
-    text = _LATEX_COMMAND.sub(" ", text).strip()
+    text = _typeset(raw)
     notes: list[str] = []
     match = _QUALIFIERS.match(text)
     if match:
@@ -241,9 +258,8 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
 
 
 # (value, notes, ends): ends is the (low, high) of a spelling that reads a whole range as its midpoint, which is
-# what range_policy picks from; None for every other reading.
+# what range_policy decides on (parse_number writes the range's note); None for every other reading.
 _Reading = tuple[float | None, list[str], tuple[float, float] | None]
-_MIDPOINT = " → midpoint"
 
 
 def _read(text: str) -> _Reading:
@@ -309,7 +325,7 @@ def _scientific(text: str) -> _Reading | None:
         if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
             low, high = values
             if low < high:
-                return (low + high) / 2, [f"range {low:g}-{high:g}{_MIDPOINT}"], (low, high)
+                return (low + high) / 2, [], (low, high)
             return _refuse("descending range in scientific notation; ambiguous")
     if len(matches) > 1 or NUMBER_RE.search(rest):
         return _refuse("numbers outside the scientific notation; ambiguous")
@@ -336,7 +352,7 @@ def _range(text: str) -> _Reading | None:
         return _refuse("descending range, or an exponent without its caret; ambiguous")
     unit = second or first
     notes = [f"trailing unit {unit!r} in value ignored"] if unit else []
-    return (low + high) / 2, [*notes, f"range {low:g}-{high:g}{_MIDPOINT}"], (low, high)
+    return (low + high) / 2, notes, (low, high)
 
 
 def _first_number(text: str) -> _Reading:
@@ -480,6 +496,7 @@ def convert_to_canonical(
     units: UnitRegistry,
     *,
     value_text: str | None = None,
+    range_ends: tuple[float, float] | None = None,
 ) -> tuple[float | None, str | None, str | None]:
     """``(canonical value, canonical unit, note)`` in ``units`` (a profile's); the value is None when conversion
     fails.
@@ -487,13 +504,15 @@ def convert_to_canonical(
     The value is multiplied by any scale factor in the header first, then converted as ``value * factor +
     offset``: the header's power of ten counts in the unit it was written in, before a temperature is shifted.
     ``value_text`` is the raw text ``value`` was parsed from. It is only consulted to detect a power of ten
-    written twice, once in the value and once in the unit, which no reading can resolve.
+    written twice, once in the value and once in the unit, which no reading can resolve. ``range_ends`` are the
+    ends of the range ``value`` was taken from (``range_policy`` lower/upper): a bare number's meaning is then
+    decided once for the whole range, so both ends read in the same unit.
     """
     canonical = spec.canonical_unit
     if canonical is None:
         return value, None, None
     if unit_raw is None:
-        return _bare_number(spec, value)
+        return _bare_number(spec, value, range_ends)
 
     def convert(unit: str) -> tuple[float, float] | None:
         return units.convert(canonical, unit)
@@ -512,7 +531,8 @@ def convert_to_canonical(
     scale_note = f"scale factor {scale:g} taken from the header in the unit" if scale != 1.0 else None
     value *= scale
     if not unit:
-        canonical_value, canonical_unit, note = _bare_number(spec, value)
+        scaled = None if range_ends is None else (range_ends[0] * scale, range_ends[1] * scale)
+        canonical_value, canonical_unit, note = _bare_number(spec, value, scaled)
         return canonical_value, canonical_unit, _join([n for n in (scale_note, note) if n])
     conversion = convert(unit)
     if conversion is None:
@@ -536,12 +556,19 @@ def _apply(value: float, factor: float, offset: float) -> float:
     return value * factor + offset if offset else value * factor
 
 
-def _bare_number(spec: FieldSpec, value: float) -> tuple[float | None, str | None, str | None]:
+def _bare_number(
+    spec: FieldSpec, value: float, range_ends: tuple[float, float] | None = None
+) -> tuple[float | None, str | None, str | None]:
     canonical = spec.canonical_unit
     match spec.bare_number:
         case "percent_or_fraction":
             # Strictly below 1: a bare "1" is far more often 1 % (1 % O2 in Ar) than a fraction of exactly
-            # one, and reading it as 100 % turns a trace admixture into the whole gas.
+            # one, and reading it as 100 % turns a trace admixture into the whole gas. A range is a fraction only
+            # when all of it is: "0.8-1.2" is 0.8-1.2 % at either end, never 80 % at one and 1.2 % at the other.
+            if range_ends is not None:
+                if 0.0 <= range_ends[0] and range_ends[1] < 1.0:
+                    return value * 100.0, canonical, "no unit; range < 1 read as a fraction"
+                return value, canonical, "no unit; read as percent"
             if 0.0 <= value < 1.0:
                 return value * 100.0, canonical, "no unit; value < 1 read as a fraction"
             return value, canonical, "no unit; read as percent"
@@ -640,29 +667,45 @@ def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Readi
 
 
 # A qualifier that makes what follows a one-sided bound: "> 450-500" is no range with two printed ends.
-_BOUND_QUALIFIER = re.compile(r"^(?:>=|<=|[≥≤<>])")
+_BOUND_SIGNS = frozenset({">=", "<=", "≥", "≤", "<", ">"})
+# "10-20", "80%–85%", "500 °C to 530 °C", "10-20 Ω cm": two plain bounds, the first with an optional unit of its
+# own, then whatever follows the second.
+_PLAIN_RANGE = re.compile(rf"^(?P<a>{_NUM})\s*(?P<ua>{_UNIT_TOKEN})?\s*{_RANGE_SEP}\s*(?P<b>{_NUM})(?P<rest>.*)$")
 
 
-def read_range(reading: Reading) -> tuple[float, float, str | None] | None:
-    """``(low, high, note)`` when ``reading`` (:func:`read_value`'s, so number words, the "after" clause and a
-    bound apply exactly as in the comparison) is one two-ended range and nothing else, else None.
+def read_range(raw: str, units: Collection[str] = ()) -> tuple[float, float, str] | None:
+    """``(low, high, unit)`` when ``raw`` is one clean range, else None: the one definition of a range with two
+    printed ends, for the lanes (:func:`parse_number` under ``range_policy`` lower/upper) and the dataset cell
+    (``kinds``) alike, so the two never disagree about which quotes have an end.
 
-    Only the two spellings that read a range claim it: a range behind a parenthesised alternative, a bound
-    ("above 450-500", or a bound grounding found before the quote), a descending pair and a range whose
-    exponent is written once ("1.2-1.5 × 10^-3") are no range with two printed ends."""
-    if reading.bound or reading.compound is not None:
+    Clean means two ascending numbers, both plain or both in scientific notation, joined by a range separator,
+    and after them nothing but a unit that is one of ``units`` ("" when the range has none). A qualifier of
+    approximation or a name before "=" may precede it (:func:`set_aside`); a bound ("> 450-500", "below 1.2e-4 -
+    1.5e-4"), a condition ("450-500 °C for 2 h"), an "after" clause, a parenthesis ("450-500 (600)"), another unit
+    ("450-500 K" on a ℃ field) and an exponent written once for two numbers ("1.2-1.5 × 10^-3") are not."""
+    bare, _, condition = set_aside(raw)
+    qualifier = _QUALIFIERS.match(_typeset(raw))
+    if condition or _AFTER.search(bare) or (qualifier is not None and qualifier.group("q") in _BOUND_SIGNS):
         return None
-    if _BOUND_QUALIFIER.match(delatex(normalize_text(reading.text)).strip()):
+    scientific = list(_SCI.finditer(bare))
+    if scientific:
+        if len(scientific) != 2 or bare[: scientific[0].start()].strip():
+            return None
+        first, second = scientific
+        if not _RANGE_SEPARATOR.fullmatch(bare[first.end() : second.start()].strip()):
+            return None
+        low, high, unit = _sci_value(first), _sci_value(second), bare[second.end() :].strip()
+    else:
+        match = _PLAIN_RANGE.match(bare)
+        if match is None:
+            return None
+        own, unit = match.group("ua") or "", match.group("rest").strip()
+        if own and unit and own != unit:
+            return None
+        low, high, unit = float(_plain(match.group("a"))), float(_plain(match.group("b"))), unit or own
+    if low >= high or (unit and clean_unit(unit) not in {clean_unit(allowed) for allowed in units}):
         return None
-    text, notes, refusal = _prepare(reading.text)
-    if refusal is not None:
-        return None
-    for spelling in (_scientific, _range):
-        found = spelling(text)
-        if found is not None:
-            _, spelled, ends = found
-            return None if ends is None else (*ends, _join([*notes, *(n.removesuffix(_MIDPOINT) for n in spelled)]))
-    return None
+    return low, high, unit
 
 
 def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:

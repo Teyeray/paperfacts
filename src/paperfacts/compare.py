@@ -137,6 +137,18 @@ class ComparisonReport(BaseModel):
             }
         return data
 
+    @model_validator(mode="after")
+    def _has_the_implicit_entity(self) -> Self:
+        # Every profile has the implicit entity (a profile without entity types has only it), and every reader
+        # starts from its matching; a report without one is refused at load, not with a KeyError far away.
+        if IMPLICIT_ENTITY not in self.matchings:
+            raise ValueError(f"matchings has no entry for the implicit entity {IMPLICIT_ENTITY!r}")
+        return self
+
+    def sample_matching(self) -> SampleMatching:
+        """The matching of the implicit entity's samples."""
+        return self.matchings[IMPLICIT_ENTITY]
+
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
 

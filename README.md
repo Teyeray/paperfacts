@@ -571,9 +571,16 @@ Two more numeric attributes decide how a quoted value is read. `range_policy` (`
 comparison: its midpoint, no value, or its lower or upper end (a calcination "at 450-500 °C" reported by the
 temperature it reached: `upper`). Under `lower` / `upper` the chosen end also fills the **dataset cell**, with
 the note 原文为区间 a–b，按字段配置取上限/下限: an end is a number the paper printed. Under `midpoint` and
-`reject` a range never fills a cell: a midpoint is a number nobody measured. A bound (">80 %", or "80" quoted
-out of "above 80 %") is no range under any policy, and a descending pair or a range whose exponent is written
-once (`1.2-1.5 × 10⁻³`) is refused under every one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
+`reject` a range never fills a cell: a midpoint is a number nobody measured. Only a **clean range** has an end,
+and the lanes and the cell use the one definition of it (`normalize.read_range`): two ascending numbers, both
+plain or both in scientific notation, and after them nothing but the transcribed or the canonical unit
+("450-500", "450 °C to 500 °C", "1.2e-4 - 1.5e-4 Ω·cm"); an approximation ("~450-500") may precede it. Anything
+else is refused under `lower` / `upper` in the lanes as in the cell: a bound ("> 450-500", "below 1.2e-4 -
+1.5e-4"), a condition ("450-500 °C for 2 h"), a parenthesis ("450-500 (600)") or another unit ("450-500 K" on a
+℃ field). A bare range on a `percent_or_fraction` field is a fraction only when all of it is below 1, so both
+ends read in one unit ("0.8-1.2" is 0.8-1.2 %). A bound (">80 %", or "80" quoted out of "above 80 %") is no
+range under any policy, and a descending pair or a range whose exponent is written once (`1.2-1.5 × 10⁻³`) is
+refused under every one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
 clause: by default "100 nm after annealing" is refused, since it describes another state of the sample; under
 `condition` ("92.5% after 100 cycles" for a capacity retention) the number is read and the clause is appended
 to the value's `condition` (`; `-joined when the model already gave one), so "after 50 cycles" and "after 100

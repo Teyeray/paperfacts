@@ -566,13 +566,13 @@ def test_a_failed_matching_is_reported_but_not_stored_so_the_next_run_asks_again
         document.document_id, failed.extractor_key, failed.comparison_key
     )
 
-    assert failed.matchings["sample"].failed
+    assert failed.sample_matching().failed
     assert not path.is_file()
 
     retried = compare(document, settings, tco_profile, client)
 
     assert client.call_count == 5  # the lanes came from their cache; only matching was asked again
-    assert not retried.matchings["sample"].failed
+    assert not retried.sample_matching().failed
     assert path.is_file()
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from paperfacts.compare import IMPLICIT_ENTITY, ComparisonReport, FieldComparison
+from paperfacts.compare import ComparisonReport, FieldComparison
 from paperfacts.records import FieldValue, LaneExtraction
 
 
@@ -38,7 +38,7 @@ def render_lane(lane: LaneExtraction) -> Iterator[str]:
 
 def render_report(report: ComparisonReport) -> Iterator[str]:
     yield f"counts: {report.counts.model_dump()}"
-    matching = report.matchings[IMPLICIT_ENTITY]
+    matching = report.sample_matching()
     for pair in matching.pairs:
         yield f"  match {pair.a_id} ↔ {pair.b_id}  conf={pair.confidence:.2f} ({pair.method}): {pair.justification}"
     for sample_id in matching.unmatched_a:

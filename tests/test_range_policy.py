@@ -1,8 +1,9 @@
 """``range_policy`` lower / upper: a range quoted as one value read as the end the field asks for.
 
 The lanes and the comparison read the chosen end (``parse_number``); the dataset cell takes it too, because an
-end is a number the paper printed. ``midpoint`` and ``reject`` behave exactly as before, and a bound is never
-mistaken for a range.
+end is a number the paper printed. Both take it only from what ``read_range`` calls a clean range, so they never
+disagree about which quotes have an end. ``midpoint`` and ``reject`` behave exactly as before, and a bound is
+never mistaken for a range.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from paperfacts import keys
 from paperfacts.compare import FieldComparison
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
-from paperfacts.fields import FieldRole
+from paperfacts.fields import RANGE_ENDS, FieldRole
 from paperfacts.kinds import RULES
 from paperfacts.normalize import normalize_field, parse_number, read_range, read_value
 from support.extraction import make_field
@@ -26,16 +27,27 @@ from support.profiles import make_profile, shipped_profile
 TCO = shipped_profile()
 UNITS = TCO.units
 CORPUS_VALUES = json.loads((Path(__file__).parent / "fixtures" / "corpus" / "values.json").read_text(encoding="utf-8"))
-ENDS = ("lower", "upper")
+ENDS = RANGE_ENDS
 
 
 def _spec(policy: str):
     return dataclasses.replace(TCO.by_name["annealing_temperature"], range_policy=policy)
 
 
-def _field(value_raw: str, *, unit_raw: str | None = "°C", bound: str | None = None, condition: str | None = None):
-    field = make_field("annealing_temperature", value_raw, unit_raw=unit_raw, condition=condition, source_ids=("b",))
+def _field(
+    value_raw: str,
+    *,
+    unit_raw: str | None = "°C",
+    bound: str | None = None,
+    condition: str | None = None,
+    name: str = "annealing_temperature",
+):
+    field = make_field(name, value_raw, unit_raw=unit_raw, condition=condition, source_ids=("b",))
     return field.model_copy(update={"bound": bound})
+
+
+def _named_spec(name: str, policy: str):
+    return dataclasses.replace(TCO.by_name[name], range_policy=policy)
 
 
 # ---- parse_number ---------------------------------------------------------------------------------------
@@ -51,13 +63,13 @@ def _field(value_raw: str, *, unit_raw: str | None = "°C", bound: str | None = 
     ],
 )
 def test_lower_and_upper_read_the_chosen_end_with_a_note(raw, low, high, shown):
-    lower_value, lower_note = parse_number(raw, range_policy="lower")
-    upper_value, upper_note = parse_number(raw, range_policy="upper")
+    lower_value, lower_note = parse_number(raw, range_policy="lower", range_units=("nm",))
+    upper_value, upper_note = parse_number(raw, range_policy="upper", range_units=("nm",))
 
     assert lower_value == pytest.approx(low)
     assert upper_value == pytest.approx(high)
-    assert lower_note.endswith(f"{shown} → lower bound")
-    assert upper_note.endswith(f"{shown} → upper bound")
+    assert lower_note.endswith(f"{shown} → lower end")
+    assert upper_note.endswith(f"{shown} → upper end")
     assert "midpoint" not in lower_note + upper_note
 
 
@@ -78,9 +90,10 @@ def test_lower_and_upper_leave_everything_that_is_not_a_range_alone(policy, raw)
 
 @pytest.mark.parametrize("policy", ENDS)
 def test_the_end_policies_move_only_the_corpus_strings_read_as_a_midpoint(policy):
-    # Over every numeric string of the real corpus: a string that is no range reads exactly as under the default,
-    # and one read as a midpoint reads as one of its ends with the same notes but the last.
-    moved = 0
+    # Over every numeric string of the real corpus: a string that is no range reads exactly as under the default;
+    # one read as a midpoint reads as the end of a clean range with the same notes but the last, and any other
+    # range is refused.
+    moved = refused = 0
     for row in CORPUS_VALUES:
         raw = row["value_raw"]
         midpoint = parse_number(raw)
@@ -88,11 +101,17 @@ def test_the_end_policies_move_only_the_corpus_strings_read_as_a_midpoint(policy
         if midpoint[1] is None or not midpoint[1].endswith(" → midpoint"):
             assert chosen == midpoint, raw
             continue
+        if read_range(raw) is None:
+            refused += 1
+            assert chosen[0] is None, raw
+            assert chosen[1].endswith(f"has no {policy} end: not one clean range in the field's unit; ambiguous")
+            continue
         moved += 1
-        assert chosen[1] == midpoint[1].removesuffix(" → midpoint") + f" → {policy} bound"
+        assert chosen[1] == midpoint[1].removesuffix(" → midpoint") + f" → {policy} end"
         assert chosen[0] != midpoint[0]
 
     assert moved > 0
+    assert refused > 0
 
 
 # ---- The comparison's reading ---------------------------------------------------------------------------
@@ -103,7 +122,7 @@ def test_normalize_field_takes_the_upper_end_in_the_canonical_unit():
 
     assert value.value == pytest.approx(500.0)
     assert value.unit == "℃"
-    assert value.normalization_note == "range 450-500 → upper bound"
+    assert value.normalization_note == "range 450-500 → upper end"
 
 
 @pytest.mark.parametrize("policy", ENDS)
@@ -114,18 +133,55 @@ def test_a_bound_grounding_found_reads_as_under_midpoint(policy):
     assert normalize_field(field, _spec(policy), UNITS) == normalize_field(field, _spec("midpoint"), UNITS)
 
 
-def test_read_range_goes_through_read_value():
-    assert read_range(read_value(_field("~450-500 °C"), _spec("upper"), UNITS)) == (
-        450.0,
-        500.0,
-        "qualifier '~' dropped; trailing unit '°C' in value ignored; range 450-500",
-    )
+def test_read_range_reads_the_text_read_value_built():
+    reading = read_value(_field("~450-500 °C"), _spec("upper"), UNITS)
+    assert read_range(reading.text, ("°C",)) == (450.0, 500.0, "°C")
     # Number words are never a range (records.spell_number_word), here as in the comparison.
-    assert read_range(read_value(_field("two to three", unit_raw="h"), TCO.by_name["annealing_time"], UNITS)) is None
+    spec = TCO.by_name["annealing_time"]
+    assert read_range(read_value(_field("two to three", unit_raw="h"), spec, UNITS).text, ("h",)) is None
+    # A bound grounding found before the quote is put in front of the text.
+    assert read_range(read_value(_field("450-500", bound="above"), _spec("upper"), UNITS).text) is None
+    assert read_range("450") is None
 
-    assert read_range(read_value(_field("450-500", bound="above"), _spec("upper"), UNITS)) is None
-    assert read_range(read_value(_field("> 450-500"), _spec("upper"), UNITS)) is None
-    assert read_range(read_value(_field("450"), _spec("upper"), UNITS)) is None
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("10-20", (10.0, 20.0, "")),
+        ("80%–85%", (80.0, 85.0, "%")),
+        ("500 °C to 530 °C", (500.0, 530.0, "°C")),
+        ("T = 450-500 °C", (450.0, 500.0, "°C")),
+        ("about 450-500", (450.0, 500.0, "")),
+        ("1.2 × 10^-3 to 1.5 × 10^-3", (1.2e-3, 1.5e-3, "")),
+        ("1.2e-4-1.5e-4 Ω·cm", (1.2e-4, 1.5e-4, "Ω.cm")),
+        # Anything but one clean range in the field's unit.
+        ("450-500 K", None),
+        ("450-500 nm", None),
+        ("1.2e-4-1.5e-4 nm", None),
+        ("> 450-500", None),
+        ("≥450-500", None),
+        ("above 450-500", None),
+        ("below 1.2 x 10^-4 - 1.5 x 10^-4", None),
+        ("above 1.2e-4 to 1.5e-4", None),
+        ("less than 1.2e-4-1.5e-4", None),
+        ("1.2e-4-1.5e-4 Ω cm (sample A)", None),
+        ("450-500 (600)", None),
+        ("450-500 °C for 2 h", None),
+        ("85-90% after annealing", None),
+        ("1.2-1.5 × 10^-3", None),
+        ("500-450", None),
+        ("450 °C-500 K", None),
+    ],
+)
+def test_read_range_is_the_one_definition_of_a_clean_range(raw, expected):
+    found = read_range(raw, ("°C", "℃", "%", "Ω·cm"))
+
+    if expected is None:
+        assert found is None
+    else:
+        assert found is not None
+        assert found[:2] == pytest.approx(expected[:2])
+        assert found[2] == expected[2]
 
 
 # ---- The dataset cell -----------------------------------------------------------------------------------
@@ -188,6 +244,83 @@ def test_a_bound_or_anything_but_one_clean_range_stays_out_of_the_cell(policy, f
     value, _ = RULES["numeric"].cell(field, _spec(policy), UNITS)
 
     assert value is None
+
+
+# The review's exact strings: a range whose own unit is not the field's, and a bound before a scientific range,
+# fill no cell and give no lane value; and the lanes and the cell agree on every range.
+UNCLEAN = [
+    ("annealing_temperature", "450-500 K", "°C"),
+    ("annealing_temperature", "450-500 nm", "°C"),
+    ("resistivity", "1.2e-4-1.5e-4 nm", "Ω·cm"),
+    ("resistivity", "1.2 × 10^-4 - 1.5 × 10^-4 K", "Ω·cm"),
+    ("resistivity", "below 1.2 x 10^-4 - 1.5 x 10^-4", "Ω·cm"),
+    ("resistivity", "above 1.2e-4 to 1.5e-4", "Ω·cm"),
+    ("resistivity", "less than 1.2e-4-1.5e-4", "Ω·cm"),
+    ("resistivity", "1.2e-4-1.5e-4 Ω cm (sample A)", "Ω·cm"),
+    ("annealing_temperature", "> 450-500", "°C"),
+    ("annealing_temperature", "450-500 (600)", "°C"),
+    ("annealing_temperature", "450-500 °C for 2 h", "°C"),
+]
+
+
+@pytest.mark.parametrize("policy", ENDS)
+@pytest.mark.parametrize(("name", "raw", "unit_raw"), UNCLEAN)
+def test_an_unclean_range_has_no_end_in_the_lanes_or_the_cell(policy, name, raw, unit_raw):
+    field, spec = _field(raw, unit_raw=unit_raw, name=name), _named_spec(name, policy)
+
+    lane = normalize_field(field, spec, UNITS)
+    cell, _ = RULES["numeric"].cell(field, spec, UNITS)
+
+    assert lane.value is None
+    assert cell is None
+
+
+@pytest.mark.parametrize("policy", ENDS)
+@pytest.mark.parametrize(
+    ("name", "raw", "unit_raw"),
+    [
+        *UNCLEAN,
+        ("annealing_temperature", "450-500", "°C"),
+        ("annealing_temperature", "450-500 °C", "°C"),
+        ("annealing_temperature", "~450-500 °C", "°C"),
+        ("annealing_temperature", "450 °C to 500 °C", "°C"),
+        ("annealing_temperature", "450-500 ℃", "°C"),
+        ("resistivity", "1.2e-4-1.5e-4 Ω·cm", "Ω·cm"),
+        ("resistivity", "1.2 × 10^-3 to 1.5 × 10^-3", "Ω·cm"),
+        ("o2_ratio", "0.8-1.2", None),
+        ("o2_ratio", "0.2-0.5", None),
+        ("o2_ratio", "5-10 %", "%"),
+    ],
+)
+def test_the_lanes_and_the_cell_take_the_same_end(policy, name, raw, unit_raw):
+    field, spec = _field(raw, unit_raw=unit_raw, name=name), _named_spec(name, policy)
+
+    lane = normalize_field(field, spec, UNITS)
+    cell, _ = RULES["numeric"].cell(field, spec, UNITS)
+
+    assert lane.value == (None if cell is None else pytest.approx(cell))
+
+
+@pytest.mark.parametrize(
+    ("raw", "lower", "upper"),
+    [("0.8-1.2", 0.8, 1.2), ("0.2-0.5", 20.0, 50.0)],
+)
+def test_a_bare_range_is_a_fraction_or_a_percent_as_a_whole(raw, lower, upper):
+    # "0.8-1.2" is not 80 % at one end and 1.2 % at the other: the range decides once, from all of it.
+    for policy, expected in (("lower", lower), ("upper", upper)):
+        field, spec = _field(raw, unit_raw=None, name="o2_ratio"), _named_spec("o2_ratio", policy)
+
+        assert normalize_field(field, spec, UNITS).value == pytest.approx(expected)
+        assert RULES["numeric"].cell(field, spec, UNITS)[0] == pytest.approx(expected)
+
+
+def test_a_bare_midpoint_still_decides_from_the_midpoint():
+    field = _field("0.8-1.2", unit_raw=None, name="o2_ratio")
+
+    value = normalize_field(field, _named_spec("o2_ratio", "midpoint"), UNITS)
+
+    assert value.value == pytest.approx(1.0)
+    assert value.normalization_note == "range 0.8-1.2 → midpoint; no unit; read as percent"
 
 
 def _decision(policy: str):
