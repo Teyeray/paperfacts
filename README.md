@@ -550,7 +550,9 @@ passage-mode retrieval and nothing else. A `text` field may add `categories`, th
 accepts, spelled the way the output should spell them: with `"categories": ["DC", "RF", "pulsed DC",
 "DC+RF", "HiPIMS"]` on `mode`, both "DC and RF magnetron co-sputtering" and "DC and RF" resolve to `DC+RF`
 and stop being judged two different modes, while "DC" and "RF" stay apart. A value naming no category is
-compared as ordinary text, never rounded to the nearest one. `categories` changes only verdicts, so adding
+compared as ordinary text, never rounded to the nearest one. Text is equal across spacing, case and a hyphen or
+period one parser dropped ("rfmagnetron sputtering" is "rf-magnetron sputtering", so both are `RF`) unless both
+values name a category, and then only the categories count. `categories` changes only verdicts, so adding
 one re-compares the stored facts instead of re-extracting them.
 
 A numeric field may declare `valid_range`, the plausible values in its `canonical_unit`, with either end
@@ -1152,6 +1154,9 @@ reaches the model as `$( 4 0 \times 1 0 \mathrm { c m }$` from one parser and `(
 — while staying strict about digits: a quoted `5` is not found inside `0.5` or `5.2`, nor `10` inside
 `10⁻⁴`. A quote that straddles the junction between the cited block and
 its same-page neighbour counts as grounded. A quote lying entirely inside the neighbour still does not.
+Grounding also notes a bound the block writes right before the quote (above, over, more/greater/higher than, exceeding,
+at least, below, less/lower than, up to, at most, `>`, `≥`, `<`, `≤`; not `~`, and not "under", which papers use for a condition): `90`
+quoted out of "above 90 %" is then read exactly as a quoted "above 90 %" and fills no dataset cell.
 
 Two more rules shape the table. **Series fan-out**: when the model states that a value holds for every
 listed sample, the code writes it onto each of them and marks it 系列级, rather than leaving it
