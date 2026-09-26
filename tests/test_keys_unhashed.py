@@ -59,6 +59,26 @@ def test_the_profile_modules_are_hashed_where_what_they_hold_is_read(monkeypatch
     assert {"text.py", "units.py", "profile.py"} <= hashed
 
 
+def test_the_kind_rules_are_hashed_with_the_stages_that_dispatch_to_them(monkeypatch, tco_profile):
+    # normalize_field, the comparison, the dataset cell and the field line all ask kinds.py.
+    real = keys.source_fingerprint
+    lists: dict[str, tuple[str, ...]] = {}
+
+    def recording(*module_files: str) -> str:
+        lists[module_files[0]] = module_files
+        return real(*module_files)
+
+    monkeypatch.setattr(keys, "source_fingerprint", recording)
+    keys.extraction_code_fingerprint.__wrapped__()
+    keys.normalization_fingerprint.__wrapped__()
+    keys.comparison_code_fingerprint.__wrapped__()
+    keys.retrieval_fingerprint.__wrapped__(tco_profile)
+
+    assert all("kinds.py" in lists[first] for first in ("extract.py", "normalize.py", "compare.py"))
+    # Retrieval reads only which kinds need a digit, from fields.py; it never imports kinds.py.
+    assert "fields.py" in lists["passages.py"]
+
+
 def test_a_workbook_header_edit_leaves_the_comparison_key(monkeypatch, tmp_path, tco_profile):
     # The row headers are display text in workbook.py; were they in dataset.py, renaming one would rename every
     # stored comparison. The package is copied so its sources can be edited without touching the checkout.

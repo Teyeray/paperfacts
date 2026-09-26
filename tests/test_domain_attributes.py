@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 
 from paperfacts import prompts
-from paperfacts.decide import _scalar
 from paperfacts.errors import ConfigError
+from paperfacts.kinds import RULES
 from paperfacts.normalize import drop_implausible, normalize_field, parse_number, split_after_clause
 from paperfacts.profile import DomainProfile, PromptSlots
 from paperfacts.profile_loader import load_profile
@@ -108,7 +108,9 @@ def test_the_clause_joins_a_condition_the_model_gave_once_only(battery):
 def test_the_dataset_cell_reads_the_same_number(battery):
     spec = battery.by_name["capacity_retention"]
 
-    value, note = _scalar(make_field("capacity_retention", "92.5% after 100 cycles", unit_raw="%"), spec, battery.units)
+    value, note = RULES["numeric"].cell(
+        make_field("capacity_retention", "92.5% after 100 cycles", unit_raw="%"), spec, battery.units
+    )
 
     assert value == 92.5
     assert "after 100 cycles" in note

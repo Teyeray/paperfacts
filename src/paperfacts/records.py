@@ -29,7 +29,7 @@ from typing import Any, Protocol, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
-from paperfacts.fields import FieldSpec
+from paperfacts.fields import DIGIT_KINDS, FieldSpec
 from paperfacts.models import Backend
 from paperfacts.storage import write_text_atomic
 
@@ -446,7 +446,7 @@ class ResponseCleaning:
     ) -> FieldValue | None:
         """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
         text = value_raw.strip()
-        if spec.kind == "numeric" and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
+        if spec.kind in DIGIT_KINDS and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
             return None
         return FieldValue(

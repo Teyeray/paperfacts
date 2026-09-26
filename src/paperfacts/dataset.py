@@ -18,9 +18,10 @@ from pydantic import BaseModel, ConfigDict
 
 from paperfacts.columns import FieldColumn
 from paperfacts.compare import IMPLICIT_ENTITY, PAPER_SCOPE, ComparisonReport, FieldComparison, check_profile
-from paperfacts.decide import CellValue, Decision, decide, joined
+from paperfacts.decide import Decision, decide
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
+from paperfacts.kinds import CellValue, joined
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.normalize import normalize_lane
 from paperfacts.records import LaneExtraction, SampleRecord

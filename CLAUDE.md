@@ -37,6 +37,11 @@ this file is the part that is easy to get wrong.
   reaches a key as a value). Presentation: `ui_copy.py`, `workbook.py`, `columns.py`, `readings.py`. `batch.py`
   is directory runs and offline export; `stored.py` is what is stored for a document and whether it is current.
   `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists).
+- What a field's kind decides (reading a value, when two lanes agree, what a dataset cell holds, the kind's note in
+  a field line) is one row per kind in `kinds.py`; a stage asks `kinds.rules_for(spec)` and never branches on
+  `spec.kind`. `records.py` and `passages.py` sit below it and read `fields.DIGIT_KINDS` instead. A dataset column
+  (`columns.FieldColumn`) carries `kind` and `cardinality`, and the workbook (`format_cell`), `table.js` and `tsv.js`
+  format a cell by its column, never by the value's shape.
 - No module converts or retrieves with a unit table of its own: every conversion goes through the
   `UnitRegistry` of the profile it runs under (`profile.units`), including in tests and fixture generators.
 
@@ -147,12 +152,14 @@ this file is the part that is easy to get wrong.
   zero misses) plus `scripts/diff_derived.py`.
 - Hashed module sources, by fingerprint (`keys.py` is the truth; the docs follow it):
   - extraction code: `extract`, `fields`, `profile`, `units`, `text`, `voting`, `records`, `adapters`,
-    `prompts`, `normalize`, `grounding`, `continuation`;
-  - retrieval (passage mode): `passages`, `continuation`, `units`, `text`;
-  - normalization (comparison): `normalize`, `units`, `text`;
-  - comparison code: `compare`, `matching`, `dataset`, `decide`, `fields`, `profile`;
+    `prompts`, `normalize`, `grounding`, `continuation`, `kinds`;
+  - retrieval (passage mode): `passages`, `continuation`, `units`, `text`, `fields`;
+  - normalization (comparison): `normalize`, `units`, `text`, `kinds`;
+  - comparison code: `compare`, `matching`, `dataset`, `decide`, `kinds`, `fields`, `profile`;
   - figure code: `figures`, `normalize`, `passages`, `units`, `text`, `fields`, `profile`.
-  Editing any of them re-keys. A module that holds a default the keys omit must be hashed.
+  Editing any of them re-keys. A module that holds a default the keys omit must be hashed. Besides the rendered
+  system prompts, `extractor_key` hashes every prompt slot not at its default (except the `matching_*` ones, which
+  `comparison_key` hashes), because a slot may reach only a user prompt.
 - Presentation and orchestration stay out of hashed modules: the Excel layout is `workbook.py`, not
   `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
   `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading

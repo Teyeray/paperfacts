@@ -36,6 +36,12 @@ from typing import Literal
 FieldLevel = Literal["paper", "sample"]
 # numeric: a number with a unit; composition: a chemical formula; text: anything else
 FieldKind = Literal["numeric", "composition", "text"]
+# The kinds whose value is quoted as a number, so an answer or a block without a digit cannot hold one. Here
+# rather than in paperfacts.kinds because cleaning (records.py) and retrieval (passages.py) sit below that module.
+DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric"})
+# How many values of a field one sample (or the paper) holds. Only "one" exists yet; a dataset column carries it
+# so that the workbook and the web format a cell by its column.
+Cardinality = Literal["one", "many"]
 # What a bare number with no unit means. Declared per field so normalisation never special-cases a name.
 BareNumberPolicy = Literal["reject", "assume_canonical", "percent_or_fraction"]
 # How a workbook prints a numeric cell: plainly, or in scientific notation for values spanning decades.

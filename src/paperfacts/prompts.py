@@ -31,6 +31,7 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 
 from paperfacts.fields import FieldSpec
+from paperfacts.kinds import rules_for
 from paperfacts.profile import MARKER, DomainProfile, GroupSpec
 
 # A value stated for part of the series. Left unsaid, the model reports "all films deposited at 100 °C" as one
@@ -166,7 +167,8 @@ Rules:
 
 Return the JSON object only."""
 
-_FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{condition}{plausible}"
+# ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" for every kind so far.
+_FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{note}{condition}{plausible}"
 # Told to the model so it checks what it is quoting before it answers; the code drops what still falls outside.
 _PLAUSIBLE = (
     " Plausible values are {range}; a number outside that range almost always belongs to {origin}, so check"
@@ -230,6 +232,7 @@ def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> s
                 kind=spec.kind,
                 unit=unit,
                 description=spec.description,
+                note=rules_for(spec).note(spec),
                 condition=condition,
                 plausible=plausible,
             )

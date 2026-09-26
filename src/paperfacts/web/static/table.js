@@ -11,7 +11,7 @@ import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
 import { clearEvidence, showEvidence } from "./samples.js";
 import { LANE_LABEL, noSamplesReason, state, uiCopy } from "./state.js";
-import { copyTable } from "./tsv.js";
+import { copyTable, fieldText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
@@ -41,7 +41,7 @@ const KEY_SEPARATOR = "\u0000";
 export const column = (header, html, text) => ({ header, head: `<th>${escapeHtml(header)}</th>`, html, text });
 
 // A field column. `value(item)` is the committed value this row shows in it (or null), and `html(item, value)`
-// wraps it in a <td>; the clipboard gets `value(item)` alone.
+// wraps it in a <td>; the clipboard gets `value(item)` alone, written out as the column's kind says.
 export function fieldColumn(field, value, html) {
   // With a Chinese label the header reads label over the id it exports under. The unit is not repeated on
   // screen: every decided cell carries it next to its value. The clipboard header does carry it, so the
@@ -52,7 +52,7 @@ export function fieldColumn(field, value, html) {
     header: field.unit ? `${title} (${field.unit})` : title,
     head: `<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`,
     html: (item) => html(item, value(item)),
-    text: value,
+    text: (item) => fieldText(value(item), field),
   };
 }
 
@@ -69,13 +69,17 @@ export function bodyRow(columns, item, className = "") {
   return tr;
 }
 
-// How a committed value is written out: numbers through `fmt`, everything else as its own text.
-const shownValue = (value) => (typeof value === "number" ? fmt(value) : String(value));
+// How a committed value is written out, decided by its column: the values of a `many` column joined with "；",
+// numbers through `fmt`, everything else as its own text.
+const shownValue = (value, field) => {
+  if (field?.cardinality === "many" && Array.isArray(value)) return value.map((item) => shownValue(item)).join("；");
+  return typeof value === "number" ? fmt(value) : String(value);
+};
 
 // A value as the reader sees it in a cell: the number and the field's canonical unit, e.g. `125 nm`.
 // Text fields have no unit, and a unitless number stays a bare number.
 export function valueHtml(value, field) {
-  const shown = escapeHtml(shownValue(value));
+  const shown = escapeHtml(shownValue(value, field));
   const unit = typeof value === "number" && field?.unit ? field.unit : "";
   return unit ? `${shown} <span class="unit">${escapeHtml(unit)}</span>` : shown;
 }

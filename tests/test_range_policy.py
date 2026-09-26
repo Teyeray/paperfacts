@@ -15,9 +15,10 @@ import pytest
 
 from paperfacts import keys
 from paperfacts.compare import FieldComparison
-from paperfacts.decide import _scalar, decide
+from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
 from paperfacts.fields import FieldRole
+from paperfacts.kinds import RULES
 from paperfacts.normalize import normalize_field, parse_number, read_range, read_value
 from support.extraction import make_field
 from support.profiles import make_profile, shipped_profile
@@ -135,14 +136,14 @@ def test_read_range_goes_through_read_value():
     [("upper", 500.0, "上限"), ("lower", 450.0, "下限")],
 )
 def test_an_end_fills_the_cell_with_a_note(policy, expected, word):
-    value, note = _scalar(_field("450-500"), _spec(policy), UNITS)
+    value, note = RULES["numeric"].cell(_field("450-500"), _spec(policy), UNITS)
 
     assert value == pytest.approx(expected)
     assert f"原文为区间 450–500，按字段配置取{word}" in note
 
 
 def test_an_approximate_range_keeps_its_end_not_a_centre():
-    value, note = _scalar(_field("~450-500"), _spec("lower"), UNITS)
+    value, note = RULES["numeric"].cell(_field("~450-500"), _spec("lower"), UNITS)
 
     assert value == pytest.approx(450.0)
     assert "原文为近似值" in note
@@ -151,7 +152,7 @@ def test_an_approximate_range_keeps_its_end_not_a_centre():
 
 def test_a_scientific_range_fills_the_cell_with_its_end():
     spec = dataclasses.replace(TCO.by_name["resistivity"], range_policy="upper")
-    value, note = _scalar(
+    value, note = RULES["numeric"].cell(
         make_field("resistivity", "1.2 × 10^-3 to 1.5 × 10^-3", unit_raw="Ω·cm", source_ids=("b",)), spec, UNITS
     )
 
@@ -161,7 +162,7 @@ def test_a_scientific_range_fills_the_cell_with_its_end():
 
 @pytest.mark.parametrize("policy", ["midpoint", "reject"])
 def test_midpoint_and_reject_still_keep_a_range_out_of_the_cell(policy):
-    value, note = _scalar(_field("450-500"), _spec(policy), UNITS)
+    value, note = RULES["numeric"].cell(_field("450-500"), _spec(policy), UNITS)
 
     assert value is None
     assert note == "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
@@ -184,7 +185,7 @@ def test_midpoint_and_reject_still_keep_a_range_out_of_the_cell(policy):
     ids=["above", "qualifier", "bound", "bound-scalar", "gt", "descending", "condition", "alternative", "exponent"],
 )
 def test_a_bound_or_anything_but_one_clean_range_stays_out_of_the_cell(policy, field):
-    value, _ = _scalar(field, _spec(policy), UNITS)
+    value, _ = RULES["numeric"].cell(field, _spec(policy), UNITS)
 
     assert value is None
 

@@ -41,7 +41,7 @@ from paperfacts.config import (
     Settings,
 )
 from paperfacts.fields import FieldRole, FieldSpec
-from paperfacts.profile import DomainProfile, FigureSlots
+from paperfacts.profile import DomainProfile, FigureSlots, PromptSlots
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
@@ -56,6 +56,9 @@ _NO_DEFAULT = object()
 # Built once: the material of every field of every key compares against it.
 _FIELD_DEFAULTS = {item.name: item.default for item in dataclasses.fields(FieldSpec)}
 _FIGURE_SLOT_DEFAULTS = {item.name: item.default for item in dataclasses.fields(FigureSlots)}
+_PROMPT_SLOT_DEFAULTS = {item.name: item.default for item in dataclasses.fields(PromptSlots)}
+# The slots only the sample-matching prompt reads: comparison material, never extraction material.
+_MATCHING_SLOT_PREFIX = "matching_"
 
 
 def content_fingerprint(material: str) -> str:
@@ -124,12 +127,12 @@ def profile_comparison_fingerprint(profile: DomainProfile) -> str:
 def retrieval_fingerprint(profile: DomainProfile) -> str:
     """Everything that decides which blocks a passage-mode question is shown: the fields' retrieval attributes
     (their keywords), the profile's condition words and unit pattern for the inventory question, how its own
-    units are found in running text, and the code that applies them."""
+    units are found in running text, and the code that applies them (``fields.py`` for which kinds need a digit)."""
     material: dict[str, object] = {
         # In question order, not by name: a field's name reaches the prompts, which the extraction schema covers.
         "fields": [_field_material(spec, FieldRole.RETRIEVAL) for spec in profile.fields],
         "retrieval": dataclasses.asdict(profile.retrieval),
-        "code": source_fingerprint("passages.py", "continuation.py", "units.py", "text.py"),
+        "code": source_fingerprint("passages.py", "continuation.py", "units.py", "text.py", "fields.py"),
     }
     # A unit's excluded spellings change what its built-in pattern finds; listed only when there are some, so a
     # unit that excludes nothing keeps the material it had before exclusions existed.
@@ -155,7 +158,8 @@ def extraction_code_fingerprint() -> str:
     ``drop_implausible`` judges (``continuation.py`` decides which blocks grounding joins across a page
     break); ``voting.py`` decides which of the model's repeated claims survive the majority vote.
     ``text.py`` and ``units.py`` hold the folding and the unit tables ``normalize.py`` applies, and
-    ``profile.py`` the prompt-slot defaults a profile falls back on. ``profile_loader.py`` is left out: what it
+    ``profile.py`` the prompt-slot defaults a profile falls back on. ``kinds.py`` reads a numeric value (which
+    ``drop_implausible`` judges) and adds its kind's note to a field line. ``profile_loader.py`` is left out: what it
     reads from a file reaches this key as values (the schema fingerprint and the rendered prompts), and a
     default it leaves in place is declared in ``fields.py``, ``profile.py`` or ``units.py``, all hashed.
     Over-invalidation is cheap here: an unchanged request replays from the LLM cache, so re-deriving the
@@ -177,12 +181,14 @@ def extraction_code_fingerprint() -> str:
         "normalize.py",
         "grounding.py",
         "continuation.py",
+        "kinds.py",
     )
 
 
 @cache
 def normalization_fingerprint() -> str:
-    return source_fingerprint("normalize.py", "units.py", "text.py")
+    # kinds.py: normalize_field reads a value as its kind's row says.
+    return source_fingerprint("normalize.py", "units.py", "text.py", "kinds.py")
 
 
 @cache
@@ -193,8 +199,10 @@ def comparison_code_fingerprint() -> str:
     ``dataset.py`` and ``decide.py`` because the consolidated table they write is stored under this key and is
     itself a set of verdicts (which cells are committed, which are refused). ``fields.py`` declares the
     attribute defaults the schema material leaves out, and ``profile.py`` the defaults the matching prompt's
-    slots fall back on."""
-    return source_fingerprint("compare.py", "matching.py", "dataset.py", "decide.py", "fields.py", "profile.py")
+    slots fall back on. ``kinds.py`` holds the per-kind verdicts: when two values agree, what a cell holds."""
+    return source_fingerprint(
+        "compare.py", "matching.py", "dataset.py", "decide.py", "kinds.py", "fields.py", "profile.py"
+    )
 
 
 @dataclass(frozen=True)
@@ -241,6 +249,19 @@ class ExtractionOptions:
         )
 
 
+def _slot_material(profile: DomainProfile, *, matching: bool) -> dict[str, object]:
+    """The prompt slots that differ from their :class:`PromptSlots` default: the matching ones or all the others.
+
+    Hashed by value because a slot may reach only a user prompt (``implausible_origin`` in a passage-mode field
+    line), which no system-prompt hash sees; a slot at its default is left out like a field attribute."""
+    return {
+        name: value
+        for name, value in dataclasses.asdict(profile.prompt).items()
+        if name.startswith(_MATCHING_SLOT_PREFIX) == matching
+        and value != _PROMPT_SLOT_DEFAULTS.get(name, dataclasses.MISSING)
+    }
+
+
 def extractor_key(options: ExtractionOptions) -> str:
     """The one key a stored lane is named by.
 
@@ -254,6 +275,7 @@ def extractor_key(options: ExtractionOptions) -> str:
         "schema": profile_extraction_fingerprint(profile),
         "extraction_system": extraction_system_prompt(profile),
         "code": extraction_code_fingerprint(),
+        "slots": _slot_material(profile, matching=False),
     }
     # Pinned to "document" rather than to the configured default: whole-document mode sends exactly the
     # request it always sent, so its keys must stay as they were, and changing the default in config.json
@@ -307,6 +329,7 @@ def comparison_key(options: ComparisonOptions) -> str:
         "normalization": normalization_fingerprint(),
         "code": comparison_code_fingerprint(),
         "matching_system": matching_system_prompt(profile),
+        "matching_slots": _slot_material(profile, matching=True),
     }
     return content_fingerprint(_dumps(material))
 

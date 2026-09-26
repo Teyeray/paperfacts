@@ -17,10 +17,9 @@ downstream consumers — the raw observation is never discarded.
 
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal, Self
 
@@ -34,17 +33,15 @@ from paperfacts.keys import (
     profile_comparison_fingerprint,
     profile_extraction_fingerprint,
 )
+from paperfacts.kinds import rules_for
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
 from paperfacts.normalize import (
     NUMBER_RE,
-    canonical_category,
-    clean_unit,
     delatex,
     normalize_key,
     normalize_lane,
     normalize_text,
-    same_text,
 )
 from paperfacts.records import FieldValue, LaneExtraction
 from paperfacts.storage import write_text_atomic
@@ -273,28 +270,7 @@ def _check_lane_profiles(lane_a: LaneExtraction, lane_b: LaneExtraction, expecte
 
 def compare_values(a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
     """Decide the outcome when both sides have a value."""
-    if spec.kind != "numeric":
-        if same_text(spec, a.value_raw, b.value_raw):
-            category = canonical_category(spec.categories, a.value_raw) or canonical_category(
-                spec.categories, b.value_raw
-            )
-            return "agree", f"both name {category}" if category else "identical after text normalization"
-        return "conflict", f"{a.value_raw!r} vs {b.value_raw!r}"
-
-    if a.value is None or b.value is None:
-        # At least one side failed to parse as a number: if the raw text (including unit, case-sensitive)
-        # is identical on both sides, that still counts as agreement; otherwise there's no way to judge
-        if normalize_key(a.value_raw) == normalize_key(b.value_raw) and _unit_key(a.unit_raw) == _unit_key(b.unit_raw):
-            return "agree", "identical raw text (not parsed as a number)"
-        return (
-            "ambiguous",
-            f"unparsed: {a.normalization_note or a.value_raw!r} vs {b.normalization_note or b.value_raw!r}",
-        )
-    if a.unit != b.unit:
-        return "ambiguous", f"units differ after normalization: {a.unit} vs {b.unit}"
-    if math.isclose(a.value, b.value, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol):
-        return "agree", f"{a.value:g} ≈ {b.value:g} {a.unit or ''} (rel_tol={spec.rel_tol:g}, abs_tol={spec.abs_tol:g})"
-    return "conflict", f"{a.value:g} vs {b.value:g} {a.unit or ''}"
+    return rules_for(spec).compare(a, b, spec)
 
 
 def _compare_records(
@@ -435,8 +411,7 @@ def _pair_values(
     rest_b: list[FieldValue] = []
     for key in sorted(groups_a.keys() | groups_b.keys()):
         group_a, group_b = list(groups_a.get(key, ())), list(groups_b.get(key, ()))
-        if spec.kind == "numeric":
-            pairs += _closest_pairs(group_a, group_b)
+        pairs += _closest_pairs(group_a, group_b, rules_for(spec).distance)
         # Same condition, so whatever remains still describes the same fact: pair it in the order the paper
         # gave, rather than leaving both sides looking like the other is missing a value.
         while group_a and group_b:
@@ -528,20 +503,20 @@ def _equal_pairs(
 
 
 def _closest_pairs(
-    rest_a: list[FieldValue], rest_b: list[FieldValue]
+    rest_a: list[FieldValue], rest_b: list[FieldValue], distance: Callable[[FieldValue, FieldValue], float | None]
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
-    """Greedily pair the two closest numbers, removing them from both lists as it goes.
+    """Greedily pair the two closest values by the kind's ``distance``, removing them from both lists as it goes.
 
-    Stops as soon as a side runs out or nothing left parsed as a number, leaving those for the caller to
-    report one-sided.
+    Stops as soon as a side runs out or no pair left has a distance (nothing parsed as a number, or a kind with
+    no distance at all), leaving those for the caller to pair in order or report one-sided.
     """
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     while rest_a and rest_b:
         candidates = [
-            (abs(a.value - b.value), i, j)
+            (gap, i, j)
             for i, a in enumerate(rest_a)
             for j, b in enumerate(rest_b)
-            if a.value is not None and b.value is not None
+            if (gap := distance(a, b)) is not None
         ]
         if not candidates:
             break
@@ -556,10 +531,6 @@ def _by_condition(values: Sequence[FieldValue]) -> dict[str, list[FieldValue]]:
     for value in values:
         grouped.setdefault(normalize_key(value.condition), []).append(value)
     return grouped
-
-
-def _unit_key(unit_raw: str | None) -> str:
-    return clean_unit(unit_raw) if unit_raw else ""
 
 
 def _count(

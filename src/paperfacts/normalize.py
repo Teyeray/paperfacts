@@ -151,8 +151,6 @@ _CONDITION = re.compile(r"\s+(?:at|@|for|during|under)\s+(?=.*\d)", re.IGNORECAS
 # "85% after 10 cycles", "100 nm after annealing": another state of the sample, not a condition of this value --
 # unless the field says otherwise (FieldSpec.after_clause, read by split_after_clause).
 _AFTER = re.compile(r"\s+after\s+\S", re.IGNORECASE)
-# The words of a condition tail that may name a unit ("2 h", "550 nm", "°C").
-_TAIL_WORD = re.compile(r"[^\d\s,;:()\[\]]+")
 NUMBER_RE = re.compile(_NUM)
 """Every plain number in a piece of text. Public because the comparison layer reads the numbers out of a
 measurement condition ("550 nm") and must use the same notion of "a number" this module parses with."""
@@ -210,15 +208,6 @@ def split_after_clause(text: str) -> tuple[str, str]:
     if match is None or not NUMBER_RE.search(text[: match.start()]):
         return text, ""
     return text[: match.start()].strip(), text[match.start() :].strip()
-
-
-def _with_after_condition(field: FieldValue, clause: str) -> FieldValue:
-    """``field`` with ``clause`` in its condition, unless the condition already says it: normalising twice must
-    give the same value."""
-    condition = field.condition
-    if condition and normalize_key(clause) in normalize_key(condition):
-        return field
-    return field.model_copy(update={"condition": f"{condition}; {clause}" if condition else clause})
 
 
 def set_aside(raw: str) -> tuple[str, list[str], str]:
@@ -603,14 +592,6 @@ def compound_value(spec: FieldSpec, text: str, units: UnitRegistry) -> float | N
     return float(_plain(match.group("a"))) * big + part
 
 
-def _names_unit_of(spec: FieldSpec, text: str, units: UnitRegistry) -> bool:
-    """Whether ``text`` names a unit of the field's own quantity ("2 h" for a time, "°C" for a temperature)."""
-    canonical = spec.canonical_unit
-    if canonical is None:
-        return False
-    return any(units.convert(canonical, word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
-
-
 @dataclass(frozen=True)
 class Reading:
     """What every reader of a numeric value -- the comparison (:func:`normalize_field`) and the dataset cell
@@ -685,36 +666,11 @@ def read_range(reading: Reading) -> tuple[float, float, str | None] | None:
 
 
 def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
-    if spec.kind != "numeric":
-        # Text and composition fields are compared through same_text on the fly.
-        return field
-    reading = read_value(field, spec, units)
-    lead_notes = []
-    if reading.number_word is not None:
-        lead_notes.append(f"number word {field.value_raw.strip()!r} read as {reading.number_word}")
-    if reading.clause:
-        field = _with_after_condition(field, reading.clause)
-        lead_notes.append(f"{reading.clause!r} moved into the condition")
-    if reading.bound:
-        lead_notes.append(f"bound {reading.bound!r} stands before the quote in its cited block")
-    lead_note = "; ".join(lead_notes) or None
-    bare, condition = reading.bare, reading.condition
-    if condition and _names_unit_of(spec, condition, units) and not _names_unit_of(spec, bare, units):
-        # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
-        note = f"the condition {condition!r} holds this field's quantity and the value does not; ambiguous"
-        return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
-    if reading.compound is not None:
-        compound_note = f"compound {bare!r} read as {reading.compound:g} {spec.canonical_unit}"
-        note = "; ".join(n for n in (lead_note, *reading.context_notes, compound_note) if n)
-        return field.model_copy(
-            update={"value": reading.compound, "unit": spec.canonical_unit, "normalization_note": note}
-        )
-    number, parse_note = parse_number(reading.text, range_policy=spec.range_policy)
-    if number is None:
-        return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
-    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=reading.text)
-    note = "; ".join(n for n in (lead_note, parse_note, unit_note) if n) or None
-    return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
+    """``field`` with ``value`` / ``unit`` filled in as its kind reads it (:mod:`paperfacts.kinds`)."""
+    # Imported here, not at the top: the kind rows are built on this module's readers.
+    from paperfacts.kinds import rules_for
+
+    return rules_for(spec).read(field, spec, units)
 
 
 def _normalize_fields(fields: tuple[FieldValue, ...], profile: DomainProfile) -> tuple[FieldValue, ...]:
