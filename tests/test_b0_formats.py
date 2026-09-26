@@ -34,6 +34,19 @@ def test_a_b0_lane_loads():
     assert lane.samples[0].fields[0].value_raw == "100"
 
 
+def test_a_b0_lane_with_a_paper_level_record_loads_it():
+    # The recorded B0 lane has none ("target": null), so one is set on its bytes here. Read under either name
+    # because round 2 renames the attribute to ``paper`` behind a read alias; without the alias it would load None.
+    data = json.loads((FIXTURES / "lane.json").read_text(encoding="utf-8"))
+    data["target"] = {"source_ids": ["mineru_p0_b1"], "fields": [data["samples"][0]["fields"][1] | {"field": "inch"}]}
+
+    lane = LaneExtraction.model_validate_json(json.dumps(data))
+
+    paper = getattr(lane, next(name for name in ("paper", "target") if name in LaneExtraction.model_fields))
+    assert paper is not None
+    assert [(value.field, value.value_raw) for value in paper.fields] == [("inch", "RF")]
+
+
 def test_a_b0_report_loads():
     report = ComparisonReport.read(FIXTURES / "report.json")
 
@@ -48,6 +61,13 @@ def test_a_b0_dataset_loads_and_exports_again():
 
     assert payload.profile_fingerprint is None
     assert dataset.paper_row["thickness"] == 100
+    # The paper-level quality rows (keyed "target" at B0) all come through.
+    assert [row["field"] for row in dataset.quality_rows if row["sample_id"] in {"paper", "target"}] == [
+        "component",
+        "resistance",
+        "density",
+        "inch",
+    ]
     # Everything but the field list, which is display text built from the profile and no longer carried.
     assert payload.fields
     assert dataset.to_payload() == payload.model_copy(update={"fields": ()})

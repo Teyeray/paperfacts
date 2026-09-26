@@ -1,0 +1,65 @@
+{
+  "document_id": "598c5d9d8a5099a87543e069f52a98452116bf180dc338609c299da3d7d4d748",
+  "backend": "mineru",
+  "extractor_key": "d3f0e6244743",
+  "model": "deepseek-v4.1-flash",
+  "profile_fingerprint": "1a1957c0a3b8",
+  "target": {
+    "source_ids": [
+      "mineru_p1_b4"
+    ],
+    "fields": [
+      {
+        "field": "component",
+        "value_raw": "Sn/Ta target 95:5 wt.%",
+        "unit_raw": null,
+        "condition": null,
+        "source_ids": [
+          "mineru_p1_b4"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": null,
+        "unit": null,
+        "normalization_note": null
+      }
+    ]
+  },
+  "samples": [],
+  "invalid_source_ids": [],
+  "dropped": [
+    "sputtering_time: the inventory found no in-scope sample, so it was not asked about",
+    "sputtering_power: the inventory found no in-scope sample, so it was not asked about",
+    "mode: the inventory found no in-scope sample, so it was not asked about",
+    "ar_flow_rate: the inventory found no in-scope sample, so it was not asked about",
+    "o2_flow_rate: the inventory found no in-scope sample, so it was not asked about",
+    "h2_flow_rate: the inventory found no in-scope sample, so it was not asked about",
+    "o2_ratio: the inventory found no in-scope sample, so it was not asked about",
+    "h2_ratio: the inventory found no in-scope sample, so it was not asked about",
+    "working_pressure: the inventory found no in-scope sample, so it was not asked about",
+    "target_substrate_distance: the inventory found no in-scope sample, so it was not asked about",
+    "substrate_axis_distance: the inventory found no in-scope sample, so it was not asked about",
+    "substrate_temperature: the inventory found no in-scope sample, so it was not asked about",
+    "annealing_temperature: the inventory found no in-scope sample, so it was not asked about",
+    "annealing_time: the inventory found no in-scope sample, so it was not asked about",
+    "rotation_speed: the inventory found no in-scope sample, so it was not asked about",
+    "sheet_resistance: the inventory found no in-scope sample, so it was not asked about",
+    "resistivity: the inventory found no in-scope sample, so it was not asked about",
+    "transmittance: the inventory found no in-scope sample, so it was not asked about",
+    "thickness: the inventory found no in-scope sample, so it was not asked about"
+  ],
+  "unattributed": [],
+  "no_tco_film": true,
+  "passes": 1,
+  "failed_questions": [],
+  "usage": {
+    "prompt_tokens": 500,
+    "completion_tokens": 100,
+    "total_tokens": 600
+  },
+  "raw_response": "# inventory\n{\"samples\": [], \"no_tco_film\": true}\n\n# component\n{\"values\": [{\"sample_id\": null, \"value_raw\": \"Sn/Ta target 95:5 wt.%\", \"unit_raw\": null, \"source_ids\": [\"mineru_p1_b4\"]}]}\n\n# resistance\n{\"values\": []}\n\n# density\n{\"values\": []}\n\n# inch\n{\"values\": []}",
+  "artifact_sha256": "3f3437a88f60aae65b34a3b0fbcb8ca954b6eeebd66a056e93cc3af97c76e33d"
+}
