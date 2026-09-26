@@ -6,9 +6,10 @@
 // missing-profile states), profile (the read-only profile page's renderers), table (the results table and the
 // column model), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
 // library-wide results table), facts (fact comparison), figures (chart readings), samples (sample records), job
-// (job progress), viewer (page-level provenance).
+// (job progress), viewer (page-level provenance), check (the page that checks a pasted profile).
 
 import { api } from "./api.js";
+import { setupCheck, showCheck } from "./check.js";
 import { showDocument, showEmpty, showMissing, showMissingProfile, showProfilePage } from "./document.js";
 import { toast } from "./html.js";
 import { loadLibrary, setupLibraryDisclosure, setupRunAll, setupUpload } from "./library.js";
@@ -38,6 +39,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupRunAll();
   setupLibraryDisclosure();
   setupSwitcher();
+  setupCheck();
   document.getElementById("refresh-library").addEventListener("click", loadLibrary);
   document.querySelector('#missing-view [data-action="retry"]').addEventListener("click", reloadView);
   applyUiCopy(document);
@@ -58,6 +60,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     onMissingProfile: showMissingProfile,
     onProfile,
     onProfilePage: showProfilePage,
+    onCheck: showCheck,
   });
   route();
   // The router loads the rail itself when the URL names a profile; for the default it is loaded here.

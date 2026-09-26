@@ -540,11 +540,11 @@ to count as the same fact.
   "description_zh": "所选样品的薄膜方块电阻。",   // Chinese explanation; display only
   "keywords": ["sheet resistance", "sheet resistivity", "Rs", "R_s"],
   "canonical_unit": "Ω/sq",
-  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol); both >= 0
+  "rel_tol": 0.02,                          // |a-b| <= max(rel_tol * max(|a|,|b|), abs_tol); both finite, >= 0
   "abs_tol": 0.0,
   "condition_hint": null,                   // what to record alongside, e.g. a wavelength
   "bare_number": "reject",                  // reject | assume_canonical | percent_or_fraction (only with "%")
-  "valid_range": {"max": 500},              // optional plausible range in canonical_unit; min and/or max
+  "valid_range": {"max": 500},              // optional plausible range in canonical_unit; finite min and/or max
   "condition_preference": ["400-800", "550"] // optional: which measurement fills the dataset cell
 }
 ```
@@ -782,7 +782,13 @@ or out of scope. What still does not fit needs a code change, not a profile.
    configuration file: it prints the profile's line (name, maturity, paper/sample field counts, content hash,
    title) and any warnings then `ok`, or every error it found, one `error:` line each, and exits 1. It makes the
    checks a run makes too: the name `paperfacts` is reserved, and a file named like a repository profile but
-   differing from it is refused, since their workbooks would overwrite each other.
+   differing from it is refused, since their workbooks would overwrite each other. Without a shell, the web
+   page 检查配置 (`#/check`, linked from the header) does the same for pasted JSON: every error one per line, or,
+   when it is valid, its fields and the system prompts it would send, and whether a served profile of the same
+   name has the same content hash (a display-only edit) or not (the edit re-extracts). It stores nothing; to use
+   the profile, put the file in `profiles/` and restart the server. The text is checked in a short-lived child
+   process with a 10 s timeout and a memory limit, at most 256 KiB and two checks at a time
+   (`POST /api/profile-check`).
 7. **Read what the model will be asked.** `uv run paperfacts prompts --profile perovskite` prints the inventory,
    field, extraction and matching system prompts exactly as sent; `--field NAME` prints the per-field system
    prompt, that field's line, and the question around it with `<sample list>` and `<excerpts>` standing for what
@@ -1053,6 +1059,7 @@ beside the old. Two profiles with identical non-display content share every key 
   refused.
 - **Spaces.** A spelling is compared with its spaces removed, as a quoted unit is, so `mAh g-1` also reads
   `mAhg-1`; declaring both is refused as a duplicate.
+- **Length.** A unit name, alias, excluded spelling or ignored suffix is at most 64 characters.
 - **Retrieval.** Every canonical unit needs a pattern that finds a number in it in running text. By default it
   is derived from the spellings: a digit, then the spelling lower-cased with its spaces optional, then a word
   boundary when it ends in a letter or digit (so `V` does not match "Vis"). Give `retrieval` yourself when that

@@ -20,10 +20,17 @@ import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from
 import { loadLibrary, renderLibrary } from "./library.js";
 import { documentHash, factFromHash, hashFor, reloadView } from "./router.js";
 
-const VIEWS = ["empty-state", "corpus-view", "document-view", "profile-view", "missing-view"];
+const VIEWS = ["empty-state", "corpus-view", "document-view", "profile-view", "missing-view", "check-view"];
 
 function showViews(...visible) {
   for (const id of VIEWS) document.getElementById(id).classList.toggle("hidden", !visible.includes(id));
+}
+
+// A page that is no document's (the profile check): the document being left stops drawing, and only `id` shows.
+export function showPage(id) {
+  leaveDocument();
+  showViews(id);
+  renderLibrary();
 }
 
 // Nothing of the document being left may keep drawing: its poller stops, and the next document starts clean.

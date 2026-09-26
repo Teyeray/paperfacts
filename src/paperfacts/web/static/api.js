@@ -12,9 +12,10 @@ import { state } from "./state.js";
 
 // The profile the server answered under, echoed on every per-profile route.
 const PROFILE_HEADER = "X-PaperFacts-Profile";
-// health, the profile list, jobs, and a document's parse output and pages: the same under every profile.
+// health, the profile list, the check of a pasted profile, jobs, and a document's parse output and pages: the same
+// under every profile.
 const PROFILE_FREE =
-  /^\/api\/(?:health|profiles(?:\/[^?]*)?|jobs(?:\/[^/?]+)?|documents\/[^/?]+\/(?:jobs|artifact\/[^/?]+|pages\/[^/?]+))(?:\?.*)?$/;
+  /^\/api\/(?:health|profiles(?:\/[^?]*)?|profile-check|jobs(?:\/[^/?]+)?|documents\/[^/?]+\/(?:jobs|artifact\/[^/?]+|pages\/[^/?]+))(?:\?.*)?$/;
 
 export async function api(path, options = {}) {
   if (!PROFILE_FREE.test(path)) throw new Error(`${path} depends on the profile: ask it through profileApi`);

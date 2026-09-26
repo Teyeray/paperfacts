@@ -1190,6 +1190,68 @@ async def api_profile_param(page: Page, _: str, docs: dict[str, str], pdf: Path)
     expect(all(href and f"profile={DEMO}" in href for href in hrefs), f"the Excel links read {hrefs}")
 
 
+INJECTED = '<img src=x onerror="window.__injected=1">'
+
+
+async def run_check(page: Page, text: str) -> None:
+    await page.fill("#check-text", text)
+    async with page.expect_response(lambda response: "/api/profile-check" in response.url):
+        await page.click("#check-run")
+    await page.wait_for_selector("#check-result .check-verdict")
+
+
+@check("the check page lists a pasted profile's errors, or previews a valid one with its markup as text")
+async def check_page(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    errors: list[str] = []
+    page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
+    await page.goto(f"{base}/")
+    await page.wait_for_selector("#doc-list .doc-item")
+    await page.click("#check-link")
+    await page.wait_for_selector("#check-view:not(.hidden)")
+    expect(await page.is_hidden("#empty-state") and await page.is_hidden("#corpus-view"), "the home view stays up")
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(f"{request.method} {urlsplit(request.url).path}"))
+
+    await run_check(page, '{"format": 1, "name": "draft", "fields": [}')
+    verdict = await page.text_content("#check-result .check-verdict") or ""
+    expect("问题" in verdict, f"an invalid profile reads {verdict!r}")
+    expect(await page.locator("#check-result .check-errors li").count() >= 1, "no error line is listed")
+
+    data = json.loads(shipped_profile().source.read_text(encoding="utf-8"))
+    data["title_zh"] = INJECTED
+    data["fields"][0]["label"] = INJECTED
+    await run_check(page, json.dumps(data, ensure_ascii=False))
+    verdict = await page.text_content("#check-result .check-verdict") or ""
+    expect("有效" in verdict, f"the shipped profile reads {verdict!r}")
+    # The preview is the profile page's own renderer.
+    expect(
+        await page.locator("#check-result .profile-fields tbody tr").count() == len(data["fields"]), "fields missing"
+    )
+    await page.click("#check-result details.prompt-preview >> nth=0 >> summary")
+    await page.wait_for_selector("#check-result .prompt-section pre")
+    expect(await page.locator("#check-result .prompt-section").count() >= 3, "the prompts are not previewed")
+    same = await page.text_content("#check-result .check-same-name") or ""
+    expect("内容哈希相同" in same, f"a display-only edit reads {same!r}")
+    expect(await page.locator("#check-view img").count() == 0, "pasted markup became an element")
+    expect(await page.evaluate("window.__injected") is None, "pasted markup ran")
+    expect(INJECTED in (await page.text_content("#check-result") or ""), "pasted markup is not shown as text")
+    expect(requests == ["POST /api/profile-check"] * 2, f"the page asked more than the check: {requests}")
+    # A field's question is the checked text asked again for that field.
+    field = data["fields"][0]["name"]
+    await page.click("#check-result details.prompt-preview >> nth=1 >> summary")
+    async with page.expect_response(lambda response: f"field={field}" in response.url):
+        await page.select_option("#check-result select.prompt-field", field)
+    await page.wait_for_selector(f"#check-result h3:has-text('({field}')")
+    expect(not errors, f"console errors: {errors}")
+
+    await page.click(".brand")
+    await page.wait_for_selector("#check-view.hidden", state="attached")
+    await page.go_back()
+    await page.wait_for_selector("#check-view:not(.hidden)")
+    kept = await page.input_value("#check-text")
+    expect(json.loads(kept)["title_zh"] == INJECTED, "the pasted text did not survive navigation")
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--headed", action="store_true")

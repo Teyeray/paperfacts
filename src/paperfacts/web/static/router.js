@@ -1,5 +1,7 @@
-// Router: (#/p/<profile>)?(/doc/<id16>(/fact/<n>)? | /profile)?. The selected fact goes into the URL; refreshing or sharing the link
-// returns to the same one. `/profile` is the read-only page of the profile itself. The profile prefix names the domain profile the view is shown under; it is left out for
+// Router: (#/p/<profile>)?(/doc/<id16>(/fact/<n>)? | /profile | /check)?. The selected fact goes into the URL; refreshing or
+// sharing the link returns to the same one. `/profile` is the read-only page of the profile itself; `/check` is the
+// profile check page, profile-free (under a prefix it is the same page, so leaving it returns to that profile). The
+// profile prefix names the domain profile the view is shown under; it is left out for
 // the server's default, so every link written before profiles existed still opens as it did.
 //
 // It also owns the view generation (state.generation): every navigation to another document, to home or to another
@@ -12,10 +14,18 @@ import { state } from "./state.js";
 // "no such profile / document" rather than silently falling back to the default's home.
 const PREFIX = /^#\/p\/([^/]*)(\/.*)?$/;
 const DOCUMENT = /^\/doc\/([^/]*)(?:\/fact\/(\d+))?\/?$/;
-const PROFILE_PAGE = /^\/profile\/?$/;
+const PAGE = /^\/(profile|check)\/?$/; // the pages beside the documents
 const DOCUMENT_ID = /^[0-9a-f]{16}$/;
 const PROFILE_NAME = /^[a-z][a-z0-9_]{0,39}$/; // profile_loader.IDENTIFIER
-let handlers = { onDocument: () => {}, onEmpty: () => {}, onMissing: () => {}, onMissingProfile: () => {}, onProfile: () => {}, onProfilePage: () => {} };
+let handlers = {
+  onDocument: () => {},
+  onEmpty: () => {},
+  onMissing: () => {},
+  onMissingProfile: () => {},
+  onProfile: () => {},
+  onProfilePage: () => {},
+  onCheck: () => {},
+};
 let routed; // the view on screen: "<profile>\n<document id | page>" (undefined: nothing yet)
 let reloadNext = false;
 
@@ -34,7 +44,7 @@ function parse(hash) {
   return {
     raw,
     profile: raw === state.defaultProfile ? null : raw,
-    page: PROFILE_PAGE.test(rest) ? "profile" : null,
+    page: rest.match(PAGE)?.[1] ?? null,
     id: document ? decoded(document[1]) : null,
     fact: document?.[2] == null ? null : Number(document[2]),
   };
@@ -57,6 +67,7 @@ export function route({ reload = false } = {}) {
     handlers.onProfile(view.profile);
   }
   if (view.page === "profile") handlers.onProfilePage();
+  else if (view.page === "check") handlers.onCheck();
   else if (view.id === null) handlers.onEmpty();
   else if (!DOCUMENT_ID.test(view.id)) handlers.onMissing(view.id);
   else handlers.onDocument(view.id, view.fact, { reload: fresh });
@@ -95,7 +106,7 @@ export const factFromHash = () => parse(location.hash).fact;
 // The document the URL names right now (null: none), whether or not its view has landed yet.
 export const documentFromHash = () => parse(location.hash).id;
 
-// The page the URL names beside the documents ("profile": the profile page), or null.
+// The page the URL names beside the documents ("profile": the profile page, "check": the check page), or null.
 export const pageFromHash = () => parse(location.hash).page;
 
 // A hand-typed link may hold a broken %-escape; it is still just a name that names nothing.
@@ -107,7 +118,7 @@ function decoded(text) {
   }
 }
 
-// The address of a view: home (no `id`), a document, or the profile page (`page: "profile"`), under `profile` (null or the default's name: no prefix).
+// The address of a view: home (no `id`), a document, or a page (`page: "profile" | "check"`), under `profile` (null or the default's name: no prefix).
 export function hashFor({ profile = null, id = null, fact = null, page = null } = {}) {
   const prefix = profile == null || profile === state.defaultProfile ? "" : `/p/${encodeURIComponent(profile)}`;
   if (page != null) return `#${prefix}/${page}`;
