@@ -200,6 +200,11 @@ def test_read_lane_grounds_a_reference_by_resolving_it_among_the_lanes_samples(t
     assert (resolving.grounded, resolving.ref_id, resolving.bound) == (True, "C1", None)  # type: ignore[union-attr]
     assert (unlisted.grounded, unlisted.ref_id) == (False, None)  # type: ignore[union-attr]
     assert (spelled.grounded, spelled.ref_id) == (True, "coat-1")  # type: ignore[union-attr]
+    # Grounding and reading resolve alike: a reference is grounded exactly when it names a listed sample.
+    for lane in lanes.values():
+        for sample in lane.samples:
+            for value in sample.fields:
+                assert value.grounded == (value.ref_id is not None)
     # ref_id is read, never stored: the lane file carries only the model's own words.
     assert "ref_id" not in STORED["mineru"].model_dump_json()
 
@@ -425,3 +430,44 @@ def test_the_score_resolves_a_reference_to_the_row_aligned_to_the_named_gold_sam
 
     assert [(c.sample, c.outcome) for c in cells if c.field == "tested_coating"] == [("t1", "correct")]
     assert [(c.sample, c.outcome) for c in wrong if c.field == "tested_coating"] == [("t1", "wrong")]
+
+
+def test_the_score_keeps_two_entities_gold_samples_of_one_id_apart():
+    # A wear test named "1" must not shadow the coating "1" its reference names.
+    gold = {
+        "doc_id": "d",
+        "samples": [
+            {"id": "1", "entity": "coating", "match": {"label": "^C1"}, "fields": {}},
+            {
+                "id": "1",
+                "entity": "wear_test",
+                "match": {"label": "^W"},
+                "fields": {"tested_coating": [{"value": "1"}]},
+            },
+        ],
+    }
+    rows = [
+        {"entity": "coating", "sample_id": "C1 | coat-1"},
+        {"entity": "wear_test", "sample_id": "W1 | run-1", "tested_coating": "C1 | coat-1"},
+    ]
+
+    cells = score.score_document(PROFILE.by_name, gold, {"sample_rows": rows, "quality_rows": []})
+
+    assert [c.outcome for c in cells if c.field == "tested_coating"] == ["correct"]
+
+
+def test_the_prompts_command_prints_a_reference_question(tmp_path: Path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from paperfacts.cli import app
+
+    profile_file = tmp_path / "profiles" / "demo.json"
+    profile_file.parent.mkdir()
+    profile_file.write_text(json.dumps(reference_profile_data()), encoding="utf-8")
+    monkeypatch.setenv("PAPERFACTS_EXTRACTION_MODE", "passage")
+
+    printed = CliRunner().invoke(app, ["prompts", "--profile", str(profile_file), "--field", "tested_coating"])
+
+    assert printed.exit_code == 0, printed.output
+    assert 'Copy the id of the referenced coating exactly from the list "Coatings" below.' in printed.output
+    assert "Coatings this paper reports:\n<referenced sample list>" in printed.output

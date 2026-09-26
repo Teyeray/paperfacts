@@ -241,8 +241,9 @@ def resolve_references(specs: dict[str, Spec], gold: dict, rows: list[dict], map
     the dataset row aligned to that sample, which is what a reference cell holds. A named sample no row is aligned to
     becomes a value no row id is, so the cell stays required and nothing matches it."""
     references = {name for name, spec in specs.items() if spec.kind == "reference"}
+    # By (entity, id): two entities' gold samples may share an id.
     row_ids = {
-        sample["id"]: rows[ri].get("sample_id")
+        (sample.get("entity"), sample["id"]): rows[ri].get("sample_id")
         for gi, sample in enumerate(gold["samples"])
         if (ri := mapping.get(gi)) is not None
     }
@@ -250,7 +251,12 @@ def resolve_references(specs: dict[str, Spec], gold: dict, rows: list[dict], map
     def resolved(fields: dict) -> dict:
         return {
             name: [
-                cell | {"value": row_ids.get(cell["value"], f"(unaligned) {cell['value']}")}
+                cell
+                | {
+                    "value": row_ids.get(
+                        (specs[name].references, cell["value"]), f"(unaligned) {specs[name].references}:{cell['value']}"
+                    )
+                }
                 if name in references and cell.get("value") is not None
                 else cell
                 for cell in cells

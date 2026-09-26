@@ -911,7 +911,8 @@ def normalize_field(
     field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext | None = None
 ) -> FieldValue:
     """``field`` with ``value`` / ``unit`` filled in as its kind reads it (:mod:`paperfacts.kinds`). ``ctx`` holds the
-    lane's samples a reference field resolves against; no other kind reads it."""
+    lane's samples a reference field resolves against; no other kind reads it. None rather than ``NO_CONTEXT`` as the
+    default only because the kind rows are imported lazily here."""
     # Imported here, not at the top: the kind rows are built on this module's readers.
     from paperfacts.kinds import NO_CONTEXT, rules_for
 

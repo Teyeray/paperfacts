@@ -31,6 +31,7 @@ from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.fields import UNIT_KINDS
 from paperfacts.figures import user_prompt as figure_user_prompt
 from paperfacts.keys import ComparisonOptions, ExtractionOptions
+from paperfacts.kinds import KindContext
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
@@ -582,18 +583,24 @@ def prompts(
                 f"no field {field!r} in {profile.name}; it has: {', '.join(profile.by_name)}", fg="red", err=True
             )
             raise typer.Exit(code=1)
-        # Asked with its entity's system prompt and sample list.
+        # Asked with its entity's system prompt and sample list, and a reference field with the list of the entity
+        # it names too.
         entity = profile.entity_of(spec)
+        entities = {declared.name: declared for declared in profile.entities}
+        referenced = None if spec.references is None else (entities[spec.references], "<referenced sample list>")
         sections = {
             "field system prompt (passage mode)": field_system_prompt(profile, entity),
-            f"field line ({field})": render_field_table((spec,), profile.prompt.implausible_origin),
-            # The question's framing; the two placeholders are what a run fills from the paper.
+            f"field line ({field})": render_field_table(
+                (spec,), profile.prompt.implausible_origin, KindContext(entities=entities)
+            ),
+            # The question's framing; the placeholders are what a run fills from the paper.
             f"field user prompt ({field}, passage mode)": field_user_prompt(
                 spec,
                 "<sample list>",
                 "<excerpts>",
                 profile.prompt.implausible_origin,
                 entity.prompt.sample_list_heading,
+                referenced,
             ),
         }
     elif len(profile.entities) > 1:
