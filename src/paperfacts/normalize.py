@@ -16,6 +16,7 @@ from __future__ import annotations
 import itertools
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import cache
 
 from paperfacts.fields import FieldSpec, RangePolicy
@@ -65,6 +66,26 @@ def text_key(spec: FieldSpec, raw: str | None) -> str:
     from ever colliding with a value whose folded text happens to spell it."""
     category = canonical_category(spec.categories, raw)
     return f"\0category:{category}" if category is not None else normalize_key(raw)
+
+
+# A hyphen or a period one parser keeps and the other drops: MinerU read "rf-magnetron sputtering" as
+# "rfmagnetron sputtering", and "wt.%" is also written "wt%". Before a digit either is part of a number (a sign,
+# a range, a decimal point), so there it stays: "10-20" is not "1020", nor "1.5" "15".
+_LOOSE_PUNCTUATION = re.compile(r"[-.](?!\d)")
+
+
+def same_text(spec: FieldSpec, a: str | None, b: str | None) -> bool:
+    """Whether two text values state the same fact, for the comparison and the dataset cell alike.
+
+    Equal :func:`text_key` decides first. Failing that, the two agree when they differ only by spacing, case and a
+    dropped hyphen or period -- unless both name a category, which is then the whole answer ("DC" is never "RF").
+    Only one of them naming a category is exactly what a lost hyphen causes: "rf-magnetron" reads as RF, its
+    glued twin "rfmagnetron" names nothing."""
+    if text_key(spec, a) == text_key(spec, b):
+        return True
+    if canonical_category(spec.categories, a) is not None and canonical_category(spec.categories, b) is not None:
+        return False
+    return _LOOSE_PUNCTUATION.sub("", normalize_key(a)) == _LOOSE_PUNCTUATION.sub("", normalize_key(b))
 
 
 # ---- Numbers ------------------------------------------------------------------------------------------------
@@ -581,34 +602,82 @@ def _names_unit_of(spec: FieldSpec, text: str, units: UnitRegistry) -> bool:
     return any(units.convert(canonical, word) is not None for word in _TAIL_WORD.findall(normalize_text(text)))
 
 
-def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
-    if spec.kind != "numeric":
-        # Text and composition fields are compared through normalize_key on the fly.
-        return field
+@dataclass(frozen=True)
+class Reading:
+    """What every reader of a numeric value -- the comparison (:func:`normalize_field`) and the dataset cell
+    (``decide``) -- takes from a quote before deciding what its number is. One function builds it, so the two
+    never read one string differently."""
+
+    # The value text to parse: number words spelled out, an "after" clause cut off, a bound put back in front.
+    text: str
+    # The spelled-out text when the quote held a number word, else None.
+    number_word: str | None
+    # The "after ..." clause moved into the condition (FieldSpec.after_clause), or "".
+    clause: str
+    # The bound grounding found before the quote in its block (FieldValue.bound), or None.
+    bound: str | None
+    # set_aside's reading of ``text``: the bare value, a note per thing set aside, and the condition.
+    bare: str
+    context_notes: tuple[str, ...]
+    condition: str
+    # The canonical value of a compound duration ("3 h 30 min"), or None.
+    compound: float | None
+
+
+def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Reading:
+    """The shared first steps of reading a numeric field's quote; see :class:`Reading`."""
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
-    lead_note = f"number word {field.value_raw.strip()!r} read as {spelled}" if spelled != field.value_raw else None
+    text, clause = spelled, ""
     if spec.after_clause == "condition":
         # "92.5% after 100 cycles": the number is the value, the clause is what it was measured after. Moved into
         # the condition, it separates "after 50 cycles" from "after 100 cycles" in the comparison and the cell.
-        spelled, clause = split_after_clause(spelled)
-        if clause:
-            field = _with_after_condition(field, clause)
-            lead_note = "; ".join(n for n in (lead_note, f"{clause!r} moved into the condition") if n)
-    bare, context_notes, condition = set_aside(spelled)
+        text, clause = split_after_clause(text)
+    if field.bound:
+        # "90" quoted out of "above 90 %" is read as "above 90": exactly what quoting the bound would have given.
+        text = f"{field.bound} {text}"
+    bare, context_notes, condition = set_aside(text)
+    return Reading(
+        text=text,
+        number_word=spelled if spelled != field.value_raw else None,
+        clause=clause,
+        bound=field.bound,
+        bare=bare,
+        context_notes=tuple(context_notes),
+        condition=condition,
+        compound=compound_value(spec, bare, units),
+    )
+
+
+def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
+    if spec.kind != "numeric":
+        # Text and composition fields are compared through same_text on the fly.
+        return field
+    reading = read_value(field, spec, units)
+    lead_notes = []
+    if reading.number_word is not None:
+        lead_notes.append(f"number word {field.value_raw.strip()!r} read as {reading.number_word}")
+    if reading.clause:
+        field = _with_after_condition(field, reading.clause)
+        lead_notes.append(f"{reading.clause!r} moved into the condition")
+    if reading.bound:
+        lead_notes.append(f"bound {reading.bound!r} stands before the quote in its cited block")
+    lead_note = "; ".join(lead_notes) or None
+    bare, condition = reading.bare, reading.condition
     if condition and _names_unit_of(spec, condition, units) and not _names_unit_of(spec, bare, units):
         # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
         note = f"the condition {condition!r} holds this field's quantity and the value does not; ambiguous"
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
-    compound = compound_value(spec, bare, units)
-    if compound is not None:
-        compound_note = f"compound {bare!r} read as {compound:g} {spec.canonical_unit}"
-        note = "; ".join(n for n in (lead_note, *context_notes, compound_note) if n)
-        return field.model_copy(update={"value": compound, "unit": spec.canonical_unit, "normalization_note": note})
-    number, parse_note = parse_number(spelled, range_policy=spec.range_policy)
+    if reading.compound is not None:
+        compound_note = f"compound {bare!r} read as {reading.compound:g} {spec.canonical_unit}"
+        note = "; ".join(n for n in (lead_note, *reading.context_notes, compound_note) if n)
+        return field.model_copy(
+            update={"value": reading.compound, "unit": spec.canonical_unit, "normalization_note": note}
+        )
+    number, parse_note = parse_number(reading.text, range_policy=spec.range_policy)
     if number is None:
         return field.model_copy(update={"value": None, "unit": None, "normalization_note": parse_note})
-    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=spelled)
+    value, unit, unit_note = convert_to_canonical(spec, number, field.unit_raw, units, value_text=reading.text)
     note = "; ".join(n for n in (lead_note, parse_note, unit_note) if n) or None
     return field.model_copy(update={"value": value, "unit": unit, "normalization_note": note})
 

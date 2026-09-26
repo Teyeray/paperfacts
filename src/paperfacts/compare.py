@@ -7,7 +7,8 @@ value equality — so when the two lanes phrase the same fact's condition differ
 "from ellipsometric"), an identical value doesn't get split into two records that each look like they're
 missing the other's value. Unequal leftovers are never paired across conditions. Numeric comparison uses
 ``math.isclose`` (|a-b| <= max(rel_tol*max(|a|,|b|), abs_tol)), with per-field tolerances configured in
-:mod:`paperfacts.fields`; text/composition comparison uses equality of the normalized key.
+:mod:`paperfacts.fields`; text/composition comparison uses
+:func:`paperfacts.normalize.same_text`.
 
 ``status`` is always the **actual** comparison outcome; sample-pairing confidence is recorded separately in
 ``match_confidence``. Whether a low-confidence pairing should be escalated for review is a decision left to
@@ -43,7 +44,7 @@ from paperfacts.normalize import (
     normalize_key,
     normalize_lane,
     normalize_text,
-    text_key,
+    same_text,
 )
 from paperfacts.records import FieldValue, LaneExtraction
 from paperfacts.storage import write_text_atomic
@@ -253,8 +254,10 @@ def _check_lane_profiles(lane_a: LaneExtraction, lane_b: LaneExtraction, expecte
 def compare_values(a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
     """Decide the outcome when both sides have a value."""
     if spec.kind != "numeric":
-        if text_key(spec, a.value_raw) == text_key(spec, b.value_raw):
-            category = canonical_category(spec.categories, a.value_raw)
+        if same_text(spec, a.value_raw, b.value_raw):
+            category = canonical_category(spec.categories, a.value_raw) or canonical_category(
+                spec.categories, b.value_raw
+            )
             return "agree", f"both name {category}" if category else "identical after text normalization"
         return "conflict", f"{a.value_raw!r} vs {b.value_raw!r}"
 
@@ -481,7 +484,7 @@ def _equal_pairs(
     """Stage 2: pair leftovers whose values are equal, whatever their conditions say.
 
     Equality is the same test the report uses: ``compare_values`` returning "agree" -- the field's
-    tolerances for a numeric field, the categories-aware text key for a text one. Greedy and deterministic:
+    tolerances for a numeric field, ``same_text`` for a text one. Greedy and deterministic:
     lane A's order, first equal partner in lane B. Because only agreement pairs, a stage-2 row is an
     agreement by construction and can never manufacture a conflict.
 
