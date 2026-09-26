@@ -22,9 +22,9 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from paperfacts.errors import ProfileMismatchError
 from paperfacts.fields import FieldSpec
@@ -50,6 +50,11 @@ from paperfacts.records import FieldValue, LaneExtraction
 from paperfacts.storage import write_text_atomic
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]
+# The scope of the paper-level comparisons, and the entity a profile without entity types has: its samples.
+PAPER_SCOPE = "paper"
+IMPLICIT_ENTITY = "sample"
+# The paper-level scope as files written before round 2 spell it. Unambiguous: every sample scope is prefixed.
+_LEGACY_PAPER_SCOPE = "target"
 
 
 class FieldComparison(BaseModel):
@@ -57,7 +62,7 @@ class FieldComparison(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    scope: str = Field(description='"target", "sample:<a_id>|<b_id>" (matched), or "sample:<id>" (unmatched)')
+    scope: str = Field(description='"paper", "sample:<a_id>|<b_id>" (matched), or "sample:<id>" (unmatched)')
     field: str
     condition: str | None = None
     status: FactStatus
@@ -70,6 +75,11 @@ class FieldComparison(BaseModel):
     a: FieldValue | None = None
     b: FieldValue | None = None
     detail: str = ""
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _current_paper_scope(cls, scope: Any) -> Any:
+        return PAPER_SCOPE if scope == _LEGACY_PAPER_SCOPE else scope
 
 
 class ComparisonCounts(BaseModel):
@@ -111,7 +121,7 @@ class ComparisonReport(BaseModel):
     comparison_key: str
     backend_a: Backend
     backend_b: Backend
-    matching: SampleMatching
+    matchings: dict[str, SampleMatching] = Field(description="the sample matching of each entity type, by its name")
     comparisons: tuple[FieldComparison, ...] = ()
     counts: ComparisonCounts = Field(default_factory=ComparisonCounts)
     # The lanes' artifact_sha256, so a report is tied to the parses it compared (None: unknown, older file).
@@ -119,6 +129,16 @@ class ComparisonReport(BaseModel):
     artifact_sha256_b: str | None = None
     # keys.profile_comparison_fingerprint of the profile the verdicts were reached under (None: an older file).
     profile_fingerprint: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _matchings_from_legacy(cls, data: Any) -> Any:
+        # A report written before round 2 holds its one matching as ``matching``: the implicit entity's.
+        if isinstance(data, dict) and "matching" in data and "matchings" not in data:
+            data = {name: value for name, value in data.items() if name != "matching"} | {
+                "matchings": {IMPLICIT_ENTITY: data["matching"]}
+            }
+        return data
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -143,11 +163,11 @@ def compare_lanes(
     a_name, b_name = lane_a.backend, lane_b.backend
     comparisons: list[FieldComparison] = []
 
-    # Target: paper-level, does not go through sample pairing
+    # Paper-level: does not go through sample pairing
     comparisons += _compare_records(
-        "target",
-        lane_a.target.fields if lane_a.target else (),
-        lane_b.target.fields if lane_b.target else (),
+        PAPER_SCOPE,
+        lane_a.paper.fields if lane_a.paper else (),
+        lane_b.paper.fields if lane_b.paper else (),
         profile.paper_fields,
         a_name,
         b_name,
@@ -217,7 +237,7 @@ def compare_lanes(
         comparison_key=comparison_key(options),
         backend_a=a_name,
         backend_b=b_name,
-        matching=matching,
+        matchings={IMPLICIT_ENTITY: matching},
         comparisons=tuple(comparisons),
         counts=_count(comparisons, matching, (lane_a, lane_b), options.ambiguous_match_confidence),
         artifact_sha256_a=lane_a.artifact_sha256,

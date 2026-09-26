@@ -21,7 +21,7 @@ function laneNode(lane, data) {
   const meta = data ? `${data.samples.length} ${uiCopy("entity_label_zh")} · ${data.usage?.total_tokens ?? "?"} tokens${reasoning} · key ${data.extractor_key}` : "";
   box.innerHTML = `<div class="lane-head ${lane === "mineru" ? "a" : "b"}"><span>${LANE_LABEL[lane]}</span><span class="meta">${escapeHtml(meta)}</span></div>`;
   if (!data) { box.append(note("还没有抽取结果。")); return box; }
-  if (data.target) box.append(sampleNode({ sample_id: uiCopy("paper_level_short_zh"), label: uiCopy("paper_level_label_zh"), conditions: {}, fields: data.target.fields }, "target"));
+  if (data.paper) box.append(sampleNode({ sample_id: uiCopy("paper_level_short_zh"), label: uiCopy("paper_level_label_zh"), conditions: {}, fields: data.paper.fields }, "paper"));
   if (!data.samples.length) box.append(note(`模型没有识别出${uiCopy("entity_label_zh")}。`));
   for (const sample of data.samples) box.append(sampleNode(sample));
   // Values the model found but could not place on any sample. Shown apart because nothing compares them:
@@ -90,7 +90,7 @@ export function clearEvidence(host) {
   for (const marked of host?.querySelectorAll(".field.evidence") ?? []) marked.classList.remove("evidence");
 }
 
-// `kind` is "target" for the results table's paper-level row (it matches the lanes' paper-level records,
+// `kind` is "paper" for the results table's paper-level row (it matches the lanes' paper-level records,
 // whatever their name) and "sample" for a sample row (matched by id among real samples only).
 export function showEvidence(host, fieldName, rowSampleId, kind = "sample") {
   if (!host) return;

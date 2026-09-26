@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from paperfacts.grounding import grounding_key
-from paperfacts.records import ExtractedRecords, FieldValue, SampleRecord, TargetRecord, sample_key
+from paperfacts.records import ExtractedRecords, FieldValue, PaperRecord, SampleRecord, sample_key
 from paperfacts.text import clean_unit, normalize_key
 
 
@@ -32,10 +32,10 @@ class Scope(Enum):
     """The two scopes a value can have that are not a sample.
 
     A sample's scope is its sample_key, a plain string, so these members cannot collide with one whatever
-    a paper calls its samples -- a promise a reserved string like ``"__target__"`` could not make.
+    a paper calls its samples -- a promise a reserved string like ``"__paper__"`` could not make.
     """
 
-    TARGET = "target"
+    PAPER = "paper"
     UNATTRIBUTED = "unattributed"
 
 
@@ -61,12 +61,12 @@ def deduplicate(records: ExtractedRecords) -> ExtractedRecords:
     condition, so a second, genuinely different reading of the same quantity (``10^-2`` against ``10^2``,
     a real OCR disagreement) can be silently dropped behind a duplicate of the first.
     """
-    target = records.target
-    if target is not None:
-        target = target.model_copy(update={"fields": _merge_repeats(target.fields)})
+    paper = records.paper
+    if paper is not None:
+        paper = paper.model_copy(update={"fields": _merge_repeats(paper.fields)})
     return records.model_copy(
         update={
-            "target": target,
+            "paper": paper,
             "samples": tuple(
                 sample.model_copy(update={"fields": _merge_repeats(sample.fields)}) for sample in records.samples
             ),
@@ -139,7 +139,7 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
     entry_counts: Counter[tuple[ScopeKey, VoteKey]] = Counter()
     sample_counts: Counter[str] = Counter()
     samples: dict[str, SampleRecord] = {}
-    target_ids: tuple[str, ...] = ()
+    paper_ids: tuple[str, ...] = ()
     for records in results:
         slot_of: dict[tuple[ScopeKey, ValueKey], VoteSlot] = {}
         ranks: Counter[tuple[ScopeKey, VoteKey]] = Counter()
@@ -163,8 +163,8 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
             sample_counts[scope] += 1
         for sample in records.samples:
             samples.setdefault(sample_key(sample.sample_id), sample)
-        if records.target is not None and not target_ids:
-            target_ids = records.target.source_ids
+        if records.paper is not None and not paper_ids:
+            paper_ids = records.paper.source_ids
 
     # A pass that supported a rank also supported its citations, including when its wording of the condition
     # was not the one kept: losing the wording must not lose the block it quoted. The union is guarded,
@@ -193,9 +193,9 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
 
     # Sample identity is voted on separately from its values: "this sample exists, under these conditions"
     # is itself a finding, kept even when none of its measurements survived.
-    target_fields = tuple(kept.get(Scope.TARGET, ()))
+    paper_fields = tuple(kept.get(Scope.PAPER, ()))
     return ExtractedRecords(
-        target=TargetRecord(source_ids=target_ids, fields=target_fields) if target_fields else None,
+        paper=PaperRecord(source_ids=paper_ids, fields=paper_fields) if paper_fields else None,
         samples=tuple(
             sample.model_copy(update={"fields": tuple(kept.get(scope, ()))})
             for scope, sample in samples.items()
@@ -210,8 +210,8 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
 
 
 def _values(records: ExtractedRecords) -> Iterator[tuple[ScopeKey, FieldValue]]:
-    for value in records.target.fields if records.target else ():
-        yield Scope.TARGET, value
+    for value in records.paper.fields if records.paper else ():
+        yield Scope.PAPER, value
     for sample in records.samples:
         scope = sample_key(sample.sample_id)
         for value in sample.fields:

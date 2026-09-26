@@ -17,7 +17,7 @@ from paperfacts.dataset import (
 from paperfacts.decide import decide
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
-from paperfacts.records import FailedQuestion, FieldValue, TargetRecord
+from paperfacts.records import FailedQuestion, FieldValue, PaperRecord
 from support.extraction import comparison_options, make_lane, make_sample
 from support.factories import DOC_ID
 from support.profiles import shipped_profile
@@ -550,7 +550,7 @@ def test_a_bound_beside_another_quantity_never_makes_that_quantity_the_value():
     # The review's T6: ">95 %" relative density next to a 99.99 % purity must not commit 99.99 as the density.
     result = dataset(
         make_lane(
-            target=TargetRecord(
+            paper=PaperRecord(
                 fields=(
                     value("density", ">95", "%", condition="relative density"),
                     value("density", "99.99", "%", condition="purity"),
@@ -786,10 +786,10 @@ def test_one_lane_quoting_two_different_modes_stays_refused():
 def test_a_target_size_written_as_a_number_word_fills_the_cell():
     # metals: "a four-inch ITO target", quoted as "four" with the unit "inch" by both lanes.
     result = dataset(
-        make_lane(target=TargetRecord(fields=(value("inch", "four", "inch"),))),
+        make_lane(paper=PaperRecord(fields=(value("inch", "four", "inch"),))),
         make_lane(
             backend="paddleocr_vl",
-            target=TargetRecord(fields=(value("inch", "four-inch", "inch", backend="paddleocr_vl"),)),
+            paper=PaperRecord(fields=(value("inch", "four-inch", "inch", backend="paddleocr_vl"),)),
         ),
     )
 
@@ -798,7 +798,7 @@ def test_a_target_size_written_as_a_number_word_fills_the_cell():
 
 
 def test_different_target_compositions_cannot_be_picked_or_joined():
-    result = dataset(make_lane(target=TargetRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
+    result = dataset(make_lane(paper=PaperRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
     assert result.paper_row["component"] is None
     assert decision(result, "component")["decision"] == "multiple_values"
 
@@ -952,7 +952,7 @@ def test_the_json_field_list_carries_the_unit_and_the_scope():
     fields = {field.name: field for field in field_columns(shipped_profile())}
 
     assert fields["thickness"].scope == "sample"
-    assert fields["component"].scope == "target"
+    assert fields["component"].scope == "paper"
     assert fields["thickness"].unit == "nm"
 
 

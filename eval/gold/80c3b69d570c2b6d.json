@@ -10,7 +10,7 @@
     "Table 1 rows other than 'ICO (this work)' are literature values.",
     "O2/H2 percentages are shares of the reactive gas; the paper does not say relative to what."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "In2O3:CeO2 = 99:1 wt%",

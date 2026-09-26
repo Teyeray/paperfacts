@@ -10,7 +10,7 @@
     "Rsh is stated in text only for ITO-RT (102.7), ITO-200 (75.1) and ITO-250 (59.9); the others are Fig. 7 data labels. The text's resistivity '102.7 × 10−3 ohm.cm' contradicts Fig. 7 (1.027 × 10−3) and is ambiguous.",
     "Table 4 transmittance is of film plus glass substrate. The 40 nm rear ITO and the 77 nm top-cell ITO are device layers (ambiguous samples). O2/Ar ratio is never stated as a percentage."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "ITO, In2O3:SnO2 90:10 (mass)",

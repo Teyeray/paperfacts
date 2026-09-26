@@ -44,7 +44,7 @@ def reference_module(ref: str) -> types.ModuleType:
 
 
 def lane_values(lane: dict) -> list[dict]:
-    target = lane.get("target") or {}
+    target = lane.get("paper") or lane.get("target") or {}
     values = list(target.get("fields", []))
     for sample in lane.get("samples", []):
         values.extend(sample.get("fields", []))

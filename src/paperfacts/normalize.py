@@ -21,7 +21,7 @@ from functools import cache
 
 from paperfacts.fields import FieldSpec, RangePolicy
 from paperfacts.profile import DomainProfile
-from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, TargetRecord, spell_number_word
+from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, PaperRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
 from paperfacts.units import UnitRegistry
 
@@ -691,16 +691,16 @@ def _normalize_fields(fields: tuple[FieldValue, ...], profile: DomainProfile) ->
 def normalize_lane(lane: LaneExtraction, profile: DomainProfile) -> LaneExtraction:
     """Fill in ``value`` / ``unit`` for every field, in ``profile``'s units. Pure and idempotent: always returns
     a new object."""
-    target: TargetRecord | None = None
-    if lane.target is not None:
-        target = lane.target.model_copy(update={"fields": _normalize_fields(lane.target.fields, profile)})
+    paper: PaperRecord | None = None
+    if lane.paper is not None:
+        paper = lane.paper.model_copy(update={"fields": _normalize_fields(lane.paper.fields, profile)})
     samples = tuple(
         sample.model_copy(update={"fields": _normalize_fields(sample.fields, profile)}) for sample in lane.samples
     )
     # Unattributed values are compared now, so they need canonical values like every other; leaving them
     # raw would silently turn every such comparison into "unparsed" and bury real agreements.
     unattributed = _normalize_fields(lane.unattributed, profile)
-    return lane.model_copy(update={"target": target, "samples": samples, "unattributed": unattributed})
+    return lane.model_copy(update={"paper": paper, "samples": samples, "unattributed": unattributed})
 
 
 def drop_implausible(records: ExtractedRecords, profile: DomainProfile) -> ExtractedRecords:
@@ -730,16 +730,16 @@ def drop_implausible(records: ExtractedRecords, profile: DomainProfile) -> Extra
     def kept(values: tuple[FieldValue, ...]) -> tuple[FieldValue, ...]:
         return tuple(value for value in values if plausible(value))
 
-    target = records.target
-    if target is not None:
-        target = target.model_copy(update={"fields": kept(target.fields)})
+    paper = records.paper
+    if paper is not None:
+        paper = paper.model_copy(update={"fields": kept(paper.fields)})
     samples = tuple(sample.model_copy(update={"fields": kept(sample.fields)}) for sample in records.samples)
     unattributed = kept(records.unattributed)
     if not dropped:
         return records
     return records.model_copy(
         update={
-            "target": target,
+            "paper": paper,
             "samples": samples,
             "unattributed": unattributed,
             "dropped": (*records.dropped, *dropped),

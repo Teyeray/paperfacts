@@ -106,8 +106,8 @@ export function renderResults(root) {
 
   const samples = data?.sample_rows ?? [];
   const paper = data?.paper_row ?? {};
-  const targetHasValue = (data?.fields ?? []).some((field) => field.scope === "target" && paper[field.name] != null);
-  const hasRows = Boolean(data) && (samples.length > 0 || targetHasValue);
+  const paperHasValue = (data?.fields ?? []).some((field) => field.scope === "paper" && paper[field.name] != null);
+  const hasRows = Boolean(data) && (samples.length > 0 || paperHasValue);
   download.classList.toggle("hidden", !hasRows);
   copy.classList.toggle("hidden", !hasRows);
   slot("results-table").classList.toggle("hidden", !hasRows);
@@ -125,7 +125,7 @@ export function renderResults(root) {
     fieldPicker(data.fields, rerender),
   );
   const columns = documentColumns(fields, qualityIndex(data.quality_rows ?? []), paper.sample_id ?? "");
-  const items = [{ kind: "target", row: paper }, ...samples.map((row) => ({ kind: "sample", row }))];
+  const items = [{ kind: "paper", row: paper }, ...samples.map((row) => ({ kind: "sample", row }))];
   slot("results-head").append(headRow(columns));
   const rows = slot("results-rows");
   for (const item of items) {
@@ -137,36 +137,36 @@ export function renderResults(root) {
 }
 
 function rowClass(item, paperSampleId) {
-  if (item.kind === "target") return "target-row";
+  if (item.kind === "paper") return "paper-level-row";
   return item.row.sample_id === paperSampleId ? "paper-row" : "";
 }
 
-// Target values are the same for every sample, so they sit on the target row alone, and sample values on
+// Paper-level values are the same for every sample, so they sit on the paper-level row alone, and sample values on
 // the sample rows alone: a field column is filled only on the rows of its own scope.
 function documentColumns(fields, quality, paperSampleId) {
-  const isTarget = (item) => item.kind === "target";
-  // An identity column the target row leaves blank.
+  const isPaperLevel = (item) => item.kind === "paper";
+  // An identity column the paper-level row leaves blank.
   const sampleColumn = (header, className, text) =>
     column(
       header,
-      (item) => (isTarget(item) ? "<td></td>" : `<td class="${className}" title="${escapeHtml(text(item))}">${escapeHtml(text(item))}</td>`),
-      (item) => (isTarget(item) ? "" : text(item)),
+      (item) => (isPaperLevel(item) ? "<td></td>" : `<td class="${className}" title="${escapeHtml(text(item))}">${escapeHtml(text(item))}</td>`),
+      (item) => (isPaperLevel(item) ? "" : text(item)),
     );
   const paperMark = `<span class="paper-mark" title="被选作论文行的${escapeHtml(uiCopy("entity_label_zh"))}">★ 论文行</span>`;
   const paperLabel = uiCopy("paper_level_label_zh");
   return [
     column(
       uiCopy("entity_label_zh"),
-      (item) => isTarget(item)
+      (item) => isPaperLevel(item)
         ? `<td class="mono">${escapeHtml(paperLabel)}</td>`
         : `<td class="mono">${escapeHtml(item.row.sample_id ?? "")}${item.row.sample_id === paperSampleId ? paperMark : ""}</td>`,
-      (item) => (isTarget(item) ? paperLabel : item.row.sample_id ?? ""),
+      (item) => (isPaperLevel(item) ? paperLabel : item.row.sample_id ?? ""),
     ),
     sampleColumn("标签", "label", (item) => String(item.row.sample_label ?? "")),
     sampleColumn("条件", "muted cond", (item) => String(item.row.conditions ?? "")),
     sampleColumn("可用/一致", "mono", (item) => `${item.row.available_fields ?? 0} / ${item.row.agree_fields ?? 0}`),
     ...fields.map((field) => {
-      const ownScope = (item) => (field.scope === "target") === isTarget(item);
+      const ownScope = (item) => (field.scope === "paper") === isPaperLevel(item);
       return fieldColumn(
         field,
         (item) => (ownScope(item) ? item.row[field.name] ?? null : null),
@@ -183,7 +183,7 @@ function qualityIndex(rows) {
 }
 
 function cell(value, quality, item, field) {
-  const sampleId = item.kind === "target" ? "target" : item.row.sample_id;
+  const sampleId = item.kind === "paper" ? "paper" : item.row.sample_id;
   const decision = quality.get(`${sampleId}${KEY_SEPARATOR}${field.name}`);
   const detail = decision?.detail ?? "";
   // Refused, not missing: the reason is the cell's accessible name (so it does not need a hover) and the

@@ -36,7 +36,7 @@ def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
             name=spec.name,
             label=spec.label,
             unit=spec.canonical_unit,
-            scope="sample" if spec.is_sample_level else "target",
+            scope="sample" if spec.is_sample_level else "paper",
             description=spec.description_zh,
         )
         for spec in profile.fields

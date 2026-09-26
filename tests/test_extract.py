@@ -195,7 +195,7 @@ def test_a_valid_response_becomes_a_lane_extraction_in_one_call():
     assert lane.backend == "mineru"
     assert lane.model == "fake-model"
     assert lane.sample("A").get("sheet_resistance").value_raw == "12.5"
-    assert lane.target.get("density").value_raw == "98.5"
+    assert lane.paper.get("density").value_raw == "98.5"
 
 
 def test_the_usage_and_the_raw_response_are_kept_as_evidence():
@@ -504,7 +504,7 @@ def test_a_response_that_found_nothing_is_a_valid_empty_lane():
         lane_options(mode="document"),
     )
 
-    assert lane.target is None
+    assert lane.paper is None
     assert lane.samples == ()
     assert lane.invalid_source_ids == ()
 
@@ -570,7 +570,7 @@ def test_a_lane_is_extracted_under_the_profile_its_options_carry():
     lane = extract_lane(make_artifact(), client, options)
 
     assert client.systems == [extraction_system_prompt(profile)]
-    assert lane.target.get("precursor_purity").value_raw == "99.9"
+    assert lane.paper.get("precursor_purity").value_raw == "99.9"
     assert [value.value_raw for value in lane.sample("A").fields] == ["120"]
     assert any("sheet_resistance: not in schema" in entry for entry in lane.dropped)
     assert any("coating_thickness" in entry and "plausible range" in entry for entry in lane.dropped)
@@ -584,5 +584,5 @@ def test_the_inventory_verdict_is_read_under_the_profile_s_own_key():
 
     lane = extract_lane(make_artifact(), client, lane_options(client, mode="passage", profile=profile))
 
-    assert lane.no_tco_film is True
+    assert lane.no_samples is True
     assert client.call_count == 1  # no block names the paper-level field, and there is no sample to ask about

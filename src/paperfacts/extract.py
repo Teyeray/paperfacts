@@ -61,10 +61,10 @@ from paperfacts.records import (
     InventoryResponse,
     InventorySample,
     LaneExtraction,
+    PaperRecord,
     ResponseCleaning,
     ResponseModels,
     ResponseValue,
-    TargetRecord,
     clean_samples,
     place_on_every_sample,
     response_models,
@@ -273,14 +273,14 @@ def extract_lane(
         extractor_key=extractor_key(options),
         model=client.model,
         profile_fingerprint=profile_extraction_fingerprint(profile),
-        target=records.target,
+        paper=records.paper,
         samples=records.samples,
         invalid_source_ids=records.invalid_source_ids,
         dropped=(*_bibliography_audit(artifact.blocks), *records.dropped),
         unattributed=records.unattributed,
         # Carried as data, not left to the audit text in `dropped`, so the web page can say why the lane is
         # empty without matching prose. The same condition that skips the sample-level questions below.
-        no_tco_film=inventory is not None and _deposits_no_film(inventory.response),
+        no_samples=inventory is not None and _reports_no_samples(inventory.response),
         passes=passes,
         # In the profile's field order, whichever pass failed first.
         failed_questions=tuple(failed[spec.name] for spec in profile.fields if spec.name in failed),
@@ -420,7 +420,7 @@ def _extract_passages(
     questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
     dropped: list[str] = []
     for spec in profile.fields:
-        if spec.is_sample_level and _deposits_no_film(inventory.response):
+        if spec.is_sample_level and _reports_no_samples(inventory.response):
             # A device paper on purchased ITO glass: asking anyway only harvests the absorber's thickness and
             # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
             # empty for any other reason -- it missed the sample text -- still gets every question, so one
@@ -505,9 +505,9 @@ def _extract_passages(
     return records, usage, "\n\n".join(raw_parts), tuple(failed)
 
 
-def _deposits_no_film(inventory: InventoryResponse) -> bool:
-    """The inventory's verdict that the paper has no film of its own, trusted only when it named no sample."""
-    return inventory.no_tco_film and not inventory.samples
+def _reports_no_samples(inventory: InventoryResponse) -> bool:
+    """The inventory's verdict that the paper has no sample of its own, trusted only when it named no sample."""
+    return inventory.no_samples and not inventory.samples
 
 
 def _render_sample_list(samples: Sequence[InventorySample]) -> str:
@@ -548,8 +548,8 @@ def passage_records(
     sample_fields: list[list[FieldValue]] = [[] for _ in samples]
     index_by_key = {sample_key(sample.sample_id): index for index, sample in enumerate(samples)}
 
-    target_fields: list[FieldValue] = []
-    target_ids: list[str] = []
+    paper_fields: list[FieldValue] = []
+    paper_ids: list[str] = []
     unattributed: list[FieldValue] = []
     single_sample_attributed = 0
     series_fanned_out = 0
@@ -569,8 +569,8 @@ def passage_records(
             if not harvest.spec.is_sample_level:
                 # The question itself decided the scope, so a stray sample_id or series flag on a paper-level
                 # field is noise rather than the scope error document mode has to guard against.
-                target_fields.append(value)
-                target_ids.extend(value.source_ids)
+                paper_fields.append(value)
+                paper_ids.extend(value.source_ids)
                 continue
             if item.applies_to_all_samples and item.sample_id:
                 # An id and the series flag contradict each other. The id is the more specific claim and
@@ -610,9 +610,9 @@ def passage_records(
         )
 
     return ExtractedRecords(
-        target=(
-            TargetRecord(source_ids=tuple(dict.fromkeys(target_ids)), fields=tuple(target_fields))
-            if target_fields
+        paper=(
+            PaperRecord(source_ids=tuple(dict.fromkeys(paper_ids)), fields=tuple(paper_fields))
+            if paper_fields
             else None
         ),
         samples=tuple(

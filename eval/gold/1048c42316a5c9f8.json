@@ -9,7 +9,7 @@
     "The 20 nm GZO single layer (T 96.04%) is optimised only in the SI; recorded as an ambiguous sample. Table 1 FoM values and the 6.7 nm MoO3 / 100 nm Ag / PCBM layers are not fields.",
     "Rotation 30 rpm is stated for bilayer and graded sputtering; for the ITO monolayer it is only implied."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "ITO",

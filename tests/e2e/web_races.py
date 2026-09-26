@@ -58,7 +58,7 @@ FIELDS = [
     {"name": "thickness", "label": "厚度", "unit": "nm", "scope": "sample", "description": "膜厚"},
     {"name": "sheet_resistance", "label": "方阻", "unit": "Ω/sq", "scope": "sample", "description": "方块电阻"},
     {"name": "transmittance", "label": "透过率", "unit": "%", "scope": "sample", "description": "可见光平均透过率"},
-    {"name": "target_purity", "label": "靶材纯度", "unit": "%", "scope": "target", "description": "靶材纯度"},
+    {"name": "target_purity", "label": "靶材纯度", "unit": "%", "scope": "paper", "description": "靶材纯度"},
 ]
 
 
@@ -95,7 +95,7 @@ def seed_document(library: Library, root: Path, index: int, name: str, *, sample
         ]
         lane = make_lane(backend=backend, samples=lane_samples, document_id=sha, extractor_key=library.extractor_key)
         # A paper with no samples is one that deposits no film of its own, the case with its own message.
-        lane = lane.model_copy(update={"no_tco_film": not samples})
+        lane = lane.model_copy(update={"no_samples": not samples})
         lane.write(library.layout.extraction_path(sha, backend, library.extractor_key))
     rows = tuple(
         FieldComparison(
@@ -120,7 +120,7 @@ def seed_document(library: Library, root: Path, index: int, name: str, *, sample
         comparison_key=library.comparison_key,
         backend_a="mineru",
         backend_b="paddleocr_vl",
-        matching=SampleMatching(),
+        matchings={"sample": SampleMatching()},
         counts=ComparisonCounts(total=comparisons, agree=comparisons),
         comparisons=rows,
     ).write(library.layout.comparison_path(sha, library.extractor_key, library.comparison_key))
