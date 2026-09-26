@@ -98,7 +98,7 @@ def test_serve_builds_the_library_under_the_profile_the_environment_names(
 
     assert result.exit_code == 0, result.output
     assert "profile=demo" in result.output
-    library = served[0].state.library
+    library = served[0].state.profiles.library
     settings = served[0].state.settings
     assert library.profile.name == "demo"
     # The browser looks for files under the demo keys, which are not TCO's.
@@ -151,8 +151,8 @@ def test_the_app_hands_its_jobs_the_profile_its_library_uses(monkeypatch, tmp_pa
 
     application = web_app.create_app(settings)
 
-    assert handed == [application.state.library.profile]
-    assert handed[0] is application.state.library.profile
+    assert handed == [application.state.profiles.library.profile]
+    assert handed[0] is application.state.profiles.library.profile
 
 
 # ---- A profile's name decides its workbook's name ----------------------------------------------------------

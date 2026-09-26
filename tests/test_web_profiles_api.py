@@ -114,6 +114,19 @@ def test_an_unknown_field_is_not_found_and_the_detail_lists_the_fields(client: T
     assert "thickness" in response.json()["detail"]
 
 
+def test_an_internal_keyerror_for_a_known_field_is_not_swallowed_into_a_404(client: TestClient, monkeypatch):
+    """The route checks the field against ``by_name`` itself and 404s only on that; any other ``KeyError`` a
+    known field's own rendering raises is a bug, not "no such field", and must not be mistaken for one."""
+
+    def boom(profile, field):
+        raise KeyError("unrelated internal error")
+
+    monkeypatch.setattr("paperfacts.web.app.prompt_sections", boom)
+
+    with pytest.raises(KeyError, match="unrelated internal error"):
+        client.get("/api/profiles/tco/prompts?field=thickness")
+
+
 # ---- ?profile= on the per-profile routes ----------------------------------------------------------------------
 
 
@@ -151,6 +164,26 @@ def pdf(tmp_path: Path) -> bytes:
     return make_blank_pdf(tmp_path / "paper.pdf").read_bytes()
 
 
+# What each route answers once ``_seed_both`` has planted a dataset alone (no report, extraction or per-document
+# workbook): the exact status, not merely "not a 500", so a route that quietly started 500ing on real input
+# would still be caught even though it is under 500.
+EXPECTED_STATUS: dict[tuple[str, str], int] = {
+    ("GET", "/api/profile"): 200,
+    ("GET", "/api/documents"): 200,
+    ("GET", "/api/dataset"): 200,
+    ("GET", f"/api/documents/{DOC_KEY}"): 200,
+    ("GET", f"/api/documents/{DOC_KEY}/report"): 404,  # no report seeded
+    ("GET", f"/api/documents/{DOC_KEY}/extraction/mineru"): 404,  # no extraction seeded
+    ("GET", f"/api/documents/{DOC_KEY}/dataset"): 200,
+    ("GET", f"/api/documents/{DOC_KEY}/figures"): 200,  # no charts read is a normal empty view, not a 404
+    ("GET", "/api/dataset.xlsx"): 200,
+    ("GET", f"/api/documents/{DOC_KEY}/dataset.xlsx"): 404,  # no per-document workbook was ever written
+    ("POST", "/api/documents"): 202,
+    ("POST", "/api/documents/run-all"): 202,
+    ("POST", f"/api/documents/{DOC_KEY}/run"): 409,  # no PDF and no cached parse to rerun from
+}
+
+
 @pytest.mark.parametrize(("method", "route"), PER_PROFILE_ROUTES)
 @pytest.mark.parametrize(("profile", "echoed"), [(None, "tco"), ("tco", "tco"), ("catalysis", "catalysis")])
 def test_every_per_profile_route_says_which_profile_answered(
@@ -161,7 +194,7 @@ def test_every_per_profile_route_says_which_profile_answered(
 
     response = _call(client, method, route, profile, pdf)
 
-    assert response.status_code < 500
+    assert response.status_code == EXPECTED_STATUS[method, route]
     assert response.headers["X-PaperFacts-Profile"] == echoed
 
 
@@ -260,6 +293,7 @@ def test_a_profile_the_mode_cannot_ask_is_listed_and_described_but_has_no_librar
         responses = {route: _call(client, method, route, "catalysis", pdf) for method, route in PER_PROFILE_ROUTES}
         listed = client.get("/api/profiles").json()["profiles"][1]
         described = client.get("/api/profiles/catalysis")
+        prompts = client.get("/api/profiles/catalysis/prompts")
         view = client.get("/api/profile?profile=catalysis")
         done = client.get(f"/api/documents/{DOC_KEY}").json()["profiles_done"]
 
@@ -268,6 +302,8 @@ def test_a_profile_the_mode_cannot_ask_is_listed_and_described_but_has_no_librar
     detail = responses["/api/documents"].json()["detail"]
     assert "passage" in detail and "catalysis.json" in detail and str(repo) not in detail
     assert (view.status_code, described.status_code) == (200, 200)
+    # A profile's prompts are read-only text over its definition; not being runnable is a job-time concern.
+    assert prompts.status_code == 200 and prompts.json()["sections"]
     assert described.json()["finished_documents"] == []
     assert (listed["runnable"], listed["not_runnable"] is not None, listed["finished_documents"]) == (False, True, 0)
     assert done == ["tco"]
@@ -335,3 +371,18 @@ def test_the_runner_runs_each_job_under_its_own_profile_and_checks_its_own_file(
     run(job("tco"), lambda *args: None)
 
     assert handed == ["catalysis", "tco"]
+
+
+def test_the_runner_refuses_a_job_for_a_profile_the_mode_cannot_ask(repo: Path):
+    """``served.library`` is ``None`` for a profile the configured mode cannot ask; the job body must refuse
+    it with the same reason the browser is shown, and never reach ``run_document``."""
+    settings = Settings(
+        data_root=repo.parent / "data", repo_root=repo, profile="tco", llm_model="fake", extraction_mode="document"
+    )
+    registry = ProfileRegistry.build(settings)
+    assert registry.get("catalysis").library is None  # the branch under test
+    run = pipeline_runner(settings, registry)
+    job = Job(job_id="j", document_id="0123456789abcdef", profile="catalysis", created_at="2026-01-01T00:00:00+00:00")
+
+    with pytest.raises(ConfigError, match="passage"):
+        run(job, lambda *args: None)

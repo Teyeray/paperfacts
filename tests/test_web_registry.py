@@ -12,7 +12,7 @@ import pytest
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError
 from paperfacts.web.registry import ProfileRegistry
-from support.profiles import SHIPPED_PROFILE_PATH, entity_profile_data, make_entity_profile, profile_data
+from support.profiles import SHIPPED_PROFILE_PATH, entity_profile_data, make_entity_profile, make_profile, profile_data
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -152,3 +152,51 @@ def test_an_empty_web_profiles_serves_the_default_alone(tmp_path: Path):
     registry = ProfileRegistry.build(_settings(_repo(tmp_path), web_profiles=()))
 
     assert (list(registry.served), registry.invalid) == (["tco"], ())
+
+
+def test_a_deeply_nested_extra_profile_does_not_stop_the_server(tmp_path: Path):
+    """A file this malformed overflows json.loads' own recursion before the loader ever gets a chance to
+    raise ConfigError; one broken extra file must not take the whole server down with it."""
+    repo = _repo(tmp_path)
+    (repo / "profiles" / "deep.json").write_text("[" * 200_000, encoding="utf-8")
+
+    registry = ProfileRegistry.build(_settings(repo))
+
+    assert list(registry.served) == ["tco", "battery_cathode", "wear"]
+    deep = registry.invalid_named("deep")
+    assert deep is not None
+    assert deep.errors and "could not be loaded" in deep.errors[0] and "RecursionError" in deep.errors[0]
+
+
+def test_a_broken_symlink_outside_profiles_does_not_leak_its_absolute_path(tmp_path: Path):
+    repo = _repo(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text("{", encoding="utf-8")  # invalid JSON, loaded through the link
+    (repo / "profiles" / "alias.json").symlink_to(outside)
+
+    registry = ProfileRegistry.build(_settings(repo))
+
+    alias = registry.invalid_named("alias")
+    assert alias is not None and alias.errors
+    assert all(str(tmp_path) not in error and str(outside) not in error for error in alias.errors)
+    assert any("alias.json" in error for error in alias.errors)
+
+
+def test_the_same_profile_named_twice_in_the_profiles_seam_is_deduped(tmp_path: Path, tco_profile):
+    settings = _settings(_repo(tmp_path))
+
+    registry = ProfileRegistry.build(settings, profile=tco_profile, profiles=(tco_profile,))
+
+    assert list(registry.served) == ["tco"]
+
+
+def test_a_different_profile_under_the_defaults_name_is_the_duplicate_name_error(tmp_path: Path, tco_profile):
+    """An extra profile that merely shares the default's name, but not its content, must not silently lose to
+    the default (or win over it): it falls through to the duplicate-name error, and that error names only the
+    names that actually collide."""
+    settings = _settings(_repo(tmp_path))
+    imposter = make_profile({"name": "tco"})
+    other = make_entity_profile()  # named "demo": does not collide with anything
+
+    with pytest.raises(ConfigError, match=r"^two served profiles share a name: tco$"):
+        ProfileRegistry.build(settings, profile=tco_profile, profiles=(imposter, other))

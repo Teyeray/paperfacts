@@ -272,7 +272,6 @@ def create_app(
     app = FastAPI(title="PaperFacts", version="0.1.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.profiles = registry
-    app.state.library = default_library
     app.state.jobs = manager
 
     @app.middleware("http")
@@ -392,10 +391,11 @@ def create_app(
     def get_profile_prompts(name: str, field: Annotated[str | None, Query()] = None) -> dict[str, Any]:
         """The same sections ``paperfacts prompts`` prints, from the same function."""
         served = lookup_profile(registry, name)
-        try:
-            sections = prompt_sections(served.profile, field)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=exc.args[0]) from None
+        if field is not None and field not in served.profile.by_name:
+            fields = ", ".join(served.profile.by_name)
+            detail = f"no field {field!r} in {served.profile.name}; it has: {fields}"
+            raise HTTPException(status_code=404, detail=detail)
+        sections = prompt_sections(served.profile, field)
         return {"sections": [{"title": title, "text": text} for title, text in sections]}
 
     @app.get("/api/profile")

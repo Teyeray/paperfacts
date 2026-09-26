@@ -417,7 +417,7 @@ class Settings:
                 "web.max_parallel_documents",
                 file.path,
             ),
-            web_profiles=_parse_names(get("WEB_PROFILES")) or file.names_or_none("web.profiles"),
+            web_profiles=_parse_names(get("WEB_PROFILES"), file.names_or_none("web.profiles")),
             max_upload_bytes=number("MAX_UPLOAD_MB", file.get("server.max_upload_mb", int), int) * 1024 * 1024,
             page_dpi=number("PAGE_DPI", file.get("server.page_dpi.default", int), int),
             page_dpi_min=number("PAGE_DPI_MIN", file.get("server.page_dpi.min", int), int),
@@ -580,10 +580,15 @@ def _known_effort(raw: str, source: Path, *, dotted: str, variable: str, extra: 
     return cast(ReasoningEffort, raw)
 
 
-def _parse_names(raw: str | None) -> tuple[str, ...] | None:
-    """A comma-separated list from the environment; unset (or only commas) leaves the file's value."""
+def _parse_names(raw: str | None, default: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """A comma-separated list from the environment; unset (or only commas) leaves ``default`` -- the file's
+    value, always parsed and validated whether or not the environment goes on to override it, so a malformed
+    ``web.profiles`` is loud even behind an override. ``"-"`` is the one way this variable can spell "no extra
+    profiles" (only the default): an empty string already means unset, so it cannot."""
+    if raw is not None and raw.strip() == "-":
+        return ()
     names = tuple(part.strip() for part in (raw or "").split(",") if part.strip())
-    return names or None
+    return names or default
 
 
 def _parse_bool(name: str, raw: str | None, default: bool) -> bool:

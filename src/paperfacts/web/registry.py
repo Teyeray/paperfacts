@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,8 +82,9 @@ class ProfileRegistry:
 
     def __init__(self, served: Sequence[ServedProfile], invalid: Sequence[InvalidProfile] = ()) -> None:
         names = [entry.name for entry in served]
-        if len(set(names)) != len(names):
-            raise ConfigError(f"two served profiles share a name: {', '.join(names)}")
+        colliding = sorted(name for name, count in Counter(names).items() if count > 1)
+        if colliding:
+            raise ConfigError(f"two served profiles share a name: {', '.join(colliding)}")
         for name in names:
             if not IDENTIFIER.fullmatch(name):
                 # The name goes unquoted into a Content-Disposition header; the loader enforces this, a profile
@@ -116,7 +118,15 @@ class ProfileRegistry:
         others: list[ServedProfile] = []
         invalid: list[InvalidProfile] = []
         if profiles is not None:
-            others = [_served(settings, extra, extra.source) for extra in profiles if extra.name != default.name]
+            # An extra profile that is the default under another name is dropped only when it is truly the
+            # same content (the default handed back in its own ``profiles``); one with the default's name but
+            # different content is kept, so __init__'s duplicate-name check catches it instead of one of the
+            # two silently winning.
+            others = [
+                _served(settings, extra, extra.source)
+                for extra in profiles
+                if extra.name != default.name or extra.content_hash != profile.content_hash
+            ]
         else:
             others, invalid = _scan(settings, default.name)
         others.sort(key=lambda entry: entry.name)
@@ -178,8 +188,19 @@ def _scan(settings: Settings, default: str) -> tuple[list[ServedProfile], list[I
             loaded = load_run_profile(named, to_run=False)
         except ConfigError as exc:
             logger.warning("not serving profile %s: %s", path.name, exc)
-            errors = tuple(_strip(line, directory) for line in str(exc).splitlines())
+            errors = tuple(_strip(line, directory, path) for line in str(exc).splitlines())
             invalid.append(InvalidProfile(path.stem, path.name, errors))
+            continue
+        except Exception as exc:
+            # A file this malformed can raise something the loader was never written to catch (a deeply
+            # nested bracket run overflows json.loads' own recursion, and can then overflow the loader's
+            # `{value!r}` error formatting too). One broken extra file must not take the others -- or the
+            # whole server -- down with it; the default profile is not guarded this way, so it still fails
+            # loudly.
+            logger.exception("not serving profile %s", path.name)
+            invalid.append(
+                InvalidProfile(path.stem, path.name, (f"{path.name}: could not be loaded ({type(exc).__name__})",))
+            )
             continue
         if loaded.name != path.stem or loaded.name in names:
             # A link to another profile's file loads as that profile (the loader resolves it and checks the name
@@ -191,7 +212,15 @@ def _scan(settings: Settings, default: str) -> tuple[list[ServedProfile], list[I
             invalid.append(InvalidProfile(path.stem, path.name, (reason,)))
             continue
         names.add(loaded.name)
-        served.append(_served(settings, loaded, profile_origin(named, loaded)))
+        try:
+            served.append(_served(settings, loaded, profile_origin(named, loaded)))
+        except Exception as exc:
+            # Same guard around building the profile's Library: an extra profile's content can be malformed
+            # in a way check_mode does not catch and the Library construction chokes on.
+            logger.exception("not serving profile %s (library)", path.name)
+            invalid.append(
+                InvalidProfile(path.stem, path.name, (f"{path.name}: could not be loaded ({type(exc).__name__})",))
+            )
     for missing in sorted((wanted or set()) - {entry.name for entry in served} - {entry.name for entry in invalid}):
         invalid.append(InvalidProfile(missing, f"{missing}.json", (f"{missing}.json: no such profile (web.profiles)",)))
     return served, invalid
@@ -207,8 +236,13 @@ def _served(settings: Settings, profile: DomainProfile, origin: Path) -> ServedP
     return ServedProfile(profile, origin, Library(settings, profile))
 
 
-def _strip(line: str, directory: Path) -> str:
-    """A loader error line with the profiles directory taken off every path it names."""
+def _strip(line: str, directory: Path, path: Path) -> str:
+    """A loader error line with the profiles directory taken off every path it names, and ``path``'s own
+    resolved target swapped for the name it is served under -- a symlink under ``profiles/`` can point
+    anywhere, and a loader error naming that target must not leak an absolute path outside it."""
     for prefix in {str(directory.resolve()), str(directory)}:
         line = line.replace(prefix + "/", "")
+    resolved = str(path.resolve())
+    if resolved in line:
+        line = line.replace(resolved, path.name)
     return line
