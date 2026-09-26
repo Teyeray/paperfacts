@@ -11,7 +11,8 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "pydantic>=2.11,<3",
     "pypdfium2>=4.30,<6",
-    "pillow>=11,<12",
+    # Lower bound excludes the Pillow 11.x line, which carries ~35 known advisories fixed by 12.1.1-12.3.0.
+    "pillow>=12.3,<13",
     "typer>=0.15,<1",
     "httpx>=0.28,<1",
     "fastapi>=0.141.1",
