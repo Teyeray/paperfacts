@@ -486,22 +486,20 @@ def _set_pairs(
     """A list field's pairing: each value of lane A with the first of lane B holding the same element
     (:func:`~paperfacts.kinds.element_key`, the union cell's identity too) under conditions that do not measure
     differently; everything else one-sided. A value naming no category pairs with nothing."""
-    rest_b = list(values_b)
+    rest_b = [(element_key(spec, b.value_raw), b) for b in values_b]
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     for a in values_a:
         key = element_key(spec, a.value_raw)
         j = next(
             (
                 j
-                for j, b in enumerate(rest_b)
-                if key is not None
-                and element_key(spec, b.value_raw) == key
-                and not conditions_measure_differently(a.condition, b.condition)
+                for j, (b_key, b) in enumerate(rest_b)
+                if key is not None and b_key == key and not conditions_measure_differently(a.condition, b.condition)
             ),
             None,
         )
-        pairs.append((a, None if j is None else rest_b.pop(j)))
-    return pairs + [(None, b) for b in rest_b]
+        pairs.append((a, None if j is None else rest_b.pop(j)[1]))
+    return pairs + [(None, b) for _, b in rest_b]
 
 
 def conditions_measure_differently(condition_a: str | None, condition_b: str | None) -> bool:

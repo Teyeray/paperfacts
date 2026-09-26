@@ -894,8 +894,10 @@ precursor of a sample. A categorical list is `kind: text` with `categories` and 
 - **Prompt.** The field line adds "Several values may hold at once: report each as its own entry.", and with
   categories "Name each with one of: XRD, XPS, …." Nothing else in the prompts changes.
 - **Comparison.** The lanes' values pair as a set, by element: the category a value names, or else its text
-  with Unicode and spacing folded (and case, for `text` but not `composition`). This is stricter than a
-  single-valued field's text equality, which drops Greek letters: `α-Al2O3` and `γ-Al2O3` are two elements. What
+  with Unicode folded, spacing dropped and a hyphen or period dropped unless a digit follows (and case folded, for
+  `text` but not `composition`), so OCR's `Ni(NO3)2 · 6H2O` and `co-precipitation` are one element with
+  `Ni(NO3)2·6H2O` and `coprecipitation`. This is stricter than a single-valued field's text equality, which drops
+  Greek letters: `α-Al2O3` and `γ-Al2O3` are two elements. What
   only one lane read is `missing` on the other. A list never reports `conflict`.
 - **Dataset cell.** The **union** of the elements either lane grounded and cited, after the usual refusals
   (`unanswered`, `missing`, the sample-match `ambiguous`, a troubled comparison, `unreviewed`). With categories
@@ -903,7 +905,9 @@ precursor of a sample. A categorical list is `kind: text` with `categories` and 
   two, "XRD and XPS" -- is refused as an element with a note; without, elements keep their first-seen order, MinerU
   first. The cell is `agree` when both lanes hold every element and `single_source` otherwise, and its 数据质量
   detail names each element's lanes, so the union never hides which lane an element rests on. A cell left with no
-  element is `non_scalar`. A non-empty list counts as one available field.
+  element is `non_scalar`. One `ambiguous` element row -- an element one lane holds under a sample whose match
+  failed -- refuses the whole list as `ambiguous`, not just that element: a union without the doubted element,
+  or with a stray one, would read as a complete answer. A non-empty list counts as one available field.
 - **Display.** Joined with "; " in Excel and the clipboard copy, and with "；" on the web page; 字段说明 marks the
   column 多值. The eval scorer scores a list per element (eval/README.md).
 

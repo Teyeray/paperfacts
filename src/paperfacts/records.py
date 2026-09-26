@@ -52,6 +52,11 @@ class ResponseField(BaseModel):
         default=False, description="a sample-level value under the paper record that the paper states for every sample"
     )
 
+    def stated_holds(self) -> bool | None:
+        """Whether the quoted words affirm a boolean field. None here: only the classes
+        ``response_models(..., holds=True)`` rebuilds carry the ``holds`` key (:class:`_HoldsAnswer`)."""
+        return None
+
 
 class ResponseSample(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -128,6 +133,11 @@ class ResponseValue(BaseModel):
         default=False, description="the excerpt states this value holds for every sample in the list"
     )
 
+    def stated_holds(self) -> bool | None:
+        """Whether the quoted words affirm a boolean field. None here: only the classes
+        ``response_models(..., holds=True)`` rebuilds carry the ``holds`` key (:class:`_HoldsAnswer`)."""
+        return None
+
 
 class FieldResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -144,15 +154,23 @@ class ResponseModels:
     field: type[FieldResponse]
 
 
-def _rebuilt[M: BaseModel](base: type[M], **fields: Any) -> type[M]:
-    """``base`` under its own name and docstring, with ``fields`` replaced or added. The name is kept because a
-    rejected answer goes back to the model as ``str(ValidationError)``, which names the class."""
-    return create_model(base.__name__, __base__=base, __doc__=base.__doc__, **fields)
+def _rebuilt[M: BaseModel](base: type[M], *mixins: type[BaseModel], **fields: Any) -> type[M]:
+    """``base`` under its own name and docstring, with ``mixins``' fields and ``fields`` replaced or added. The name
+    is kept because a rejected answer goes back to the model as ``str(ValidationError)``, which names the class."""
+    return create_model(base.__name__, __base__=(*mixins, base), __doc__=base.__doc__, **fields)
 
 
-# ``holds`` as a boolean field's answer carries it: true when the quoted words affirm the field, false when they
-# deny it. Every other field leaves it null.
-_HOLDS = (bool | None, Field(default=None, description="a boolean field: whether the quoted words affirm it"))
+class _HoldsAnswer(BaseModel):
+    """``holds`` as a boolean field's answer carries it: true when the quoted words affirm the field, false when
+    they deny it. Every other field leaves it null. Mixed in ahead of the value's own class, so its
+    :meth:`stated_holds` is the one a rebuilt value answers with."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    holds: bool | None = Field(default=None, description="a boolean field: whether the quoted words affirm it")
+
+    def stated_holds(self) -> bool | None:
+        return self.holds
 
 
 @cache
@@ -176,11 +194,11 @@ def response_models(paper_key: str, no_samples_key: str, *, holds: bool = False)
     extraction_fields: dict[str, Any] = {}
     field_response: type[FieldResponse] = FieldResponse
     if holds:
-        field_model = _rebuilt(ResponseField, holds=_HOLDS)
+        field_model = _rebuilt(ResponseField, _HoldsAnswer)
         sample_model = _rebuilt(ResponseSample, fields=(list[field_model], Field(default_factory=list)))
         paper_model = _rebuilt(ResponsePaper, fields=(list[field_model], Field(default_factory=list)))
         extraction_fields["samples"] = (list[sample_model], Field(default_factory=list))
-        value_model = _rebuilt(ResponseValue, holds=_HOLDS)
+        value_model = _rebuilt(ResponseValue, _HoldsAnswer)
         field_response = _rebuilt(FieldResponse, values=(list[value_model], Field(default_factory=list)))
     extraction = _rebuilt(
         ExtractionResponse,
@@ -607,8 +625,7 @@ def response_to_records(
             source_ids=item.source_ids,
             note=item.note,
             known_ids=known_ids,
-            # Only response_models(..., holds=True) has the key.
-            holds=getattr(item, "holds", None),
+            holds=item.stated_holds(),
         )
 
     def in_schema(item: ResponseField) -> FieldSpec | None:

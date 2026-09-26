@@ -12,7 +12,7 @@ import dataclasses
 
 import pytest
 
-from paperfacts.normalize import normalize_field, parse_number
+from paperfacts.normalize import normalize_field, parse_number, read_range
 from support.extraction import make_field
 from support.profiles import shipped_profile
 
@@ -179,6 +179,23 @@ def test_every_range_separator_is_recognised(raw):
 
     assert value == 15.0
     assert "range" in note
+
+
+@pytest.mark.parametrize(
+    ("raw", "ends"),
+    [
+        # "to" is the separator, not the first bound's unit: once read as (-60, 20) with unit "to".
+        ("-60 to -20", (-60.0, -20.0, "")),
+        ("between 450 and 500 °C", (450.0, 500.0, "°C")),
+        ("Between 450 °C and 500 °C", (450.0, 500.0, "°C")),
+    ],
+)
+def test_a_negative_range_in_words_and_a_between_range_are_read_as_ranges(raw, ends):
+    assert read_range(raw, lambda unit: True) == ends
+
+
+def test_and_without_between_still_joins_two_values():
+    assert parse_number("450 and 500")[0] is None
 
 
 def test_a_parenthesized_alternative_is_ignored_in_favour_of_the_outer_value():

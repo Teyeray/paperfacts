@@ -97,7 +97,6 @@ def test_a_single_valued_field_with_categories_derives_no_prompt_categories():
     [
         pytest.param({"kind": "numeric", "canonical_unit": "nm"}, "needs a text or composition field", id="numeric"),
         pytest.param({"figure_readable": True}, "cannot be combined with figure_readable", id="figure_readable"),
-        pytest.param({"figure_readable": False}, "cannot be combined with figure_readable", id="figure_readable-false"),
         pytest.param({"condition_preference": ["550"]}, "condition_preference", id="condition_preference"),
         pytest.param(
             {"condition_hint": "the step", "condition_rule": "the step", "missing_condition_note_zh": "未注明"},
@@ -114,6 +113,12 @@ def test_a_single_valued_field_with_categories_derives_no_prompt_categories():
 def test_the_loader_refuses_a_list_it_cannot_honour(changes, message):
     with pytest.raises(ConfigError, match=message.replace("(", r"\(").replace(")", r"\)")):
         load_field(entry(**changes))
+
+
+def test_a_list_accepts_an_attribute_written_at_its_default():
+    spec = load_field(entry(figure_readable=False, rel_tol=0.0, canonical_unit=None, display_format="plain"))
+
+    assert spec.cardinality == "many"
 
 
 # ---- the prompt and the keys -------------------------------------------------------------------------------------
@@ -219,6 +224,38 @@ def test_elements_differing_only_in_a_greek_letter_or_a_compositions_case_stay_t
     assert element_key(SOLVENT, " Ethanol ") == element_key(SOLVENT, "ethanol")
 
 
+@pytest.mark.parametrize(
+    ("kind", "a", "b"),
+    [
+        ("composition", "Ni(NO3)2·6H2O", "Ni(NO3)2 · 6H2O"),
+        ("text", "nickel(II) nitrate", "nickel (II) nitrate"),
+        ("text", "co-precipitation", "coprecipitation"),
+        ("text", "Nickel nitrate.", "nickel nitrate"),
+        ("text", "N,N-dimethylformamide", "N, N-dimethylformamide"),
+    ],
+)
+def test_ocr_spacing_and_a_lost_hyphen_or_period_do_not_split_an_element(kind, a, b):
+    spec = load_field(entry(kind=kind))
+
+    assert element_key(spec, a) == element_key(spec, b)
+
+
+def test_an_elements_punctuation_before_a_digit_and_its_greek_letter_stay():
+    oxide = load_field(entry(kind="composition"))
+
+    assert element_key(oxide, "α-Al2O3") != element_key(oxide, "γ-Al2O3")
+    assert element_key(SOLVENT, "10-20 wt% ethanol") != element_key(SOLVENT, "1020 wt% ethanol")
+    assert element_key(SOLVENT, "1.5 M LiPF6") != element_key(SOLVENT, "15 M LiPF6")
+
+
+def test_an_ocr_spacing_variant_pairs_as_one_element():
+    result = report(
+        lane("mineru", solvent=["N,N-dimethylformamide"]), lane("paddleocr_vl", solvent=["N, N-dimethylformamide"])
+    )
+
+    assert [status for status, *_ in rows(result, "solvent")] == ["agree"]
+
+
 def test_unplaced_list_values_are_not_paired_by_position():
     result = report(lane("mineru", unattributed=["water"]), lane("paddleocr_vl", unattributed=["toluene"]))
 
@@ -309,6 +346,19 @@ def test_the_refusals_are_decides_in_its_order(kwargs, status):
     decision = cell([cited("mineru", "XRD")], **kwargs)
 
     assert (decision.value, decision.status) == (None, status)
+
+
+def test_one_ambiguous_element_comparison_refuses_the_whole_list():
+    # A one-sided element is ambiguous when its sample match failed: the other lane may hold it under another
+    # sample. The cell refuses rather than write a union that may be missing that element, or hold a stray one.
+    evidence = [cited("mineru", "XRD"), cited("paddleocr_vl", "XRD"), cited("mineru", "TEM")]
+    comparisons = report(lane("mineru", paper=["XRD", "TEM"]), lane("paddleocr_vl", paper=["XRD"])).comparisons
+    doubted = [c.model_copy(update={"status": "ambiguous"}) if c.status == "missing" else c for c in comparisons]
+    assert [c.status for c in doubted if c.field == SPEC.name] == ["agree", "ambiguous"]
+
+    decision = decide_many(SPEC, evidence, doubted)
+
+    assert (decision.value, decision.status) == (None, "ambiguous")
 
 
 def test_no_evidence_is_missing_and_no_comparison_is_unreviewed():

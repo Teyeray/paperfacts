@@ -266,6 +266,10 @@ def test_a_boolean_cell_is_its_holds():
         ("12 March 2021", "2021-03-12"),
         ("March 12th, 2021", "2021-03-12"),
         ("2021 May 3", "2021-05-03"),
+        ("March 2021.", "2021-03"),
+        ("(March 2021)", "2021-03"),
+        ("(2021-03-12).", "2021-03-12"),
+        ("2021.", "2021"),
     ],
 )
 def test_a_date_is_read_to_iso_at_the_precision_written(raw: str, iso: str):
@@ -423,11 +427,17 @@ def test_the_plausible_range_is_checked_on_each_finite_end():
     [
         ({"fields.3.canonical_unit": "nm"}, "canonical_unit is only meaningful for a numeric or interval field"),
         ({"fields.4.valid_range": {"min": 1}}, "valid_range is only meaningful for a numeric or interval field"),
-        ({"fields.5.bare_number": "assume_canonical"}, "bare_number must be 'reject' for an interval field"),
+        (
+            {"fields.5.bare_number": "assume_canonical"},
+            "bare_number is only meaningful for a numeric field, not a 'interval'",
+        ),
         ({"fields.5.range_policy": "upper"}, "range_policy is only meaningful for a numeric field"),
+        ({"fields.3.rel_tol": 0.1}, "rel_tol is only meaningful for a numeric or interval field, not a 'boolean' one"),
+        ({"fields.4.abs_tol": 1}, "abs_tol is only meaningful for a numeric or interval field, not a 'date' one"),
+        ({"fields.2.rel_tol": 0.1}, "rel_tol is only meaningful for a numeric or interval field, not a 'text' one"),
         (
             {"fields.3.condition_rule": "the dopant", "fields.3.condition_hint": "dopant"},
-            "condition_rule is not meaningful for a boolean field",
+            "condition_rule is only meaningful for a numeric, composition, text, date or interval field",
         ),
     ],
 )
@@ -440,6 +450,16 @@ def test_the_loader_refuses_an_attribute_the_kind_cannot_use(changes, message):
 
     with pytest.raises(ConfigError, match=message):
         make_profile(data)
+
+
+def test_an_attribute_written_at_its_default_is_accepted_on_any_kind():
+    # tco.json spells every attribute out; at its default an attribute says nothing about the kind.
+    data = {"fields": [*profile_data()["fields"], *_NEW_FIELDS]}
+    defaults = {"rel_tol": 0.0, "abs_tol": 0, "canonical_unit": None, "bare_number": "reject"}
+    defaults |= {"range_policy": "midpoint", "display_format": "plain", "figure_readable": False}
+    data["fields"][3] = {**data["fields"][3], **defaults}
+
+    assert make_profile(data).by_name["doped"].kind == "boolean"
 
 
 def test_an_interval_canonical_unit_is_checked_against_the_units():

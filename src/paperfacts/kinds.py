@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from paperfacts.fields import RANGE_ENDS, FieldKind, FieldSpec
 from paperfacts.normalize import (
+    LOOSE_PUNCTUATION,
     NUMBER_ATOM,
     SCALAR,
     Reading,
@@ -65,10 +66,6 @@ def joined(values: Sequence[str]) -> str:
 
 class KindRules(Protocol):
     """The per-kind decisions. Every method is pure."""
-
-    # Whether a value of the kind is quoted with digits. Cleaning and retrieval read the same fact from
-    # fields.DIGIT_KINDS, which they can import; tests hold the two to each other.
-    needs_digit: bool
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         """``field`` with ``value`` / ``unit`` filled in, in ``units`` (``normalize.normalize_field``)."""
@@ -187,8 +184,6 @@ def _own_unit_note(written: str, unit_raw: str | None) -> str:
 
 class NumericRules:
     """A number in the field's canonical unit, compared within the field's tolerances."""
-
-    needs_digit = True
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         reading = read_value(field, spec, units)
@@ -347,8 +342,6 @@ class TextRules:
     """Text as quoted, equal as :func:`paperfacts.normalize.same_text` judges it: across spacing, case and a
     lost hyphen, or by the category both name. A composition is compared the same way."""
 
-    needs_digit = False
-
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         # Compared through same_text on the fly.
         return field
@@ -401,8 +394,6 @@ class BooleanRules:
     """A yes/no the paper states in words. The model quotes the words and says with ``holds`` whether they affirm
     the field; the code never reads a negation itself. Cleaning drops an answer without ``holds``."""
 
-    needs_digit = False
-
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         return field
 
@@ -443,8 +434,6 @@ class BooleanRules:
 
 class DateRules:
     """A calendar date as ISO at the precision the paper wrote (:func:`paperfacts.normalize.read_date`)."""
-
-    needs_digit = True
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         if field.bound:
@@ -504,8 +493,6 @@ class IntervalRules:
     """A range with two printed ends ("2.8-4.3 V"), or a one-sided bound (">80 %"), both ends in the canonical
     unit. The quote is read through :func:`read_value`, so a bound grounding found before it counts: "80" quoted
     out of "above 80 %" is (80, None). A bare number is no interval and is refused."""
-
-    needs_digit = True
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> FieldValue:
         def refused(note: str | None) -> FieldValue:
@@ -626,14 +613,19 @@ def rules_for(spec: FieldSpec) -> KindRules:
     return RULES[spec.kind]
 
 
+_WHITESPACE = re.compile(r"\s+")
+
+
 def element_key(spec: FieldSpec, raw: str) -> str | None:
     """What identifies one element of a list field (``cardinality: many``), for the comparison's set pairing and
     the union cell alike; None when a field with categories gets a value naming none of them.
 
-    Stricter than :func:`same_text`, whose ``normalize_key`` deletes Greek letters and folds case: in a union two
-    elements judged one lose one of them, so "α-Al2O3" and "γ-Al2O3", or "Co3O4" and "CO3O4", must stay two. A
-    composition keeps its case; text folds it ("Ethanol" is "ethanol")."""
+    The loose half of :func:`same_text` without its Greek deletion: spacing and a hyphen or period not before a
+    digit are dropped, so OCR's "Ni(NO3)2 · 6H2O", "nickel (II) nitrate", "coprecipitation" and "Nickel nitrate."
+    are the one element their tidy spellings are, while "10-20" and "1.5" keep their punctuation. Greek letters
+    stay, because in a union two elements judged one lose one of them: "α-Al2O3" and "γ-Al2O3" are two. A
+    composition keeps its case ("Co3O4" is not "CO3O4"); text folds it ("Ethanol" is "ethanol")."""
     if spec.categories:
         return canonical_category(spec.categories, raw)
-    text = normalize_text(raw)
+    text = LOOSE_PUNCTUATION.sub("", _WHITESPACE.sub("", normalize_text(raw)))
     return text if spec.kind == "composition" else text.casefold()

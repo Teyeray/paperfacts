@@ -10,7 +10,7 @@ import pytest
 
 from paperfacts import normalize
 from paperfacts.columns import FieldColumn, field_columns
-from paperfacts.fields import DIGIT_KINDS, FieldKind
+from paperfacts.fields import FieldKind
 from paperfacts.kinds import RULES, NumericRules, TextRules, rules_for
 from paperfacts.profile import DomainProfile
 from paperfacts.workbook import format_cell
@@ -18,11 +18,6 @@ from paperfacts.workbook import format_cell
 
 def test_every_kind_has_a_row():
     assert set(RULES) == set(typing.get_args(FieldKind))
-
-
-def test_every_digit_kind_is_quoted_with_digits():
-    # records.py and passages.py sit below kinds.py and read DIGIT_KINDS; the rows must agree with it.
-    assert {kind for kind, rules in RULES.items() if rules.needs_digit} == DIGIT_KINDS
 
 
 def test_a_field_is_dispatched_by_its_kind(tco_profile: DomainProfile):
