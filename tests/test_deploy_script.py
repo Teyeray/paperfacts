@@ -132,3 +132,18 @@ def test_the_preflight_reads_the_units_environment_not_the_shells(tmp_path: Path
     result = preflight(tmp_path, "", PAPERFACTS_PROFILE=str(tmp_path / "missing.json"))
 
     assert result.returncode == 0, result.stderr
+
+
+def test_the_preflight_warns_about_a_broken_extra_profile_and_still_passes(tmp_path: Path):
+    # The server serves every profiles/*.json beside its default and lists a broken one; a deploy should say so,
+    # not stop.
+    profiles = tmp_path / "repo" / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "tco.json").write_bytes((REPO / "profiles" / "tco.json").read_bytes())
+    (profiles / "broken.json").write_text("{", encoding="utf-8")
+
+    result = preflight(tmp_path, f"PAPERFACTS_PROFILE=tco PAPERFACTS_REPO_ROOT={tmp_path / 'repo'}")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("tco ")
+    assert "warn: profile broken.json will not be served" in result.stderr

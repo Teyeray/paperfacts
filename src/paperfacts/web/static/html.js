@@ -5,6 +5,17 @@ export function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// An element built from text only: `text` and `title` land through textContent and the title property, children are
+// nodes or strings (appended as text), so untrusted text never reaches the parser.
+export function el(tag, { className = "", text = null, title = null } = {}, ...children) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = String(text);
+  if (title) node.title = String(title);
+  node.append(...children);
+  return node;
+}
+
 // Very large / very small numbers use scientific notation; everything else keeps 6 significant figures with trailing zeros stripped
 export const fmt = (n) => (Math.abs(n) >= 1e5 || (Math.abs(n) < 1e-3 && n !== 0) ? n.toExponential(3) : Number(n.toPrecision(6)).toString());
 
@@ -36,6 +47,40 @@ export function onActivate(element, action) {
     if (event.target !== element || (event.key !== "Enter" && event.key !== " ")) return;
     event.preventDefault();
     action();
+  });
+}
+
+// Arrowing through a closed <select> fires a change per key. `action` runs at once for a pick with the mouse; a change
+// made from the keyboard waits until the reader settles on an option, presses Enter or leaves the select.
+const SETTLE_MS = 400;
+
+export function onSettledChange(select, action) {
+  let keyed = false;
+  let timer = null;
+  const run = () => {
+    clearTimeout(timer);
+    timer = null;
+    action();
+  };
+  select.addEventListener("pointerdown", () => {
+    keyed = false;
+  });
+  select.addEventListener("keydown", (event) => {
+    keyed = true;
+    if (event.key === "Enter" && timer) run();
+  });
+  select.addEventListener("blur", () => {
+    if (timer) run();
+  });
+  select.addEventListener("change", () => {
+    const fromKeyboard = keyed;
+    keyed = false;
+    if (!fromKeyboard) {
+      run();
+      return;
+    }
+    clearTimeout(timer);
+    timer = setTimeout(run, SETTLE_MS);
   });
 }
 

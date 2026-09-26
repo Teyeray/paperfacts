@@ -2,7 +2,7 @@
 // the per-sample table inside a document and the corpus table on the home view -- share this module,
 // so a column hidden on one stays hidden on the other.
 
-import { entityGroups, inEntity, uiCopy } from "./state.js";
+import { entityGroups, inEntity, state, uiCopy } from "./state.js";
 
 // A field earns a column when at least one row put a value in it; the toggle brings the rest back so the
 // full table stays inspectable without making the default view mostly blank. Shared with the corpus table,
@@ -21,7 +21,10 @@ export function visibleFields(fields, rows, showAll) {
 // stays hidden inside a document. Storage may be unavailable (private mode, blocked site data); every
 // failure degrades to "show every field", never to an empty table.
 
+// One choice per profile: another domain's fields share no names with it. The default keeps the key it always had,
+// so a choice made before profiles existed survives.
 const PICKER_KEY = "paperfacts.chosen-fields";
+const pickerKey = () => (state.shownProfile == null ? PICKER_KEY : `${PICKER_KEY}.${state.shownProfile}`);
 // Fields carry `scope`, not the config's richer `group`, so the picker groups by the distinction the
 // dataset actually exposes: what belongs to the paper and what belongs to a sample -- to each entity type's
 // samples, when the profile declares several.
@@ -38,7 +41,7 @@ function pickerGroups(fields) {
 // null means "no choice stored" -- every field is shown, including ones added after the last choice.
 function readChosen() {
   try {
-    const raw = window.localStorage.getItem(PICKER_KEY);
+    const raw = window.localStorage.getItem(pickerKey());
     if (!raw) return null;
     const names = JSON.parse(raw);
     return Array.isArray(names) ? new Set(names.map(String)) : null;
@@ -49,8 +52,8 @@ function readChosen() {
 
 function writeChosen(names) {
   try {
-    if (names === null) window.localStorage.removeItem(PICKER_KEY);
-    else window.localStorage.setItem(PICKER_KEY, JSON.stringify([...names]));
+    if (names === null) window.localStorage.removeItem(pickerKey());
+    else window.localStorage.setItem(pickerKey(), JSON.stringify([...names]));
   } catch {
     // A browser that refuses storage still gets a working picker for this page view.
   }

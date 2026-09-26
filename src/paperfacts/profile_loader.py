@@ -185,6 +185,22 @@ _TOP_KEYS = (
 _REQUIRED_KEYS = ("format", "name", "groups", "prompt", "retrieval", "fields")
 
 
+def _lone_surrogate(value: Any) -> str | None:
+    """The first string (key or value) in a parsed JSON value that holds a lone surrogate, or None."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if any("\ud800" <= character <= "\udfff" for character in item):
+                return item
+        elif isinstance(item, Mapping):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return None
+
+
 def parse_profile(data: Any, source: Path) -> DomainProfile:
     """A profile from its parsed JSON. ``source`` names it in errors, and its stem must be the profile's name.
 
@@ -193,6 +209,11 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     where = str(source)
     if not isinstance(data, Mapping):
         raise ConfigError(f"{where} must hold a JSON object, got {type(data).__name__}")
+    # JSON lets a string escape half a surrogate pair; no UTF-8 answer (the web's profile list, a workbook) can carry
+    # it, so it is refused here rather than failing wherever the text is first encoded.
+    lone = _lone_surrogate(data)
+    if lone is not None:
+        raise ConfigError(f"{where}: {lone!r} holds an unpaired surrogate escape; every string must be valid Unicode")
     errors: list[str] = []
 
     def checked[T](step: Callable[[], T]) -> T | None:
@@ -679,8 +700,8 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
     def tolerance(key: str) -> float:
         # A negative tolerance makes |a - b| <= tol impossible even for a == b: every value would conflict.
         value = entry.get(key, _FIELD_DEFAULTS[key])
-        if type(value) not in (int, float) or value < 0:
-            raise ConfigError(f"{where}: {key} must be a number of at least 0, got {value!r}")
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ConfigError(f"{where}: {key} must be a finite number of at least 0, got {value!r}")
         return float(value)
 
     def text_or_none(key: str) -> str | None:
@@ -787,8 +808,10 @@ def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, fl
         raise ConfigError(f"{where}: valid_range must be an object with 'min' and/or 'max', got {bounds!r}")
     low, high = bounds.get("min"), bounds.get("max")
     for key, value in (("min", low), ("max", high)):
-        if value is not None and type(value) not in (int, float):
-            raise ConfigError(f"{where}: valid_range.{key} must be a number or null, got {value!r}")
+        # Finite: every comparison with NaN is false, so a NaN bound would pass the order check below and judge
+        # nothing, and an infinite one is what leaving the bound out already says.
+        if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+            raise ConfigError(f"{where}: valid_range.{key} must be a finite number or null, got {value!r}")
     if low is None and high is None:
         raise ConfigError(f"{where}: valid_range needs at least one of 'min' and 'max'")
     if low is not None and high is not None and low >= high:
@@ -801,6 +824,9 @@ def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, fl
 OFFSET_UNITS = frozenset({"℃", "K"})
 MAX_ALIASES = 50
 MAX_IGNORED_SUFFIXES = 50
+# Every unit spelling is folded through text.normalize_text, whose markup pattern backtracks polynomially in a long
+# run of spaces; no real unit is anywhere near this long, and the cap keeps a pasted profile from stalling a check.
+MAX_SPELLING_LENGTH = 64
 _UNIT_KEYS = ("aliases", "case_sensitive", "retrieval", "extends_builtin", "exclude")
 _ALIAS_KEYS = ("factor", "offset")
 
@@ -813,13 +839,16 @@ def load_units(data: Any, where: str, ignored_suffixes: Any = ()) -> UnitRegistr
     if (
         not isinstance(ignored_suffixes, list | tuple)
         or len(ignored_suffixes) > MAX_IGNORED_SUFFIXES
-        or not all(isinstance(word, str) and word and not any(c.isspace() for c in word) for word in ignored_suffixes)
+        or not all(
+            isinstance(word, str) and 0 < len(word) <= MAX_SPELLING_LENGTH and not any(c.isspace() for c in word)
+            for word in ignored_suffixes
+        )
         or len(set(ignored_suffixes)) != len(ignored_suffixes)
     ):
         # No spaces: a quoted unit is compared with its spaces removed, so a suffix with one would never match.
         raise ConfigError(
             f"{where}: ignored_unit_suffixes must be a list of at most {MAX_IGNORED_SUFFIXES} distinct words"
-            " without spaces"
+            f" without spaces, each at most {MAX_SPELLING_LENGTH} characters"
         )
     declared = (_declared_unit(canonical, entry, f"{where}: units[{canonical!r}]") for canonical, entry in data.items())
     return UnitRegistry(tuple(declared), tuple(ignored_suffixes))
@@ -828,6 +857,8 @@ def load_units(data: Any, where: str, ignored_suffixes: Any = ()) -> UnitRegistr
 def _declared_unit(canonical: str, entry: Any, where: str) -> DeclaredUnit:
     if not canonical.strip():
         raise ConfigError(f"{where}: a unit needs a non-empty name")
+    if len(canonical) > MAX_SPELLING_LENGTH:
+        raise ConfigError(f"{where}: a unit name is at most {MAX_SPELLING_LENGTH} characters")
     if not isinstance(entry, Mapping):
         raise ConfigError(f"{where} must be an object, got {type(entry).__name__}")
     unknown = sorted(set(entry) - set(_UNIT_KEYS))
@@ -856,6 +887,8 @@ def _declared_unit(canonical: str, entry: Any, where: str) -> DeclaredUnit:
     aliases: list[tuple[str, float, float]] = []
     seen: dict[str, str] = {}
     for spelling, value in table.items():
+        if len(spelling) > MAX_SPELLING_LENGTH:
+            raise ConfigError(f"{where}: aliases has a spelling longer than {MAX_SPELLING_LENGTH} characters")
         key = fold_spelling(spelling, case_sensitive)
         if not key:
             raise ConfigError(f"{where}: aliases has an empty spelling {spelling!r}")
@@ -895,9 +928,15 @@ def _exclusions(canonical: str, value: Any, extends: bool, where: str) -> tuple[
     if (
         not isinstance(value, list)
         or not 1 <= len(value) <= MAX_ALIASES
-        or not all(isinstance(spelling, str) and spelling.strip() for spelling in value)
+        or not all(
+            isinstance(spelling, str) and spelling.strip() and len(spelling) <= MAX_SPELLING_LENGTH
+            for spelling in value
+        )
     ):
-        raise ConfigError(f"{where}: exclude must be a list of 1 to {MAX_ALIASES} non-empty spellings")
+        raise ConfigError(
+            f"{where}: exclude must be a list of 1 to {MAX_ALIASES} non-empty spellings of at most"
+            f" {MAX_SPELLING_LENGTH} characters"
+        )
     convert, pattern = BUILTIN_CONVERTERS[canonical], BUILTIN_RETRIEVAL[canonical]
     remaining = UnitRegistry((DeclaredUnit(canonical, (), extends_builtin=True, exclude=tuple(value)),))
     for spelling in value:

@@ -61,3 +61,14 @@ class ContextBudgetError(PaperFactsError):
 class Cancelled(PaperFactsError):
     """A run was asked to stop before it finished: the paper it served failed elsewhere, or a batch was
     interrupted. Whatever it had already paid for is in the caches, so the next run picks it up for free."""
+
+
+class ProfileCheckError(PaperFactsError):
+    """A pasted profile could not be checked at all: the check ran out of time or memory, or its process died.
+    Not a verdict on the profile; a profile that merely fails validation is an ordinary check result."""
+
+    def __init__(self, message: str, *, retryable: bool) -> None:
+        super().__init__(message)
+        # True when asking again may work (the check ran out of time, or its process could not start); False when
+        # the process crashed or gave no answer, which the same text would do again.
+        self.retryable = retryable

@@ -14,7 +14,15 @@
     <span class="brand-mark">PF</span>
     <span class="brand-text"><b>PaperFacts</b><small class="profile-title" id="profile-title"></small></span>
   </a>
-  <div class="topbar-meta" id="health">…</div>
+  <div class="topbar-right">
+    <label class="profile-switch hidden" id="profile-switch">
+      <span class="visually-hidden">领域配置</span>
+      <select id="profile-select"></select>
+    </label>
+    <a class="topbar-link" id="profile-link" href="#/profile" title="当前领域配置的字段、单位和提示词">配置说明</a>
+    <a class="topbar-link" id="check-link" href="#/check" title="粘贴一份领域配置 JSON，检查它能否加载">检查配置</a>
+    <div class="topbar-meta" id="health">…</div>
+  </div>
 </header>
 
 <main class="shell">
@@ -23,6 +31,7 @@
       <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden>
       <div class="upload-title">拖入 PDF，或<button class="linklike" id="pick-file" type="button">选择文件</button></div>
       <div class="upload-hint">上传即开始：两路解析 → LLM 抽取 → 对齐比较</div>
+      <div class="upload-hint upload-profile hidden" id="upload-profile"></div>
       <label class="upload-force"><input type="checkbox" id="upload-force"> 忽略缓存，全部重跑</label>
     </section>
     <div class="rail-head">
@@ -50,6 +59,19 @@
     </div>
     <div class="corpus-view hidden" id="corpus-view"></div>
     <div class="document hidden" id="document-view"></div>
+    <div class="profile-page hidden" id="profile-view"></div>
+    <div class="check-view hidden" id="check-view">
+      <h1>检查领域配置</h1>
+      <p class="muted">粘贴一份领域配置 JSON（或选择本地文件），检查它能否加载：有问题时逐行列出，没问题时显示它的字段和会发给模型的系统提示词。只做检查，不会保存；要启用，请把文件放进 profiles/ 并重启服务器。</p>
+      <textarea id="check-text" spellcheck="false" autocomplete="off" aria-label="领域配置 JSON" placeholder="{ &quot;format&quot;: 1, &quot;name&quot;: … }"></textarea>
+      <div class="check-actions">
+        <button class="primary" id="check-run" type="button">检查</button>
+        <input type="file" id="check-file" accept="application/json,.json" hidden>
+        <button class="linklike" id="check-pick" type="button">读取本地文件</button>
+        <span class="muted" id="check-status" role="status"></span>
+      </div>
+      <div class="check-result" id="check-result"></div>
+    </div>
     <div class="missing-state hidden" id="missing-view" role="alert">
       <h1>找不到这篇文档</h1>
       <p data-slot="missing-message"></p>
@@ -69,6 +91,8 @@
       <button class="primary" data-action="run" type="button">重新处理</button>
     </div>
   </header>
+  <p class="doc-note hidden" data-slot="other-profiles"></p>
+  <p class="doc-note other-job hidden" data-slot="other-job" role="status"></p>
   <ol class="stages" data-slot="stages"></ol>
   <div class="kpis" data-slot="kpis"></div>
   <section class="results" aria-label="结果表">

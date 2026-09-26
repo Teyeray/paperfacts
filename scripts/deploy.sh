@@ -88,10 +88,12 @@ unit_started() {  # epoch of the running process, 0 when the unit is down
     echo $(( $(date +%s) - uptime_s + usec / 1000000 ))
 }
 
-preflight_profile() {  # prints "<name> <hash>" of the profile the service would serve; fails when it would not start
-    # What create_app loads: Settings.from_env() and then load_run_profile, which also refuses a reserved or
-    # shadowing profile name. Under the unit's own Environment= lines (PAPERFACTS_PROFILE usually lives there),
-    # not this shell's PAPERFACTS_* variables, which the service never sees; .env is read by from_env either way.
+preflight_profile() {  # prints "<name> <hash>" of the default profile the service would serve; fails when it would not start
+    # What create_app loads: Settings.from_env() and then the profile registry -- the default through
+    # load_run_profile, which also refuses a reserved or shadowing profile name, and every other profiles/*.json
+    # (web.profiles) beside it. A broken extra profile does not stop the service, so it is a warning here, never a
+    # failure. Under the unit's own Environment= lines (PAPERFACTS_PROFILE usually lives there), not this shell's
+    # PAPERFACTS_* variables, which the service never sees; .env is read by from_env either way.
     local unit_env
     unit_env="$(systemctl --user show paperfacts.service -p Environment --value 2>/dev/null || true)"
     PF_UNIT_ENV="$unit_env" "$ROOT/.venv/bin/python" -c '
@@ -105,11 +107,22 @@ for item in shlex.split(os.environ.pop("PF_UNIT_ENV")):
     if sep:
         os.environ[key] = value
 
-from paperfacts.config import Settings
-from paperfacts.workflow import load_run_profile
+import logging
+import sys
 
-profile = load_run_profile(Settings.from_env())
-print(profile.name, profile.content_hash[:12])
+from paperfacts.config import Settings
+from paperfacts.web.registry import ProfileRegistry
+
+# The registry logs what it skips; the lines below say it once, as warnings.
+logging.getLogger("paperfacts").addHandler(logging.NullHandler())
+registry = ProfileRegistry.build(Settings.from_env())
+for invalid in registry.invalid:
+    for error in invalid.errors:
+        print(f"warn: profile {invalid.file} will not be served: {error}", file=sys.stderr)
+for served in registry.served.values():
+    if not served.runnable:
+        print(f"warn: profile {served.name} is served but cannot run: {served.not_runnable}", file=sys.stderr)
+print(registry.default.name, registry.default.profile.content_hash[:12])
 '
 }
 

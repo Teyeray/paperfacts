@@ -23,6 +23,8 @@ UNHASHED = {
     "batch.py",
     "ui_copy.py",
     "profile_loader.py",
+    "profile_view.py",
+    "profile_check.py",
 }
 
 

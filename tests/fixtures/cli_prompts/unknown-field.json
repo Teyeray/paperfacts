@@ -1,0 +1,5 @@
+{
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "no field 'colour' in tco; it has: component, resistance, density, inch, sputtering_time, sputtering_power, mode, ar_flow_rate, o2_flow_rate, h2_flow_rate, o2_ratio, h2_ratio, working_pressure, target_substrate_distance, substrate_axis_distance, substrate_temperature, annealing_temperature, annealing_time, rotation_speed, sheet_resistance, resistivity, transmittance, thickness\n"
+}

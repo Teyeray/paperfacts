@@ -98,7 +98,7 @@ def test_serve_builds_the_library_under_the_profile_the_environment_names(
 
     assert result.exit_code == 0, result.output
     assert "profile=demo" in result.output
-    library = served[0].state.library
+    library = served[0].state.profiles.library
     settings = served[0].state.settings
     assert library.profile.name == "demo"
     # The browser looks for files under the demo keys, which are not TCO's.
@@ -142,17 +142,17 @@ def test_the_app_hands_its_jobs_the_profile_its_library_uses(monkeypatch, tmp_pa
     handed: list[DomainProfile] = []
     real = web_app.pipeline_runner
 
-    def recording(settings: Settings, profile: DomainProfile, library: Any) -> Any:
-        handed.append(profile)
-        return real(settings, profile, library)
+    def recording(settings: Settings, registry: Any) -> Any:
+        handed.append(registry.default.profile)
+        return real(settings, registry)
 
     monkeypatch.setattr(web_app, "pipeline_runner", recording)
     settings = Settings(data_root=tmp_path / "data", repo_root=tmp_path, profile=str(demo_path))
 
     application = web_app.create_app(settings)
 
-    assert handed == [application.state.library.profile]
-    assert handed[0] is application.state.library.profile
+    assert handed == [application.state.profiles.library.profile]
+    assert handed[0] is application.state.profiles.library.profile
 
 
 # ---- A profile's name decides its workbook's name ----------------------------------------------------------
@@ -229,3 +229,34 @@ def test_run_document_takes_no_default_profile():
     # Every entry point loads its profile once with load_run_profile and passes it; a silent fallback here would
     # skip the reserved-name and shadow checks that loader makes.
     assert inspect.signature(run_document).parameters["profile"].default is inspect.Parameter.empty
+
+
+# `paperfacts prompts` output for the shipped profiles, recorded on main before the rendering moved from cli.py to
+# profile_view.py; the web's prompt preview is the same function, so this pins both.
+GOLDEN_PROMPTS = Path(__file__).parent / "fixtures" / "cli_prompts"
+
+
+@pytest.mark.parametrize("golden", sorted(GOLDEN_PROMPTS.glob("*.txt")), ids=lambda path: path.stem)
+def test_prompts_output_is_the_recorded_golden(golden: Path):
+    name, _, field = golden.stem.partition("--field-")
+    args = ["prompts", "--profile", str(SHIPPED_PROFILE_PATH.parent / f"{name}.json")]
+    if field:
+        args += ["--field", field]
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == golden.read_text(encoding="utf-8")
+
+
+def test_an_unknown_field_is_the_recorded_golden_message_and_exit_code():
+    golden = json.loads((GOLDEN_PROMPTS / "unknown-field.json").read_text(encoding="utf-8"))
+
+    result = runner.invoke(app, ["prompts", "--profile", str(SHIPPED_PROFILE_PATH), "--field", "colour"])
+
+    assert {"exit_code": result.exit_code, "stdout": result.stdout, "stderr": result.stderr} == golden
+
+
+def test_every_shipped_profile_has_a_prompts_golden():
+    shipped = {path.stem for path in SHIPPED_PROFILE_PATH.parent.glob("*.json")}
+    assert shipped == {path.stem for path in GOLDEN_PROMPTS.glob("*.txt") if "--field-" not in path.stem}

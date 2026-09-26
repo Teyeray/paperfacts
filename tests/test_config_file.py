@@ -701,3 +701,44 @@ def test_offline_replay_moves_no_cache_key(tmp_path: Path, tco_profile):
     offline = Settings.from_env(env_for(path, PAPERFACTS_LLM_OFFLINE="1"))
 
     assert keys.extractor_key_for(online, tco_profile) == keys.extractor_key_for(offline, tco_profile)
+
+
+# ---- web.profiles: which profiles a server serves beside its default ----------------------------------------
+
+
+def test_web_profiles_is_every_profile_unless_named(tmp_path: Path):
+    assert Settings.from_env({}).web_profiles is None
+    path = write_config(tmp_path / "config.json", {"web.profiles": ["battery_cathode"]})
+
+    assert Settings.from_env(env_for(path)).web_profiles == ("battery_cathode",)
+    assert Settings.from_env(env_for(path, PAPERFACTS_WEB_PROFILES=" catalysis, tco ,")).web_profiles == (
+        "catalysis",
+        "tco",
+    )
+    assert Settings.from_env(env_for(write_config(tmp_path / "empty.json", {"web.profiles": []}))).web_profiles == ()
+
+
+@pytest.mark.parametrize("value", ["tco", [1], [""]])
+def test_web_profiles_that_is_not_a_list_of_names_names_the_key(tmp_path: Path, value):
+    path = write_config(tmp_path / "config.json", {"web.profiles": value})
+
+    with pytest.raises(ConfigError, match=r"web\.profiles must be a list of names or null"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_dash_env_value_means_no_extra_profiles(tmp_path: Path):
+    """An empty string already means "unset" (falls back to the file), so it cannot also mean "none of
+    them"; "-" is the one spelling left for that, distinct from an env var that names nothing at all."""
+    path = write_config(tmp_path / "config.json", {"web.profiles": ["battery_cathode"]})
+
+    assert Settings.from_env(env_for(path, PAPERFACTS_WEB_PROFILES="-")).web_profiles == ()
+    assert Settings.from_env(env_for(path, PAPERFACTS_WEB_PROFILES=" - ")).web_profiles == ()
+
+
+def test_the_file_value_is_validated_even_when_the_environment_overrides_it(tmp_path: Path):
+    """``web.profiles`` must not be validated lazily: a malformed file value has to be loud even when
+    ``PAPERFACTS_WEB_PROFILES`` means it is never actually read for its value."""
+    path = write_config(tmp_path / "config.json", {"web.profiles": "tco"})
+
+    with pytest.raises(ConfigError, match=r"web\.profiles must be a list of names or null"):
+        Settings.from_env(env_for(path, PAPERFACTS_WEB_PROFILES="battery_cathode"))

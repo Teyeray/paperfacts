@@ -6,6 +6,7 @@
 // for one row, and the raw value the clipboard gets for that row. The rendered table and the copy are both
 // `columns.map(...)` over the same list, so they cannot disagree about which column holds what.
 
+import { profileHref } from "./api.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
 import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
@@ -69,6 +70,18 @@ export function bodyRow(columns, item, className = "") {
   return tr;
 }
 
+// A whole <table> from `columns` over `items`: the header row, then one body row per item, classed by `rowClass`.
+export function resultsTable(columns, items, { rowClass = () => "", className = "results-table" } = {}) {
+  const table = document.createElement("table");
+  table.className = `facts-table ${className}`.trim();
+  const thead = document.createElement("thead");
+  thead.append(headRow(columns));
+  const tbody = document.createElement("tbody");
+  for (const item of items) tbody.append(bodyRow(columns, item, rowClass(item)));
+  table.append(thead, tbody);
+  return table;
+}
+
 // How a committed value is written out, decided by its column: the values of a `many` column joined with "；",
 // an interval as its ends ("2.8–4.3", "≥ 80"), a boolean as 是/否, numbers through `fmt`, everything else as its
 // own text.
@@ -126,7 +139,7 @@ export function renderResults(root) {
   empty.textContent = data ? noSamplesReason() : "还没有结果表，处理完成后会出现在这里。";
   empty.classList.toggle("hidden", Boolean(data) && samples.length > 0);
   if (!hasRows) return;
-  download.href = `/api/documents/${state.current}/dataset.xlsx`;
+  download.href = profileHref(state.currentProfile, `/api/documents/${state.current}/dataset.xlsx`);
 
   const rerender = () => keepFocus(root, () => renderResults(root));
   const chosen = chosenFields(data.fields);
@@ -178,23 +191,14 @@ function entityTable(group, samples, fields, quality) {
   head.append(title, copyButton(() => copyTable(columns, items)));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
-  const table = document.createElement("table");
-  table.className = "facts-table results-table";
-  const thead = document.createElement("thead");
-  thead.append(headRow(columns));
-  const tbody = document.createElement("tbody");
-  for (const item of items) {
-    const tr = bodyRow(columns, item);
-    bindCells(tr);
-    tbody.append(tr);
-  }
+  const table = resultsTable(columns, items);
+  for (const tr of table.tBodies[0].rows) bindCells(tr);
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "table-empty";
     empty.textContent = `没有${group.label}。`;
     wrap.append(empty);
   }
-  table.append(thead, tbody);
   wrap.append(table);
   box.append(head, wrap);
   return box;

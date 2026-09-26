@@ -1,0 +1,53 @@
+===== field system prompt (passage mode) =====
+You are reading selected excerpts from ONE scientific paper about heterogeneous catalysts for the hydrogenation of CO2 to methanol (supported Cu, Pd or In2O3 catalysts, Cu/ZnO/Al2O3, ZnZrOx).
+Every excerpt is preceded by a provenance marker of the form `<!-- source: <id> -->`. You must cite these ids: they are how every value is traced back to the PDF page.
+
+You are asked about ONE field at a time. The field, and the list of samples this paper reports, are given in the question.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{"values": [VALUE, ...]}
+
+VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exactly as written in the paper>",
+         "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
+         "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>",
+         "applies_to_all_samples": <true|false>,
+         "holds": <true|false for a boolean field, else null>}
+
+Rules:
+1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
+2. Put the unit in `unit_raw` exactly as written (e.g. "°C", "MPa", "mL g-1 h-1", "m2 g-1", "%"). If the number and unit are fused, split them.
+   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. "STY × 10^3 (g kg-1 h-1)" or "rate (×10^-3 mol g-1 s-1)"), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone (a column "GHSV (mL g-1 h-1)" gives just "mL g-1 h-1").
+3. `source_ids` must be copied from the `<!-- source: ... -->` markers shown here. Never invent ids and never cite an excerpt you were not shown. Prefer the most specific excerpt (a table over the surrounding paragraph).
+4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
+5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, "all tests", "in every run". Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ("the high-pressure runs", when one listed test ran at ambient pressure) is false: give the individual sample ids the excerpt names.
+   A value the paper states for a named subset of the listed samples -- "the tests at 3 MPa", "the tests of the ZrO2-supported catalysts" -- belongs to each sample in that subset when the excerpts or the sample list say exactly which listed samples form the subset: then report it once per sample of the subset, each time under that sample's own id, never as one entry without a sample id. Never guess which samples a subset holds. `applies_to_all_samples` stays reserved for a value that holds for the whole list; a subset, however large, is reported sample by sample. If they do not, report it once with a null `sample_id`.
+6. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
+   Every field describes one reaction test: its conditions, the catalyst it ran on and the performance it measured. A value of a catalyst's preparation or characterization is not a value of these fields.
+   For a numeric field `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
+7. If the same field has several values -- one per sample, or the same sample under different conditions (e.g. the methanol selectivity at 5 h and after 100 h on stream) -- report them as separate entries with `condition` set.
+8. When a field's line names a condition, always fill `condition` with it.
+9. Every value is verified against the excerpt you cite for it: if `value_raw` cannot be found in that excerpt's text, the value is recorded as unverified. Cite the excerpt that literally contains the characters you copied, and copy them exactly.
+10. If the excerpts do not state this field at all, return {"values": []}. An empty answer is a correct answer.
+
+Return the JSON object only.
+
+===== field line (catalyst) =====
+- `catalyst` (group: reaction, kind: reference): The catalyst this reaction test was run on. Copy the id of the referenced catalyst exactly from the list "Catalysts" below.
+
+===== field user prompt (catalyst, passage mode) =====
+Field to extract:
+- `catalyst` (group: reaction, kind: reference): The catalyst this reaction test was run on. Copy the id of the referenced catalyst exactly from the list "Catalysts" below.
+
+Reaction tests this paper reports:
+<sample list>
+
+Catalysts this paper reports:
+<referenced sample list>
+
+Excerpts (Markdown with provenance markers):
+
+<excerpts>
+
+Return the JSON object now.
+

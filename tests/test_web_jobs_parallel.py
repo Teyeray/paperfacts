@@ -57,7 +57,7 @@ def test_different_documents_run_at_the_same_time():
     runner = RecordingRunner(body=lambda job, mark: barrier.wait(timeout=WAIT_TIMEOUT_S))
     manager = JobManager(runner, STAGES, workers=3)
 
-    jobs = [manager.submit(f"doc-{i}") for i in range(3)]
+    jobs = [manager.submit(f"doc-{i}", profile="demo") for i in range(3)]
 
     for job in jobs:
         assert wait_for_status(manager, job.job_id, "done", "failed").status == "done"
@@ -67,7 +67,7 @@ def test_different_documents_run_at_the_same_time():
 def test_no_more_documents_run_than_there_are_workers():
     body = Overlap()
     manager = JobManager(body, STAGES, workers=2)
-    jobs = [manager.submit(f"doc-{i}") for i in range(5)]
+    jobs = [manager.submit(f"doc-{i}", profile="demo") for i in range(5)]
     wait_until(lambda: body.total() == 2, what="both workers to be busy")
     assert [manager.get(job.job_id).status for job in jobs].count("queued") == 3
 
@@ -82,10 +82,10 @@ def test_a_forced_rerun_of_a_running_document_waits_for_it_while_other_documents
     first has finished, or two workers would write the same document directory at once."""
     body = Overlap()
     manager = JobManager(body, STAGES, workers=3)
-    first = manager.submit("doc-1")
+    first = manager.submit("doc-1", profile="demo")
     wait_until(lambda: body.total() == 1, what="the first job to start")
-    forced = manager.submit("doc-1", force=True)
-    other = manager.submit("doc-2")
+    forced = manager.submit("doc-1", profile="demo", force=True)
+    other = manager.submit("doc-2", profile="demo")
 
     # doc-2 was queued after the forced job, so once it runs the forced one has been looked at and passed
     # over; it is still queued although a worker is free.
@@ -104,9 +104,9 @@ def test_jobs_start_in_the_order_they_were_submitted():
     gate = threading.Event()
     runner = RecordingRunner(gate=gate)
     manager = JobManager(runner, STAGES, workers=1)
-    first = manager.submit("doc-0")
+    first = manager.submit("doc-0", profile="demo")
     assert runner.entered.wait(timeout=WAIT_TIMEOUT_S)
-    rest = [manager.submit(f"doc-{i}") for i in range(1, 5)]
+    rest = [manager.submit(f"doc-{i}", profile="demo") for i in range(1, 5)]
 
     gate.set()
     for job in (first, *rest):
@@ -121,7 +121,7 @@ def test_simultaneous_submissions_of_one_document_share_one_job():
 
     def submit() -> str:
         barrier.wait(timeout=WAIT_TIMEOUT_S)
-        return manager.submit("doc-1").job_id
+        return manager.submit("doc-1", profile="demo").job_id
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         ids = {future.result(timeout=WAIT_TIMEOUT_S) for future in [pool.submit(submit) for _ in range(8)]}
@@ -141,7 +141,7 @@ def test_stage_marks_from_concurrent_jobs_land_on_their_own_job():
             mark(stage, "done", job.document_id)
 
     manager = JobManager(RecordingRunner(body=body), STAGES, workers=2)
-    jobs = [manager.submit(f"doc-{i}") for i in range(2)]
+    jobs = [manager.submit(f"doc-{i}", profile="demo") for i in range(2)]
 
     for job in jobs:
         finished = wait_for_status(manager, job.job_id, "done")
@@ -164,7 +164,7 @@ def test_the_logs_of_concurrent_jobs_do_not_mix():
         barrier.wait(timeout=WAIT_TIMEOUT_S)  # both have logged before either finishes
 
     manager = JobManager(RecordingRunner(body=body), STAGES, workers=2)
-    jobs = [manager.submit(f"doc-{i}") for i in range(2)]
+    jobs = [manager.submit(f"doc-{i}", profile="demo") for i in range(2)]
 
     for job in jobs:
         finished = wait_for_status(manager, job.job_id, "done")
@@ -187,8 +187,8 @@ def test_the_package_logger_stays_at_info_until_the_last_running_job_ends():
                 logging.getLogger("paperfacts.test").info("after the other job ended")
 
         manager = JobManager(RecordingRunner(body=body), STAGES, workers=2)
-        early = manager.submit("doc-early")
-        late = manager.submit("doc-late")
+        early = manager.submit("doc-early", profile="demo")
+        late = manager.submit("doc-late", profile="demo")
         wait_for_status(manager, early.job_id, "done")
         first_done.set()
         finished = wait_for_status(manager, late.job_id, "done")
@@ -202,9 +202,9 @@ def test_the_package_logger_stays_at_info_until_the_last_running_job_ends():
 def test_shutdown_drops_queued_jobs_and_lets_running_ones_finish():
     body = Overlap()
     manager = JobManager(body, STAGES, workers=2)
-    running = [manager.submit(f"doc-{i}") for i in range(2)]
+    running = [manager.submit(f"doc-{i}", profile="demo") for i in range(2)]
     wait_until(lambda: body.total() == 2, what="both workers to be busy")
-    queued = manager.submit("doc-queued")
+    queued = manager.submit("doc-queued", profile="demo")
 
     manager.shutdown()
     body.release.set()
@@ -226,7 +226,7 @@ def test_a_submission_after_shutdown_is_refused_and_leaves_no_job_behind():
     manager.shutdown()
 
     with pytest.raises(RuntimeError, match="shut down"):
-        manager.submit("doc-1")
+        manager.submit("doc-1", profile="demo")
     assert manager.all_jobs() == []
 
 
@@ -241,9 +241,9 @@ def test_an_interrupted_job_does_not_cost_the_queue_its_worker():
             raise KeyboardInterrupt
 
     manager = JobManager(RecordingRunner(body=body), STAGES, workers=1)
-    first = manager.submit("doc-1")
+    first = manager.submit("doc-1", profile="demo")
     wait_until(lambda: manager.get(first.job_id).status == "running", what="the first run to start")
-    forced = manager.submit("doc-1", force=True)
+    forced = manager.submit("doc-1", profile="demo", force=True)
 
     release.set()
 
@@ -256,7 +256,7 @@ def test_the_workers_are_started_on_first_use_and_leave_on_shutdown():
     manager = JobManager(RecordingRunner(), STAGES, workers=3)
     assert {t for t in threading.enumerate() if t.name.startswith("paperfacts-job")} == before
 
-    job = manager.submit("doc-1")
+    job = manager.submit("doc-1", profile="demo")
     wait_for_status(manager, job.job_id, "done")
     manager.shutdown(wait=True)
 
@@ -266,7 +266,7 @@ def test_the_workers_are_started_on_first_use_and_leave_on_shutdown():
 def test_shutdown_with_wait_returns_only_after_the_running_jobs_finish():
     body = Overlap()
     manager = JobManager(body, STAGES, workers=2)
-    running = [manager.submit(f"doc-{i}") for i in range(2)]
+    running = [manager.submit(f"doc-{i}", profile="demo") for i in range(2)]
     wait_until(lambda: body.total() == 2, what="both workers to be busy")
 
     releaser = threading.Timer(0, body.release.set)  # released from another thread, after shutdown began

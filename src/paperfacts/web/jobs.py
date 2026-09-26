@@ -49,6 +49,8 @@ class Job(BaseModel):
 
     job_id: str
     document_id: str
+    # The name of the served profile the job runs under.
+    profile: str
     force: bool = False
     status: JobStatus = "queued"
     stages: tuple[Stage, ...] = ()
@@ -66,6 +68,7 @@ class JobBrief(BaseModel):
 
     job_id: str
     document_id: str
+    profile: str
     force: bool
     status: JobStatus
     error: str | None
@@ -78,7 +81,8 @@ class JobBrief(BaseModel):
         return cls.model_validate(job.model_dump(exclude={"stages", "log"}))
 
 
-# Job body: receives a job snapshot (only document_id / force are used) and a mark(stage, status, detail) callback
+# Job body: receives a job snapshot (only document_id / profile / force are used) and a mark(stage, status,
+# detail) callback
 JobRunner = Callable[[Job, Callable[[str, StageStatus, str], None]], None]
 
 
@@ -104,20 +108,28 @@ class JobManager:
         self._lock = threading.Lock()
         self._changed = threading.Condition(self._lock)
 
-    def submit(self, document_id: str, *, force: bool = False) -> Job:
-        """Idempotent: if the same document is already queued or running, reuse that job (double-
-        clicking "reprocess" shouldn't pay for the LLM call twice); a new job only starts when
-        upgrading from "use cache" to "force rerun", and then only after the running one has finished."""
+    def submit(self, document_id: str, *, profile: str, force: bool = False) -> Job:
+        """Idempotent: if the same document is already queued or running under the same profile, reuse that job
+        (double-clicking "reprocess" shouldn't pay for the LLM call twice); a new job only starts when upgrading
+        from "use cache" to "force rerun", or for another profile, and then only after the running one has
+        finished: the document's parse and identity are shared by every profile, so one document never has two
+        jobs running whatever their profiles."""
         with self._changed:
             if self._closed:
                 # Refused before anything is recorded: a job nobody will ever run would show "queued" forever.
                 raise RuntimeError("the job manager has shut down")
             for job in self._jobs.values():
-                if job.document_id == document_id and job.status in ACTIVE and job.force >= force:
+                if (
+                    job.document_id == document_id
+                    and job.profile == profile
+                    and job.status in ACTIVE
+                    and job.force >= force
+                ):
                     return job
             job = Job(
                 job_id=uuid.uuid4().hex[:12],
                 document_id=document_id,
+                profile=profile,
                 force=force,
                 created_at=_now(),
                 stages=tuple(Stage(name=name) for name in self._stage_names),

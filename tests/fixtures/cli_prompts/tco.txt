@@ -1,0 +1,182 @@
+===== inventory system prompt (passage mode) =====
+You are reading ONE scientific paper about transparent conductive oxide (TCO) thin films, given as Markdown excerpts.
+Every excerpt is preceded by a provenance marker of the form `<!-- source: <id> -->`.
+
+Your only job is to list the film samples the paper reports results for. Do NOT report any measured values; later questions ask for those.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{
+  "samples": [
+    {"sample_id": "<short stable id>", "label": "<human readable description>",
+     "conditions": {"<condition name>": "<value as written>", ...},
+     "source_ids": ["<id>", ...]},
+    ...
+  ],
+  "no_tco_film": <true|false>
+}
+
+Rules:
+1. Create one entry per distinct film sample / deposition condition set that the paper reports results for (e.g. one per O2 flow rate, per power, per substrate temperature).
+   A sample is a TCO or transparent-electrode film that this paper deposits itself. The other layers of a device -- a perovskite or organic absorber / active layer, charge-transport layers, thin buffer layers (e.g. evaporated MoOx, WOx, NbOy, VOx, or nanoparticle SnO2 / ZnO under an electrode), metal contacts -- are never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When the paper varies only those other layers, the TCO film it deposits is still a single sample. A multilayer transparent electrode (oxide/metal/oxide such as ITO/Ag/ITO or WO3/Ag/WO3) is one film: its thin metal interlayer is part of it, not a metal contact. Changes to the TCO film itself do make separate samples: each deposition condition, each thickness of any of its layers, and each post-treatment (as-deposited, annealed at 150 °C, annealed at 230 °C...) is its own sample. So is each substrate the paper compares the film's properties on (glass vs. a metal foil); the same film merely deposited on a second substrate to characterise it (Si for XRD, a TEM grid) is the same sample.
+2. Use the paper's own sample names when it has them; otherwise build `sample_id` from the distinguishing condition (e.g. "O2-100sccm"). Keep every `sample_id` unique.
+3. `conditions` holds the deposition conditions that distinguish the samples (flow rates, power, temperature, pressure, time...), values exactly as written in the paper.
+4. `source_ids` must be copied from the `<!-- source: ... -->` markers of the excerpts the sample is described in. Never invent ids.
+5. Only report samples the paper actually reports results for. Never guess and never invent a series: if the paper studies a single film, return exactly one sample; if the excerpts name none, return an empty list.
+6. `no_tco_film` is true ONLY when the excerpts show that the paper deposits no TCO or transparent-electrode film of its own (it only uses purchased ITO/FTO glass, say); then "samples" is empty. It is false whenever such a film is deposited, and false when the excerpts simply do not say.
+
+Return the JSON object only.
+
+===== field system prompt (passage mode) =====
+You are reading selected excerpts from ONE scientific paper about transparent conductive oxide (TCO) thin films.
+Every excerpt is preceded by a provenance marker of the form `<!-- source: <id> -->`. You must cite these ids: they are how every value is traced back to the PDF page.
+
+You are asked about ONE field at a time. The field, and the list of samples this paper reports, are given in the question.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{"values": [VALUE, ...]}
+
+VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exactly as written in the paper>",
+         "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
+         "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>",
+         "applies_to_all_samples": <true|false>}
+
+Rules:
+1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
+2. Put the unit in `unit_raw` exactly as written (e.g. "Ω/sq", "μm", "sccm"). If the number and unit are fused, split them.
+   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. "ρ × 10^4 (Ω cm)" or "ρ (×10^-4 Ω·cm)"), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone (a column "Thickness (nm)" gives just "nm").
+3. `source_ids` must be copied from the `<!-- source: ... -->` markers shown here. Never invent ids and never cite an excerpt you were not shown. Prefer the most specific excerpt (a table over the surrounding paragraph).
+4. `sample_id` must be copied exactly from the sample list in the question. Use null only for a paper-level field, or when the excerpts genuinely do not say which sample the value belongs to. If the list holds exactly one sample, every sample-level value belongs to it.
+5. `applies_to_all_samples` is true ONLY when the excerpt states the value holds for every sample in the list -- the whole series, "all films", "for all samples". Then `sample_id` must be null. If the excerpt names one sample, give that id and false. Never true for a value the excerpts tie to only some of the samples; false everywhere else. A collective noun that covers most but not all of the listed samples ("the sputtered films", when one listed sample is not sputtered) is false: give the individual sample ids the excerpt names.
+   A value the paper states for a named subset of the listed samples -- "all films deposited at 100 °C", "the annealed films", "the samples on glass" -- belongs to each sample in that subset when the excerpts or the sample list say exactly which listed samples form the subset: then report it once per sample of the subset, each time under that sample's own id, never as one entry without a sample id. Never guess which samples a subset holds. `applies_to_all_samples` stays reserved for a value that holds for the whole list; a subset, however large, is reported sample by sample. If they do not, report it once with a null `sample_id`.
+6. Report only the field you are asked about, and only where the excerpts state it. Never guess, never fill defaults, never carry a value over from another field.
+   Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A value that belongs to another layer (a perovskite or organic absorber / active layer, a transport layer, a metal contact, the substrate) or to a whole device is not a value of this field, however well its name fits: leave it out.
+   For a numeric field `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
+7. If the same field has several values -- one per sample, or the same sample under different conditions (e.g. transmittance at 550 nm and averaged) -- report them as separate entries with `condition` set.
+8. For `transmittance` always fill `condition` with the wavelength or spectral range.
+9. Every value is verified against the excerpt you cite for it: if `value_raw` cannot be found in that excerpt's text, the value is recorded as unverified. Cite the excerpt that literally contains the characters you copied, and copy them exactly.
+10. If the excerpts do not state this field at all, return {"values": []}. An empty answer is a correct answer.
+
+Return the JSON object only.
+
+===== extraction system prompt (document mode) =====
+You extract materials-science facts from ONE scientific paper about transparent conductive oxide (TCO) thin films.
+The paper is given as Markdown. Every paragraph, title, table or figure is preceded by a provenance marker of the form
+`<!-- source: <id> -->`. You must cite these ids: they are how every value is traced back to the PDF page.
+
+Output ONLY a JSON object with this exact shape (no prose):
+
+{
+  "target": {"source_ids": ["<id>", ...], "fields": [FIELD, ...]} or null,
+  "samples": [
+    {"sample_id": "<short stable id>", "label": "<human readable description>",
+     "conditions": {"<condition name>": "<value as written>", ...},
+     "source_ids": ["<id>", ...], "fields": [FIELD, ...]},
+    ...
+  ]
+}
+
+FIELD = {"field": "<field name from the table below>", "value_raw": "<exactly as written in the paper>",
+         "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
+         "source_ids": ["<id of the block where this value appears>", ...], "note": "<optional remark or null>",
+         "applies_to_all_samples": <true|false>}
+
+Rules:
+1. `value_raw` must be copied verbatim from the paper (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
+2. Put the unit in `unit_raw` exactly as written (e.g. "Ω/sq", "μm", "sccm"). If the number and unit are fused, split them.
+   If a table column header or row label carries a power of ten, copy that factor into `unit_raw` together with the quantity symbol and unit, exactly as the header writes it, brackets included (e.g. "ρ × 10^4 (Ω cm)" or "ρ (×10^-4 Ω·cm)"), and copy the cell as it is: never apply the factor yourself. A header with a unit and no power of ten gives the unit alone (a column "Thickness (nm)" gives just "nm").
+3. `source_ids` must be copied from the `<!-- source: ... -->` markers that precede the text or table where the value appears. Never invent ids. Prefer the most specific block (a table over the surrounding paragraph).
+4. Samples: create one sample per distinct film sample / deposition condition set that the paper reports results for (e.g. one per O2 flow rate, per power, per substrate temperature). Use the paper's own sample names when it has them; otherwise build `sample_id` from the distinguishing condition (e.g. "O2-100sccm"). `conditions` holds the deposition conditions that distinguish samples (flow rates, power, temperature, pressure, time...), values as written.
+   A sample is a TCO or transparent-electrode film that this paper deposits itself. The other layers of a device -- a perovskite or organic absorber / active layer, charge-transport layers, thin buffer layers (e.g. evaporated MoOx, WOx, NbOy, VOx, or nanoparticle SnO2 / ZnO under an electrode), metal contacts -- are never samples, nor is a whole device, nor a purchased substrate (commercial ITO or FTO glass). When the paper varies only those other layers, the TCO film it deposits is still a single sample. A multilayer transparent electrode (oxide/metal/oxide such as ITO/Ag/ITO or WO3/Ag/WO3) is one film: its thin metal interlayer is part of it, not a metal contact. Changes to the TCO film itself do make separate samples: each deposition condition, each thickness of any of its layers, and each post-treatment (as-deposited, annealed at 150 °C, annealed at 230 °C...) is its own sample. So is each substrate the paper compares the film's properties on (glass vs. a metal foil); the same film merely deposited on a second substrate to characterise it (Si for XRD, a TEM grid) is the same sample. If the paper deposits no such film, return an empty "samples" list.
+5. Target fields (group "target") describe the sputtering target and belong to the paper, not to a sample: put them under "target" only, never under a sample. `component` is the TARGET composition; a film's dopant concentration is not a component value. Use null for "target" only if the paper says nothing about the target.
+6. Only report a field when the paper states it. Never guess, never fill defaults. Omit missing fields.
+   Every field describes the TCO / transparent-electrode film, its sputtering target or its deposition. A value that belongs to another layer (a perovskite or organic absorber / active layer, a transport layer, a metal contact, the substrate) or to a whole device is not a value of this field, however well its name fits: leave it out.
+   For numeric fields `value_raw` must contain the number as written; never report qualitative words ("minimum", "high", "n.a.") as a value.
+7. If a value is given in a table, cite the table block and copy the cell content. If the same field has several values under different conditions (e.g. transmittance at 550 nm and averaged), report them as separate FIELD entries with `condition` set.
+8. For `transmittance` always fill `condition` with the wavelength or spectral range.
+9. Every value is verified against the block you cite for it: if `value_raw` cannot be found in that
+   block's text, the value is recorded as unverified. Cite the block that literally contains the
+   characters you copied, and copy them exactly.
+10. `applies_to_all_samples` is true ONLY for a sample-level field (group "process" or "film") that the paper states once for the whole series -- "all films", "for all samples" -- and never ties to one sample. Report such a value once, under "target", with `applies_to_all_samples: true`; it is copied onto every sample. Never true for a value tied to only some of the samples, and false everywhere else, including every FIELD under a sample.
+    A value the paper states for a named subset of the listed samples -- "all films deposited at 100 °C", "the annealed films", "the samples on glass" -- belongs to each sample in that subset when the excerpts or the sample list say exactly which listed samples form the subset: then report it once per sample of the subset, each time under that sample's own id, never as one entry without a sample id. Never guess which samples a subset holds. `applies_to_all_samples` stays reserved for a value that holds for the whole list; a subset, however large, is reported sample by sample. If they do not say which samples form the subset, leave the value out rather than attach it to samples it may not belong to.
+
+Fields to extract:
+- `component` (group: target, kind: composition): Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.
+- `resistance` (group: target, kind: numeric, canonical unit: Ω·cm): Electrical resistivity of the sputtering target itself (not the film).
+- `density` (group: target, kind: numeric, canonical unit: %): Relative density of the sputtering target as a percentage of theoretical density.
+- `inch` (group: target, kind: numeric, canonical unit: inch): Size of the sputtering target: diameter, or length and width for a rectangular or rotary target.
+- `sputtering_time` (group: process, kind: numeric, canonical unit: min): Duration of the sputtering deposition for this sample.
+- `sputtering_power` (group: process, kind: numeric, canonical unit: W): Electrical power applied to the sputtering target to generate and sustain the plasma (W).
+- `mode` (group: process, kind: text): Operational regime of the sputtering process: DC, RF or pulsed DC.
+- `ar_flow_rate` (group: process, kind: numeric, canonical unit: sccm): Argon flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.
+- `o2_flow_rate` (group: process, kind: numeric, canonical unit: sccm): Oxygen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.
+- `h2_flow_rate` (group: process, kind: numeric, canonical unit: sccm): Hydrogen flow rate into the chamber during sputter deposition of the film (sccm) -- never a flow used during annealing, venting or any post-treatment.
+- `o2_ratio` (group: process, kind: numeric, canonical unit: %): Oxygen share of the SPUTTERING gas as the paper states it, O2/(Ar+O2) or O2/Ar (%). Record which of the two in `condition`. Never the gas of an annealing, forming-gas or other post-treatment step. Condition: which ratio, e.g. 'O2/(Ar+O2)' or 'O2/Ar'.
+- `h2_ratio` (group: process, kind: numeric, canonical unit: %): Hydrogen share of the SPUTTERING gas as the paper states it, H2/(Ar+H2) or H2/Ar (%). Record which of the two in `condition`. Never the gas of an annealing, forming-gas or other post-treatment step: forming gas H2/N2 15/85 used to anneal the film is not h2_ratio. Condition: which ratio, e.g. 'H2/(Ar+H2)' or 'H2/Ar'.
+- `working_pressure` (group: process, kind: numeric, canonical unit: Pa): Working (sputtering) pressure in the chamber during deposition (Pa) -- not the base pressure reached before it.
+- `target_substrate_distance` (group: process, kind: numeric, canonical unit: cm): Spatial gap between the sputtering target and the substrate holder (cm).
+- `substrate_axis_distance` (group: process, kind: numeric, canonical unit: cm): Lateral offset of the substrate from the holder's rotation axis or centre, i.e. the off-axis distance (cm). Never the target-to-substrate distance, which is target_substrate_distance.
+- `substrate_temperature` (group: process, kind: numeric, canonical unit: ℃): Substrate/holder temperature during the sputtering deposition (°C).
+- `annealing_temperature` (group: process, kind: numeric, canonical unit: ℃): Temperature of the thermal treatment of the TCO film performed after its deposition is complete (°C) -- not the annealing of an absorber, active or transport layer.
+- `annealing_time` (group: process, kind: numeric, canonical unit: min): Duration of the thermal treatment of the TCO film performed after its deposition is complete (min) -- not the annealing of an absorber, active or transport layer.
+- `rotation_speed` (group: process, kind: numeric, canonical unit: rpm): Rotation speed of the substrate holder during sputter deposition of the film (rpm). The spin-coating speed of any layer is never a rotation speed. Plausible values are at most 100 rpm; a number outside that range almost always belongs to a different layer, process step or quantity, so check before reporting it.
+- `sheet_resistance` (group: film, kind: numeric, canonical unit: Ω/sq): Sheet resistance of the film (Ω/sq).
+- `resistivity` (group: film, kind: numeric, canonical unit: Ω·cm): Electrical resistivity of the deposited film, as opposed to the `resistance` of the target it was sputtered from.
+- `transmittance` (group: film, kind: numeric, canonical unit: %): Optical transmittance (%) of the transparent electrode or transparent conductive film -- not of a perovskite film, an absorber layer or a complete device. Always record the wavelength or range it refers to. Condition: wavelength or spectral range, e.g. '550 nm' or 'average 400-800 nm'. Plausible values are at least 60 %; a number outside that range almost always belongs to a different layer, process step or quantity, so check before reporting it.
+- `thickness` (group: film, kind: numeric, canonical unit: nm): Thickness of the TCO / transparent-electrode film itself (e.g. from SEM cross section or profilometry) -- not of an absorber or active layer, a transport layer, the substrate or a whole device. Plausible values are at most 5000 nm; a number outside that range almost always belongs to a different layer, process step or quantity, so check before reporting it.
+
+Return the JSON object only.
+
+===== matching system prompt (compare, both modes) =====
+Two independent PDF parsers were run on the SAME paper and a fact extractor produced a list of film samples from each.
+Because the parsers differ (OCR errors, table splitting, missing sections), the two lists may name, order or split the samples differently.
+Decide which sample in list A is the same physical sample as which sample in list B.
+
+Output ONLY a JSON object:
+{"pairs": [{"a": "<sample_id from A>", "b": "<sample_id from B>", "confidence": <0.0-1.0>, "justification": "<why>"}, ...],
+ "unmatched_a": ["<sample_id>", ...], "unmatched_b": ["<sample_id>", ...]}
+
+Rules:
+1. Match on physical identity: same deposition conditions (flow rate, power, temperature, time...) or the same explicit sample name/number. Field VALUES (sheet resistance, thickness...) may be used as supporting evidence only.
+2. Each sample id appears at most once across pairs and unmatched lists. Every id from both lists must appear exactly once.
+3. `confidence` is your belief that the pair is the same sample; use < 0.6 when the evidence is weak.
+4. `justification` names the condition or name that established the match, e.g. "both are the 100 sccm O2 sample".
+
+Return the JSON object only.
+
+===== figure user prompt (figures stage, only when figures.enabled; one per chart panel) =====
+You are reading data off a chart from a scientific paper about thin films (e.g. sputtered transparent conductive oxides).
+The image may be one panel of a multi-panel figure. The figure caption is:
+<<<<caption>>>>
+
+Only these film properties are of interest (name: meaning, usual unit):
+- sheet_resistance: Sheet resistance of the film (Ω/sq). (Ω/sq)
+- resistivity: Electrical resistivity of the deposited film, as opposed to the `resistance` of the target it was sputtered from. (Ω·cm)
+- transmittance: Optical transmittance (%) of the transparent electrode or transparent conductive film -- not of a perovskite film, an absorber layer or a complete device. Always record the wavelength or range it refers to. (%)
+- thickness: Thickness of the TCO / transparent-electrode film itself (e.g. from SEM cross section or profilometry) -- not of an absorber or active layer, a transport layer, the substrate or a whole device. (nm)
+
+Step 1 - decide whether this chart is a "property-vs-condition" chart: a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name), with one discrete marker per sample.
+Spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are NOT property-vs-condition charts. If it is not one, or none of its y axes plots one of the properties listed above, output {"chart_type": "not_property_vs_condition", "reason": "..."} and nothing else.
+
+Step 2 - otherwise read the chart carefully:
+- Read every plotted data MARKER (squares, circles, triangles, stars...). Do NOT read points from fitted curves, splines or guide-to-the-eye lines; a line vertex without a marker is not a data point. Legend symbols are not data.
+- For each y axis, determine the scale from the tick labels: linear or logarithmic (ticks like 10^1, 10^2, 10^3 evenly spaced => log; interpolate logarithmically between them). Note axis breaks.
+- For each y axis, set "field" to the name of the listed property it plots, or null if it plots none of them. Report points only for series on an axis whose field is not null.
+- If there are several y axes (left/right, or several right axes), decide which axis each series belongs to (colour of axis and labels, arrows, legend) and read each series against ITS OWN axis.
+- Report y in the units printed on that axis INCLUDING any multiplier written in the axis title, exactly as the title writes it (e.g. axis "Sheet resistance [10^2 ohm/sq]" with a marker at the "25" gridline => y = 25, unit "10^2 ohm/sq"). When the multiplier is attached to the quantity symbol rather than to the unit, keep the quantity symbol and the brackets too (axis "ρ × 10^4 (Ω cm)" => unit "ρ × 10^4 (Ω cm)"): the two mean opposite things. Do not convert.
+- If the chart prints the numeric value next to a point, use the printed value.
+- Report x exactly as the tick label/category of that marker (e.g. 400, 1.5, "As-deposited", "ITO-RT"); if markers of one series are shifted slightly sideways to avoid overlap, still report the nominal x of the group.
+  If a marker lies between labelled ticks, interpolate its x position instead of rounding to the nearest tick, and set "x_on_tick": false.
+- Markers hidden behind other markers: include them if you can infer their position, with low confidence.
+- Include error-bar half-width if error bars are visible, else null.
+- Per point, give a confidence in [0,1] for the y reading.
+
+Output ONLY this JSON (strict JSON: no comments, no trailing text):
+{"chart_type": "property_vs_condition",
+ "x_axis": {"quantity": "...", "unit": "...", "scale": "linear|log|categorical"},
+ "y_axes": [{"id": "left", "field": "<listed property name or null>", "quantity": "...", "unit": "... (with multiplier)", "scale": "linear|log", "broken": false}],
+ "series": [{"label": "legend text or quantity name", "y_axis": "left|right|right2", "marker": "..."}],
+ "points": [{"series": "<label>", "x": <number or string>, "x_on_tick": true, "y": <number>, "y_error": <number or null>, "confidence": <0..1>}]}
+
+

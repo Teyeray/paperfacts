@@ -38,7 +38,7 @@ def manager_for(runner: RecordingRunner, stages: tuple[str, ...] = STAGES) -> Jo
 def run_to_completion(runner: RecordingRunner, *, document_id: str = "doc-1", force: bool = False) -> tuple[Job, Job]:
     """Submit a job and wait for it to end; returns ``(the object from submit, the finished snapshot)``."""
     manager = manager_for(runner)
-    submitted = manager.submit(document_id, force=force)
+    submitted = manager.submit(document_id, profile="demo", force=force)
     return submitted, wait_for_status(manager, submitted.job_id, "done", "failed")
 
 
@@ -51,10 +51,10 @@ def test_a_submitted_job_starts_out_queued_with_every_stage_pending():
     runner = RecordingRunner(gate=gate)
     manager = manager_for(runner)
     try:
-        first = manager.submit("doc-1")
+        first = manager.submit("doc-1", profile="demo")
         assert runner.entered.wait(timeout=2.0)
 
-        queued = manager.submit("doc-2")
+        queued = manager.submit("doc-2", profile="demo")
 
         assert queued.status == "queued"
         assert queued.started_at is None and queued.finished_at is None
@@ -69,7 +69,7 @@ def test_every_job_gets_its_own_id():
     runner = RecordingRunner()
     manager = manager_for(runner)
 
-    ids = {manager.submit(f"doc-{i}").job_id for i in range(5)}
+    ids = {manager.submit(f"doc-{i}", profile="demo").job_id for i in range(5)}
 
     assert len(ids) == 5
     wait_until(lambda: runner.call_count == 5, what="all five jobs to finish")
@@ -81,10 +81,10 @@ def test_submitting_a_document_that_is_already_active_returns_the_same_job():
     runner = RecordingRunner(gate=gate)
     manager = manager_for(runner)
     try:
-        first = manager.submit("doc-1")
+        first = manager.submit("doc-1", profile="demo")
         assert runner.entered.wait(timeout=2.0)
 
-        again = manager.submit("doc-1")
+        again = manager.submit("doc-1", profile="demo")
 
         assert again.job_id == first.job_id
     finally:
@@ -99,8 +99,8 @@ def test_a_forced_resubmission_is_a_new_job_even_while_a_cached_run_is_active():
     runner = RecordingRunner(gate=gate)
     manager = manager_for(runner)
     try:
-        first = manager.submit("doc-1")
-        forced = manager.submit("doc-1", force=True)
+        first = manager.submit("doc-1", profile="demo")
+        forced = manager.submit("doc-1", profile="demo", force=True)
         assert forced.job_id != first.job_id
     finally:
         gate.set()
@@ -113,8 +113,8 @@ def test_a_plain_resubmission_reuses_an_active_forced_run():
     runner = RecordingRunner(gate=gate)
     manager = manager_for(runner)
     try:
-        forced = manager.submit("doc-1", force=True)
-        plain = manager.submit("doc-1")
+        forced = manager.submit("doc-1", profile="demo", force=True)
+        plain = manager.submit("doc-1", profile="demo")
         assert plain.job_id == forced.job_id
     finally:
         gate.set()
@@ -125,10 +125,10 @@ def test_a_plain_resubmission_reuses_an_active_forced_run():
 def test_a_finished_document_can_be_submitted_again():
     runner = RecordingRunner()
     manager = manager_for(runner)
-    first = manager.submit("doc-1")
+    first = manager.submit("doc-1", profile="demo")
     wait_for_status(manager, first.job_id, "done")
 
-    second = manager.submit("doc-1")
+    second = manager.submit("doc-1", profile="demo")
 
     assert second.job_id != first.job_id
     wait_for_status(manager, second.job_id, "done")
@@ -228,7 +228,7 @@ def test_a_finished_snapshot_is_never_half_written():
     lock: any snapshot is either still running, or completely finished."""
     runner = RecordingRunner(body=lambda job, mark: mark("compare", "running", ""))
     manager = manager_for(runner)
-    job = manager.submit("doc-1")
+    job = manager.submit("doc-1", profile="demo")
     seen: list[Job] = []
 
     def consistent() -> bool:
@@ -250,11 +250,11 @@ def test_a_failure_does_not_kill_the_worker_thread():
     # a single failure must not take down the pool's one worker, or every later job would queue forever.
     runner = RecordingRunner(error=RuntimeError("boom"))
     manager = manager_for(runner)
-    failed = manager.submit("doc-1")
+    failed = manager.submit("doc-1", profile="demo")
     wait_for_status(manager, failed.job_id, "failed")
 
     runner.error = None
-    following = manager.submit("doc-2")
+    following = manager.submit("doc-2", profile="demo")
 
     assert wait_for_status(manager, following.job_id, "done").status == "done"
 
@@ -305,12 +305,12 @@ def test_an_unknown_job_id_is_none():
 def test_for_document_only_returns_that_documents_jobs():
     runner = RecordingRunner()
     manager = manager_for(runner)
-    mine = manager.submit("doc-1")
-    manager.submit("doc-2")
+    mine = manager.submit("doc-1", profile="demo")
+    manager.submit("doc-2", profile="demo")
     wait_for_status(
         manager, mine.job_id, "done"
     )  # while still running, a resubmission would be merged (see idempotency tests)
-    also_mine = manager.submit("doc-1")
+    also_mine = manager.submit("doc-1", profile="demo")
     wait_until(lambda: runner.call_count == 3, what="all three jobs to finish")
 
     assert [job.job_id for job in manager.for_document("doc-1")] == [mine.job_id, also_mine.job_id]
@@ -324,9 +324,9 @@ def test_for_document_sorts_by_creation_time_not_by_insertion_order(monkeypatch)
     runner = RecordingRunner()
     manager = manager_for(runner)
 
-    earlier_submission = manager.submit("doc-1")
+    earlier_submission = manager.submit("doc-1", profile="demo")
     wait_for_status(manager, earlier_submission.job_id, "done")
-    later_submission = manager.submit("doc-1")
+    later_submission = manager.submit("doc-1", profile="demo")
     wait_for_status(manager, later_submission.job_id, "done")
 
     assert [job.job_id for job in manager.for_document("doc-1")] == [
@@ -347,7 +347,7 @@ def test_jobs_handed_out_are_frozen():
     """
     runner = RecordingRunner()
     manager = manager_for(runner)
-    job = manager.submit("doc-1")
+    job = manager.submit("doc-1", profile="demo")
 
     with pytest.raises(ValidationError):
         job.status = "done"
@@ -361,7 +361,7 @@ def test_a_snapshot_taken_while_running_does_not_change_afterwards():
     gate = threading.Event()
     runner = RecordingRunner(gate=gate, body=lambda job, mark: mark("parse", "done", "11 blocks"))
     manager = manager_for(runner)
-    job = manager.submit("doc-1")
+    job = manager.submit("doc-1", profile="demo")
     running = wait_for_status(manager, job.job_id, "running")
     assert running.stages[0].status == "pending"
 
@@ -416,7 +416,7 @@ def test_records_from_other_threads_do_not_enter_the_job_log():
         gate=gate, body=lambda job, mark: logging.getLogger("paperfacts.test").info("from the worker thread")
     )
     manager = manager_for(runner)
-    job = manager.submit("doc-1")
+    job = manager.submit("doc-1", profile="demo")
     assert runner.entered.wait(timeout=2.0)
 
     logging.getLogger("paperfacts.test").info("from the request thread")
@@ -481,7 +481,7 @@ def test_only_the_most_recent_finished_jobs_are_kept(monkeypatch):
 
     submitted = []
     for index in range(5):
-        job = manager.submit(f"doc-{index}")
+        job = manager.submit(f"doc-{index}", profile="demo")
         wait_for_status(manager, job.job_id, "done")
         submitted.append(job.job_id)
 
@@ -500,9 +500,9 @@ def test_an_active_job_is_never_pruned(monkeypatch):
     runner = RecordingRunner(body=body)
     manager = JobManager(runner, STAGES, workers=2)
     try:
-        slow = manager.submit("slow-doc")
+        slow = manager.submit("slow-doc", profile="demo")
         wait_until(runner.entered.is_set, what="the slow job to start")
-        quick = [manager.submit(f"doc-{index}") for index in range(3)]
+        quick = [manager.submit(f"doc-{index}", profile="demo") for index in range(3)]
         # one worker is held by the slow job, so the quick ones run one after another, in order
         wait_for_status(manager, quick[-1].job_id, "done")
 

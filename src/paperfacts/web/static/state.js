@@ -37,23 +37,39 @@ export const state = {
   // the same: a late response then can never paint over whatever the reader navigated to since.
   generation: 0,
   docs: [],        // document library list (DocumentSummary[])
-  activeDocs: new Set(), // document_ids with a queued or running job (from GET /api/jobs)
+  activeDocs: new Map(), // document_id -> the profiles of its queued or running jobs (from GET /api/jobs)
   current: null,   // the open document_id (16 chars)
   summary: null,   // the current document's DocumentSummary
   report: null,    // ComparisonReport | null
   dataset: null,   // the consolidated per-sample table (DocumentDataset.as_dict) | null
   figures: null,   // chart readings from the figures stage ({ stale, orphaned, rows })
   corpus: null,    // the home view's library-wide table ({ fields, rows }) | null
+  corpusProfile: null, // the profile `corpus` was read under
   lanes: {},       // { mineru: LaneExtraction | null, paddleocr_vl: ... }
   artifacts: {},   // { mineru: ParsedArtifact | null, paddleocr_vl: ... }
   job: null,       // the current document's most recent job snapshot (this process only)
   filter: null,    // status filter for the facts table
   selectedFact: null, // index into report.comparisons of the fact in the URL, even while a filter hides it
   viewer: null,    // the PageViewer instance
-  profile: null,   // the served domain profile's title, UI copy, groups and fields (GET /api/profile)
+  profile: null,   // the routed profile's title, UI copy, groups and fields (GET /api/profile), set with what it labels
+  // The domain profiles this server serves (GET /api/profiles: { default, profiles, invalid }) | null when unread.
+  profiles: null,
+  defaultProfile: null, // the default profile's name, once /api/profiles has answered
+  // The profile the URL routes to: null is the server's default (#/…), a name is #/p/<name>/…. Set by the router
+  // only; a load reads it once, before its first await, and asks every per-profile route under that value.
+  profileName: null,
+  currentProfile: null, // the profile the open document was loaded under (with `current`)
+  shownProfile: null, // the profile the view on screen was drawn under (with `profile`, its view)
+  otherJob: null,  // an active job on the open document under another profile, or null
 };
 
 export const isCurrent = (generation) => generation === state.generation;
+
+// The one sanctioned exception to the generation rule: a handler that must outlive a finish reload (which bumps the
+// generation while its request is out) -- a rerun, a bulk run, a profile view's retry -- asks instead whether the
+// page still shows document `id` under routed `profile`. `id` undefined: any view under that profile.
+export const viewShows = (id, profile) =>
+  state.profileName === profile && (id === undefined || (state.current === id && state.currentProfile === profile));
 
 // ui_copy.UiCopy's domain-free defaults, mirrored here (tests/test_web_copy.py holds the two equal): until the
 // profile has loaded, or when it never does, the page still names things, just generically.
@@ -102,9 +118,17 @@ export function entityLabel(name) {
   return groups.find((group) => group.name === name)?.label ?? name;
 }
 
-// Only a job belonging to the current document is used to draw progress; after switching
-// documents, a stale job snapshot must not carry over onto the new one
-export const currentJob = () => (state.job && state.job.document_id === state.current ? state.job : null);
+// A job runs under a named profile; `profile` is a routed one (null: the default). While the default's name is
+// unknown (the profile list did not load) every job counts as the default's, as on a one-profile server.
+export function jobInProfile(job, profile) {
+  const name = profile ?? state.defaultProfile;
+  return name == null || job?.profile == null || job.profile === name;
+}
+
+// Only a job belonging to the current document, under the profile it is shown in, is used to draw progress; after
+// switching documents or profiles, a stale job snapshot must not carry over onto the new view
+export const currentJob = () =>
+  state.job && state.job.document_id === state.current && jobInProfile(state.job, state.currentProfile) ? state.job : null;
 export const isActive = (job) => Boolean(job) && ACTIVE_JOB_STATUS.has(job.status);
 
 // slots in the document view template
