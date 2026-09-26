@@ -8,10 +8,22 @@
 
 import { api } from "./api.js";
 import { showPage } from "./document.js";
+import { el } from "./html.js";
 import { renderDefinition } from "./profile.js";
-import { isCurrent, state } from "./state.js";
 
-let run = 0; // the latest check: an older answer that lands after a newer press is dropped
+// The latest check: an older answer that lands after a newer press is dropped. Nothing else gates an answer: the page
+// is profile-free and its text and result stay in the (hidden) page across navigation, so an answer that lands while
+// the reader is elsewhere is drawn for the text it checked and is there when they come back.
+let run = 0;
+
+// What a failed check's status means for the reader: the server's detail says which, this says whether to retry.
+const FAILURE_HINT = {
+  408: "配置没有及时传完",
+  413: "配置太大",
+  429: "服务器正忙，请稍后再试",
+  502: "检查进程出错，没有给出结果",
+  503: "检查超时或暂时无法启动，可以稍后再试",
+};
 
 export function setupCheck() {
   const file = document.getElementById("check-file");
@@ -37,7 +49,6 @@ export function showCheck() {
 }
 
 async function check() {
-  const generation = state.generation;
   const mine = ++run;
   const text = document.getElementById("check-text").value;
   const button = document.getElementById("check-run");
@@ -47,6 +58,9 @@ async function check() {
   }
   button.disabled = true;
   setStatus("检查中…");
+  // The previous answer is about other text; it must not stand next to this one while it is checked.
+  const root = document.getElementById("check-result");
+  root.replaceChildren();
   let result = null;
   let failure = null;
   try {
@@ -61,11 +75,13 @@ async function check() {
   if (mine !== run) return;
   button.disabled = false;
   setStatus("");
-  if (!isCurrent(generation)) return; // the reader left the page; the text and the button are still here for later
-  const root = document.getElementById("check-result");
-  root.replaceChildren();
-  if (failure) root.append(element("p", "check-verdict bad", `没能完成检查：${failure.message}`));
+  if (failure) root.append(el("p", { className: "check-verdict bad", text: failureText(failure) }));
   else renderResult(root, result, { text, mine });
+}
+
+function failureText(failure) {
+  const hint = FAILURE_HINT[failure.status];
+  return `没能完成检查${hint ? `（${hint}）` : ""}：${failure.message}`;
 }
 
 function setStatus(text) {
@@ -75,37 +91,34 @@ function setStatus(text) {
 function renderResult(root, result, asked) {
   const errors = result.errors ?? [];
   root.append(
-    element(
-      "p",
-      `check-verdict ${result.ok ? "ok" : "bad"}`,
-      result.ok ? "✓ 配置有效，可以加载" : `✗ 发现 ${errors.length} 个问题，配置不能加载`,
-    ),
+    el("p", {
+      className: `check-verdict ${result.ok ? "ok" : "bad"}`,
+      text: result.ok ? "✓ 配置有效，可以加载" : `✗ 发现 ${errors.length} 个问题，配置不能加载`,
+    }),
   );
   if (errors.length) root.append(list("ol", "check-errors", errors));
-  if (result.warnings?.length) root.append(element("h2", "", "警告"), list("ul", "check-notes", result.warnings));
-  if (result.notes?.length) root.append(element("h2", "", "说明"), list("ul", "check-notes", result.notes));
+  if (result.warnings?.length) root.append(el("h2", { text: "警告" }), list("ul", "check-notes", result.warnings));
+  if (result.notes?.length) root.append(el("h2", { text: "说明" }), list("ul", "check-notes", result.notes));
   if (result.same_name) {
     const { name, same_content_hash: same } = result.same_name;
     root.append(
-      element(
-        "p",
-        "check-same-name",
-        same
+      el("p", {
+        className: "check-same-name",
+        text: same
           ? `与服务器上的「${name}」同名；内容哈希相同，只改了显示文字`
           : `与服务器上的「${name}」同名；内容哈希不同，改动会重新抽取`,
-      ),
+      }),
     );
   }
   if (result.definition) {
-    const preview = element("div", "check-preview");
-    root.append(element("h2", "", "预览"), preview);
+    const preview = el("div", { className: "check-preview" });
+    root.append(el("h2", { text: "预览" }), preview);
     renderDefinition(preview, result.definition, { loadPrompts: (field) => loadPrompts(field, result, asked) });
   }
 }
 
 // The system prompts came with the check; a field's question is the same text checked again with ?field=. An answer
-// that lands after another check is no longer wanted (null); leaving the page does not matter, since the preview
-// stays in the (hidden) page with the pasted text.
+// that lands after another check is no longer wanted (null).
 async function loadPrompts(field, result, { text, mine }) {
   if (field == null) return { sections: result.prompts ?? [] };
   const answer = await api(`/api/profile-check?field=${encodeURIComponent(field)}`, {
@@ -118,14 +131,5 @@ async function loadPrompts(field, result, { text, mine }) {
 }
 
 function list(tag, className, items) {
-  const root = element(tag, className);
-  for (const item of items) root.append(element("li", "", String(item)));
-  return root;
-}
-
-function element(tag, className = "", text = null) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
+  return el(tag, { className }, ...items.map((item) => el("li", { text: item })));
 }

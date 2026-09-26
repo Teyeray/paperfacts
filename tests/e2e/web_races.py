@@ -949,7 +949,8 @@ async def profile_page_markup(page: Page, _: str, docs: dict[str, str], __: Path
     await per_field.locator(".prompt-section pre").first.wait_for()
     question = " ".join(await per_field.locator(".prompt-section pre").all_text_contents())
     expect("Coatings" in question, "the reference field's question does not name the entity it refers to")
-    await page.wait_for_timeout(300)
+    # With no <img> or <script> anywhere on the page, prompts drawn, there is nothing left that could run it later.
+    expect(await page.locator("#profile-view img, #profile-view script").count() == 0, "a prompt became an element")
     expect(await page.evaluate("window.__xss") is None and not errors, f"markup ran: {errors}")
 
 
@@ -958,11 +959,14 @@ async def profile_page_late(page: Page, _: str, docs: dict[str, str], __: Path) 
     await page.goto(f"{docs['multi']}/")
     await page.wait_for_selector("#corpus-view:not(.hidden) table")
     await page.route(lambda url: f"/api/profiles/{DEMO}" in url, delayed(1.5))
-    await page.evaluate(f"location.hash = '#/p/{DEMO}/profile'")
-    await page.wait_for_timeout(200)
+    answer = settled(page, f"/api/profiles/{DEMO}")
+    async with page.expect_request(lambda request: f"/api/profiles/{DEMO}" in request.url):
+        await page.evaluate(f"location.hash = '#/p/{DEMO}/profile'")
     await page.evaluate(f"location.hash = '#/doc/{docs['M']}'")
     await page.wait_for_selector("#document-view:not(.hidden) h1")
-    await page.wait_for_timeout(2000)
+    await answer.wait()
+    # One more round trip, so the page has run whatever the late answer's handler would draw.
+    await page.evaluate("fetch('/api/health').then((response) => response.json())")
     expect(await page.is_hidden("#profile-view"), "the late profile page drew over the document")
     expect(await page.is_visible("#document-view"), "the document view was hidden")
 
@@ -1123,13 +1127,20 @@ async def switcher_keyboard(page: Page, _: str, docs: dict[str, str], __: Path) 
     await page.wait_for_selector("#profile-switch:not(.hidden)")
     label = await page.get_attribute("#profile-select", "aria-label")
     expect(label is None, f"the select is labelled twice ({label!r} beside its <label>)")
-    # What a closed select does on an arrow key: a keydown, then a change per option passed.
-    await page.evaluate(f"""() => {{
-      const select = document.getElementById("profile-select");
-      select.dispatchEvent(new KeyboardEvent("keydown", {{ key: "ArrowDown", bubbles: true }}));
-      select.value = "{DEMO}";
-      select.dispatchEvent(new Event("change", {{ bubbles: true }}));
-    }}""")
+    # A closed, focused select moves to the next option on an arrow key and fires a change (Chromium on Linux and
+    # Windows). Chromium on macOS opens the option list instead and changes nothing, headless too; there the same
+    # keydown-then-change is dispatched by hand after closing the list.
+    await page.focus("#profile-select")
+    await page.keyboard.press("ArrowDown")
+    if await selected_profile(page) != DEMO:
+        await page.keyboard.press("Escape")
+        await page.evaluate(f"""() => {{
+          const select = document.getElementById("profile-select");
+          select.dispatchEvent(new KeyboardEvent("keydown", {{ key: "ArrowDown", bubbles: true }}));
+          select.value = "{DEMO}";
+          select.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }}""")
+    expect(await selected_profile(page) == DEMO, f"the arrow key moved to {await selected_profile(page)!r}")
     expect(await page.evaluate("location.hash") in ("", "#/"), "one arrow key switched at once")
     await page.wait_for_function(f"location.hash === '#/p/{DEMO}'", timeout=3000)
 
@@ -1381,6 +1392,25 @@ async def check_page(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     await page.wait_for_selector("#check-view:not(.hidden)")
     kept = await page.input_value("#check-text")
     expect(json.loads(kept)["title_zh"] == INJECTED, "the pasted text did not survive navigation")
+
+
+@check("a check that lands after a profile switch is drawn for its text, and a new check clears the old answer")
+async def check_across_switch(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['multi']}/#/check")
+    await page.wait_for_selector("#check-view:not(.hidden)")
+    await run_check(page, '{"format": 1, "name": "draft", "fields": [}')
+    await page.route("**/api/profile-check", delayed(1.5))
+    answer = settled(page, "/api/profile-check")
+    await page.fill("#check-text", shipped_profile().source.read_text(encoding="utf-8"))
+    async with page.expect_request(lambda request: "/api/profile-check" in request.url):
+        await page.click("#check-run")
+    expect(await page.locator("#check-result > *").count() == 0, "the previous answer stands beside the new text")
+    await page.select_option("#profile-select", DEMO)
+    await page.wait_for_function(f"location.hash === '#/p/{DEMO}/check'")
+    await answer.wait()
+    await page.wait_for_selector("#check-result .check-verdict")
+    verdict = await page.text_content("#check-result .check-verdict") or ""
+    expect("有效" in verdict, f"the answer for the text on screen reads {verdict!r}")
 
 
 async def main() -> int:

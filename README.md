@@ -787,8 +787,9 @@ or out of scope. What still does not fit needs a code change, not a profile.
    when it is valid, the page the profile would get (fields, units, the system prompts and each field's question),
    and whether a served profile of the same name has the same content hash (a display-only edit) or not (the edit
    re-extracts). It stores nothing; to use the profile, put the file in `profiles/` and restart the server. The
-   text is checked in a short-lived child process with a 10 s timeout and a memory limit, at most 256 KiB, sent
-   within 15 s, and two checks at a time (`POST /api/profile-check`).
+   text is checked in a short-lived child process with a 10 s timeout and a CPU limit (plus a 1 GiB memory limit on
+   Linux; macOS refuses it, and there the timeout and CPU limit bound the check), at most 256 KiB, sent within 15 s,
+   and two checks at a time (`POST /api/profile-check`; 503 when a check timed out, 502 when its process failed).
 7. **Read what the model will be asked.** `uv run paperfacts prompts --profile perovskite` prints the inventory,
    field, extraction and matching system prompts exactly as sent; `--field NAME` prints the per-field system
    prompt, that field's line, and the question around it with `<sample list>` and `<excerpts>` standing for what

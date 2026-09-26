@@ -2,12 +2,13 @@
 definition and system prompts the profile would get.
 
 The text is untrusted, and parts of validation are expensive on hostile input: every unit spelling goes through
-``text.normalize_text``, whose markup pattern backtracks polynomially in a long run of spaces while holding the
-GIL, and the unit tables fill process-wide ``functools.cache``s. So the check never runs in the server: it runs in a
-short-lived child process (``run_check``) with a wall-clock timeout, CPU, memory and file-size limits, no
-environment (so no API key) and a neutral working directory. Whatever it caches dies with it. Inside the child the
-text is size-capped by the caller, depth-scanned before ``json.loads`` (a deep nesting would raise RecursionError in
-the parser and in the loader's error text), and parsed with NaN and infinities refused.
+``text.normalize_text``, whose markup pattern backtracks polynomially in a long run of spaces while holding the GIL, and
+the unit tables fill process-wide ``functools.cache``s. So the check never runs in the server: it runs in a short-lived
+child process (``run_check``) with a wall-clock timeout, CPU and file-size limits, a memory limit where the OS allows
+one (Linux; macOS refuses it), a bounded read of its answer, no environment (so no API key) and a neutral working
+directory. Whatever it caches dies with it. Inside the child the text is size-capped by the caller, depth-scanned before
+``json.loads`` (a deep nesting would raise RecursionError in the parser and in the loader's error text), and parsed with
+NaN and infinities refused.
 
 The pasted profile's name only labels its errors (``<name>.json``); it is never joined to a path and never read
 from or written to disk, and nothing here calls ``load_profile`` or a key function.
@@ -17,14 +18,14 @@ Unhashed (``tests/test_keys_unhashed.py``): it only reports what the loader deci
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
-import re
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping
-from logging.handlers import BufferingHandler
 from pathlib import Path
 from typing import Any
 
@@ -42,14 +43,12 @@ MAX_DEPTH = 64
 TIMEOUT_S = 10.0
 MEMORY_LIMIT_BYTES = 1 << 30
 # A valid profile's preview is bounded by the loader's caps (100 fields, 2000-character slots); anything larger is
-# not the child's answer.
+# not the child's answer, and no more than one byte past it is ever read from the child.
 MAX_OUTPUT_BYTES = 16 << 20
 # The options line ahead of the text on the child's stdin (the served names and hashes, the mode, the field).
 MAX_OPTIONS_BYTES = 1 << 20
 # The child finds the package by the path it is handed, not by its environment, which it runs without.
 _CHILD = "import sys; sys.path.insert(0, sys.argv[1]); from paperfacts.profile_check import child_main; child_main()"
-# One escape inside a JSON string: \uXXXX, or a backslash and the one character it escapes.
-_ESCAPE = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.S)
 
 
 def run_check(
@@ -63,30 +62,73 @@ def run_check(
     options = json.dumps({"served": dict(served), "extraction_mode": extraction_mode, "field": field})
     package_root = str(Path(__file__).resolve().parent.parent)
     try:
-        done = subprocess.run(
+        child = subprocess.Popen(
             # -I: no PYTHON* variables, user site or script directory; -B: no bytecode written.
             [sys.executable, "-I", "-B", "-c", _CHILD, package_root],
-            input=options.encode("utf-8") + b"\n" + raw,
-            capture_output=True,
-            timeout=timeout,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env={},
             cwd="/",
-            check=False,
         )
-    except subprocess.TimeoutExpired:
-        # subprocess.run has already killed and reaped the child.
-        logger.warning("a profile check ran past %.0f s and was killed", timeout)
-        raise ProfileCheckError("检查超时 (the check ran out of time)") from None
     except OSError as exc:
         logger.warning("a profile check could not start: %s", exc)
-        raise ProfileCheckError("检查未能启动 (the check process could not start)") from None
-    output = done.stdout
-    if done.returncode != 0 or not output.startswith(b"{") or len(output) > MAX_OUTPUT_BYTES:
+        raise ProfileCheckError("检查未能启动 (the check process could not start)", retryable=True) from None
+    timed_out = threading.Event()
+
+    def expire() -> None:
+        timed_out.set()
+        child.kill()
+
+    # Killing the child on time also ends every blocking read and write below. stderr is drained beside stdout (a
+    # child blocked on a full stderr pipe would never finish stdout), keeping only its tail for the log.
+    timer = threading.Timer(timeout, expire)
+    stderr_tail = bytearray()
+    drain = threading.Thread(target=_keep_tail, args=(child.stderr, stderr_tail), daemon=True)
+    with child:
+        timer.start()
+        drain.start()
+        try:
+            # A child that exits (or is killed) without reading it all breaks the pipe; its exit status says why.
+            with contextlib.suppress(OSError):
+                child.stdin.write(options.encode("utf-8") + b"\n" + raw)
+            with contextlib.suppress(OSError):
+                child.stdin.close()
+            output = child.stdout.read(MAX_OUTPUT_BYTES + 1)
+        finally:
+            timer.cancel()
+            child.kill()  # a no-op once it has exited; ends one that is still writing past the cap
+            child.wait()
+            drain.join()
+    if timed_out.is_set():
+        logger.warning("a profile check ran past %.0f s and was killed", timeout)
+        raise ProfileCheckError("检查超时 (the check ran out of time)", retryable=True)
+    if child.returncode != 0 or not output.startswith(b"{") or len(output) > MAX_OUTPUT_BYTES:
         logger.warning(
-            "a profile check failed (exit %s): %s", done.returncode, done.stderr[-2000:].decode("utf-8", "replace")
+            "a profile check failed (exit %s, %d bytes out): %s",
+            child.returncode,
+            len(output),
+            bytes(stderr_tail).decode("utf-8", "replace"),
         )
-        raise ProfileCheckError("检查未能完成 (the check process failed)")
+        raise ProfileCheckError("检查未能完成 (the check process failed)", retryable=False)
     return output
+
+
+def _keep_tail(stream: Any, tail: bytearray, keep: int = 2000) -> None:
+    while chunk := stream.read1(65536):
+        tail.extend(chunk)
+        del tail[:-keep]
+
+
+class _Collect(logging.Handler):
+    """Every record it is handed, in order: a warning the loader logs is part of the answer and must not be dropped."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
 
 
 def child_main() -> None:
@@ -140,7 +182,7 @@ def check_profile(
     # A label for the errors only, never a path that is opened.
     source = Path(f"{name}.json" if isinstance(name, str) and IDENTIFIER.fullmatch(name) else "pasted.json")
     # The loader logs its warnings (a large field table); the CLI prints them, and so does this.
-    handler = BufferingHandler(capacity=1000)
+    handler = _Collect()
     handler.setLevel(logging.WARNING)
     package_logger = logging.getLogger("paperfacts")
     package_logger.addHandler(handler)
@@ -154,7 +196,7 @@ def check_profile(
     if profile.name == LEGACY_EXPORT_NAME:
         result["errors"] = [f"{source}: the profile name {LEGACY_EXPORT_NAME!r} is reserved for old exports"]
         return result
-    result["warnings"] = [record.getMessage() for record in handler.buffer]
+    result["warnings"] = [record.getMessage() for record in handler.records]
     notes: list[str] = []
     if profile.declared_entities:
         names = ", ".join(entity.name for entity in profile.declared_entities)
@@ -193,30 +235,8 @@ def _parse(raw: bytes) -> tuple[Any, str | None]:
         value = json.loads(text, parse_constant=_refuse_constant, parse_float=_finite)
     except (ValueError, RecursionError) as exc:
         return None, f"the profile is not valid JSON: {exc}"
-    # json.loads accepts a lone \ud800, which no UTF-8 answer can carry.
-    position = unpaired_surrogate_at(text)
-    if position is not None:
-        return None, f"the profile holds an unpaired surrogate escape at position {position}"
+    # json.loads accepts a lone \ud800, which no UTF-8 answer can carry; parse_profile refuses it (message escaped).
     return value, None
-
-
-def unpaired_surrogate_at(text: str) -> int | None:
-    """Where the first \\u escape of half a surrogate pair starts in ``text`` (JSON that parsed, so every backslash is
-    inside a string), or None. A high half counts as paired only when its low half is the very next escape."""
-    high = None  # (start, end) of a high half waiting for its low half
-    for match in _ESCAPE.finditer(text):
-        if high is not None and match.start() != high[1]:
-            return high[0]
-        code = int(match.group(1)[1:], 16) if match.group(1)[0] == "u" and len(match.group(1)) == 5 else None
-        if code is not None and 0xDC00 <= code <= 0xDFFF:
-            if high is None:
-                return match.start()
-            high = None
-        elif high is not None:
-            return high[0]
-        elif code is not None and 0xD800 <= code <= 0xDBFF:
-            high = (match.start(), match.end())
-    return None if high is None else high[0]
 
 
 def nesting_exceeds(text: str, limit: int) -> bool:

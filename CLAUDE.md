@@ -264,8 +264,10 @@ this file is the part that is easy to get wrong.
   so a chunked body is fine. `/api/jobs` is briefs without logs; finished jobs are pruned to the newest 200.
 - `POST /api/profile-check` takes untrusted profile JSON: 256 KiB counted as it arrives and read within 15 s (408)
   before one of the two check slots is taken (429), `?field=` an identifier (422), and parsed and rendered only in
-  `profile_check.run_check`'s child process (options on its stdin, never argv; 10 s wall clock, RLIMIT_AS/CPU/FSIZE,
-  empty environment), because validation folds unit spellings through `text._HTML_SUB`, which backtracks
+  `profile_check.run_check`'s child process (options on its stdin, never argv; 10 s wall clock, CPU/FSIZE limits,
+  a RLIMIT_AS memory limit on Linux only -- macOS refuses it, so there the wall clock and CPU limit bound it -- its
+  answer read to at most 16 MiB, empty environment; 503 when it timed out or could not start, 502 when it crashed or
+  gave no answer), because validation folds unit spellings through `text._HTML_SUB`, which backtracks
   polynomially and holds the GIL, and fills unbounded caches (`units._compiled`). Never validate pasted text in the
   server process, never pass it to `load_profile` or a key function, and never use its name as a path;
   `tests/test_profile_check.py` snapshots every package cache and the data and profile trees around a check.

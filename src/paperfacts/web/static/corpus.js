@@ -15,7 +15,7 @@ import { escapeHtml, keepFocus } from "./html.js";
 import { documentHash } from "./router.js";
 import { entityGroups, inEntity, state } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
-import { bodyRow, column, fieldColumn, headRow, plainCell } from "./table.js";
+import { column, fieldColumn, plainCell, resultsTable } from "./table.js";
 import { copyButton, copyTable } from "./tsv.js";
 
 let showAllFields = false;
@@ -98,9 +98,9 @@ export function renderCorpus(root) {
     `${rows.length} 篇论文各取一个完整${entity}行，点${entity}数可展开该论文的全部${entity}；` +
     "空白单元格是流水线拒绝猜测的取值，不是 0。";
 
-  const table = resultsTable(columns, items, (item) =>
-    item.kind === "sample" ? "sample-row" : expanded.has(item.row.document_id) ? "expanded" : "",
-  );
+  const table = resultsTable(columns, items, {
+    rowClass: (item) => (item.kind === "sample" ? "sample-row" : expanded.has(item.row.document_id) ? "expanded" : ""),
+  });
   table.querySelector("tbody").addEventListener("click", (event) => {
     const button = event.target.closest("button.expand");
     if (!button) return;
@@ -160,17 +160,6 @@ function resultsSection(entityChips, chips, columns, items, noteText, table) {
   section.setAttribute("aria-label", "结果总表");
   section.append(head, note, wrap);
   return section;
-}
-
-function resultsTable(columns, items, rowClass = () => "") {
-  const table = document.createElement("table");
-  table.className = "facts-table results-table";
-  const thead = document.createElement("thead");
-  thead.append(headRow(columns));
-  const tbody = document.createElement("tbody");
-  for (const item of items) tbody.append(bodyRow(columns, item, rowClass(item)));
-  table.append(thead, tbody);
-  return table;
 }
 
 // One chip per entity type; the one shown is pressed. Each re-renders the table and keeps the keyboard on itself.

@@ -7,7 +7,7 @@
 // generation-guarded load awaits `profileView(profile)` beside its data and adopts both only while it is current.
 
 import { api, profileApi } from "./api.js";
-import { toast } from "./html.js";
+import { onSettledChange, toast } from "./html.js";
 import { documentFromHash, hashFor, navigate, pageFromHash, reloadView } from "./router.js";
 import { applyUiCopy, state, viewShows } from "./state.js";
 
@@ -22,8 +22,6 @@ const views = new Map();
 const retries = new Map(); // profile key -> { failures, timer }
 const keyOf = (profile) => profile ?? "";
 const backoff = (failures) => Math.min(RETRY_MS * 2 ** failures, MAX_RETRY_MS);
-// Arrowing through the closed select fires a change per key; the switch waits for the reader to settle (or Enter).
-const SWITCH_SETTLE_MS = 400;
 
 // A list that fails at start is asked again with the same growing pause as a profile's view; once one lands, the
 // switcher appears and the view on screen is re-read (the router can now tell a served profile from a missing one).
@@ -41,7 +39,8 @@ export async function loadProfiles({ failures = 0 } = {}) {
   }
   state.profiles = list;
   state.defaultProfile = list.default ?? null;
-  // A view read under other content (or before the list said which) is read again when next asked.
+  // A view fetched before the list arrived did not know its profile's content hash; it is read again when next asked.
+  // (The list is read once per page load, as the server reads its profiles once, so nothing else goes stale here.)
   for (const [key, entry] of views) {
     const hash = servedProfile(key || null)?.content_hash ?? null;
     if (hash !== null && hash !== entry.hash) views.delete(key);
@@ -168,40 +167,14 @@ export function syncSwitcher() {
 
 // Switching keeps the reader on the same paper: "show me this one under the other domain" is the point. The fact
 // index is dropped, since it numbers another profile's comparisons. On the profile page it shows the other profile's.
-//
-// A pick with the mouse switches at once. A change made from the keyboard waits until the reader settles on an option,
-// presses Enter or leaves the select, so arrowing past a profile does not open it.
+// Arrowing past a profile does not open it (onSettledChange).
 export function setupSwitcher() {
   const select = document.getElementById("profile-select");
-  let keyed = false;
-  let timer = null;
-  const go = () => {
-    clearTimeout(timer);
-    timer = null;
+  onSettledChange(select, () => {
     const name = select.value;
     if (name === (state.profileName ?? state.defaultProfile)) return;
     const id = documentFromHash();
     const profile = name === state.defaultProfile ? null : name;
     navigate(hashFor({ profile, id: /^[0-9a-f]{16}$/.test(id ?? "") ? id : null, page: pageFromHash() }));
-  };
-  select.addEventListener("pointerdown", () => {
-    keyed = false;
-  });
-  select.addEventListener("keydown", (event) => {
-    keyed = true;
-    if (event.key === "Enter" && timer) go();
-  });
-  select.addEventListener("blur", () => {
-    if (timer) go();
-  });
-  select.addEventListener("change", () => {
-    const fromKeyboard = keyed;
-    keyed = false;
-    if (!fromKeyboard) {
-      go();
-      return;
-    }
-    clearTimeout(timer);
-    timer = setTimeout(go, SWITCH_SETTLE_MS);
   });
 }

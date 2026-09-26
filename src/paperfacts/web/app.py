@@ -663,7 +663,9 @@ def create_app(
                 run_check, raw, served=served, extraction_mode=settings.extraction_mode, field=field
             )
         except ProfileCheckError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from None
+            # Not a verdict on the text: 503 when asking again may work (out of time, could not start), 502 when the
+            # check process crashed or gave no answer.
+            raise HTTPException(status_code=503 if exc.retryable else 502, detail=str(exc)) from None
         finally:
             check_slots.release()
         return Response(content=answer, media_type="application/json")

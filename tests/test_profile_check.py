@@ -10,6 +10,7 @@ import copy
 import dataclasses
 import functools
 import json
+import logging
 import shutil
 import sys
 import time
@@ -24,7 +25,7 @@ from fastapi.testclient import TestClient
 from paperfacts import profile_loader
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, ProfileCheckError
-from paperfacts.profile_check import MAX_CHECK_BYTES, check_profile, nesting_exceeds, run_check, unpaired_surrogate_at
+from paperfacts.profile_check import MAX_CHECK_BYTES, check_profile, nesting_exceeds, run_check
 from paperfacts.profile_loader import MAX_SPELLING_LENGTH, parse_profile
 from paperfacts.profile_view import profile_definition, prompt_sections
 from paperfacts.web.app import create_app
@@ -133,28 +134,11 @@ def test_malformed_text_is_an_error_line_not_a_server_error(client: TestClient, 
     assert any(expected in line for line in result["errors"])
 
 
-def test_a_lone_surrogate_escape_is_an_error_line_with_its_position(client: TestClient):
+def test_a_lone_surrogate_escape_is_an_error_line_not_a_crash(client: TestClient):
     response = post(client, b'{"format": 1, "name": "x\\ud800"}')
 
     assert response.status_code == 200
-    assert response.json()["errors"] == ["the profile holds an unpaired surrogate escape at position 24"]
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ('"\\ud800"', 1),
-        ('"\\udc00"', 1),
-        ('"ok \\ud83d\\ude00"', None),
-        ('"\\\\ud800"', None),  # an escaped backslash, then plain text
-        ('"x\\ud83dy"', 2),
-        ('"\\ud83d\\n"', 1),
-        ('"\\ud83d\\ud83d\\ude00"', 1),
-        ('"\\u00e9"', None),
-    ],
-)
-def test_unpaired_surrogates_are_found_where_they_start(text: str, expected: int | None):
-    assert unpaired_surrogate_at(text) == expected
+    assert any("unpaired surrogate" in line and "\\ud800" in line for line in response.json()["errors"])
 
 
 def test_the_loader_refuses_a_lone_surrogate_too():
@@ -230,12 +214,12 @@ def test_a_long_unit_spelling_is_refused_before_it_is_folded(client: TestClient)
     assert any(f"longer than {MAX_SPELLING_LENGTH}" in line for line in body["errors"])
 
 
-def test_a_check_that_runs_out_of_time_is_killed_and_answered_422(client: TestClient, monkeypatch):
+def test_a_check_that_runs_out_of_time_is_killed_and_answered_503(client: TestClient, monkeypatch):
     monkeypatch.setattr("paperfacts.web.app.run_check", functools.partial(run_check, timeout=0.001))
 
     response = post(client, SHIPPED_PROFILE_PATH.read_bytes())
 
-    assert response.status_code == 422
+    assert response.status_code == 503
     assert "检查超时" in response.json()["detail"]
 
 
@@ -246,11 +230,47 @@ def test_a_child_that_fails_is_not_a_result(monkeypatch):
         run_check(b"{}", served={}, extraction_mode="passage")
 
 
+def test_a_child_that_fails_is_answered_502(client: TestClient, monkeypatch):
+    monkeypatch.setattr("paperfacts.profile_check._CHILD", "import sys; sys.exit(3)")
+
+    response = post(client, SHIPPED_PROFILE_PATH.read_bytes())
+
+    assert response.status_code == 502
+    assert "检查未能完成" in response.json()["detail"]
+
+
+def test_a_child_that_writes_without_end_is_read_only_past_the_cap_and_killed(monkeypatch):
+    monkeypatch.setattr("paperfacts.profile_check.MAX_OUTPUT_BYTES", 1 << 16)
+    monkeypatch.setattr(
+        "paperfacts.profile_check._CHILD", "import sys\nwhile True: sys.stdout.buffer.write(b'{' * 4096)"
+    )
+    started = time.monotonic()
+
+    with pytest.raises(ProfileCheckError, match="检查未能完成") as excinfo:
+        run_check(b"{}", served={}, extraction_mode="passage", timeout=30)
+
+    assert time.monotonic() - started < 10
+    assert excinfo.value.retryable is False
+
+
+def test_every_loader_warning_reaches_the_answer(monkeypatch):
+    def noisy(data: Any, source: Path) -> Any:
+        for index in range(1500):
+            logging.getLogger("paperfacts.profile_loader").warning("warning %d", index)
+        return parse_profile(data, source)
+
+    monkeypatch.setattr("paperfacts.profile_check.parse_profile", noisy)
+
+    result = check_profile(SHIPPED_PROFILE_PATH.read_bytes(), served={}, extraction_mode="passage")
+
+    assert result["warnings"][-1] == "warning 1499" and len(result["warnings"]) >= 1500
+
+
 def test_a_child_that_cannot_start_is_a_check_error(monkeypatch):
     def refuse(*args: Any, **kwargs: Any) -> None:
         raise OSError(7, "Argument list too long")
 
-    monkeypatch.setattr("paperfacts.profile_check.subprocess.run", refuse)
+    monkeypatch.setattr("paperfacts.profile_check.subprocess.Popen", refuse)
 
     with pytest.raises(ProfileCheckError, match="检查未能启动"):
         run_check(b"{}", served={}, extraction_mode="passage")

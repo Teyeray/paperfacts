@@ -6,7 +6,8 @@
 // profile text lands through textContent (or escapeHtml where a table column is spliced as markup): a profile is data,
 // and a label holding markup reads as that markup, never as an element.
 
-import { escapeHtml } from "./html.js";
+import { el, escapeHtml, onSettledChange } from "./html.js";
+import { resultsTable } from "./table.js";
 import { copyButton, copyTable } from "./tsv.js";
 
 // What a FieldSpec attribute is called on the page. The table's columns come from the definition itself (every
@@ -47,15 +48,6 @@ const LEADING = [
 
 // ---------- small builders: text only ----------
 
-function el(tag, { className = "", text = null, title = null } = {}, ...children) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = String(text);
-  if (title) node.title = String(title);
-  node.append(...children);
-  return node;
-}
-
 function section(heading, ...children) {
   return el("section", { className: "profile-section" }, el("h2", { text: heading }), ...children);
 }
@@ -71,27 +63,17 @@ function valueText(name, value) {
     return `${low ?? "−∞"} – ${high ?? "∞"}`;
   }
   if (typeof value === "boolean") return value ? "是" : "否";
-  if (Array.isArray(value)) return value.map((item) => (typeof item === "object" ? JSON.stringify(item) : String(item))).join("、");
+  if (Array.isArray(value)) {
+    return value.map((item) => (typeof item === "object" ? JSON.stringify(item) : String(item))).join("、");
+  }
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
 
 // A table from `columns` ({header, head, html, text}, the table.js shape) over `items`, with a copy button when asked.
 function table(columns, items, { copy = false, className = "" } = {}) {
-  const wrap = el("div", { className: "table-wrap" });
-  const tableNode = el("table", { className: `facts-table profile-table ${className}`.trim() });
-  const head = el("thead");
-  const headRow = document.createElement("tr");
-  headRow.innerHTML = columns.map((column) => column.head).join("");
-  head.append(headRow);
-  const body = el("tbody");
-  for (const item of items) {
-    const row = document.createElement("tr");
-    row.innerHTML = columns.map((column) => column.html(item)).join("");
-    body.append(row);
-  }
-  tableNode.append(head, body);
-  wrap.append(tableNode);
+  const tableNode = resultsTable(columns, items, { className: `profile-table ${className}`.trim() });
+  const wrap = el("div", { className: "table-wrap" }, tableNode);
   if (!copy) return wrap;
   const bar = el("div", { className: "results-head" }, copyButton(() => copyTable(columns, items)));
   return el("div", {}, bar, wrap);
@@ -107,7 +89,8 @@ function textColumn(header, text, { sub = "", mono = false, title = () => "" } =
       const shown = text(item);
       const tip = title(item);
       const classes = ["profile-cell", mono ? "mono" : "", shown ? "" : "empty"].filter(Boolean).join(" ");
-      return `<td class="${classes}"${tip ? ` title="${escapeHtml(tip)}"` : ""}>${shown ? escapeHtml(shown) : "—"}</td>`;
+      const tipAttribute = tip ? ` title="${escapeHtml(tip)}"` : "";
+      return `<td class="${classes}"${tipAttribute}>${shown ? escapeHtml(shown) : "—"}</td>`;
     },
     text,
   };
@@ -119,12 +102,20 @@ function textColumn(header, text, { sub = "", mono = false, title = () => "" } =
 // for the profile's system prompts (field null) or one field's question, or null when the answer is no longer
 // wanted (the reader left); without it there is no prompt preview. `documentHref(id)` links a document that has
 // results under the profile; without it that list is left out.
-export function renderDefinition(root, definition, { loadPrompts = null, documentHref = null, documentName = (id) => id } = {}) {
+export function renderDefinition(
+  root,
+  definition,
+  { loadPrompts = null, documentHref = null, documentName = (id) => id } = {},
+) {
   root.innerHTML = "";
   const ui = definition.ui ?? {};
-  const entityLabel = new Map((definition.entities ?? []).map((entity) => [entity.name, entity.label_zh || entity.name]));
+  const entityLabel = new Map(
+    (definition.entities ?? []).map((entity) => [entity.name, entity.label_zh || entity.name]),
+  );
   const levelText = (level, entity) =>
-    level === "paper" ? ui.paper_level_label_zh || "论文级" : `${entityLabel.get(entity) || ui.entity_label_zh || entity || ""}级`;
+    level === "paper"
+      ? ui.paper_level_label_zh || "论文级"
+      : `${entityLabel.get(entity) || ui.entity_label_zh || entity || ""}级`;
 
   root.append(header(definition));
   // A profile without entity types has one implicit, unlabelled entity, which the page names nowhere else either.
@@ -134,7 +125,9 @@ export function renderDefinition(root, definition, { loadPrompts = null, documen
   root.append(fieldsSection(definition, levelText, entityLabel));
   root.append(unitsSection(definition.units ?? {}));
   root.append(retrievalSection(definition.retrieval ?? {}));
-  if (documentHref && definition.finished_documents) root.append(documentsSection(definition.finished_documents, documentHref, documentName));
+  if (documentHref && definition.finished_documents) {
+    root.append(documentsSection(definition.finished_documents, documentHref, documentName));
+  }
   if (loadPrompts) root.append(promptsSection(definition, loadPrompts));
 }
 
@@ -149,7 +142,9 @@ function header(definition) {
     el("code", { text: definition.content_hash ?? "" }),
   );
   const box = el("header", { className: "profile-head" }, title, meta);
-  if (definition.description_zh) box.append(el("p", { className: "profile-description", text: definition.description_zh }));
+  if (definition.description_zh) {
+    box.append(el("p", { className: "profile-description", text: definition.description_zh }));
+  }
   if (definition.runnable === false) {
     box.append(el("p", { className: "profile-warning", text: `本服务器上不可运行：${definition.not_runnable ?? ""}` }));
   }
@@ -162,7 +157,8 @@ function header(definition) {
 function entitiesSection(definition) {
   const list = el("ul", { className: "profile-entities" });
   (definition.entities ?? []).forEach((entity, index) => {
-    const item = el("li", {}, el("b", { text: entity.label_zh || entity.name }), " ", el("code", { text: entity.name }));
+    const name = el("b", { text: entity.label_zh || entity.name });
+    const item = el("li", {}, name, " ", el("code", { text: entity.name }));
     const notes = [index === 0 ? "主实体" : "", `${(entity.fields ?? []).length} 个字段`];
     if (entity.sample_list_heading) notes.push(`样本清单标题「${entity.sample_list_heading}」`);
     item.append(el("span", { className: "muted", text: `（${notes.filter(Boolean).join("，")}）` }));
@@ -189,7 +185,9 @@ function fieldsSection(definition, levelText, entityLabel) {
   ];
   const cell = (name) => (field) => {
     if (name === "level") return levelText(field.level, field.entity);
-    if ((name === "entity" || name === "references") && field[name]) return `${entityLabel.get(field[name]) ?? ""} ${field[name]}`.trim();
+    if ((name === "entity" || name === "references") && field[name]) {
+      return `${entityLabel.get(field[name]) ?? ""} ${field[name]}`.trim();
+    }
     return valueText(name, field[name]);
   };
   const columns = shown.map((name) =>
@@ -220,8 +218,12 @@ function unitsSection(units) {
   ];
   const body = declared.length ? table(columns, declared) : el("p", { className: "muted", text: "没有声明单位，只用内置的单位换算。" });
   const extra = el("dl", { className: "profile-list" });
-  if ((units.ignored_suffixes ?? []).length) extra.append(el("dt", { text: "忽略的后缀" }), el("dd", { text: units.ignored_suffixes.join("、") }));
-  if ((units.known ?? []).length) extra.append(el("dt", { text: "认得的单位" }), el("dd", { className: "mono", text: units.known.join("  ") }));
+  if ((units.ignored_suffixes ?? []).length) {
+    extra.append(el("dt", { text: "忽略的后缀" }), el("dd", { text: units.ignored_suffixes.join("、") }));
+  }
+  if ((units.known ?? []).length) {
+    extra.append(el("dt", { text: "认得的单位" }), el("dd", { className: "mono", text: units.known.join("  ") }));
+  }
   return section("声明的单位", body, extra);
 }
 
@@ -274,7 +276,8 @@ function promptsSection(definition, loadPrompts) {
   }
   const fieldBody = el("div", { className: "prompt-sections" });
   let pick = 0;
-  select.addEventListener("change", () => {
+  // Arrowing through the fields asks for one question, where the reader settles, not one per option passed.
+  onSettledChange(select, () => {
     const token = ++pick;
     const name = select.value;
     if (!name) {
@@ -303,8 +306,16 @@ async function fill(body, load, onError, wanted = () => true) {
     body.replaceChildren(el("p", { className: "profile-warning", text: `读取提示词失败：${error.message}` }));
     return;
   }
-  if (answer == null || !wanted()) return;
+  if (!wanted()) return;
+  if (answer == null) {
+    // No longer wanted by the page that asked (a newer check): nothing to show, and opening again asks again.
+    onError();
+    body.replaceChildren();
+    return;
+  }
   body.replaceChildren(
-    ...(answer.sections ?? []).map((part) => el("div", { className: "prompt-section" }, el("h3", { text: part.title }), el("pre", { text: part.text }))),
+    ...(answer.sections ?? []).map((part) =>
+      el("div", { className: "prompt-section" }, el("h3", { text: part.title }), el("pre", { text: part.text })),
+    ),
   );
 }
