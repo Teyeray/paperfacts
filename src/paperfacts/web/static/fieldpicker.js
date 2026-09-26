@@ -2,7 +2,7 @@
 // the per-sample table inside a document and the corpus table on the home view -- share this module,
 // so a column hidden on one stays hidden on the other.
 
-import { uiCopy } from "./state.js";
+import { entityGroups, inEntity, uiCopy } from "./state.js";
 
 // A field earns a column when at least one row put a value in it; the toggle brings the rest back so the
 // full table stays inspectable without making the default view mostly blank. Shared with the corpus table,
@@ -23,9 +23,17 @@ export function visibleFields(fields, rows, showAll) {
 
 const PICKER_KEY = "paperfacts.chosen-fields";
 // Fields carry `scope`, not the config's richer `group`, so the picker groups by the distinction the
-// dataset actually exposes: what belongs to the paper and what belongs to a sample.
-const SCOPE_LABEL = { paper: () => uiCopy("paper_level_label_zh"), sample: () => `${uiCopy("entity_label_zh")}级` };
-const SCOPE_ORDER = ["paper", "sample"];
+// dataset actually exposes: what belongs to the paper and what belongs to a sample -- to each entity type's
+// samples, when the profile declares several.
+function pickerGroups(fields) {
+  return [
+    { title: uiCopy("paper_level_label_zh"), fields: fields.filter((field) => field.scope === "paper") },
+    ...entityGroups().map((group) => ({
+      title: `${group.label}级`,
+      fields: fields.filter((field) => (field.scope ?? "sample") === "sample" && inEntity(group, field)),
+    })),
+  ];
+}
 
 // null means "no choice stored" -- every field is shown, including ones added after the last choice.
 function readChosen() {
@@ -107,15 +115,14 @@ export function fieldPicker(fields, onChange) {
   );
   pop.append(actions);
 
-  for (const scope of SCOPE_ORDER) {
-    const group = all.filter((field) => (field.scope ?? "sample") === scope);
-    if (!group.length) continue;
+  for (const group of pickerGroups(all)) {
+    if (!group.fields.length) continue;
     const box = document.createElement("div");
     box.className = "picker-group";
     const title = document.createElement("h4");
-    title.textContent = SCOPE_LABEL[scope]();
+    title.textContent = group.title;
     box.append(title);
-    for (const field of group) box.append(checkbox(field, isOn(field)));
+    for (const field of group.fields) box.append(checkbox(field, isOn(field)));
     pop.append(box);
   }
 

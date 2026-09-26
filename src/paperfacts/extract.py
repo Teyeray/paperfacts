@@ -43,7 +43,7 @@ from paperfacts.llm import LlmClient, complete_validated
 from paperfacts.models import Backend, ParsedArtifact, SourceBlock
 from paperfacts.normalize import drop_implausible
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
-from paperfacts.profile import DomainProfile
+from paperfacts.profile import DomainProfile, EntitySpec
 from paperfacts.prompts import (
     extraction_system_prompt,
     extraction_user_prompt,
@@ -56,7 +56,6 @@ from paperfacts.prompts import (
 from paperfacts.records import (
     ExtractedRecords,
     FailedQuestion,
-    FieldResponse,
     FieldValue,
     InventoryResponse,
     InventorySample,
@@ -65,6 +64,7 @@ from paperfacts.records import (
     ResponseCleaning,
     ResponseModels,
     ResponseValue,
+    SampleRecord,
     clean_samples,
     place_on_every_sample,
     response_models,
@@ -224,7 +224,8 @@ def extract_lane(
     usage: dict[str, int] = {}
     raw_response = ""
 
-    # Passage mode asks which samples exist exactly once for the whole lane, however many passes follow.
+    # Passage mode asks which samples exist exactly once per entity type for the whole lane, however many passes
+    # follow.
     # Repeating that question let the model name the same sample differently in each pass
     # ("ITO-O2-0.0sccm-480C" against "ITO-0.0sccm-480C"), and since a sample id is the scope its values are
     # voted under, no sample reached a majority and two passes returned an empty lane. One inventory makes
@@ -232,20 +233,24 @@ def extract_lane(
     # passes by construction and the sample vote in `merge_passes` becomes unanimous rather than useless.
     # What the passes repeat is what they are meant to measure: the field questions, whose noise is the
     # noise the vote exists to filter.
-    inventory = (
-        None
+    profile = options.profile
+    inventories = (
+        ()
         if document is not None
-        else _take_inventory(blocks, client, options, backend=artifact.backend, refresh=refresh)
+        else tuple(
+            _take_inventory(blocks, client, options, entity, backend=artifact.backend, refresh=refresh)
+            for entity in profile.entities
+        )
     )
-    if inventory is not None:
-        # One call, counted once: charging it to every pass would misreport what the lane cost.
+    for inventory in inventories:
+        # One call per entity, counted once: charging it to every pass would misreport what the lane cost.
         _add_usage(usage, inventory.usage)
 
     for index in range(passes):
         # Every pass asks exactly the same question; only the cache key differs, so a repeat costs a call
         # but never a different prompt.
         cache_salt = "" if index == 0 else f"pass-{index}"
-        if inventory is None:
+        if document is not None:
             records, pass_usage, text = _extract_whole_document(
                 document, client, options, refresh=refresh, cache_salt=cache_salt
             )
@@ -254,7 +259,7 @@ def extract_lane(
                 blocks,
                 client,
                 options,
-                inventory=inventory,
+                inventories=inventories,
                 concurrency=concurrency,
                 refresh=refresh,
                 cache_salt=cache_salt,
@@ -265,8 +270,11 @@ def extract_lane(
         raw_response = raw_response or text
         _add_usage(usage, pass_usage)
 
-    profile = options.profile
-    records = drop_implausible(deduplicate(merge_passes(results)), profile)
+    # A reference field's quotes are sample ids, which the vote and the repeats compare as sample ids.
+    references = frozenset(spec.name for spec in profile.fields if spec.references is not None)
+    records = drop_implausible(
+        deduplicate(merge_passes(results, reference_fields=references), reference_fields=references), profile
+    )
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,
@@ -276,18 +284,21 @@ def extract_lane(
         paper=records.paper,
         samples=records.samples,
         invalid_source_ids=records.invalid_source_ids,
-        dropped=(*_bibliography_audit(artifact.blocks), *records.dropped),
+        dropped=(*_bibliography_audit(artifact.blocks), *_inventory_audit(inventories), *records.dropped),
         unattributed=records.unattributed,
         # Carried as data, not left to the audit text in `dropped`, so the web page can say why the lane is
-        # empty without matching prose. The same condition that skips the sample-level questions below.
-        no_samples=inventory is not None and _reports_no_samples(inventory.response),
+        # empty without matching prose. The same condition that skips the sample-level questions below; with
+        # several entity types, true only when every one of them has none.
+        no_samples=bool(inventories) and all(_reports_no_samples(inventory.response) for inventory in inventories),
         passes=passes,
         # In the profile's field order, whichever pass failed first.
         failed_questions=tuple(failed[spec.name] for spec in profile.fields if spec.name in failed),
         usage=usage,
         raw_response=raw_response,
     )
-    lane = ground_lane(lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks))
+    lane = ground_lane(
+        lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks), profile=profile
+    )
     _log_outcome(lane)
     return lane
 
@@ -319,8 +330,9 @@ def _extract_whole_document(
 
 
 def _response_models(profile: DomainProfile) -> ResponseModels:
-    """The answer shapes under the JSON keys this profile's prompts tell the model to emit."""
-    return response_models(profile.prompt.paper_key, profile.prompt.no_samples_key)
+    """The answer shapes under the JSON keys this profile's prompts tell the model to emit, with ``holds`` when
+    some field is boolean."""
+    return response_models(profile.prompt.paper_key, profile.prompt.no_samples_key, holds=profile.asks_holds)
 
 
 @dataclass(frozen=True)
@@ -338,12 +350,13 @@ class FieldHarvest:
 
 @dataclass(frozen=True)
 class SampleInventory:
-    """Which samples the paper has, asked once and reused by every pass of one lane."""
+    """Which samples of one entity type the paper has, asked once and reused by every pass of one lane."""
 
     response: InventoryResponse
     raw_text: str
     usage: Mapping[str, int]
     source_ids: frozenset[str]
+    entity: EntitySpec
 
 
 def _budget_chars(options: ExtractionOptions) -> int:
@@ -355,18 +368,19 @@ def _take_inventory(
     blocks: Sequence[SourceBlock],
     client: LlmClient,
     options: ExtractionOptions,
+    entity: EntitySpec,
     *,
     backend: Backend,
     refresh: bool,
 ) -> SampleInventory:
-    """Ask which samples exist -- once per lane.
+    """Ask which samples of ``entity`` exist -- once per lane.
 
     The salt is empty, the salt pass 0 would have used, so a lane re-run with more passes still hits the
     inventory entry the earlier run cached.
     """
     profile = options.profile
-    selection = fit_budget(inventory_blocks(blocks, profile.retrieval), budget_chars=_budget_chars(options))
-    system = inventory_system_prompt(profile)
+    selection = fit_budget(inventory_blocks(blocks, entity.retrieval), budget_chars=_budget_chars(options))
+    system = inventory_system_prompt(profile, entity)
     user = inventory_user_prompt(render_markdown(selection))
     _check_context_budget(system, user, options)
     response, raw_text, usage = complete_validated(
@@ -379,12 +393,30 @@ def _take_inventory(
         cache_salt="",
         reasoning_effort=options.inventory_reasoning_effort,
     )
-    logger.info("inventory backend=%s samples=%d blocks=%d", backend, len(response.samples), len(selection))
+    logger.info(
+        "inventory backend=%s entity=%s samples=%d blocks=%d",
+        backend,
+        entity.name,
+        len(response.samples),
+        len(selection),
+    )
     return SampleInventory(
         response=response,
         raw_text=raw_text,
         usage=usage,
         source_ids=frozenset(block.source_id for block in selection),
+        entity=entity,
+    )
+
+
+def _inventory_audit(inventories: Sequence[SampleInventory]) -> tuple[str, ...]:
+    """With several entity types, each one's no-samples verdict, so an empty entity says why in the audit."""
+    if len(inventories) < 2:
+        return ()
+    return tuple(
+        f"inventory {inventory.entity.name}: the paper reports no {inventory.entity.prompt.sample_singular} of its own"
+        for inventory in inventories
+        if _reports_no_samples(inventory.response)
     )
 
 
@@ -393,12 +425,13 @@ def _extract_passages(
     client: LlmClient,
     options: ExtractionOptions,
     *,
-    inventory: SampleInventory,
+    inventories: Sequence[SampleInventory],
     concurrency: int,
     refresh: bool,
     cache_salt: str,
 ) -> tuple[ExtractedRecords, dict[str, int], str, tuple[FailedQuestion, ...]]:
-    """Passage mode, one pass: one question per field against the lane's single inventory.
+    """Passage mode, one pass: one question per field against the lane's inventory of that field's entity type
+    (:meth:`~paperfacts.profile.DomainProfile.entity_of`), asked with that entity's system prompt and sample list.
 
     A field question the model answers badly twice (or cuts off) is returned as a :class:`FailedQuestion`
     instead of failing the pass: at temperature 0 such an answer tends to repeat, and it must cost that field,
@@ -408,18 +441,24 @@ def _extract_passages(
     budget_chars = _budget_chars(options)
     usage: dict[str, int] = {}
 
-    sample_list = _render_sample_list(inventory.response.samples)
-    # What the inventory cited as describing the samples: the recipe paragraph every field question needs.
-    sample_blocks = frozenset(source_id for sample in inventory.response.samples for source_id in sample.source_ids)
     profile = options.profile
-    field_system = field_system_prompt(profile)
+    by_entity = {inventory.entity.name: inventory for inventory in inventories}
+    sample_lists = {name: _render_sample_list(inventory.response.samples) for name, inventory in by_entity.items()}
+    # What the inventory cited as describing the samples: the recipe paragraph every field question needs.
+    sample_blocks = {
+        name: frozenset(source_id for sample in inventory.response.samples for source_id in sample.source_ids)
+        for name, inventory in by_entity.items()
+    }
+    field_systems = {name: field_system_prompt(profile, inventory.entity) for name, inventory in by_entity.items()}
+    field_response = _response_models(profile).field
 
     # Which fields get asked, and with which blocks, is decided here in the profile's field order and nowhere
     # else. Retrieval and the budget check stay on this thread, so the questions -- and the "never asked"
     # reasons recorded beside them -- are the same bytes in the same order whatever `concurrency` is.
-    questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str]] = []
+    questions: list[tuple[FieldSpec, tuple[SourceBlock, ...], str, str]] = []
     dropped: list[str] = []
     for spec in profile.fields:
+        inventory = by_entity[profile.entity_of(spec).name]
         if spec.is_sample_level and _reports_no_samples(inventory.response):
             # A device paper on purchased ITO glass: asking anyway only harvests the absorber's thickness and
             # the spin-coater's rpm as unattributed values that look like findings. An inventory that is
@@ -427,9 +466,19 @@ def _extract_passages(
             # missed inventory cannot cost the lane all its sample-level values.
             dropped.append(f"{spec.name}: the inventory found no in-scope sample, so it was not asked about")
             continue
+        referenced = by_entity[spec.references] if spec.references is not None else None
+        if referenced is not None and not referenced.response.samples:
+            # Its answer copies an id from that list; with none listed, nothing it says can resolve.
+            dropped.append(f"{spec.name}: no {spec.references} was listed, so it was not asked about")
+            continue
+        entity = inventory.entity
         candidates = fit_budget(
             candidate_blocks(
-                spec, blocks, units=profile.units, limit=options.candidate_limit, sample_blocks=sample_blocks
+                spec,
+                blocks,
+                units=profile.units,
+                limit=options.candidate_limit,
+                sample_blocks=sample_blocks[entity.name],
             ),
             budget_chars=budget_chars,
         )
@@ -439,20 +488,26 @@ def _extract_passages(
             dropped.append(f"{spec.name}: no block in this lane mentions it, so it was not asked about")
             continue
         field_user = field_user_prompt(
-            spec, sample_list, render_markdown(candidates), profile.prompt.implausible_origin
+            spec,
+            sample_lists[entity.name],
+            render_markdown(candidates),
+            profile.prompt.implausible_origin,
+            entity.prompt.sample_list_heading,
+            None if referenced is None else (referenced.entity, sample_lists[referenced.entity.name]),
         )
+        field_system = field_systems[entity.name]
         _check_context_budget(field_system, field_user, options)
-        questions.append((spec, tuple(candidates), field_user))
+        questions.append((spec, tuple(candidates), field_system, field_user))
 
     def ask(
-        question: tuple[FieldSpec, tuple[SourceBlock, ...], str],
+        question: tuple[FieldSpec, tuple[SourceBlock, ...], str, str],
     ) -> tuple[FieldHarvest | FailedQuestion, str, dict[str, int]]:
         """One field question. Returns everything it produced; it shares no mutable state with its peers."""
-        spec, candidates, field_user = question
+        spec, candidates, field_system, field_user = question
         try:
             response, text, field_usage = complete_validated(
                 client,
-                FieldResponse,
+                field_response,
                 system=field_system,
                 user=field_user,
                 # The default argument binds this field's question; a bare closure would repair against the last.
@@ -486,7 +541,10 @@ def _extract_passages(
 
     harvests: list[FieldHarvest] = []
     failed: list[FailedQuestion] = []
-    raw_parts = [f"# inventory\n{inventory.raw_text}"]
+    raw_parts = [
+        f"# inventory{'' if len(inventories) == 1 else ' ' + inventory.entity.name}\n{inventory.raw_text}"
+        for inventory in inventories
+    ]
     for harvest, text, field_usage in answers:
         if isinstance(harvest, FailedQuestion):
             failed.append(harvest)
@@ -496,12 +554,7 @@ def _extract_passages(
         raw_parts.append(f"# {harvest.spec.name}\n{text}")
         _add_usage(usage, field_usage)
 
-    records = passage_records(
-        inventory.response,
-        harvests,
-        inventory_ids=inventory.source_ids,
-        dropped=dropped,
-    )
+    records = passage_records(inventories, harvests, profile, dropped=dropped)
     return records, usage, "\n\n".join(raw_parts), tuple(failed)
 
 
@@ -522,13 +575,18 @@ def _render_sample_list(samples: Sequence[InventorySample]) -> str:
 
 
 def passage_records(
-    inventory: InventoryResponse,
+    inventories: Sequence[SampleInventory],
     harvests: Sequence[FieldHarvest],
+    profile: DomainProfile,
     *,
-    inventory_ids: frozenset[str],
     dropped: Sequence[str] = (),
 ) -> ExtractedRecords:
     """Assemble one pass of passage answers into records, placing each value on the sample it names.
+
+    Every rule below holds within one entity type: a sample-level field's value is placed among the samples of
+    its field's entity only (``profile.entity_of``), so a catalyst's value never lands on a reaction test of the
+    same name, and a series value fans out to that entity's samples. Unplaced values of every entity share the
+    one ``unattributed`` list.
 
     Attribution is by :func:`~paperfacts.records.sample_key` -- the same key that pairs samples across
     lanes -- so the model only has to repeat an id it was given. A sample-level value naming no sample, or
@@ -544,14 +602,21 @@ def passage_records(
     cleaning = ResponseCleaning()
     cleaning.dropped.extend(dropped)
 
-    samples, _ = clean_samples(inventory.samples, cleaning, inventory_ids)
+    samples: list[SampleRecord] = []
+    # Per entity: the positions of its samples in ``samples``, keyed by sample_key.
+    index_by_key: dict[str, dict[str, int]] = {}
+    for inventory in inventories:
+        listed, _ = clean_samples(inventory.response.samples, cleaning, inventory.source_ids, inventory.entity.name)
+        index_by_key[inventory.entity.name] = {
+            sample_key(sample.sample_id): len(samples) + offset for offset, sample in enumerate(listed)
+        }
+        samples += listed
     sample_fields: list[list[FieldValue]] = [[] for _ in samples]
-    index_by_key = {sample_key(sample.sample_id): index for index, sample in enumerate(samples)}
 
     paper_fields: list[FieldValue] = []
     paper_ids: list[str] = []
     unattributed: list[FieldValue] = []
-    single_sample_attributed = 0
+    lone_owners: list[int] = []
     series_fanned_out = 0
     for harvest in harvests:
         for item in harvest.values:
@@ -563,6 +628,7 @@ def passage_records(
                 source_ids=item.source_ids,
                 note=item.note,
                 known_ids=harvest.known_ids,
+                holds=item.stated_holds(),
             )
             if value is None:
                 continue
@@ -572,6 +638,8 @@ def passage_records(
                 paper_fields.append(value)
                 paper_ids.extend(value.source_ids)
                 continue
+            # The samples of the field's entity: the only ones its value may land on.
+            own = index_by_key[profile.entity_of(harvest.spec).name]
             if item.applies_to_all_samples and item.sample_id:
                 # An id and the series flag contradict each other. The id is the more specific claim and
                 # the one the prompt asks to be copied verbatim, so it wins; the flag is noise.
@@ -581,15 +649,16 @@ def passage_records(
                     item.sample_id,
                 )
             elif item.applies_to_all_samples:
-                series_fanned_out += place_on_every_sample(value, sample_fields, unattributed)
+                owners = [sample_fields[index] for index in own.values()]
+                series_fanned_out += place_on_every_sample(value, owners, unattributed)
                 continue
-            index = index_by_key.get(sample_key(item.sample_id)) if item.sample_id else None
-            if index is None and not item.sample_id and len(samples) == 1:
+            index = own.get(sample_key(item.sample_id)) if item.sample_id else None
+            if index is None and not item.sample_id and len(own) == 1:
                 # The prompt allows a null sample_id when the excerpts do not say which sample a value
                 # belongs to. With exactly one sample in the inventory there is nothing to say: the lone
                 # sample is not a plausible neighbour, it is the only possible owner.
-                index = 0
-                single_sample_attributed += 1
+                index = next(iter(own.values()))
+                lone_owners.append(index)
             if index is None:
                 unattributed.append(value)
                 continue
@@ -602,11 +671,11 @@ def passage_records(
             len(samples),
         )
 
-    if single_sample_attributed:
+    if lone_owners:
         logger.info(
-            "attributed %d value(s) with no sample_id to the paper's only sample %r",
-            single_sample_attributed,
-            samples[0].sample_id,
+            "attributed %d value(s) with no sample_id to the only sample of their entity (%s)",
+            len(lone_owners),
+            ", ".join(f"{samples[i].entity}:{samples[i].sample_id}" for i in dict.fromkeys(lone_owners)),
         )
 
     return ExtractedRecords(

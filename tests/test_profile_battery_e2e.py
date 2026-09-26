@@ -288,3 +288,72 @@ def test_battery_and_tco_runs_of_one_document_coexist(paper, monkeypatch):
     again, _, _, client = run_under(BATTERY_PROFILE_PATH, document, settings, ANSWERS, monkeypatch)
     assert client.call_count == 0
     assert again.dataset.sample_rows == battery.dataset.sample_rows
+
+
+# ---- a list field (cardinality: many) end to end ----------------------------------------------------------------
+
+PRECURSORS = {
+    "name": "precursors",
+    "group": "synthesis",
+    "kind": "composition",
+    "cardinality": "many",
+    "description": "Each metal salt or lithium source used to prepare the cathode, as named.",
+    "keywords": ["precursors"],
+    "label": "前驱体",
+}
+PRECURSOR_PARAGRAPH = "The precursors were NiSO4, CoSO4 and MnSO4, lithiated with LiOH."
+# Per lane, the precursors it reads for every sample: the PaddleOCR-VL lane misses CoSO4 and MnSO4.
+PRECURSOR_ANSWERS = {"mineru": ("NiSO4", "CoSO4", "LiOH"), "paddleocr_vl": ("LiOH", "NiSO4")}
+
+
+def test_a_list_field_runs_end_to_end_as_the_union_of_both_lanes(
+    tmp_path: Path, document: DocumentInput, geometry: DocumentGeometry, monkeypatch
+):
+    data = json.loads(BATTERY_PROFILE_PATH.read_text(encoding="utf-8"))
+    data["fields"].append(PRECURSORS)
+    profile_dir = tmp_path / "profiles"
+    profile_dir.mkdir()
+    list_profile = profile_dir / "battery_cathode.json"
+    list_profile.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(f"{__name__}.PARAGRAPHS", (*PARAGRAPHS, PRECURSOR_PARAGRAPH))
+    settings = Settings(data_root=tmp_path / "data", repo_root=tmp_path, llm_api_key="sk-test")
+    seed_parses(document, DataLayout(settings.data_root), geometry)
+    settings = dataclasses.replace(settings, profile=str(list_profile))
+    profile = load_run_profile(settings)
+    base = scripted_model(profile, ANSWERS)
+
+    def respond(system: str, user: str) -> str:
+        field = _FIELD.match(user)
+        if field is None or field.group(1) != "precursors":
+            return base(system, user)
+        # The field line asks for one entry per value.
+        assert "Several values may hold at once: report each as its own entry." in user
+        excerpts = user.split("Excerpts (Markdown with provenance markers):", 1)[1]
+        listed = _LISTED_ID.findall(user.split("Excerpts (Markdown", 1)[0])
+        values = [
+            {"sample_id": sample_id, "value_raw": raw, "source_ids": _citing(excerpts, raw)}
+            for sample_id in listed
+            for raw in PRECURSOR_ANSWERS[_lane(user)]
+        ]
+        return json.dumps({"values": values})
+
+    client = FakeLlmClient(respond)
+    monkeypatch.setattr("paperfacts.workflow.build_llm_client", lambda _settings: client)
+
+    result = run_document(document, settings, profile)
+
+    # A set: the two lanes' lists in another order agree element by element, and a list never conflicts.
+    precursors = [c for c in result.report.comparisons if c.field == "precursors"]
+    assert {c.status for c in precursors} == {"agree", "missing"}
+    assert sorted(c.a.value_raw for c in precursors if c.status == "missing" and c.a) == ["CoSO4", "CoSO4"]
+    rows = {row["sample_id"].split(" | ")[0]: row for row in result.dataset.sample_rows}
+    for row in rows.values():
+        assert row["precursors"] == ["NiSO4", "CoSO4", "LiOH"]
+    quality = [row for row in result.dataset.quality_rows if row["field"] == "precursors"]
+    assert {row["decision"] for row in quality} == {"single_source"}
+    assert all(
+        "CoSO4（mineru）" in row["detail"] and "LiOH（mineru, paddleocr_vl）" in row["detail"] for row in quality
+    )
+    samples = list(load_workbook(result.excel_path)["样品数据"].values)
+    column = samples[0].index("precursors")
+    assert {line[column] for line in samples[1:]} == {"NiSO4; CoSO4; LiOH"}

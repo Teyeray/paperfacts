@@ -19,12 +19,32 @@ const tsvCell = (value) => {
   return FORMULA_START.test(text) && !isNumber(text) ? `'${text}` : text;
 };
 
+// An interval cell, [low, high] with null for an open end: "2.8–4.3", "≥ 80", "≤ 5". Its ends are written in full,
+// exactly as the workbook writes them (kinds.interval_text), never cut to a number of significant digits.
+export const intervalText = ([low, high]) =>
+  high == null ? `≥ ${String(low)}` : low == null ? `≤ ${String(high)}` : `${String(low)}–${String(high)}`;
+
+// What the code read out of one lane value's quote, shown beside it in the evidence views: the canonical number, a
+// yes/no, the ISO date, an interval's ends or the sample a reference names -- or why nothing was read.
+export function readingText(field) {
+  const unit = field.unit ?? "";
+  if (field.value != null) return `= ${fmt(field.value)} ${unit}`.trim();
+  if (field.holds != null) return `= ${field.holds ? "是" : "否"}`;
+  if (field.iso_date != null) return `= ${field.iso_date}`;
+  if (field.bounds != null) return `= ${intervalText(field.bounds)} ${unit}`.trim();
+  if (field.ref_id != null) return `→ ${field.ref_id}`;
+  return field.normalization_note ? `(${field.normalization_note})` : "";
+}
+
 // A field's value as the clipboard gets it, decided by its column (a dataset field: `kind`, `cardinality`): the
-// values of a `many` column joined with "; ", every other value as it is.
+// values of a `many` column joined with "; ", an interval as its two ends, a boolean as true/false, every other
+// value as it is.
 export function fieldText(value, field) {
   if (field?.cardinality === "many" && Array.isArray(value)) {
     return value.map((item) => (typeof item === "number" ? fmt(item) : String(item ?? ""))).join("; ");
   }
+  if (field?.kind === "interval" && Array.isArray(value)) return intervalText(value);
+  if (typeof value === "boolean") return String(value);
   return value;
 }
 

@@ -10,8 +10,8 @@ import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpic
 import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
 import { clearEvidence, showEvidence } from "./samples.js";
-import { LANE_LABEL, noSamplesReason, state, uiCopy } from "./state.js";
-import { copyTable, fieldText } from "./tsv.js";
+import { LANE_LABEL, entityGroups, entityLabel, entityOf, inEntity, noSamplesReason, state, uiCopy } from "./state.js";
+import { copyButton, copyTable, fieldText, intervalText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
@@ -31,8 +31,8 @@ function cellBadge(decision) {
     cls: lanes.length === 1 ? (LANE_CLASS[lanes[0]] ?? "") : "",
   };
 }
-// quality_rows are keyed by (sample_id, field); a sample_id may itself contain "|", so join on a
-// character that cannot occur in either half.
+// quality_rows are keyed by (entity, sample_id, field); a sample_id may itself contain "|", so join on a
+// character that cannot occur in any part. A paper-level quality row names no entity.
 const KEY_SEPARATOR = "\u0000";
 
 // ---------- columns, shared with the corpus table ----------
@@ -70,17 +70,22 @@ export function bodyRow(columns, item, className = "") {
 }
 
 // How a committed value is written out, decided by its column: the values of a `many` column joined with "；",
-// numbers through `fmt`, everything else as its own text.
+// an interval as its ends ("2.8–4.3", "≥ 80"), a boolean as 是/否, numbers through `fmt`, everything else as its
+// own text.
 const shownValue = (value, field) => {
   if (field?.cardinality === "many" && Array.isArray(value)) return value.map((item) => (item == null ? "" : shownValue(item))).join("；");
+  if (field?.kind === "interval" && Array.isArray(value)) return intervalText(value);
+  if (field?.kind === "boolean" && typeof value === "boolean") return value ? "是" : "否";
   return typeof value === "number" ? fmt(value) : String(value);
 };
 
-// A value as the reader sees it in a cell: the number and the field's canonical unit, e.g. `125 nm`.
-// Text fields have no unit, and a unitless number stays a bare number.
+// A value as the reader sees it in a cell: the number (or an interval's ends) and the field's canonical unit,
+// e.g. `125 nm`. Text fields have no unit, and a unitless number stays a bare number. A reference is the id of a row
+// of another entity's table, followed by that entity's label where the unit would be.
 export function valueHtml(value, field) {
   const shown = escapeHtml(shownValue(value, field));
-  const unit = typeof value === "number" && field?.unit ? field.unit : "";
+  const numeric = typeof value === "number" || (field?.kind === "interval" && Array.isArray(value));
+  const unit = field?.references ? entityLabel(field.references) : numeric && field?.unit ? field.unit : "";
   return unit ? `${shown} <span class="unit">${escapeHtml(unit)}</span>` : shown;
 }
 
@@ -107,6 +112,8 @@ export function renderResults(root) {
   slot("results-chips").innerHTML = "";
   slot("results-head").innerHTML = "";
   slot("results-rows").innerHTML = "";
+  slot("results-entities").innerHTML = "";
+  slot("results-entity").classList.add("hidden");
 
   const samples = data?.sample_rows ?? [];
   const paper = data?.paper_row ?? {};
@@ -123,13 +130,21 @@ export function renderResults(root) {
 
   const rerender = () => keepFocus(root, () => renderResults(root));
   const chosen = chosenFields(data.fields);
-  const fields = visibleFields(chosen, [paper, ...samples], showAllFields);
   slot("results-chips").append(
     toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
     fieldPicker(data.fields, rerender),
   );
-  const columns = documentColumns(fields, qualityIndex(data.quality_rows ?? []), paper.sample_id ?? "");
-  const items = [{ kind: "paper", row: paper }, ...samples.map((row) => ({ kind: "sample", row }))];
+  const quality = qualityIndex(data.quality_rows ?? []);
+  // One table per entity type. The first (the primary entity's) sits in the template's own table with the
+  // paper-level row, as the only table does for a profile without entity types; each other entity's table follows
+  // under its label, with its own fields and its own copy button.
+  const [primary, ...others] = entityGroups();
+  const ownFields = (group) =>
+    chosen.filter((field) => (field.scope === "sample" ? inEntity(group, field) : group === primary));
+  const primaryRows = samples.filter((row) => inEntity(primary, row));
+  const fields = visibleFields(ownFields(primary), [paper, ...primaryRows], showAllFields);
+  const columns = documentColumns(fields, quality, paper.sample_id ?? "", primary);
+  const items = [{ kind: "paper", row: paper }, ...primaryRows.map((row) => ({ kind: "sample", row }))];
   slot("results-head").append(headRow(columns));
   const rows = slot("results-rows");
   for (const item of items) {
@@ -138,6 +153,51 @@ export function renderResults(root) {
     rows.append(tr);
   }
   copy.onclick = () => copyTable(columns, items);
+  if (!others.length) return;
+  const heading = slot("results-entity");
+  heading.textContent = primary.label;
+  heading.classList.remove("hidden");
+  for (const group of others) slot("results-entities").append(entityTable(group, samples, ownFields(group), quality));
+}
+
+// A non-primary entity's table: its rows under its label, with only its own fields (the paper-level values are on
+// the primary table's paper-level row).
+function entityTable(group, samples, fields, quality) {
+  const rows = samples.filter((row) => inEntity(group, row));
+  const shown = visibleFields(fields, rows, showAllFields);
+  const columns = documentColumns(shown, quality, "", group);
+  const items = rows.map((row) => ({ kind: "sample", row }));
+  const box = document.createElement("div");
+  box.className = "entity-table";
+  box.dataset.entity = group.name;
+  const head = document.createElement("div");
+  head.className = "results-head";
+  const title = document.createElement("h3");
+  title.className = "entity-head";
+  title.textContent = group.label;
+  head.append(title, copyButton(() => copyTable(columns, items)));
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  const table = document.createElement("table");
+  table.className = "facts-table results-table";
+  const thead = document.createElement("thead");
+  thead.append(headRow(columns));
+  const tbody = document.createElement("tbody");
+  for (const item of items) {
+    const tr = bodyRow(columns, item);
+    bindCells(tr);
+    tbody.append(tr);
+  }
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "table-empty";
+    empty.textContent = `没有${group.label}。`;
+    wrap.append(empty);
+  }
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(head, wrap);
+  return box;
 }
 
 function rowClass(item, paperSampleId) {
@@ -147,7 +207,7 @@ function rowClass(item, paperSampleId) {
 
 // Paper-level values are the same for every sample, so they sit on the paper-level row alone, and sample values on
 // the sample rows alone: a field column is filled only on the rows of its own scope.
-function documentColumns(fields, quality, paperSampleId) {
+function documentColumns(fields, quality, paperSampleId, group) {
   const isPaperLevel = (item) => item.kind === "paper";
   // An identity column the paper-level row leaves blank.
   const sampleColumn = (header, className, text) =>
@@ -160,7 +220,7 @@ function documentColumns(fields, quality, paperSampleId) {
   const paperLabel = uiCopy("paper_level_label_zh");
   return [
     column(
-      uiCopy("entity_label_zh"),
+      group.label,
       (item) => isPaperLevel(item)
         ? `<td class="mono">${escapeHtml(paperLabel)}</td>`
         : `<td class="mono">${escapeHtml(item.row.sample_id ?? "")}${item.row.sample_id === paperSampleId ? paperMark : ""}</td>`,
@@ -182,13 +242,17 @@ function documentColumns(fields, quality, paperSampleId) {
 
 function qualityIndex(rows) {
   const index = new Map();
-  for (const row of rows) index.set(`${row.sample_id}${KEY_SEPARATOR}${row.field}`, row);
+  for (const row of rows) index.set(qualityKey(row.entity ?? "", row.sample_id, row.field), row);
   return index;
 }
 
+const qualityKey = (entity, sampleId, field) => [entity, sampleId, field].join(KEY_SEPARATOR);
+
 function cell(value, quality, item, field) {
-  const sampleId = item.kind === "paper" ? "paper" : item.row.sample_id;
-  const decision = quality.get(`${sampleId}${KEY_SEPARATOR}${field.name}`);
+  const paperLevel = item.kind === "paper";
+  const decision = quality.get(
+    qualityKey(paperLevel ? "" : item.row.entity ?? "", paperLevel ? "paper" : item.row.sample_id, field.name),
+  );
   const detail = decision?.detail ?? "";
   // Refused, not missing: the reason is the cell's accessible name (so it does not need a hover) and the
   // cell is focusable, because clicking it jumps to the two lanes' records for this (sample, field).
@@ -196,7 +260,8 @@ function cell(value, quality, item, field) {
     const reason = detail || "流水线没有给出取值";
     return (
       `<td class="cell empty" tabindex="0" title="${escapeHtml(detail)}" aria-label="${escapeHtml(reason)}"` +
-      ` data-field="${escapeHtml(field.name)}" data-kind="${item.kind}" data-sample="${escapeHtml(item.row.sample_id ?? "")}">—</td>`
+      ` data-field="${escapeHtml(field.name)}" data-kind="${item.kind}" data-sample="${escapeHtml(item.row.sample_id ?? "")}"` +
+      ` data-entity="${escapeHtml(entityOf(item.row))}">—</td>`
     );
   }
   const status = decision?.decision ?? "";
@@ -224,8 +289,13 @@ function bindCells(tr) {
       revealViewer();
     });
   }
+  // The records are narrowed to the cell's entity only where the page groups by entity: with one entity type every
+  // record is its, and a row naming none must not filter out the records that do.
+  const byEntity = entityGroups().length > 1;
   for (const td of tr.querySelectorAll("td.cell.empty[data-field]")) {
-    onActivate(td, () => showEvidence(samplesHost(td), td.dataset.field, td.dataset.sample, td.dataset.kind));
+    onActivate(td, () =>
+      showEvidence(samplesHost(td), td.dataset.field, td.dataset.sample, td.dataset.kind, byEntity ? td.dataset.entity : null),
+    );
   }
 }
 

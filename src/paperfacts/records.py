@@ -22,16 +22,20 @@ import logging
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
-from paperfacts.fields import DIGIT_KINDS, FieldSpec
+from paperfacts.fields import DIGIT_KINDS, MAX_NUMBER_QUOTE, FieldSpec
 from paperfacts.models import Backend
+from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.storage import write_text_atomic
+
+if TYPE_CHECKING:
+    from paperfacts.profile import EntitySpec
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,11 @@ class ResponseField(BaseModel):
     applies_to_all_samples: bool = Field(
         default=False, description="a sample-level value under the paper record that the paper states for every sample"
     )
+
+    def stated_holds(self) -> bool | None:
+        """Whether the quoted words affirm a boolean field. None here: only the classes
+        ``response_models(..., holds=True)`` rebuilds carry the ``holds`` key (:class:`_HoldsAnswer`)."""
+        return None
 
 
 class ResponseSample(BaseModel):
@@ -127,6 +136,11 @@ class ResponseValue(BaseModel):
         default=False, description="the excerpt states this value holds for every sample in the list"
     )
 
+    def stated_holds(self) -> bool | None:
+        """Whether the quoted words affirm a boolean field. None here: only the classes
+        ``response_models(..., holds=True)`` rebuilds carry the ``holds`` key (:class:`_HoldsAnswer`)."""
+        return None
+
 
 class FieldResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -136,14 +150,34 @@ class FieldResponse(BaseModel):
 
 @dataclass(frozen=True)
 class ResponseModels:
-    """The two answer shapes whose keys a profile names: document mode's and the inventory's."""
+    """The answer shapes whose keys a profile names: document mode's, the inventory's and a field question's."""
 
     extraction: type[ExtractionResponse]
     inventory: type[InventoryResponse]
+    field: type[FieldResponse]
+
+
+def _rebuilt[M: BaseModel](base: type[M], *mixins: type[BaseModel], **fields: Any) -> type[M]:
+    """``base`` under its own name and docstring, with ``mixins``' fields and ``fields`` replaced or added. The name
+    is kept because a rejected answer goes back to the model as ``str(ValidationError)``, which names the class."""
+    return create_model(base.__name__, __base__=(*mixins, base), __doc__=base.__doc__, **fields)
+
+
+class _HoldsAnswer(BaseModel):
+    """``holds`` as a boolean field's answer carries it: true when the quoted words affirm the field, false when
+    they deny it. Every other field leaves it null. Mixed in ahead of the value's own class, so its
+    :meth:`stated_holds` is the one a rebuilt value answers with."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    holds: bool | None = Field(default=None, description="a boolean field: whether the quoted words affirm it")
+
+    def stated_holds(self) -> bool | None:
+        return self.holds
 
 
 @cache
-def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
+def response_models(paper_key: str, no_samples_key: str, *, holds: bool = False) -> ResponseModels:
     """The answer shapes for a profile that tells the model to emit ``paper_key`` and ``no_samples_key``.
 
     The keys are validation aliases onto the attributes ``paper`` and ``no_samples``, so every profile's answer
@@ -151,17 +185,31 @@ def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
     back to the model as ``str(ValidationError)``, which names the class and the key the model wrote, so under
     the keys the corpus was extracted with the text is byte-identical to what it was before the rename, as is
     every request that carries it.
+
+    ``holds`` is for a profile with a boolean field. Every class that contains a value is then rebuilt with the
+    ``holds`` key, down to the value itself: ``extra="ignore"`` would otherwise drop the key silently at whichever
+    container still pointed at a class without it. Without it the module-level classes are used as they are, so a
+    profile with no boolean field (TCO) validates its answers exactly as before.
     """
-    extraction = create_model(
-        ExtractionResponse.__name__,
-        __base__=ExtractionResponse,
-        __doc__=ExtractionResponse.__doc__,
-        paper=(ResponsePaper | None, Field(default=None, validation_alias=paper_key)),
+    field_model: type[ResponseField] = ResponseField
+    sample_model: type[ResponseSample] = ResponseSample
+    paper_model: type[ResponsePaper] = ResponsePaper
+    extraction_fields: dict[str, Any] = {}
+    field_response: type[FieldResponse] = FieldResponse
+    if holds:
+        field_model = _rebuilt(ResponseField, _HoldsAnswer)
+        sample_model = _rebuilt(ResponseSample, fields=(list[field_model], Field(default_factory=list)))
+        paper_model = _rebuilt(ResponsePaper, fields=(list[field_model], Field(default_factory=list)))
+        extraction_fields["samples"] = (list[sample_model], Field(default_factory=list))
+        value_model = _rebuilt(ResponseValue, _HoldsAnswer)
+        field_response = _rebuilt(FieldResponse, values=(list[value_model], Field(default_factory=list)))
+    extraction = _rebuilt(
+        ExtractionResponse,
+        paper=(paper_model | None, Field(default=None, validation_alias=paper_key)),
+        **extraction_fields,
     )
-    inventory = create_model(
-        InventoryResponse.__name__,
-        __base__=InventoryResponse,
-        __doc__=InventoryResponse.__doc__,
+    inventory = _rebuilt(
+        InventoryResponse,
         no_samples=(
             bool,
             Field(
@@ -171,7 +219,7 @@ def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
             ),
         ),
     )
-    return ResponseModels(extraction=extraction, inventory=inventory)
+    return ResponseModels(extraction=extraction, inventory=inventory, field=field_response)
 
 
 # ---- Stored records --------------------------------------------------------------------------
@@ -200,10 +248,21 @@ class FieldValue(BaseModel):
         default=None,
         description="a bound ('above', '<') the cited block writes right before value_raw; set by grounding",
     )
+    # A boolean field's answer: whether the quoted words affirm it. Null, and then left out of the file, for every
+    # other kind, so files of profiles without a boolean field keep their bytes.
+    holds: bool | None = Field(default=None, exclude_if=lambda holds: holds is None)
     # Filled in by paperfacts.normalize at read time; always null in the stored file.
     value: float | None = None
     unit: str | None = None
     normalization_note: str | None = None
+    # Filled in at read time for a date or interval field, and left out of every file when null: the date as ISO
+    # at the precision written ("2021", "2021-03", "2021-03-12"), and an interval's (low, high) in the canonical
+    # unit, None for an open end.
+    iso_date: str | None = Field(default=None, exclude_if=lambda iso_date: iso_date is None)
+    bounds: tuple[float | None, float | None] | None = Field(default=None, exclude_if=lambda bounds: bounds is None)
+    # Filled in at read time for a reference field, and left out of every file when null: the id of the lane's sample
+    # of the referenced entity type the quote names (:func:`resolve_reference`), None when it names none.
+    ref_id: str | None = Field(default=None, exclude_if=lambda ref_id: ref_id is None)
 
 
 class PaperRecord(BaseModel):
@@ -228,6 +287,9 @@ class SampleRecord(BaseModel):
     conditions: dict[str, str] = Field(default_factory=dict)
     source_ids: tuple[str, ...] = ()
     fields: tuple[FieldValue, ...] = ()
+    # The entity type the sample is of; a sample's identity is (entity, sample_key(sample_id)). Left out of the file
+    # at the implicit entity, so lanes of a profile without entity types keep their bytes.
+    entity: str = Field(default=IMPLICIT_ENTITY, exclude_if=lambda entity: entity == IMPLICIT_ENTITY)
 
     def get(self, name: str) -> FieldValue | None:
         return next((f for f in self.fields if f.field == name), None)
@@ -278,6 +340,39 @@ def sample_key(sample_id: str | None) -> str:
             key += " "
         key += token.replace("−", "-")
     return key
+
+
+def resolve_reference(listed: Mapping[str, str | None], value_raw: str) -> str | None:
+    """The id of the sample ``value_raw`` names among ``listed`` (one entity type's samples of a lane, by
+    :func:`sample_key`, as :meth:`LaneExtraction.listed` gives them), or None: when it names none, and when it names
+    a key two of the samples share, since picking either would be a guess. A reference is resolved by the key that
+    pairs and attributes samples, so the model only has to copy an id it was shown."""
+    return listed.get(sample_key(value_raw))
+
+
+@dataclass(frozen=True)
+class KindContext:
+    """What a ``reference`` field is asked, read, compared and decided against beyond its own spec. Every other kind
+    ignores it. Reading, comparing and deciding take it as a required argument: a caller that forgot it would
+    silently resolve no reference, compare none as agreeing and fill no reference cell, so one with nothing of the
+    kind says so by passing :data:`NO_CONTEXT`.
+
+    Each stage fills the part it holds: the question the entity types a field may name, a lane's normalisation that
+    lane's samples, the comparison every entity's matching, the dataset every row id and the lane of the value."""
+
+    # The profile's entity types by name: the referenced one's heading and noun, for the field line's note.
+    entities: Mapping[str, EntitySpec] = field(default_factory=dict)
+    # One lane's samples of each entity type, sample_key -> sample_id (LaneExtraction.listed).
+    samples: Mapping[str, Mapping[str, str | None]] = field(default_factory=dict)
+    # Each entity type's matched pairs, (lane A's sample id, lane B's sample id).
+    pairs: Mapping[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # The dataset row id of a lane's sample: (backend, entity, the lane's sample id) -> the row's sample_id.
+    row_ids: Mapping[tuple[str, str, str], str] = field(default_factory=dict)
+    # The lane the value decided belongs to; set per candidate by paperfacts.decide.
+    backend: str | None = None
+
+
+NO_CONTEXT = KindContext()
 
 
 class FailedQuestion(BaseModel):
@@ -354,8 +449,20 @@ class LaneExtraction(BaseModel):
         """Values that could not be located in the block they cite."""
         return tuple(value for value in self.values() if not value.grounded)
 
-    def sample(self, sample_id: str) -> SampleRecord | None:
-        return next((s for s in self.samples if s.sample_id == sample_id), None)
+    def sample(self, sample_id: str, entity: str = IMPLICIT_ENTITY) -> SampleRecord | None:
+        return next((s for s in self.samples if s.sample_id == sample_id and s.entity == entity), None)
+
+    def listed(self) -> dict[str, dict[str, str | None]]:
+        """Each entity type's samples in this lane, ``sample_key`` -> ``sample_id``: what a reference field's value
+        resolves against (:func:`resolve_reference`). A key two differently spelled ids of one entity share maps to
+        None, so a reference to it is refused as ambiguous rather than resolved to whichever came first; the
+        inventory merges such repeats (:func:`clean_samples`), but a lane file need not have come from it."""
+        listed: dict[str, dict[str, str | None]] = {}
+        for sample in self.samples:
+            ids = listed.setdefault(sample.entity, {})
+            key = sample_key(sample.sample_id)
+            ids[key] = sample.sample_id if ids.get(key, sample.sample_id) == sample.sample_id else None
+        return listed
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -442,11 +549,19 @@ class ResponseCleaning:
         source_ids: Sequence[str],
         note: str | None,
         known_ids: frozenset[str],
+        holds: bool | None = None,
     ) -> FieldValue | None:
-        """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
+        """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``). ``holds`` is kept
+        for a boolean field only, which is dropped without it: the quote alone does not say yes or no."""
         text = value_raw.strip()
+        if spec.kind in DIGIT_KINDS and len(text) > MAX_NUMBER_QUOTE:
+            self.dropped.append(f"{spec.name}: a value of {len(text)} characters is too long to be one value")
+            return None
         if spec.kind in DIGIT_KINDS and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
+            return None
+        if spec.kind == "boolean" and holds is None:
+            self.dropped.append(f"{spec.name}: boolean field without holds {text!r}")
             return None
         return FieldValue(
             field=spec.name,
@@ -455,6 +570,7 @@ class ResponseCleaning:
             condition=_clean(condition),
             source_ids=self.keep_ids(source_ids, known_ids),
             note=_clean(note),
+            holds=holds if spec.kind == "boolean" else None,
         )
 
 
@@ -468,9 +584,13 @@ class ListedSample(Protocol):
 
 
 def clean_samples(
-    listed: Sequence[ListedSample], cleaning: ResponseCleaning, known_ids: frozenset[str]
+    listed: Sequence[ListedSample],
+    cleaning: ResponseCleaning,
+    known_ids: frozenset[str],
+    entity: str = IMPLICIT_ENTITY,
 ) -> tuple[list[SampleRecord], list[int | None]]:
-    """The sample list both modes build their records on, and where each listed entry went.
+    """The sample list both modes build their records on, and where each listed entry went. Every record is of
+    ``entity``, the entity type whose inventory listed it.
 
     Returns the records (without fields) and, per listed entry, the index of the record it became: a repeat
     of an id already listed points at the first one, and an entry with no usable id points nowhere (None).
@@ -502,6 +622,7 @@ def clean_samples(
                 label=item.label.strip(),
                 conditions={str(name).strip(): str(value).strip() for name, value in item.conditions.items()},
                 source_ids=cleaning.keep_ids(item.source_ids, known_ids),
+                entity=entity,
             )
         )
     return records, placement
@@ -558,6 +679,7 @@ def response_to_records(
             source_ids=item.source_ids,
             note=item.note,
             known_ids=known_ids,
+            holds=item.stated_holds(),
         )
 
     def in_schema(item: ResponseField) -> FieldSpec | None:

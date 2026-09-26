@@ -79,7 +79,7 @@ def test_the_demo_profile_is_valid():
         pytest.param({"fields.1.figure_readable": "yes"}, "figure_readable", id="readable-not-a-boolean"),
         pytest.param({"fields.2.figure_readable": True}, "figure_readable", id="readable-text-field"),
         pytest.param({"fields.1.figure_readable": True}, "figures", id="readable-without-figure-slots"),
-        pytest.param({"fields.2.display_format": "plain"}, "display_format", id="format-on-text"),
+        pytest.param({"fields.2.display_format": "scientific"}, "display_format", id="format-on-text"),
         pytest.param({"fields.1.display_format": "engineering"}, "display_format", id="format-unknown"),
         pytest.param({"fields.2.range_policy": "reject"}, "range_policy", id="range-policy-on-text"),
         pytest.param({"fields.1.range_policy": "first"}, "range_policy", id="range-policy-unknown"),

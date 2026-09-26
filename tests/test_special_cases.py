@@ -7,7 +7,7 @@ from paperfacts.compare import FieldComparison
 from paperfacts.dataset import DocumentDataset
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
-from paperfacts.records import FieldValue
+from paperfacts.records import NO_CONTEXT, FieldValue
 from paperfacts.workbook import write_dataset
 from support.extraction import make_lane
 from support.profiles import make_profile
@@ -27,7 +27,7 @@ def _single(name, *, condition=None, raw="120", unit="nm"):
 def _decide(spec, evidence, units):
     """One lane's value, which the comparison saw only on that lane."""
     comparison = FieldComparison(scope="sample:A", field=spec.name, status="missing", a=evidence[0][1])
-    return decide(spec, evidence, [comparison], units=units)
+    return decide(spec, evidence, [comparison], units=units, ctx=NO_CONTEXT)
 
 
 def test_a_condition_rule_without_its_note_is_refused():

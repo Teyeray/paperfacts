@@ -32,7 +32,8 @@ from collections.abc import Mapping, Sequence
 
 from paperfacts.fields import FieldSpec
 from paperfacts.kinds import rules_for
-from paperfacts.profile import MARKER, DomainProfile, GroupSpec
+from paperfacts.profile import MARKER, DomainProfile, EntitySpec, GroupSpec, PromptSlots
+from paperfacts.records import NO_CONTEXT, KindContext
 
 # A value stated for part of the series. Left unsaid, the model reports "all films deposited at 100 °C" as one
 # value with no sample and the series flag off, and the value reaches none of the samples it names (the gold set
@@ -57,6 +58,9 @@ _NO_PAPER_LEVEL_RULE = (
     'No field is paper-level. Use "{paper_key}" only for a whole-series value as rule 10 describes; otherwise set'
     " it to null."
 )
+# The answer key a boolean field needs, shown only to a profile that has one, so every other profile's prompts
+# keep their bytes.
+_HOLDS_KEY = ',\n         "holds": <true|false for a boolean field, else null>'
 _CONDITION_RULE = "For `{name}` always fill `condition` with {rule}."
 _NO_CONDITION_RULE = "When a field's line names a condition, always fill `condition` with it."
 
@@ -81,7 +85,7 @@ Output ONLY a JSON object with this exact shape (no prose):
 FIELD = {"field": "<field name from the table below>", "value_raw": "<exactly as written in the paper>",
          "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
          "source_ids": ["<id of the block where this value appears>", ...], "note": "<optional remark or null>",
-         "applies_to_all_samples": <true|false>}
+         "applies_to_all_samples": <true|false>{holds_key}}
 
 Rules:
 1. `value_raw` must be copied verbatim from the paper (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
@@ -147,7 +151,7 @@ Output ONLY a JSON object with this exact shape (no prose):
 VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exactly as written in the paper>",
          "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
          "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>",
-         "applies_to_all_samples": <true|false>}
+         "applies_to_all_samples": <true|false>{holds_key}}
 
 Rules:
 1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
@@ -167,7 +171,8 @@ Rules:
 
 Return the JSON object only."""
 
-# ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" for every kind so far.
+# ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" for numeric, and for single-valued
+# text and composition.
 _FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{note}{condition}{plausible}"
 # Told to the model so it checks what it is quoting before it answers; the code drops what still falls outside.
 _PLAUSIBLE = (
@@ -207,18 +212,26 @@ def condition_rules(specs: Sequence[FieldSpec]) -> str:
     return " ".join(rules) if rules else _NO_CONDITION_RULE
 
 
-def _values(profile: DomainProfile) -> dict[str, str]:
-    """Every slot and computed marker of the system prompts. The computed ones are finished text before the
-    templates are rendered, so they too are inserted verbatim."""
-    values = {**dataclasses.asdict(profile.prompt), "paper_level_rule": paper_level_rule(profile)}
-    values["sample_groups"] = quoted_names(profile.sample_groups)
-    values["condition_rules"] = condition_rules(profile.fields)
+def _values(profile: DomainProfile, entity: EntitySpec | None = None) -> dict[str, str]:
+    """Every slot and computed marker of the system prompts asked about ``entity``'s samples (the primary entity's
+    by default, which for a profile without entity types is ``profile.prompt`` itself). The computed ones are
+    finished text before the templates are rendered, so they too are inserted verbatim. Rule 8 names the fields
+    asked with this entity's prompt: its own and the paper-level ones; rule 10 this entity's sample groups."""
+    entity = entity or profile.primary
+    values = {**dataclasses.asdict(entity.prompt), "paper_level_rule": paper_level_rule(profile)}
+    # Rule 10 names the sample groups of this entity only; the implicit entity's groups name none, so it names all.
+    values["sample_groups"] = quoted_names([g for g in profile.sample_groups if g.entity in (None, entity.name)])
+    values["condition_rules"] = condition_rules(
+        [spec for spec in profile.fields if profile.entity_of(spec).name == entity.name]
+    )
     values["subset_scope"] = render(_SUBSET_SCOPE, values)
+    values["holds_key"] = _HOLDS_KEY if profile.asks_holds else ""
     return values
 
 
-def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> str:
-    """One line per field. ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`."""
+def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str, ctx: KindContext = NO_CONTEXT) -> str:
+    """One line per field. ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`; ``ctx``
+    holds the entity types a reference field's note names."""
     lines = []
     for spec in specs:
         unit = f", canonical unit: {spec.canonical_unit}" if spec.canonical_unit else ""
@@ -232,7 +245,7 @@ def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> s
                 kind=spec.kind,
                 unit=unit,
                 description=spec.description,
-                note=rules_for(spec).note(spec),
+                note=rules_for(spec).note(spec, ctx),
                 condition=condition,
                 plausible=plausible,
             )
@@ -241,7 +254,8 @@ def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str) -> s
 
 
 def extraction_system_prompt(profile: DomainProfile) -> str:
-    fields = render_field_table(profile.fields, profile.prompt.implausible_origin)
+    ctx = KindContext(entities={entity.name: entity for entity in profile.entities})
+    fields = render_field_table(profile.fields, profile.prompt.implausible_origin, ctx)
     return render(_EXTRACTION_SYSTEM, {**_values(profile), "fields": fields})
 
 
@@ -249,25 +263,42 @@ def extraction_user_prompt(markdown: str) -> str:
     return f"Paper (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now."
 
 
-def inventory_system_prompt(profile: DomainProfile) -> str:
-    return render(_INVENTORY_SYSTEM, _values(profile))
+def inventory_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:
+    """The question that lists ``entity``'s samples (the primary entity's by default)."""
+    return render(_INVENTORY_SYSTEM, _values(profile, entity))
 
 
 def inventory_user_prompt(markdown: str) -> str:
     return f"Paper excerpts (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now."
 
 
-def field_system_prompt(profile: DomainProfile) -> str:
-    """One text for every field and both lanes: what varies is the question, not the instructions."""
-    return render(_FIELD_SYSTEM, _values(profile))
+def field_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:
+    """One text for every field of ``entity`` (the primary entity's by default, which the paper-level fields are
+    asked with too) and both lanes: what varies is the question, not the instructions."""
+    return render(_FIELD_SYSTEM, _values(profile, entity))
 
 
-def field_user_prompt(spec: FieldSpec, sample_list: str, markdown: str, implausible_origin: str) -> str:
+def field_user_prompt(
+    spec: FieldSpec,
+    sample_list: str,
+    markdown: str,
+    implausible_origin: str,
+    heading: str = PromptSlots.sample_list_heading,
+    referenced: tuple[EntitySpec, str] | None = None,
+) -> str:
     """``sample_list`` is rendered by the caller, which owns the record types; this module stays free of them.
-    ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`."""
+    ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`, ``heading`` the
+    :attr:`PromptSlots.sample_list_heading` of the entity whose samples the list holds. ``referenced`` is a
+    reference field's: the entity type it names a sample of and that entity's list, shown after the first, whose
+    ids the answer copies."""
+    ctx, second = NO_CONTEXT, ""
+    if referenced is not None:
+        entity, listed = referenced
+        ctx = KindContext(entities={entity.name: entity})
+        second = f"{entity.prompt.sample_list_heading} this paper reports:\n{listed}\n\n"
     return (
-        f"Field to extract:\n{render_field_table((spec,), implausible_origin)}\n\n"
-        f"Samples this paper reports:\n{sample_list}\n\n"
+        f"Field to extract:\n{render_field_table((spec,), implausible_origin, ctx)}\n\n"
+        f"{heading} this paper reports:\n{sample_list}\n\n{second}"
         f"Excerpts (Markdown with provenance markers):\n\n{markdown}\n\n"
         "Return the JSON object now."
     )
@@ -303,8 +334,9 @@ Rules:
 Return the JSON object only."""
 
 
-def matching_system_prompt(profile: DomainProfile) -> str:
-    return render(_MATCHING_SYSTEM, _values(profile))
+def matching_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:
+    """The question that pairs ``entity``'s samples across the lanes (the primary entity's by default)."""
+    return render(_MATCHING_SYSTEM, _values(profile, entity))
 
 
 def matching_user_prompt(lane_a_name: str, lane_a: str, lane_b_name: str, lane_b: str) -> str:

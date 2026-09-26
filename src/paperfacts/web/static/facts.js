@@ -4,9 +4,10 @@
 // The selected fact is one value, `state.selectedFact`, mirrored in the URL: a filter that hides its row does
 // not unselect it, and anything else that takes over the viewer releases it (and the URL) explicitly.
 
-import { caveats, escapeHtml, fmt, keepFocus, onActivate, toast } from "./html.js";
+import { caveats, escapeHtml, keepFocus, onActivate, toast } from "./html.js";
 import { documentHash } from "./router.js";
-import { LANES, LANE_LABEL, STATUS, STATUS_ORDER, noSamplesReason, slot, state, uiCopy } from "./state.js";
+import { LANES, LANE_LABEL, STATUS, STATUS_ORDER, entityGroups, entityLabel, noSamplesReason, slot, state, uiCopy } from "./state.js";
+import { readingText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
 export function renderKpis(root) {
@@ -17,7 +18,7 @@ export function renderKpis(root) {
   const matchNote = `${counts.samples_unmatched} 未配对${counts.low_confidence_matches ? ` · ${counts.low_confidence_matches} 低置信度` : ""}${counts.matching_failed ? " · 匹配失败" : ""}`;
   const tiles = [
     ...STATUS_ORDER.map((status) => [status, STATUS[status].label, counts[status], status === "missing" ? missingNote : STATUS[status].note]),
-    ["samples", `${uiCopy("entity_label_zh")}配对`, counts.samples_matched, matchNote],
+    ...matchingTiles(counts, matchNote),
   ];
   // Only worth a tile when it happened: a lane that placed every value has nothing to report here.
   const unplaced = Object.entries(counts.unattributed_by_backend ?? {});
@@ -31,6 +32,19 @@ export function renderKpis(root) {
     div.innerHTML = `<div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="note" title="${escapeHtml(note)}">${escapeHtml(note)}</div>`;
     root.append(div);
   }
+}
+
+// The sample matching: one tile over the report's counts, or with several entity types one per entity, each
+// from that entity's own matching (the counts are summed over all of them).
+function matchingTiles(counts, matchNote) {
+  const groups = entityGroups();
+  const matchings = state.report?.matchings ?? {};
+  if (groups.length < 2) return [["samples", `${uiCopy("entity_label_zh")}配对`, counts.samples_matched, matchNote]];
+  return groups.map((group) => {
+    const matching = matchings[group.name] ?? {};
+    const unmatched = (matching.unmatched_a?.length ?? 0) + (matching.unmatched_b?.length ?? 0);
+    return ["samples", `${group.label}配对`, matching.pairs?.length ?? 0, `${unmatched} 未配对${matching.failed ? " · 匹配失败" : ""}`];
+  });
 }
 
 export function renderFilters(root) {
@@ -94,22 +108,24 @@ export function renderRows(tbody, emptyNode) {
   }
 }
 
-// scope is "paper", "sample:<a>|<b>" (each lane's own sample_id) or "unattributed" (both lanes
-// extracted the value but neither could place it on a sample)
+// scope is "paper", "<entity>:<a>|<b>" (each lane's own sample_id; the entity of a profile without entity types
+// is "sample") or "unattributed" (both lanes extracted the value but neither could place it on a sample). The
+// entity is an identifier, so the first colon ends it; with several entity types the label names it.
 function scopeLabel(scope) {
   if (scope === "paper") return uiCopy("paper_level_label_zh");
   if (scope === "unattributed") return `未归属（两路均未对应到${uiCopy("entity_label_zh")}）`;
-  const m = scope.match(/^sample:(.*)$/);
+  const m = scope.match(/^([a-z][a-z0-9_]*):(.*)$/);
   if (!m) return scope;
-  const [a, b] = m[1].split("|");
-  return b && b !== a ? `${a} ↔ ${b}` : a;
+  const [a, b] = m[2].split("|");
+  const label = entityLabel(m[1]);
+  const ids = b && b !== a ? `${a} ↔ ${b}` : a;
+  return label ? `${label} · ${ids}` : ids;
 }
 
 function valueCell(field) {
   if (!field) return `<span class="muted">—</span>`;
   const raw = `${field.value_raw} ${field.unit_raw ?? ""}`.trim();
-  const norm = field.value != null ? `= ${fmt(field.value)} ${field.unit ?? ""}` : (field.normalization_note ? `(${field.normalization_note})` : "");
-  return `${escapeHtml(raw)}<small>${escapeHtml(norm)}</small>${caveats(field)}`;
+  return `${escapeHtml(raw)}<small>${escapeHtml(readingText(field))}</small>${caveats(field)}`;
 }
 
 function markRows() {

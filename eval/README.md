@@ -29,6 +29,7 @@ file that still says `"target"` (the id before round 2) is read the same, with a
   "samples": [
     {
       "id": "ICO-30nm-1H2-annealed",
+      "entity": "catalyst",                         // required under a profile with entity types (one is enough)
       "description": "30 nm RPD ICO, 1% H2, annealed 180 °C",
       "ambiguous": false, "why": "...",           // optional; see below
       "match": { "fields": {"thickness": 30}, "label": "regex", "label_not": "regex" },
@@ -61,7 +62,11 @@ Values are text/table values only. A field the paper does not state has no entry
 
 **Paper-level fields** are compared with the dataset's `paper_row` (every row repeats them).
 
-**Sample alignment.** A dataset row is a candidate for a gold sample when every `match.fields` value equals the
+**Sample alignment.** A dataset row is a candidate for a gold sample only when both name the same `entity` (both
+none for a profile without entity types), and a gold sample is scored on its entity's fields only. Under a profile
+that declares entity types, a gold sample whose `entity` is missing or names none of them stops the run with the
+document and sample id, since it could match no row and would score nothing. It is then a
+candidate when every `match.fields` value equals the
 row's value within the field tolerance, `match.label` matches `sample_id + " | " + sample_label`
 (case-insensitive) and `match.label_not` does not. Candidate pairs are then taken greedily, one-to-one, by the
 number of the row's cells that agree with that gold sample (descending), ties by gold order then row order.
@@ -81,6 +86,17 @@ non-empty cells *extra*.
 
 Numbers match with `math.isclose(dataset, gold, rel_tol, abs_tol)` using the field's tolerances; a field with `categories` (`mode`)
 compares the category each value names, by the pipeline's rule; `component` matches on normalised equality or an `accept` regex.
+
+**List fields** (`cardinality: many`) are scored per element: their gold cells are the elements the list must
+hold, not alternatives. Each dataset element matching a required cell no other element matched is *correct* (*soft* if it matches only an
+ambiguous or figure-only one), any other element is *extra* (*disputed* when the gold has only ambiguous/null
+cells), and each required cell no element matches is *missing*. The gold format is unchanged.
+
+**Reference fields** (`kind: reference`, e.g. the catalyst a reaction test ran on) hold, as gold `value`, the `id`
+of the gold sample of the referenced entity. The dataset cell holds a row's `sample_id`, so each gold value is first
+replaced by the `sample_id` of the row aligned to the sample it names; a sample no row is aligned to leaves a value
+no row matches. The samples holding references are then aligned again with those values, and scored as usual:
+correct when the dataset names the row aligned to the gold sample.
 
 Precision = (correct + soft) / (correct + soft + wrong + extra); recall = correct / (correct + wrong + missing).
 The report gives micro totals, a macro average over papers (a 36-sample series otherwise dominates), per field

@@ -13,6 +13,8 @@ import dataclasses
 import pytest
 
 from paperfacts.normalize import normalize_field, parse_number
+from paperfacts.readers import read_range
+from paperfacts.records import NO_CONTEXT
 from support.extraction import make_field
 from support.profiles import shipped_profile
 
@@ -113,8 +115,10 @@ def test_number_words_under_either_range_policy(policy):
     # policy gives it a value; a single number word is one value, which reject has no reason to refuse.
     spec = dataclasses.replace(shipped_profile().by_name["thickness"], range_policy=policy)
 
-    words_range = normalize_field(make_field("thickness", "two to three", unit_raw="nm"), spec, shipped_profile().units)
-    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, shipped_profile().units)
+    words_range = normalize_field(
+        make_field("thickness", "two to three", unit_raw="nm"), spec, shipped_profile().units, NO_CONTEXT
+    )
+    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, shipped_profile().units, NO_CONTEXT)
 
     assert words_range.value is None
     assert "midpoint" not in (words_range.normalization_note or "")
@@ -179,6 +183,23 @@ def test_every_range_separator_is_recognised(raw):
 
     assert value == 15.0
     assert "range" in note
+
+
+@pytest.mark.parametrize(
+    ("raw", "ends"),
+    [
+        # "to" is the separator, not the first bound's unit: once read as (-60, 20) with unit "to".
+        ("-60 to -20", (-60.0, -20.0, "")),
+        ("between 450 and 500 °C", (450.0, 500.0, "°C")),
+        ("Between 450 °C and 500 °C", (450.0, 500.0, "°C")),
+    ],
+)
+def test_a_negative_range_in_words_and_a_between_range_are_read_as_ranges(raw, ends):
+    assert read_range(raw, lambda unit: True) == ends
+
+
+def test_and_without_between_still_joins_two_values():
+    assert parse_number("450 and 500")[0] is None
 
 
 def test_a_parenthesized_alternative_is_ignored_in_favour_of_the_outer_value():
@@ -420,3 +441,59 @@ def test_real_spellings_read_as_the_value_or_are_refused(raw, expected, fragment
 def test_parse_number_has_no_unit_context_and_so_reads_no_number_word(raw):
     # Whether "four" is a value depends on its unit, which parse_number does not see; normalize_field decides.
     assert parse_number(raw) == (None, "no number found")
+
+
+# ---- A quote too long to be one number --------------------------------------------------------------------------
+
+
+def test_a_quote_longer_than_the_cap_is_refused_before_it_is_parsed(monkeypatch):
+    from paperfacts import normalize
+    from paperfacts.fields import MAX_NUMBER_QUOTE
+    from paperfacts.readers import read_interval
+
+    # The reader is quadratic in a run of digits, so "refused before it is parsed" is proved by the parser never
+    # running, not by a clock.
+    def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a quote over the cap reached the parser")
+
+    for inner in ("_read", "set_aside", "compound_value"):
+        monkeypatch.setattr(normalize, inner, never)
+    quote = "1" * 20_000
+    value, note = parse_number(quote)
+    clean, why = read_interval(quote, lambda unit: True)
+    spec = shipped_profile().by_name["thickness"]
+    read = normalize_field(make_field("thickness", quote, unit_raw="nm"), spec, shipped_profile().units, NO_CONTEXT)
+
+    assert value is None and "20000 characters is too long" in (note or "")
+    assert clean is None and "too long" in (why or "")
+    assert read.value is None and "20000 characters is too long" in (read.normalization_note or "")
+    monkeypatch.undo()
+    # The cap is a guard, not a reading rule: a quote at it is still read.
+    assert parse_number(" " * (MAX_NUMBER_QUOTE - 2) + "12")[0] == 12.0
+
+
+@pytest.mark.parametrize("length", [200, 201])
+def test_reading_measures_the_cap_where_cleaning_does_on_value_raw(length):
+    # A bound grounding found before the quote is put in front of it when it is read; that must not push a quote
+    # cleaning kept over the cap, and a quote cleaning dropped is refused with the length cleaning reported.
+    from paperfacts.fields import MAX_NUMBER_QUOTE
+
+    spec = shipped_profile().by_name["thickness"]
+    field = make_field("thickness", "1" * length, unit_raw="nm").model_copy(update={"bound": "greater than"})
+    note = normalize_field(field, spec, shipped_profile().units, NO_CONTEXT).normalization_note or ""
+
+    if length <= MAX_NUMBER_QUOTE:
+        assert "too long" not in note
+    else:
+        assert f"a quote of {length} characters is too long" in note
+
+
+def test_the_cap_is_above_every_corpus_value():
+    import json
+    from pathlib import Path
+
+    from paperfacts.fields import MAX_NUMBER_QUOTE
+
+    corpus = Path(__file__).parent / "fixtures" / "corpus" / "values.json"
+    longest = max(len(entry["value_raw"]) for entry in json.loads(corpus.read_text(encoding="utf-8")))
+    assert longest < MAX_NUMBER_QUOTE / 2

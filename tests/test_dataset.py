@@ -17,7 +17,7 @@ from paperfacts.dataset import (
 from paperfacts.decide import decide
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
-from paperfacts.records import FailedQuestion, FieldValue, PaperRecord
+from paperfacts.records import NO_CONTEXT, FailedQuestion, FieldValue, PaperRecord
 from support.extraction import comparison_options, make_lane, make_sample
 from support.factories import DOC_ID
 from support.profiles import shipped_profile
@@ -648,7 +648,7 @@ def test_a_conflict_about_values_no_candidate_holds_still_refuses_the_cell(tco_p
         FieldComparison(scope="sample:A|A", field="transmittance", status="conflict", a=stranger, b=None),
     ]
 
-    assert decide(spec, evidence, comparisons, units=tco_profile.units).status == "conflict"
+    assert decide(spec, evidence, comparisons, units=tco_profile.units, ctx=NO_CONTEXT).status == "conflict"
 
 
 def test_a_troubled_comparison_with_no_values_still_refuses_the_cell(tco_profile):
@@ -664,7 +664,7 @@ def test_a_troubled_comparison_with_no_values_still_refuses_the_cell(tco_profile
         FieldComparison(scope="sample:A|A", field="transmittance", status="ambiguous"),
     ]
 
-    assert decide(spec, evidence, comparisons, units=tco_profile.units).status == "ambiguous"
+    assert decide(spec, evidence, comparisons, units=tco_profile.units, ctx=NO_CONTEXT).status == "ambiguous"
 
 
 def test_a_conflict_at_the_chosen_condition_still_refuses_the_cell():

@@ -16,8 +16,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from paperfacts.compare import IMPLICIT_ENTITY, ComparisonReport
+from paperfacts.compare import ComparisonReport
 from paperfacts.dataset import DatasetPayload, DocumentDataset
+from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.readings import StoredReadings
 from paperfacts.records import LaneExtraction
 
@@ -81,12 +82,23 @@ def test_a_b1_report_loads_with_its_paper_comparison_and_unmatched_sample():
     assert report.sample_matching().unmatched_b == ("SnO2:Ta reference",)
 
 
-def test_a_report_without_the_implicit_entity_s_matching_is_refused_at_load():
+def test_a_report_without_any_matching_is_refused_at_load():
     data = json.loads((FIXTURES / "report.json").read_text(encoding="utf-8"))
-    data["matchings"] = {"catalyst": data.pop("matching")}
+    data.pop("matching")
+    data["matchings"] = {}
 
-    with pytest.raises(ValidationError, match="matchings has no entry for the implicit entity 'sample'"):
+    with pytest.raises(ValidationError, match="matchings is empty"):
         ComparisonReport.model_validate(data)
+
+
+def test_a_report_of_named_entities_loads_and_its_primary_matching_comes_first():
+    data = json.loads((FIXTURES / "report.json").read_text(encoding="utf-8"))
+    data["matchings"] = {"catalyst": data.pop("matching"), "test": {}}
+
+    report = ComparisonReport.model_validate(data)
+
+    assert list(report.matchings) == ["catalyst", "test"]
+    assert report.sample_matching() is report.matchings["catalyst"]
 
 
 def test_a_b1_report_is_written_back_under_the_new_names():
