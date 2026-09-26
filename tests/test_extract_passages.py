@@ -317,7 +317,7 @@ def test_a_paper_depositing_no_tco_film_is_asked_only_paper_level_fields():
         for entry in lane.dropped
     )
     # the verdict travels as data, so the web page never has to match the audit text above
-    assert lane.no_tco_film is True
+    assert lane.no_samples is True
 
 
 def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
@@ -330,7 +330,7 @@ def test_an_inventory_empty_for_any_other_reason_still_gets_every_question():
 
     assert client.call_count == 5
     assert [field.value_raw for field in lane.unattributed] == ["12.5"]
-    assert lane.no_tco_film is False
+    assert lane.no_samples is False
 
 
 def test_a_no_film_verdict_beside_named_samples_is_not_trusted():
@@ -340,7 +340,7 @@ def test_a_no_film_verdict_beside_named_samples_is_not_trusted():
     lane = extract(client)
 
     assert len(lane.samples) == 2
-    assert lane.no_tco_film is False
+    assert lane.no_samples is False
 
 
 def test_a_value_naming_a_sample_the_inventory_does_not_have_is_kept_unattributed():
@@ -377,8 +377,8 @@ def test_a_paper_level_value_goes_to_the_target_even_when_it_names_a_sample():
 
     lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
-    assert lane.target is not None
-    assert [(field.field, field.value_raw) for field in lane.target.fields] == [("inch", "4")]
+    assert lane.paper is not None
+    assert [(field.field, field.value_raw) for field in lane.paper.fields] == [("inch", "4")]
     assert lane.samples[0].fields == ()
     assert lane.unattributed == ()
 
@@ -624,7 +624,7 @@ def test_a_paper_level_value_flagged_for_every_sample_is_not_stored_as_a_series_
 
     lane = extract_lane(make_artifact(blocks), client, lane_options(client, mode="passage"))
 
-    assert lane.target.get("component").series is False
+    assert lane.paper.get("component").series is False
     assert all(sample.fields == () for sample in lane.samples)
 
 

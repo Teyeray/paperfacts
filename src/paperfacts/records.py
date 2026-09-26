@@ -27,9 +27,9 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
-from paperfacts.fields import FieldSpec
+from paperfacts.fields import DIGIT_KINDS, FieldSpec
 from paperfacts.models import Backend
 from paperfacts.storage import write_text_atomic
 
@@ -48,7 +48,7 @@ class ResponseField(BaseModel):
     source_ids: list[str] = Field(default_factory=list)
     note: str | None = None
     applies_to_all_samples: bool = Field(
-        default=False, description="a sample-level value under the target that the paper states for every sample"
+        default=False, description="a sample-level value under the paper record that the paper states for every sample"
     )
 
 
@@ -62,7 +62,13 @@ class ResponseSample(BaseModel):
     fields: list[ResponseField] = Field(default_factory=list)
 
 
-class ResponseTarget(BaseModel):
+class ResponsePaper(BaseModel):
+    """The paper-level record as the model writes it.
+
+    Its class name appears in no text sent back to the model: answers are validated as JSON
+    (``model_validate_json``), whose errors name only the top-level model and the key path the model wrote
+    (``tests/test_records.py`` pins them)."""
+
     model_config = ConfigDict(extra="ignore")
 
     source_ids: list[str] = Field(default_factory=list)
@@ -74,7 +80,7 @@ class ExtractionResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    target: ResponseTarget | None = None
+    paper: ResponsePaper | None = None
     samples: list[ResponseSample] = Field(default_factory=list)
 
 
@@ -96,9 +102,9 @@ class InventoryResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     samples: list[InventorySample] = Field(default_factory=list)
-    no_tco_film: bool = Field(
+    no_samples: bool = Field(
         default=False,
-        description="the paper deposits no TCO film of its own; an empty list for any other reason says nothing",
+        description="the paper reports no sample of its own; an empty list for any other reason says nothing",
     )
 
 
@@ -140,27 +146,28 @@ class ResponseModels:
 def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
     """The answer shapes for a profile that tells the model to emit ``paper_key`` and ``no_samples_key``.
 
-    The keys are validation aliases onto the unchanged attributes ``target`` and ``no_tco_film``, so every
-    stored record keeps its shape. The class names are the base classes' own: a rejected answer goes back to
-    the model as ``str(ValidationError)``, which names the class, and under keys equal to the attribute names
-    the text is byte-identical to the base class's, as is every request that carries it.
+    The keys are validation aliases onto the attributes ``paper`` and ``no_samples``, so every profile's answer
+    lands on the same record whatever its keys. The class names are the base classes' own: a rejected answer goes
+    back to the model as ``str(ValidationError)``, which names the class and the key the model wrote, so under
+    the keys the corpus was extracted with the text is byte-identical to what it was before the rename, as is
+    every request that carries it.
     """
     extraction = create_model(
         ExtractionResponse.__name__,
         __base__=ExtractionResponse,
         __doc__=ExtractionResponse.__doc__,
-        target=(ResponseTarget | None, Field(default=None, validation_alias=paper_key)),
+        paper=(ResponsePaper | None, Field(default=None, validation_alias=paper_key)),
     )
     inventory = create_model(
         InventoryResponse.__name__,
         __base__=InventoryResponse,
         __doc__=InventoryResponse.__doc__,
-        no_tco_film=(
+        no_samples=(
             bool,
             Field(
                 default=False,
                 validation_alias=no_samples_key,
-                description=InventoryResponse.model_fields["no_tco_film"].description,
+                description=InventoryResponse.model_fields["no_samples"].description,
             ),
         ),
     )
@@ -199,8 +206,8 @@ class FieldValue(BaseModel):
     normalization_note: str | None = None
 
 
-class TargetRecord(BaseModel):
-    """The sputtering target, which belongs to the paper rather than to any one sample."""
+class PaperRecord(BaseModel):
+    """The paper-level values, which belong to the paper rather than to any one sample."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -302,7 +309,9 @@ class LaneExtraction(BaseModel):
         description="keys.profile_extraction_fingerprint of the profile the lane was extracted under; None in "
         "files written before profiles existed",
     )
-    target: TargetRecord | None = None
+    # Files written before round 2 name these two ``target`` and ``no_tco_film``; they are read under either
+    # name and written under the new one, so an old lane never loads with its paper record silently empty.
+    paper: PaperRecord | None = Field(default=None, validation_alias=AliasChoices("paper", "target"))
     samples: tuple[SampleRecord, ...] = ()
     invalid_source_ids: tuple[str, ...] = Field(
         default=(), description="ids the model cited that do not exist in the artifact (removed from fields)"
@@ -312,9 +321,10 @@ class LaneExtraction(BaseModel):
         default=(),
         description="sample-level values the model could not place on a sample: kept and grounded, never compared",
     )
-    no_tco_film: bool = Field(
+    no_samples: bool = Field(
         default=False,
-        description="the inventory found no sample because the paper deposits no TCO film of its own, so no "
+        validation_alias=AliasChoices("no_samples", "no_tco_film"),
+        description="the inventory found no sample because the paper reports no sample of its own, so no "
         "sample-level question was asked; an empty lane for any other reason leaves it False",
     )
     passes: int = Field(default=1, ge=1, description="extraction passes that were merged into this result")
@@ -332,13 +342,13 @@ class LaneExtraction(BaseModel):
     )
 
     def values(self) -> tuple[FieldValue, ...]:
-        """Every field value in the lane, target first, unplaced ones last.
+        """Every field value in the lane, paper-level first, unplaced ones last.
 
         Unattributed values are included because they were extracted and grounded like any other; leaving
         them out here would understate what the lane found and would hide an ungrounded one.
         """
-        target = self.target.fields if self.target else ()
-        return (*target, *(value for sample in self.samples for value in sample.fields), *self.unattributed)
+        paper = self.paper.fields if self.paper else ()
+        return (*paper, *(value for sample in self.samples for value in sample.fields), *self.unattributed)
 
     def ungrounded(self) -> tuple[FieldValue, ...]:
         """Values that could not be located in the block they cite."""
@@ -360,7 +370,7 @@ class ExtractedRecords(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    target: TargetRecord | None
+    paper: PaperRecord | None
     samples: tuple[SampleRecord, ...]
     invalid_source_ids: tuple[str, ...]
     dropped: tuple[str, ...]
@@ -435,7 +445,7 @@ class ResponseCleaning:
     ) -> FieldValue | None:
         """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
         text = value_raw.strip()
-        if spec.kind == "numeric" and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
+        if spec.kind in DIGIT_KINDS and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
             return None
         return FieldValue(
@@ -526,7 +536,7 @@ def response_to_records(
     but a prompt is a request, not an enforcement mechanism; the observed failure is a film's dopant
     concentration being reported as the sputtering target's composition.
 
-    The one sample-level value allowed under the target is one flagged ``applies_to_all_samples``: the paper
+    The one sample-level value allowed under the paper record is one flagged ``applies_to_all_samples``: the paper
     states it once for the whole series, and it is written onto every sample exactly as passage mode does.
     A sample listed without a usable id keeps its values, unattributed; a sample listed twice has its
     values filed under the first listing. Both are audited, as in passage mode.
@@ -556,17 +566,17 @@ def response_to_records(
             cleaning.dropped.append(f"{item.field}: not in schema")
         return spec
 
-    target = None
-    if response.target is not None:
+    paper = None
+    if response.paper is not None:
         # Validate first: if every field is dropped, invented ids still belong in the audit.
-        target_ids = cleaning.keep_ids(response.target.source_ids, known_ids)
-        target_fields: list[FieldValue] = []
-        for item in response.target.fields:
+        paper_ids = cleaning.keep_ids(response.paper.source_ids, known_ids)
+        paper_fields: list[FieldValue] = []
+        for item in response.paper.fields:
             spec = in_schema(item)
             if spec is None:
                 continue
             if spec.is_sample_level and not item.applies_to_all_samples:
-                cleaning.dropped.append(f"{item.field}: {spec.group}-level field reported under the target")
+                cleaning.dropped.append(f"{item.field}: {spec.group}-level field reported at paper level")
                 continue
             value = cleaned(item, spec)
             if value is None:
@@ -574,9 +584,9 @@ def response_to_records(
             if spec.is_sample_level:
                 place_on_every_sample(value, sample_fields, unattributed)
             else:
-                target_fields.append(value)
-        if target_fields:
-            target = TargetRecord(source_ids=target_ids, fields=tuple(target_fields))
+                paper_fields.append(value)
+        if paper_fields:
+            paper = PaperRecord(source_ids=paper_ids, fields=tuple(paper_fields))
 
     for listed, index in zip(response.samples, placement, strict=True):
         for item in listed.fields:
@@ -593,7 +603,7 @@ def response_to_records(
             (unattributed if index is None else sample_fields[index]).append(value)
 
     return ExtractedRecords(
-        target=target,
+        paper=paper,
         samples=tuple(
             sample.model_copy(update={"fields": tuple(values)})
             for sample, values in zip(samples, sample_fields, strict=True)

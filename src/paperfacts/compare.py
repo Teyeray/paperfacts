@@ -17,14 +17,13 @@ downstream consumers — the raw observation is never discarded.
 
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from paperfacts.errors import ProfileMismatchError
 from paperfacts.fields import FieldSpec
@@ -34,22 +33,25 @@ from paperfacts.keys import (
     profile_comparison_fingerprint,
     profile_extraction_fingerprint,
 )
+from paperfacts.kinds import rules_for
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
 from paperfacts.normalize import (
     NUMBER_RE,
-    canonical_category,
-    clean_unit,
     delatex,
     normalize_key,
     normalize_lane,
     normalize_text,
-    same_text,
 )
 from paperfacts.records import FieldValue, LaneExtraction
 from paperfacts.storage import write_text_atomic
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]
+# The scope of the paper-level comparisons, and the entity a profile without entity types has: its samples.
+PAPER_SCOPE = "paper"
+IMPLICIT_ENTITY = "sample"
+# The paper-level scope as files written before round 2 spell it. Unambiguous: every sample scope is prefixed.
+_LEGACY_PAPER_SCOPE = "target"
 
 
 class FieldComparison(BaseModel):
@@ -57,7 +59,7 @@ class FieldComparison(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    scope: str = Field(description='"target", "sample:<a_id>|<b_id>" (matched), or "sample:<id>" (unmatched)')
+    scope: str = Field(description='"paper", "sample:<a_id>|<b_id>" (matched), or "sample:<id>" (unmatched)')
     field: str
     condition: str | None = None
     status: FactStatus
@@ -70,6 +72,11 @@ class FieldComparison(BaseModel):
     a: FieldValue | None = None
     b: FieldValue | None = None
     detail: str = ""
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _current_paper_scope(cls, scope: Any) -> Any:
+        return PAPER_SCOPE if scope == _LEGACY_PAPER_SCOPE else scope
 
 
 class ComparisonCounts(BaseModel):
@@ -111,7 +118,7 @@ class ComparisonReport(BaseModel):
     comparison_key: str
     backend_a: Backend
     backend_b: Backend
-    matching: SampleMatching
+    matchings: dict[str, SampleMatching] = Field(description="the sample matching of each entity type, by its name")
     comparisons: tuple[FieldComparison, ...] = ()
     counts: ComparisonCounts = Field(default_factory=ComparisonCounts)
     # The lanes' artifact_sha256, so a report is tied to the parses it compared (None: unknown, older file).
@@ -119,6 +126,28 @@ class ComparisonReport(BaseModel):
     artifact_sha256_b: str | None = None
     # keys.profile_comparison_fingerprint of the profile the verdicts were reached under (None: an older file).
     profile_fingerprint: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _matchings_from_legacy(cls, data: Any) -> Any:
+        # A report written before round 2 holds its one matching as ``matching``: the implicit entity's.
+        if isinstance(data, dict) and "matching" in data and "matchings" not in data:
+            data = {name: value for name, value in data.items() if name != "matching"} | {
+                "matchings": {IMPLICIT_ENTITY: data["matching"]}
+            }
+        return data
+
+    @model_validator(mode="after")
+    def _has_the_implicit_entity(self) -> Self:
+        # Every profile has the implicit entity (a profile without entity types has only it), and every reader
+        # starts from its matching; a report without one is refused at load, not with a KeyError far away.
+        if IMPLICIT_ENTITY not in self.matchings:
+            raise ValueError(f"matchings has no entry for the implicit entity {IMPLICIT_ENTITY!r}")
+        return self
+
+    def sample_matching(self) -> SampleMatching:
+        """The matching of the implicit entity's samples."""
+        return self.matchings[IMPLICIT_ENTITY]
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -143,11 +172,11 @@ def compare_lanes(
     a_name, b_name = lane_a.backend, lane_b.backend
     comparisons: list[FieldComparison] = []
 
-    # Target: paper-level, does not go through sample pairing
+    # Paper-level: does not go through sample pairing
     comparisons += _compare_records(
-        "target",
-        lane_a.target.fields if lane_a.target else (),
-        lane_b.target.fields if lane_b.target else (),
+        PAPER_SCOPE,
+        lane_a.paper.fields if lane_a.paper else (),
+        lane_b.paper.fields if lane_b.paper else (),
         profile.paper_fields,
         a_name,
         b_name,
@@ -217,7 +246,7 @@ def compare_lanes(
         comparison_key=comparison_key(options),
         backend_a=a_name,
         backend_b=b_name,
-        matching=matching,
+        matchings={IMPLICIT_ENTITY: matching},
         comparisons=tuple(comparisons),
         counts=_count(comparisons, matching, (lane_a, lane_b), options.ambiguous_match_confidence),
         artifact_sha256_a=lane_a.artifact_sha256,
@@ -253,28 +282,7 @@ def _check_lane_profiles(lane_a: LaneExtraction, lane_b: LaneExtraction, expecte
 
 def compare_values(a: FieldValue, b: FieldValue, spec: FieldSpec) -> tuple[FactStatus, str]:
     """Decide the outcome when both sides have a value."""
-    if spec.kind != "numeric":
-        if same_text(spec, a.value_raw, b.value_raw):
-            category = canonical_category(spec.categories, a.value_raw) or canonical_category(
-                spec.categories, b.value_raw
-            )
-            return "agree", f"both name {category}" if category else "identical after text normalization"
-        return "conflict", f"{a.value_raw!r} vs {b.value_raw!r}"
-
-    if a.value is None or b.value is None:
-        # At least one side failed to parse as a number: if the raw text (including unit, case-sensitive)
-        # is identical on both sides, that still counts as agreement; otherwise there's no way to judge
-        if normalize_key(a.value_raw) == normalize_key(b.value_raw) and _unit_key(a.unit_raw) == _unit_key(b.unit_raw):
-            return "agree", "identical raw text (not parsed as a number)"
-        return (
-            "ambiguous",
-            f"unparsed: {a.normalization_note or a.value_raw!r} vs {b.normalization_note or b.value_raw!r}",
-        )
-    if a.unit != b.unit:
-        return "ambiguous", f"units differ after normalization: {a.unit} vs {b.unit}"
-    if math.isclose(a.value, b.value, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol):
-        return "agree", f"{a.value:g} ≈ {b.value:g} {a.unit or ''} (rel_tol={spec.rel_tol:g}, abs_tol={spec.abs_tol:g})"
-    return "conflict", f"{a.value:g} vs {b.value:g} {a.unit or ''}"
+    return rules_for(spec).compare(a, b, spec)
 
 
 def _compare_records(
@@ -415,8 +423,7 @@ def _pair_values(
     rest_b: list[FieldValue] = []
     for key in sorted(groups_a.keys() | groups_b.keys()):
         group_a, group_b = list(groups_a.get(key, ())), list(groups_b.get(key, ()))
-        if spec.kind == "numeric":
-            pairs += _closest_pairs(group_a, group_b)
+        pairs += _closest_pairs(group_a, group_b, rules_for(spec).distance)
         # Same condition, so whatever remains still describes the same fact: pair it in the order the paper
         # gave, rather than leaving both sides looking like the other is missing a value.
         while group_a and group_b:
@@ -508,20 +515,20 @@ def _equal_pairs(
 
 
 def _closest_pairs(
-    rest_a: list[FieldValue], rest_b: list[FieldValue]
+    rest_a: list[FieldValue], rest_b: list[FieldValue], distance: Callable[[FieldValue, FieldValue], float | None]
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
-    """Greedily pair the two closest numbers, removing them from both lists as it goes.
+    """Greedily pair the two closest values by the kind's ``distance``, removing them from both lists as it goes.
 
-    Stops as soon as a side runs out or nothing left parsed as a number, leaving those for the caller to
-    report one-sided.
+    Stops as soon as a side runs out or no pair left has a distance (nothing parsed as a number, or a kind with
+    no distance at all), leaving those for the caller to pair in order or report one-sided.
     """
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     while rest_a and rest_b:
         candidates = [
-            (abs(a.value - b.value), i, j)
+            (gap, i, j)
             for i, a in enumerate(rest_a)
             for j, b in enumerate(rest_b)
-            if a.value is not None and b.value is not None
+            if (gap := distance(a, b)) is not None
         ]
         if not candidates:
             break
@@ -536,10 +543,6 @@ def _by_condition(values: Sequence[FieldValue]) -> dict[str, list[FieldValue]]:
     for value in values:
         grouped.setdefault(normalize_key(value.condition), []).append(value)
     return grouped
-
-
-def _unit_key(unit_raw: str | None) -> str:
-    return clean_unit(unit_raw) if unit_raw else ""
 
 
 def _count(

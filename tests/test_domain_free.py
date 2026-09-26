@@ -39,21 +39,27 @@ FORBIDDEN = (
     re.compile("溅射"),
 )
 # Exact phrases allowed per file (keyed by the path under the package) with the most times each may occur, so a
-# new occurrence of an allowed phrase fails just like a new word. Each goes with the deferred
-# ``target``/``no_tco_film`` rename (spec section 0), is the default profile's name, or is not the domain word.
-# - ``no_tco_film``: the persisted inventory flag, an internal name this migration keeps.
-# - records.py ``no TCO film``: the descriptions of that same flag. records.py is hashed into extractor_key, so
-#   rewording them would re-key every stored extraction; they change together with the rename.
+# new occurrence of an allowed phrase fails just like a new word. Each is a legacy name read from stored files,
+# is the default profile's name, or is not the domain word.
+# - records.py ``"no_tco_film"``: the read alias of ``LaneExtraction.no_samples``, the name lanes written before
+#   round 2 store it under. The model-facing key of that name is the TCO profile's ``no_samples_key``.
 # - config.py ``DEFAULT_PROFILE = "tco"``, readings.py ``LEGACY_PROFILE = "tco"``: the shipped profile's name
 #   (``profiles/tco.json``), the only literal spelling of it in the package. It is a file name, not copy.
 # - app.css ``transparent``: the CSS colour keyword.
 ALLOWED: dict[str, dict[str, int]] = {
-    "records.py": {"no_tco_film": 1, "no TCO film": 2},
+    "records.py": {'"no_tco_film"': 1},
     "config.py": {'"tco"': 1},
     "readings.py": {'"tco"': 1},
-    "web/static/state.js": {"no_tco_film": 1},
     "web/static/app.css": {"transparent": 12},
 }
+# The internal names round 2 retired (spec §1.8), matched in the whole source, identifiers included: the
+# paper-level record is ``paper`` / ``PaperRecord`` and a report holds ``matchings`` per entity. ``event.target``
+# is the DOM's.
+RETIRED = (
+    re.compile(r"TargetRecord"),
+    re.compile(r"(?<!event)\.target\b"),
+    re.compile(r"report\.matching\b"),
+)
 
 
 def allowed_for(path: Path) -> dict[str, int]:
@@ -149,6 +155,23 @@ def test_no_python_string_names_the_domain(path: Path):
 @pytest.mark.parametrize("path", WEB_FILES, ids=lambda path: path.name)
 def test_no_web_asset_names_the_domain(path: Path):
     assert hits(web_text(path), allowed_for(path)) == []
+
+
+@pytest.mark.parametrize("path", [*PY_FILES, *WEB_FILES], ids=lambda path: str(path.relative_to(SOURCE)))
+def test_no_source_uses_a_retired_internal_name(path: Path):
+    text = path.read_text(encoding="utf-8")
+
+    assert sorted({match.group(0) for pattern in RETIRED for match in pattern.finditer(text)}) == []
+
+
+def test_the_retired_names_are_caught_and_the_dom_s_event_target_is_not():
+    text = "lane.target\nx = TargetRecord()\nreport.matching.pairs\nevent.target.closest('a')\nreport.matchings"
+
+    assert sorted(match.group(0) for pattern in RETIRED for match in pattern.finditer(text)) == [
+        ".target",
+        "TargetRecord",
+        "report.matching",
+    ]
 
 
 def test_the_scan_sees_through_comments_but_not_into_strings():

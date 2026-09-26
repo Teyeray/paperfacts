@@ -98,7 +98,7 @@ def test_extract_prints_the_samples_the_fields_and_the_provenance_summary(
     assert "[mineru] samples=1" in result.output
     assert "A  (O2 100 sccm)" in result.output
     assert "sheet_resistance: 12.5 Ω/sq" in result.output
-    assert "target.density: 98.5 %" in result.output
+    assert "paper.density: 98.5 %" in result.output
     assert client.call_count == 1
 
 

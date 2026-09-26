@@ -13,7 +13,7 @@ import dataclasses
 import pytest
 
 from paperfacts.normalize import drop_implausible, normalize_field, normalize_lane
-from paperfacts.records import ExtractedRecords, FieldValue, TargetRecord
+from paperfacts.records import ExtractedRecords, FieldValue, PaperRecord
 from support.extraction import make_field, make_lane, make_sample
 from support.profiles import shipped_profile
 
@@ -183,16 +183,16 @@ def test_normalize_lane_returns_a_new_object_and_leaves_the_input_alone(tco_prof
 
 
 def test_normalize_lane_covers_the_target_record_too(tco_profile):
-    lane = make_lane(target=TargetRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
+    lane = make_lane(paper=PaperRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
 
     normalized = normalize_lane(lane, tco_profile)
 
-    assert normalized.target.fields[0].value == 98.5
-    assert normalized.target.fields[0].unit == "%"
+    assert normalized.paper.fields[0].value == 98.5
+    assert normalized.paper.fields[0].unit == "%"
 
 
 def test_normalize_lane_keeps_a_missing_target_as_none(tco_profile):
-    assert normalize_lane(make_lane(), tco_profile).target is None
+    assert normalize_lane(make_lane(), tco_profile).paper is None
 
 
 def test_normalize_lane_normalizes_every_field_of_every_sample(tco_profile):
@@ -258,7 +258,7 @@ def test_normalizing_twice_changes_nothing_further(tco_profile):
 
 def _records(*, samples=(), unattributed=()) -> ExtractedRecords:
     return ExtractedRecords(
-        target=None, samples=tuple(samples), invalid_source_ids=(), dropped=(), unattributed=tuple(unattributed)
+        paper=None, samples=tuple(samples), invalid_source_ids=(), dropped=(), unattributed=tuple(unattributed)
     )
 
 
@@ -317,7 +317,7 @@ def test_fields_without_a_range_and_values_inside_one_leave_the_records_as_they_
 def test_a_target_whose_every_field_is_dropped_keeps_its_citations(tco_profile):
     spec = FIELD_BY_NAME["thickness"]  # any ranged field will do; the target is judged like a sample
     records = ExtractedRecords(
-        target=TargetRecord(source_ids=("mineru_p0_b1",), fields=(make_field(spec.name, "9", unit_raw="μm"),)),
+        paper=PaperRecord(source_ids=("mineru_p0_b1",), fields=(make_field(spec.name, "9", unit_raw="μm"),)),
         samples=(),
         invalid_source_ids=(),
         dropped=(),
@@ -325,4 +325,4 @@ def test_a_target_whose_every_field_is_dropped_keeps_its_citations(tco_profile):
 
     kept = drop_implausible(records, tco_profile)
 
-    assert kept.target == TargetRecord(source_ids=("mineru_p0_b1",), fields=())
+    assert kept.paper == PaperRecord(source_ids=("mineru_p0_b1",), fields=())

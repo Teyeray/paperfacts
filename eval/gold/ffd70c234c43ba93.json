@@ -6,7 +6,7 @@
     "No TCO is deposited: the ITO is commercial pre-coated glass, the top electrode is thermally evaporated Ag/CsF.",
     "Every sample row and every target value in a dataset for this paper is an extra."
   ],
-  "target": {},
+  "paper": {},
   "series": {},
   "samples": []
 }

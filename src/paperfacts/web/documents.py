@@ -20,8 +20,8 @@ from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload, DocumentDataset
-from paperfacts.decide import CellValue
 from paperfacts.keys import comparison_key_for, extractor_key_for, figure_key_for
+from paperfacts.kinds import CellValue
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import render_page_cached
 from paperfacts.profile import DomainProfile

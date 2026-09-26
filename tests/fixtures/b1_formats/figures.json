@@ -1,0 +1,91 @@
+{
+  "document_id": "67e5ebcc48e2d58566c8b879907ab7c86bb40dc28e0efee5c7b7798e767cce2e",
+  "figure_key": "89177f655a48",
+  "model": "fake-vl",
+  "backend": "mineru",
+  "panels": [
+    {
+      "source_id": "mineru_p0_b0",
+      "page": 0,
+      "figure": "Fig. 2",
+      "caption": "Fig. 2 Sheet resistance of the films versus O2 flow.",
+      "fields": [
+        "sheet_resistance"
+      ],
+      "status": "read",
+      "detail": "",
+      "readings": 2,
+      "usage": {
+        "prompt_tokens": 900,
+        "completion_tokens": 400,
+        "total_tokens": 1300
+      }
+    }
+  ],
+  "readings": [
+    {
+      "source_id": "mineru_p0_b0",
+      "page": 0,
+      "bbox": {
+        "x1": 0.1,
+        "y1": 0.1,
+        "x2": 0.6,
+        "y2": 0.5
+      },
+      "figure": "Fig. 2",
+      "caption": "Fig. 2 Sheet resistance of the films versus O2 flow.",
+      "panel": 1,
+      "field": "sheet_resistance",
+      "series": "Rs",
+      "x_quantity": "O2 flow",
+      "x_value": 100.0,
+      "x_unit": "sccm",
+      "x_on_tick": true,
+      "y_raw": 25.0,
+      "y_unit_raw": "Ω/sq",
+      "y_error_raw": null,
+      "y": 25.0,
+      "unit": "Ω/sq",
+      "scale": "linear",
+      "precision": 0.1,
+      "confidence": 0.9,
+      "approximate": true,
+      "note": null
+    },
+    {
+      "source_id": "mineru_p0_b0",
+      "page": 0,
+      "bbox": {
+        "x1": 0.1,
+        "y1": 0.1,
+        "x2": 0.6,
+        "y2": 0.5
+      },
+      "figure": "Fig. 2",
+      "caption": "Fig. 2 Sheet resistance of the films versus O2 flow.",
+      "panel": 1,
+      "field": "sheet_resistance",
+      "series": "Rs",
+      "x_quantity": "O2 flow",
+      "x_value": 200.0,
+      "x_unit": "sccm",
+      "x_on_tick": true,
+      "y_raw": 40.0,
+      "y_unit_raw": "Ω/sq",
+      "y_error_raw": null,
+      "y": 40.0,
+      "unit": "Ω/sq",
+      "scale": "linear",
+      "precision": 0.1,
+      "confidence": 0.9,
+      "approximate": true,
+      "note": null
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 900,
+    "completion_tokens": 400,
+    "total_tokens": 1300
+  },
+  "profile": "tco"
+}

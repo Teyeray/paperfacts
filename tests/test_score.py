@@ -49,8 +49,8 @@ def test_the_tco_profile_scores_every_cell_as_b0_did(tmp_path, monkeypatch):
 
     assert cells == json.loads((FIXTURE / "cells.json").read_text(encoding="utf-8"))
     assert text == (FIXTURE / "report.md").read_text(encoding="utf-8")
-    # The paper-level cells keep the gold side's id.
-    assert {cell["sample"] for cell in cells if cell["field"] == "component"} == {"target"}
+    # The paper-level cells are reported under "paper", although these gold files still say "target".
+    assert {cell["sample"] for cell in cells if cell["field"] == "component"} == {"paper"}
 
 
 def test_paper_level_is_the_groups_level_not_its_name(tmp_path):
@@ -68,6 +68,17 @@ def test_paper_level_is_the_groups_level_not_its_name(tmp_path):
 
     assert specs["component"].level == "paper"
     assert score.score_document(specs, gold, dataset) == score.score_document(score.load_specs(TCO), gold, dataset)
+
+
+def test_a_gold_file_under_the_legacy_paper_key_scores_as_under_the_current_one(capsys):
+    specs = score.load_specs(TCO)
+    legacy = json.loads((FIXTURE / "gold" / "0000000000000001.json").read_text(encoding="utf-8"))
+    current = {("paper" if key == "target" else key): value for key, value in legacy.items()}
+    dataset = json.loads((FIXTURE / "dataset_1.json").read_text(encoding="utf-8"))
+
+    assert "target" in legacy
+    assert score.score_document(specs, legacy, dataset) == score.score_document(specs, current, dataset)
+    assert "legacy key 'target'" in capsys.readouterr().err
 
 
 def write_dataset(root: Path, doc: str, keys: str, value: float, mtime: int) -> Path:

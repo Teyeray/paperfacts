@@ -19,6 +19,15 @@ const tsvCell = (value) => {
   return FORMULA_START.test(text) && !isNumber(text) ? `'${text}` : text;
 };
 
+// A field's value as the clipboard gets it, decided by its column (a dataset field: `kind`, `cardinality`): the
+// values of a `many` column joined with "; ", every other value as it is.
+export function fieldText(value, field) {
+  if (field?.cardinality === "many" && Array.isArray(value)) {
+    return value.map((item) => (typeof item === "number" ? fmt(item) : String(item ?? ""))).join("; ");
+  }
+  return value;
+}
+
 export function buildTsv(columns, items) {
   const lines = [columns.map((column) => column.header), ...items.map((item) => columns.map((column) => column.text(item)))];
   return lines.map((line) => line.map(tsvCell).join("\t")).join("\n");

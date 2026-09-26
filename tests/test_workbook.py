@@ -5,7 +5,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from paperfacts.matching import SampleMatch, SampleMatching
-from paperfacts.records import TargetRecord
+from paperfacts.records import PaperRecord
 from paperfacts.workbook import write_dataset
 from support.extraction import make_lane, make_sample
 from support.factories import DOC_ID
@@ -23,9 +23,9 @@ def test_excel_reopens_with_numeric_fields_text_ids_and_no_pdf_formulas(tmp_path
                 conditions={"temperature": "001"},
             )
         ],
-        target=TargetRecord(fields=(value("component", "=1+1"),)),
+        paper=PaperRecord(fields=(value("component", "=1+1"),)),
     )
-    b = make_lane(backend="paddleocr_vl", samples=[make_sample("001", a.samples[0].fields)], target=a.target)
+    b = make_lane(backend="paddleocr_vl", samples=[make_sample("001", a.samples[0].fields)], paper=a.paper)
     matching = SampleMatching(
         pairs=(SampleMatch(a_id="001", b_id="001", confidence=1.0, method="exact", justification="same"),)
     )

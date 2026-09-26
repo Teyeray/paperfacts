@@ -293,7 +293,7 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .results-table tr.sample-row small.chosen { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
 .results-table td.cond { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .results-table tr.paper-row { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
-.results-table tr.target-row td { color: var(--ink-2); }
+.results-table tr.paper-level-row td { color: var(--ink-2); }
 .paper-mark { margin-left: 6px; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); white-space: nowrap; }
 
 /* ---------- page viewer ---------- */

@@ -81,7 +81,7 @@ def export_document(document: DocumentInput, settings: Settings, profile: Domain
         raise FileNotFoundError(f"the comparison of {document.display_filename} predates its parse; run it again")
     # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
     # serves the report beside the table, and the two must be the same verdicts.
-    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matching, options)
+    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.sample_matching(), options)
     reason = incomplete_reason(lanes, report)
     if reason:
         raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")

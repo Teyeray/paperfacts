@@ -14,7 +14,8 @@ Runs in the package's environment: tolerances, categories and which fields are p
 (`profiles/tco.json`; `--profile` to point elsewhere), and categories are matched by the package's own
 `normalize.canonical_category`. `--keys` scores `datasets/<extractor_key>.<comparison_key>.json`; without it the
 newest dataset file of each paper is scored, which is only right while the library holds a single set of keys.
-The gold files keep `"target"` as the id of the paper-level record, whatever the profile calls that group.
+The gold files use `"paper"` as the id of the paper-level record, whatever the profile calls that group. A gold
+file that still says `"target"` (the id before round 2) is read the same, with a note on stderr.
 
 ## Gold file format
 
@@ -23,7 +24,7 @@ The gold files keep `"target"` as the id of the paper-level record, whatever the
   "doc_id": "80c3b69d570c2b6d",          // the 16-hex directory prefix under data/docs/
   "sha256": "...", "title": "...",
   "notes": ["what the paper contains, traps, what was deliberately left out"],
-  "target": { "<target field>": [cell, ...] },   // component, resistance, density, inch
+  "paper": { "<paper-level field>": [cell, ...] },   // TCO: component, resistance, density, inch
   "series": { "<field>": [cell, ...] },          // stated once for the whole series; applies to every sample
   "samples": [
     {
@@ -58,8 +59,7 @@ Values are text/table values only. A field the paper does not state has no entry
 
 ## Scoring rules
 
-**Target fields** are compared with the dataset's `paper_row` (target values are paper-level; every row repeats
-them).
+**Paper-level fields** are compared with the dataset's `paper_row` (every row repeats them).
 
 **Sample alignment.** A dataset row is a candidate for a gold sample when every `match.fields` value equals the
 row's value within the field tolerance, `match.label` matches `sample_id + " | " + sample_label`
@@ -68,7 +68,7 @@ number of the row's cells that agree with that gold sample (descending), ties by
 A gold sample without a row loses all its required cells as *missing*; a row without a gold sample makes all its
 non-empty cells *extra*.
 
-**Cell outcomes** (for each gold sample × sample field, and each target field):
+**Cell outcomes** (for each gold sample × sample field, and each paper-level field):
 
 | outcome | when | precision | recall |
 |---|---|---|---|

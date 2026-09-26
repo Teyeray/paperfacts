@@ -23,9 +23,9 @@ export function visibleFields(fields, rows, showAll) {
 
 const PICKER_KEY = "paperfacts.chosen-fields";
 // Fields carry `scope`, not the config's richer `group`, so the picker groups by the distinction the
-// dataset actually exposes: what belongs to the target/paper and what belongs to a sample.
-const SCOPE_LABEL = { target: () => uiCopy("paper_level_label_zh"), sample: () => `${uiCopy("entity_label_zh")}级` };
-const SCOPE_ORDER = ["target", "sample"];
+// dataset actually exposes: what belongs to the paper and what belongs to a sample.
+const SCOPE_LABEL = { paper: () => uiCopy("paper_level_label_zh"), sample: () => `${uiCopy("entity_label_zh")}级` };
+const SCOPE_ORDER = ["paper", "sample"];
 
 // null means "no choice stored" -- every field is shown, including ones added after the last choice.
 function readChosen() {

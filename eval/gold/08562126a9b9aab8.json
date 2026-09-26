@@ -9,7 +9,7 @@
     "Substrate temperature is 'room temperature'; the 20-40 °C rise is a measurement on static substrates, recorded as ambiguous.",
     "Deposition time is a range (0-40 min) for the whole thickness series, not per sample; base pressure 1e-4 Pa is not the working pressure."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "In2O3:SnO2 90:10 wt.%",

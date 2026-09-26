@@ -8,7 +8,7 @@
     "The 2 µm SiO2 is PECVD, the NiO/MAPbI3/PCBM layers are spin-coated: none of their numbers belong to ITO.",
     "Substrate temperature is 'room temperature' only."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "ITO",

@@ -9,7 +9,7 @@ from paperfacts.compare import compare_values
 from paperfacts.grounding import ground_lane, quoted_bound
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import canonical_category, normalize_field, read_value, same_text
-from paperfacts.records import FieldValue, TargetRecord
+from paperfacts.records import FieldValue, PaperRecord
 from support.extraction import make_lane, make_sample
 from test_dataset import FIELD_BY_NAME, dataset, decision, paired, value
 
@@ -165,11 +165,11 @@ def test_without_the_bound_the_same_quote_still_fills_the_cell():
 def test_the_gzo_component_audit_does_not_repeat_a_unit_the_quote_already_ends_with():
     result = dataset(
         make_lane(
-            target=TargetRecord(fields=(value("component", "3 wt.%", "wt.%"), value("component", "97 wt.%", "wt.%")))
+            paper=PaperRecord(fields=(value("component", "3 wt.%", "wt.%"), value("component", "97 wt.%", "wt.%")))
         ),
         make_lane(
             backend="paddleocr_vl",
-            target=TargetRecord(
+            paper=PaperRecord(
                 fields=(
                     value(
                         "component",

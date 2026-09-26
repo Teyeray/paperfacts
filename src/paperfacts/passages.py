@@ -38,7 +38,7 @@ from typing import Literal
 
 from paperfacts.config import DEFAULT_CANDIDATE_LIMIT
 from paperfacts.continuation import continuation_partners
-from paperfacts.fields import FieldSpec
+from paperfacts.fields import DIGIT_KINDS, FieldSpec
 from paperfacts.models import SourceBlock
 from paperfacts.profile import RetrievalSpec
 from paperfacts.text import delatex, is_word_edge, normalize_text
@@ -174,7 +174,7 @@ def candidate_blocks(
         chosen |= {
             index
             for index, block in enumerate(blocks)
-            if block.source_id in sample_blocks and (spec.kind != "numeric" or _has_digit(block))
+            if block.source_id in sample_blocks and (spec.kind not in DIGIT_KINDS or _has_digit(block))
         }
     chosen |= _dense_neighbours(chosen, blocks)
     chosen |= continuation_partners(chosen, blocks)
@@ -199,7 +199,7 @@ def _classify(
     """Whether ``block`` names ``spec`` by a keyword, only carries its unit (searched in its first ``span``
     characters), or does not qualify at all."""
     text = searchable(block)
-    if spec.kind == "numeric" and not any(character.isdigit() for character in text):
+    if spec.kind in DIGIT_KINDS and not any(character.isdigit() for character in text):
         return None  # a number cannot be quoted from a block that has none
     if keyword_hits(spec.keywords, text):
         return "named"

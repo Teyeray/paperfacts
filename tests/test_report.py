@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from paperfacts.compare import compare_lanes
 from paperfacts.matching import SampleMatch, SampleMatching
-from paperfacts.records import TargetRecord
+from paperfacts.records import PaperRecord
 from paperfacts.report import render_lane, render_report
 from support.extraction import comparison_options, make_field, make_lane, make_sample
 
@@ -24,14 +24,14 @@ def lane_text(**kwargs) -> str:
 def test_the_header_summarises_the_counts_the_cost_and_the_extractor():
     text = lane_text(
         samples=[make_sample("A", [make_field("thickness", "300", unit_raw="nm")])],
-        target=TargetRecord(fields=(make_field("density", "98.5", unit_raw="%"),)),
+        paper=PaperRecord(fields=(make_field("density", "98.5", unit_raw="%"),)),
         invalid_source_ids=("ghost",),
         dropped=("sheet_resistance: non-numeric value 'minimum'",),
         usage={"total_tokens": 1234},
     )
     header = text.splitlines()[0]
 
-    assert "samples=1" in header and "target_fields=1" in header
+    assert "samples=1" in header and "paper_fields=1" in header
     assert "invalid_source_ids=1" in header and "dropped=1" in header
     assert "tokens=1234" in header
     assert "model=fake-model" in header
@@ -72,10 +72,10 @@ def test_a_measurement_condition_is_shown_with_the_value():
     assert "@550 nm" in text
 
 
-def test_target_fields_are_labelled_as_such():
-    text = lane_text(target=TargetRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
+def test_paper_level_fields_are_labelled_as_such():
+    text = lane_text(paper=PaperRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
 
-    assert "target.density: 98.5 %" in text
+    assert "paper.density: 98.5 %" in text
 
 
 def test_each_sample_shows_its_id_and_label():

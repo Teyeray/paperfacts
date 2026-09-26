@@ -177,7 +177,7 @@ def seed_report(
         comparison_key=cmp_key,
         backend_a="mineru",
         backend_b="paddleocr_vl",
-        matching=SampleMatching(),
+        matchings={"sample": SampleMatching()},
         counts=counts or ComparisonCounts(),
     )
     report.write(library.layout.comparison_path(document_sha, key, cmp_key))

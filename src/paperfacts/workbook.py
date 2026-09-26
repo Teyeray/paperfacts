@@ -18,8 +18,9 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
-from paperfacts.columns import field_columns
+from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.dataset import DocumentDataset, Row
+from paperfacts.kinds import CellValue
 from paperfacts.profile import DomainProfile
 from paperfacts.storage import write_atomic
 
@@ -37,6 +38,30 @@ def data_columns(profile: DomainProfile) -> tuple[tuple[str, str], ...]:
         ("agree_fields", "双路一致字段数"),
         *((spec.name, spec.name) for spec in profile.fields),
     )
+
+
+def format_cell(value: CellValue, column: FieldColumn) -> CellValue:
+    """A field's cell as a sheet holds it, decided by the column rather than by the value's shape: the values of
+    a ``many`` column joined with "; ", every other value as it is."""
+    if column.cardinality == "many" and isinstance(value, list):
+        return "; ".join("" if item is None else str(item) for item in value)
+    return value
+
+
+def _formatted(rows: Sequence[Row], columns: dict[str, FieldColumn], *, quality: bool = False) -> list[Row]:
+    """``rows`` with every field cell through :func:`format_cell`: a data row's field columns, or a quality row's
+    ``value`` under the column its ``field`` names."""
+    if quality:
+        return [
+            {**row, "value": format_cell(row.get("value"), columns[str(row["field"])])}
+            if row.get("field") in columns
+            else row
+            for row in rows
+        ]
+    return [
+        {key: format_cell(value, columns[key]) if key in columns else value for key, value in row.items()}
+        for row in rows
+    ]
 
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -151,9 +176,11 @@ def write_dataset(
     workbook = Workbook()
     workbook.remove(workbook.active)
     columns = data_columns(profile)
+    by_name = {column.name: column for column in field_columns(profile)}
     scientific = frozenset(spec.name for spec in profile.fields if spec.display_format == "scientific")
-    _worksheet(workbook, "论文数据", columns, [doc.paper_row for doc in unique], "Papers", scientific=scientific)
-    samples = [row for doc in unique for row in doc.sample_rows]
+    papers = _formatted([doc.paper_row for doc in unique], by_name)
+    _worksheet(workbook, "论文数据", columns, papers, "Papers", scientific=scientific)
+    samples = _formatted([row for doc in unique for row in doc.sample_rows], by_name)
     _worksheet(workbook, "样品数据", columns, samples, "Samples", scientific=scientific)
     descriptions: list[Row] = [
         column.model_dump()
@@ -163,7 +190,7 @@ def write_dataset(
             "unit": column.unit or "文本",
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
-        for column in field_columns(profile)
+        for column in by_name.values()
     ]
     _worksheet(
         workbook,
@@ -179,7 +206,8 @@ def write_dataset(
         descriptions,
         "Fields",
     )
-    _worksheet(workbook, "数据质量", _QUALITY_COLUMNS, [row for doc in unique for row in doc.quality_rows], "Quality")
+    quality = _formatted([row for doc in unique for row in doc.quality_rows], by_name, quality=True)
+    _worksheet(workbook, "数据质量", _QUALITY_COLUMNS, quality, "Quality")
     _worksheet(workbook, "图中读数", _FIGURE_COLUMNS, figure_rows, "Figures")
     runs: list[Row] = [
         {

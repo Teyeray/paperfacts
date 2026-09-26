@@ -83,10 +83,10 @@ export const isActive = (job) => Boolean(job) && ACTIVE_JOB_STATUS.has(job.statu
 export const slot = (name, root = document.getElementById("document-view")) => root.querySelector(`[data-slot="${name}"]`);
 
 // Why a processed paper has no samples. Each lane carries the inventory's "this paper reports no in-scope
-// sample of its own" verdict under the internal name `no_tco_film` (extract.py), and the profile words it; any
+// sample of its own" verdict as `no_samples` (extract.py), and the profile words it; any
 // other empty lane just found no samples.
 export function noSamplesReason() {
   const lanes = LANES.map((lane) => state.lanes[lane]).filter(Boolean);
-  const noneInScope = lanes.length > 0 && lanes.every((lane) => !lane.samples?.length && lane.no_tco_film === true);
+  const noneInScope = lanes.length > 0 && lanes.every((lane) => !lane.samples?.length && lane.no_samples === true);
   return noneInScope ? uiCopy("no_samples_message_zh") : `未识别到${uiCopy("entity_label_zh")}：两路抽取都没有给出${uiCopy("entity_label_zh")}。`;
 }

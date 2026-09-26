@@ -8,7 +8,7 @@
     "Traps: Hall measured at 22 °C, J-V at 25 °C, 80 nm evaporated ITO tunnel junction, ~10 Ω/sq commercial ITO glass, 9 nm MoOx.",
     "Fig. 4a inset text (T550 and Rsheet) is recorded as figure_only."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "In2O3:CeO2 (3 wt%)",

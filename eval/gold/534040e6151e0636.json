@@ -8,7 +8,7 @@
     "Resistivities of HN400/HN500/HN550 are figure-only (Fig. 1) and not recorded.",
     "The 200 nm / 32 Ω/sq / 84% ITO and the 1.97e-4 Ω·cm commercial ITO are literature references."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "3 wt.% Ga2O3 + 97 wt.% ZnO",

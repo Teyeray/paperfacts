@@ -9,7 +9,7 @@
     "Table 2 (stability) 'before' sheet resistances (ITO 34.1/33.2, ATO/ITO 210.3/223.2, ATO 1122.2/1200.1) disagree with Table 1 and are ambiguous; 'after' values are post-stress states and not recorded.",
     "The abstract pairs 140 nm Hall data with 82.64 % transmittance, which the text later gives for the 280 nm film."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "Sb2O5:SnO2 = 5:95 wt%",

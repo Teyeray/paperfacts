@@ -13,20 +13,20 @@ from collections.abc import Sequence
 
 import pytest
 
-from paperfacts.records import ExtractedRecords, SampleRecord, TargetRecord
+from paperfacts.records import ExtractedRecords, PaperRecord, SampleRecord
 from paperfacts.voting import Scope, merge_passes
 from support.extraction import make_field, make_sample
 
 
 def records(
     *,
-    target: TargetRecord | None = None,
+    paper: PaperRecord | None = None,
     samples: Sequence[SampleRecord] = (),
     invalid: Sequence[str] = (),
     dropped: Sequence[str] = (),
 ) -> ExtractedRecords:
     return ExtractedRecords(
-        target=target, samples=tuple(samples), invalid_source_ids=tuple(invalid), dropped=tuple(dropped)
+        paper=paper, samples=tuple(samples), invalid_source_ids=tuple(invalid), dropped=tuple(dropped)
     )
 
 
@@ -160,28 +160,28 @@ def test_passes_spelling_the_sample_id_differently_still_merge_into_one_sample()
 
 
 def test_the_targets_fields_are_merged_by_the_same_majority_rule():
-    with_density = TargetRecord(source_ids=("mineru_p0_b0",), fields=(make_field("density", "98.5", unit_raw="%"),))
-    without_density = TargetRecord(source_ids=("mineru_p0_b0",), fields=())
-    passes = [records(target=with_density), records(target=with_density), records(target=without_density)]
+    with_density = PaperRecord(source_ids=("mineru_p0_b0",), fields=(make_field("density", "98.5", unit_raw="%"),))
+    without_density = PaperRecord(source_ids=("mineru_p0_b0",), fields=())
+    passes = [records(paper=with_density), records(paper=with_density), records(paper=without_density)]
 
     merged = merge_passes(passes)
 
-    assert merged.target.get("density").agreement == pytest.approx(2 / 3)
-    assert merged.target.source_ids == ("mineru_p0_b0",)
+    assert merged.paper.get("density").agreement == pytest.approx(2 / 3)
+    assert merged.paper.source_ids == ("mineru_p0_b0",)
 
 
 def test_a_target_with_no_surviving_fields_is_dropped_entirely():
     # Unlike a sample, the target has no separate identity vote -- there is at most one per paper -- so it
     # disappears whenever every one of its fields fails to reach a majority.
     passes = [
-        records(target=TargetRecord(fields=(make_field("density", "98.5"),))),
-        records(target=None),
-        records(target=None),
+        records(paper=PaperRecord(fields=(make_field("density", "98.5"),))),
+        records(paper=None),
+        records(paper=None),
     ]
 
     merged = merge_passes(passes)
 
-    assert merged.target is None
+    assert merged.paper is None
 
 
 # ---- Audit trails from every pass are combined, never silently narrowed to one -------------------
@@ -218,18 +218,18 @@ def test_a_sample_value_never_leaks_into_the_target_record():
     scope confusion that ``response_to_records`` exists to prevent.
     """
     blank = SampleRecord(sample_id=" ", fields=(make_field("sheet_resistance", "15.6", unit_raw="Ω/sq"),))
-    results = [ExtractedRecords(target=None, samples=(blank,), invalid_source_ids=(), dropped=()) for _ in range(2)]
+    results = [ExtractedRecords(paper=None, samples=(blank,), invalid_source_ids=(), dropped=()) for _ in range(2)]
 
     merged = merge_passes(results)
 
-    assert merged.target is None
+    assert merged.paper is None
     assert [v.field for s in merged.samples for v in s.fields] == ["sheet_resistance"]
 
 
 def test_the_scopes_that_are_not_a_sample_cannot_collide_with_a_sample_id():
     # A sample's scope is its normalised id, always a string; these two are not strings at all, so no
     # paper can name a sample in a way that lands its values in the target or unattributed bucket.
-    assert not isinstance(Scope.TARGET, str)
+    assert not isinstance(Scope.PAPER, str)
     assert not isinstance(Scope.UNATTRIBUTED, str)
 
 
@@ -307,7 +307,7 @@ def test_a_paraphrase_seen_in_two_of_three_passes_keeps_the_partial_agreement():
 def test_unattributed_values_are_voted_on_condition_free_too():
     def unplaced(condition: str) -> ExtractedRecords:
         return ExtractedRecords(
-            target=None,
+            paper=None,
             samples=(),
             invalid_source_ids=(),
             dropped=(),

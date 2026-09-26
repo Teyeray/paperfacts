@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from paperfacts.grounding import block_adjacency, ground_lane, ground_values, grounding_key, is_grounded
-from paperfacts.records import FieldValue, TargetRecord
+from paperfacts.records import FieldValue, PaperRecord
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_block
 
@@ -122,7 +122,7 @@ def test_ground_values_does_not_mutate_its_input():
 def test_ground_lane_updates_grounding_on_both_the_target_and_every_sample():
     blocks = {"b1": "target relative density of 98.5 %", "b2": "sheet resistance of 12.5 Ω/sq"}
     lane = make_lane(
-        target=TargetRecord(source_ids=("b1",), fields=(make_field("density", "98.5", source_ids=("b1",)),)),
+        paper=PaperRecord(source_ids=("b1",), fields=(make_field("density", "98.5", source_ids=("b1",)),)),
         samples=[
             make_sample(
                 "A",
@@ -136,17 +136,17 @@ def test_ground_lane_updates_grounding_on_both_the_target_and_every_sample():
 
     grounded = ground_lane(lane, blocks)
 
-    assert grounded.target.get("density").grounded is True
+    assert grounded.paper.get("density").grounded is True
     assert grounded.sample("A").get("sheet_resistance").grounded is True
     assert grounded.sample("A").get("thickness").grounded is False
 
 
 def test_ground_lane_tolerates_a_lane_with_no_target():
-    lane = make_lane(target=None, samples=[make_sample("A", [make_field("thickness", "300", source_ids=("b1",))])])
+    lane = make_lane(paper=None, samples=[make_sample("A", [make_field("thickness", "300", source_ids=("b1",))])])
 
     grounded = ground_lane(lane, {"b1": "thickness of 300 nm"})
 
-    assert grounded.target is None
+    assert grounded.paper is None
     assert grounded.sample("A").get("thickness").grounded is True
 
 

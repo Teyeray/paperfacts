@@ -1,0 +1,144 @@
+{
+  "document_id": "19227e043d928d6e0d6142991c806f2a9f71972c63b3376b274706a80e133fa0",
+  "backend": "paddleocr_vl",
+  "extractor_key": "d3f0e6244743",
+  "model": "deepseek-v4.1-flash",
+  "profile_fingerprint": "1a1957c0a3b8",
+  "target": {
+    "source_ids": [
+      "paddleocr_vl_p1_b4"
+    ],
+    "fields": [
+      {
+        "field": "component",
+        "value_raw": "Sn/Ta target 95:5 wt.%",
+        "unit_raw": null,
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p1_b4"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": null,
+        "unit": null,
+        "normalization_note": null
+      }
+    ]
+  },
+  "samples": [
+    {
+      "sample_id": "SnO2:Ta (0.70 at.% Ta)",
+      "label": "optimized flow conditions",
+      "conditions": {
+        "temperature": "225°C"
+      },
+      "source_ids": [
+        "paddleocr_vl_p0_b1"
+      ],
+      "fields": [
+        {
+          "field": "working_pressure",
+          "value_raw": "1.1",
+          "unit_raw": "Pa",
+          "condition": null,
+          "source_ids": [
+            "paddleocr_vl_p0_b1"
+          ],
+          "note": null,
+          "grounded": false,
+          "series": false,
+          "agreement": 1.0,
+          "bound": null,
+          "value": null,
+          "unit": null,
+          "normalization_note": null
+        },
+        {
+          "field": "substrate_temperature",
+          "value_raw": "225",
+          "unit_raw": "°C",
+          "condition": null,
+          "source_ids": [
+            "paddleocr_vl_p0_b1"
+          ],
+          "note": null,
+          "grounded": false,
+          "series": false,
+          "agreement": 1.0,
+          "bound": null,
+          "value": null,
+          "unit": null,
+          "normalization_note": null
+        },
+        {
+          "field": "resistivity",
+          "value_raw": "0.3",
+          "unit_raw": "Ω cm",
+          "condition": null,
+          "source_ids": [
+            "paddleocr_vl_p0_b1"
+          ],
+          "note": null,
+          "grounded": false,
+          "series": false,
+          "agreement": 1.0,
+          "bound": null,
+          "value": null,
+          "unit": null,
+          "normalization_note": null
+        },
+        {
+          "field": "transmittance",
+          "value_raw": ">80",
+          "unit_raw": "%",
+          "condition": null,
+          "source_ids": [
+            "paddleocr_vl_p0_b1"
+          ],
+          "note": null,
+          "grounded": false,
+          "series": false,
+          "agreement": 1.0,
+          "bound": null,
+          "value": null,
+          "unit": null,
+          "normalization_note": null
+        }
+      ]
+    },
+    {
+      "sample_id": "O2 flow series",
+      "label": "",
+      "conditions": {},
+      "source_ids": [
+        "paddleocr_vl_p0_b1"
+      ],
+      "fields": []
+    },
+    {
+      "sample_id": "SnO2:Ta reference",
+      "label": "commercial reference film",
+      "conditions": {},
+      "source_ids": [
+        "paddleocr_vl_p0_b1"
+      ],
+      "fields": []
+    }
+  ],
+  "invalid_source_ids": [],
+  "dropped": [],
+  "unattributed": [],
+  "no_tco_film": false,
+  "passes": 1,
+  "failed_questions": [],
+  "usage": {
+    "prompt_tokens": 2500,
+    "completion_tokens": 500,
+    "total_tokens": 3000
+  },
+  "raw_response": "# inventory\n{\"samples\": [{\"sample_id\": \"SnO2:Ta (0.70 at.% Ta)\", \"label\": \"optimized flow conditions\", \"conditions\": {\"temperature\": \"225\\u00b0C\"}, \"source_ids\": [\"paddleocr_vl_p0_b1\"]}, {\"sample_id\": \"O2 flow series\", \"label\": \"\", \"conditions\": {}, \"source_ids\": [\"paddleocr_vl_p0_b1\"]}, {\"sample_id\": \"SnO2:Ta reference\", \"label\": \"commercial reference film\", \"conditions\": {}, \"source_ids\": [\"paddleocr_vl_p0_b1\"]}], \"no_tco_film\": false}\n\n# component\n{\"values\": [{\"sample_id\": null, \"value_raw\": \"Sn/Ta target 95:5 wt.%\", \"unit_raw\": null, \"source_ids\": [\"paddleocr_vl_p1_b4\"]}]}\n\n# resistance\n{\"values\": []}\n\n# density\n{\"values\": []}\n\n# inch\n{\"values\": []}\n\n# sputtering_time\n{\"values\": []}\n\n# sputtering_power\n{\"values\": []}\n\n# mode\n{\"values\": []}\n\n# ar_flow_rate\n{\"values\": []}\n\n# o2_flow_rate\n{\"values\": []}\n\n# h2_flow_rate\n{\"values\": []}\n\n# o2_ratio\n{\"values\": []}\n\n# h2_ratio\n{\"values\": []}\n\n# working_pressure\n{\"values\": [{\"sample_id\": \"SnO2:Ta (0.70 at.% Ta)\", \"value_raw\": \"1.1\", \"unit_raw\": \"Pa\", \"source_ids\": [\"paddleocr_vl_p0_b1\"]}]}\n\n# target_substrate_distance\n{\"values\": []}\n\n# substrate_axis_distance\n{\"values\": []}\n\n# substrate_temperature\n{\"values\": [{\"sample_id\": \"SnO2:Ta (0.70 at.% Ta)\", \"value_raw\": \"225\", \"unit_raw\": \"\\u00b0C\", \"source_ids\": [\"paddleocr_vl_p0_b1\"]}]}\n\n# annealing_temperature\n{\"values\": []}\n\n# annealing_time\n{\"values\": []}\n\n# rotation_speed\n{\"values\": []}\n\n# sheet_resistance\n{\"values\": []}\n\n# resistivity\n{\"values\": [{\"sample_id\": \"SnO2:Ta (0.70 at.% Ta)\", \"value_raw\": \"0.3\", \"unit_raw\": \"\\u03a9 cm\", \"source_ids\": [\"paddleocr_vl_p0_b1\"]}]}\n\n# transmittance\n{\"values\": [{\"sample_id\": \"SnO2:Ta (0.70 at.% Ta)\", \"value_raw\": \">80\", \"unit_raw\": \"%\", \"source_ids\": [\"paddleocr_vl_p0_b1\"]}]}\n\n# thickness\n{\"values\": []}",
+  "artifact_sha256": "5db6e4e8e6786a2bb57aae871bc107a916322dfa121de9d0a6e243a425a69d58"
+}

@@ -9,8 +9,9 @@ Run it in the package's environment: a text field's closed categories are matche
 
 The field table is the profile's (``--profile``, default ``profiles/tco.json``), parsed and validated by the
 package itself, so scoring reads the same fields, tolerances and categories as the run. The gold files keep their
-own ids: paper-level cells are under ``"target"`` and are reported with sample ``"target"``, whatever the profile
-calls its paper-level group.
+own ids: paper-level cells are under ``"paper"`` and are reported with sample ``"paper"``, whatever the profile
+calls its paper-level group. A gold file or a dataset written before round 2 spells that id ``"target"``; both are
+still read, the gold file with a note on stderr.
 
 ``--keys`` names the dataset file (``datasets/<extractor_key>.<comparison_key>.json``), so the score is of the
 run those keys describe. Without it the newest dataset file of each document that was built under this profile
@@ -40,7 +41,9 @@ from paperfacts.profile_loader import parse_profile
 
 REPO = Path(__file__).resolve().parent.parent
 # The gold files' id for the paper-level record, and the sample id the report prints for it.
-PAPER = "target"
+PAPER = "paper"
+# The same id before round 2, in gold files and in datasets' quality rows.
+LEGACY_PAPER = "target"
 OUTCOMES = ("correct", "soft", "wrong", "missing", "extra", "disputed")
 
 
@@ -51,7 +54,7 @@ Spec = FieldSpec
 @dataclass(frozen=True)
 class Cell:
     doc: str
-    sample: str  # gold sample id, "target", or "(unaligned) <row id>"
+    sample: str  # gold sample id, "paper", or "(unaligned) <row id>"
     row: str  # dataset sample_id, "" when the dataset has no row for it
     field: str
     outcome: str
@@ -189,6 +192,8 @@ def quality_index(dataset: dict) -> dict[tuple[str, str], dict]:
 
 def trace(quality: dict, sample_id: str, field: str) -> str:
     q = quality.get((sample_id, field))
+    if not q and sample_id == PAPER:
+        q = quality.get((LEGACY_PAPER, field))
     if not q:
         return ""
     bits = [q.get("decision") or "", q.get("conditions") or "", q.get("detail") or "", q.get("source_ids") or ""]
@@ -201,12 +206,15 @@ def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Ce
     rows = list(dataset.get("sample_rows", []))
     cells: list[Cell] = []
 
-    target_row = dataset.get("paper_row") or {}
+    paper_row = dataset.get("paper_row") or {}
+    if PAPER not in gold and LEGACY_PAPER in gold:
+        print(f"{doc}: gold file uses the legacy key {LEGACY_PAPER!r}; read as {PAPER!r}", file=sys.stderr)
+    paper_gold = gold.get(PAPER, gold.get(LEGACY_PAPER, {}))
     for name, spec in specs.items():
         if spec.level != "paper":
             continue
-        gcells = gold.get(PAPER, {}).get(name, [])
-        got = target_row.get(name)
+        gcells = paper_gold.get(name, [])
+        got = paper_row.get(name)
         outcome = classify(spec, got, gcells, False)
         if outcome:
             detail = trace(quality, PAPER, name)

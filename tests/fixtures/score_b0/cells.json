@@ -1,8 +1,8 @@
 [
  {
   "doc": "0000000000000001",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "component",
   "outcome": "correct",
   "value": "In2O3:SnO2 90:10 wt%",
@@ -11,8 +11,8 @@
  },
  {
   "doc": "0000000000000001",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "resistance",
   "outcome": "extra",
   "value": 0.001,
@@ -21,8 +21,8 @@
  },
  {
   "doc": "0000000000000001",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "inch",
   "outcome": "wrong",
   "value": 2,
@@ -191,8 +191,8 @@
  },
  {
   "doc": "0000000000000002",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "component",
   "outcome": "extra",
   "value": "ITO",

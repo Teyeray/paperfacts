@@ -1,8 +1,8 @@
 [
  {
   "doc": "08562126a9b9aab8",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "component",
   "outcome": "correct",
   "value": "90 wt.% In₂O₃ and 10 wt.% SnO₂",
@@ -481,8 +481,8 @@
  },
  {
   "doc": "1048c42316a5c9f8",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "inch",
   "outcome": "correct",
   "value": 4.0,
@@ -1391,8 +1391,8 @@
  },
  {
   "doc": "534040e6151e0636",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "component",
   "outcome": "missing",
   "value": null,
@@ -3301,8 +3301,8 @@
  },
  {
   "doc": "c3ab31d08acc066b",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "component",
   "outcome": "missing",
   "value": null,
@@ -3841,8 +3841,8 @@
  },
  {
   "doc": "e6939c89e983c426",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "component",
   "outcome": "correct",
   "value": "SnO (99.99%)",
@@ -3851,8 +3851,8 @@
  },
  {
   "doc": "e6939c89e983c426",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "inch",
   "outcome": "correct",
   "value": 2.0,
@@ -6941,8 +6941,8 @@
  },
  {
   "doc": "e855631c6f46a0ee",
-  "sample": "target",
-  "row": "target",
+  "sample": "paper",
+  "row": "paper",
   "field": "inch",
   "outcome": "correct",
   "value": 4.0,
