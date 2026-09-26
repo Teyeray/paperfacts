@@ -252,13 +252,17 @@ def test_two_lanes_agree_exactly_when_the_referenced_matching_pairs_their_sample
     assert _pair("C1", "coat-2", coatings_a, coatings_b, PAIRED)[0] == "conflict"
     # One names no listed coating.
     assert _pair("C1", "coat-9", coatings_a, coatings_b, PAIRED)[0] == "ambiguous"
-    # One names a coating its matching left unpaired: whether it is the other's is not known.
+    # Both name coatings their matching left unpaired: whether they are one is not known.
     unpaired = SampleMatching(
         pairs=(SampleMatch(a_id="C1", b_id="coat-1", confidence=0.9, justification="j", method="llm"),),
         unmatched_a=("C2",),
         unmatched_b=("coat-2",),
     )
     assert _pair("C2", "coat-2", coatings_a, coatings_b, unpaired)[0] == "ambiguous"
+    # One names a paired coating, the other one its matching left unpaired: the pairing is one to one, so the unpaired
+    # coating is not the paired one's partner.
+    assert _pair("C1", "coat-2", coatings_a, coatings_b, unpaired)[0] == "conflict"
+    assert _pair("C2", "coat-1", coatings_a, coatings_b, unpaired)[0] == "conflict"
 
 
 def test_the_kind_row_needs_its_context_and_ignores_every_other():

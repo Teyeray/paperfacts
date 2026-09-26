@@ -289,8 +289,13 @@ function bindCells(tr) {
       revealViewer();
     });
   }
+  // The records are narrowed to the cell's entity only where the page groups by entity: with one entity type every
+  // record is its, and a row naming none must not filter out the records that do.
+  const byEntity = entityGroups().length > 1;
   for (const td of tr.querySelectorAll("td.cell.empty[data-field]")) {
-    onActivate(td, () => showEvidence(samplesHost(td), td.dataset.field, td.dataset.sample, td.dataset.kind, td.dataset.entity));
+    onActivate(td, () =>
+      showEvidence(samplesHost(td), td.dataset.field, td.dataset.sample, td.dataset.kind, byEntity ? td.dataset.entity : null),
+    );
   }
 }
 

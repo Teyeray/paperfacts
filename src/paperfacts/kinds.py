@@ -663,9 +663,10 @@ class ReferenceRules:
         pairs = ctx.pairs.get(spec.references or "", frozenset())
         if (a.ref_id, b.ref_id) in pairs:
             return "agree", f"both name {spec.references} {a.ref_id} | {b.ref_id}, which its matching pairs"
-        if any(pair_a == a.ref_id for pair_a, _ in pairs) and any(pair_b == b.ref_id for _, pair_b in pairs):
+        # Matching is one to one: a sample paired with any other than the one the other lane names is not that one.
+        if any(pair_a == a.ref_id for pair_a, _ in pairs) or any(pair_b == b.ref_id for _, pair_b in pairs):
             return "conflict", f"{a.ref_id!r} and {b.ref_id!r} are two {spec.references} samples"
-        # One of them was paired with nothing: whether it is the other's sample is not known.
+        # Neither was paired with anything: whether they are one sample is not known.
         return "ambiguous", f"{a.ref_id!r} vs {b.ref_id!r}: the {spec.references} matching does not pair them"
 
     def distance(self, a: FieldValue, b: FieldValue) -> float | None:

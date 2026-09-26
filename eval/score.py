@@ -286,8 +286,23 @@ def trace(quality: dict, sample_id: str, field: str, entity: str | None = None) 
     return " | ".join(b for b in bits if b)
 
 
+def check_gold_entities(specs: dict[str, Spec], gold: dict) -> None:
+    """Under a profile with entity types, every gold sample must name one of them: a missing or misspelled entity
+    would match no row and silently score nothing."""
+    entities = sorted({spec.entity for spec in specs.values() if spec.entity is not None})
+    if not entities:
+        return
+    for sample in gold["samples"]:
+        if sample.get("entity") not in entities:
+            raise ValueError(
+                f"{gold['doc_id']}: gold sample {sample.get('id')!r} names entity {sample.get('entity')!r}; "
+                f"it must name one of the profile's entities ({', '.join(entities)})"
+            )
+
+
 def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Cell]:
     doc = gold["doc_id"]
+    check_gold_entities(specs, gold)
     quality = quality_index(dataset)
     rows = list(dataset.get("sample_rows", []))
     cells: list[Cell] = []

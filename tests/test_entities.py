@@ -35,6 +35,7 @@ from paperfacts.models import BACKENDS, DocumentGeometry, DocumentInput
 from paperfacts.profile import IMPLICIT_ENTITY, DomainProfile
 from paperfacts.profile_loader import parse_profile
 from paperfacts.prompts import (
+    extraction_system_prompt,
     field_system_prompt,
     field_user_prompt,
     inventory_system_prompt,
@@ -206,6 +207,8 @@ def test_each_entity_is_asked_in_its_own_words_with_its_own_condition_rules():
     assert "both are the test at 300 °C" not in matching_system_prompt(PROFILE, COATING)
     question = field_user_prompt(SPECS["wear_mode"], "- T1", "text", "x", WEAR.prompt.sample_list_heading)
     assert "Wear tests this paper reports:\n- T1" in question
+    # Rule 10 names the sample groups of the entity the prompt is rendered for.
+    assert 'field (group "coating") that the paper states once' in extraction_system_prompt(PROFILE)
 
 
 # ---- Attribution, fan-out and the vote, per entity -------------------------------------------------------------
@@ -251,7 +254,8 @@ def test_a_value_lands_on_the_sample_of_its_own_entity_even_when_another_shares_
     assert [(value.field, value.value_raw) for value in records.unattributed] == [("wear_mode", "sliding")]
 
 
-def test_a_series_value_fans_out_within_its_entity_and_a_lone_sample_owns_a_null_id():
+def test_a_series_value_fans_out_within_its_entity_and_a_lone_sample_owns_a_null_id(caplog):
+    caplog.set_level("INFO", logger="paperfacts.extract")
     records = passage_records(
         [_inventory(COATING, "S1", "S2"), _inventory(WEAR, "T1")],
         [
@@ -271,6 +275,9 @@ def test_a_series_value_fans_out_within_its_entity_and_a_lone_sample_owns_a_null
     }
     assert all(value.series for sample in records.samples[:2] for value in sample.fields)
     assert [value.field for value in records.unattributed] == ["coating_thickness"]
+    # The log names the lone owner it used, not every sample of the paper.
+    (line,) = [r.getMessage() for r in caplog.records if "only sample of their entity" in r.getMessage()]
+    assert line.endswith("(wear_test:T1)")
 
 
 def test_the_vote_keeps_two_entities_samples_of_one_name_apart():

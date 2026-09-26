@@ -215,10 +215,11 @@ def _values(profile: DomainProfile, entity: EntitySpec | None = None) -> dict[st
     """Every slot and computed marker of the system prompts asked about ``entity``'s samples (the primary entity's
     by default, which for a profile without entity types is ``profile.prompt`` itself). The computed ones are
     finished text before the templates are rendered, so they too are inserted verbatim. Rule 8 names the fields
-    asked with this entity's prompt: its own and the paper-level ones."""
+    asked with this entity's prompt: its own and the paper-level ones; rule 10 this entity's sample groups."""
     entity = entity or profile.primary
     values = {**dataclasses.asdict(entity.prompt), "paper_level_rule": paper_level_rule(profile)}
-    values["sample_groups"] = quoted_names(profile.sample_groups)
+    # Rule 10 names the sample groups of this entity only; the implicit entity's groups name none, so it names all.
+    values["sample_groups"] = quoted_names([g for g in profile.sample_groups if g.entity in (None, entity.name)])
     values["condition_rules"] = condition_rules(
         [spec for spec in profile.fields if profile.entity_of(spec).name == entity.name]
     )

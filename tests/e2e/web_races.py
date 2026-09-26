@@ -46,7 +46,7 @@ from paperfacts.web.jobs import Job, JobManager
 from paperfacts.workflow import stage_names
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_blank_pdf, make_block
-from support.profiles import make_reference_profile, shipped_profile
+from support.profiles import make_one_entity_profile, make_reference_profile, shipped_profile
 
 STAGE_SECONDS = 0.3  # the stub job takes len(stage_names()) * this
 # As long as the model's condition prose gets on real papers: the text that pushed the second lane off screen.
@@ -251,6 +251,58 @@ def seed_entity_document(library: Library, root: Path) -> str:
     return document_key(sha)
 
 
+def seed_one_entity_document(library: Library, root: Path) -> str:
+    """A paper of a profile declaring one entity type (coatings): its lane records name the entity, its dataset rows
+    were written before rows named a lone declared entity, so they name none."""
+    pdf = make_blank_pdf(root / "one-entity.pdf", [(400.0, 600.0)])
+    sha = library.register_upload("O 一种实体.pdf", pdf.read_bytes()).sha256
+    for backend in BACKENDS:
+        blocks = tuple(
+            make_block(page=0, order=order, backend=backend, document_id=sha, content=f"block {order}")
+            for order in (0, 1)
+        )
+        ParsedArtifact(
+            document_id=sha,
+            backend=backend,
+            backend_version="stub",
+            pages=(PageGeometry(index=0, width_pt=400.0, height_pt=600.0),),
+            blocks=blocks,
+        ).write(library.layout.artifact_path(sha, backend))
+        solvent = make_field("solvent", "water" if backend == "mineru" else "ethanol", source_ids=[f"{backend}_p0_b1"])
+        sample = make_sample("S1", [solvent]).model_copy(update={"entity": "coating"})
+        make_lane(backend=backend, samples=[sample], document_id=sha, extractor_key=library.extractor_key).write(
+            library.layout.extraction_path(sha, backend, library.extractor_key)
+        )
+    field = make_field("solvent", "water", source_ids=["mineru_p0_b1"])
+    ComparisonReport(
+        document_id=sha,
+        extractor_key=library.extractor_key,
+        comparison_key=library.comparison_key,
+        backend_a="mineru",
+        backend_b="paddleocr_vl",
+        matchings={
+            "coating": SampleMatching(
+                pairs=(SampleMatch(a_id="S1", b_id="S1", confidence=1.0, justification="", method="exact"),)
+            )
+        },
+        counts=ComparisonCounts(total=1, conflict=1),
+        comparisons=(FieldComparison(scope="coating:S1|S1", field="solvent", status="conflict", a=field, b=field),),
+    ).write(library.layout.comparison_path(sha, library.extractor_key, library.comparison_key))
+    row = {
+        "document_id": sha,
+        "filename": "O 一种实体.pdf",
+        "sample_id": "S1",
+        "solvent": None,
+        "precursor_purity": None,
+    }
+    quality = [{"sample_id": "S1", "field": "solvent", "decision": "conflict", "detail": "两路冲突"}]
+    path = library.layout.dataset_json_path(sha, library.extractor_key, library.comparison_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"document_id": sha, "filename": "O", "paper_row": row, "sample_rows": [row], "quality_rows": quality}
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return document_key(sha)
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -286,8 +338,14 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     entity_app = create_app(
         entity_settings, profile=entity_profile, jobs=JobManager(stub_runner, stage_names(), workers=1)
     )
-    with running(app) as base, running(entity_app) as entity_base:
+    # A third under a profile declaring a single entity type: the page groups nothing, the records name the entity.
+    one_settings = Settings(data_root=root / "one-entity", repo_root=root, llm_api_key="sk-test", llm_model="fake")
+    one_profile = make_one_entity_profile()
+    docs["O"] = seed_one_entity_document(Library(one_settings, one_profile), root)
+    one_app = create_app(one_settings, profile=one_profile, jobs=JobManager(stub_runner, stage_names(), workers=1))
+    with running(app) as base, running(entity_app) as entity_base, running(one_app) as one_base:
         docs["entities"] = entity_base
+        docs["one-entity"] = one_base
         yield base, docs, root / "0.pdf"
 
 
@@ -731,6 +789,21 @@ async def entity_evidence(page: Page, _: str, docs: dict[str, str], __: Path) ->
         "[...document.querySelectorAll('.field.evidence')].map((row) => row.closest('.sample').dataset.entity)"
     )
     expect(marked == ["wear_test", "wear_test"], f"the marked records belong to {marked}")
+
+
+@check("an empty cell under a single declared entity marks both lanes' records")
+async def one_entity_evidence(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await open_doc(page, docs["one-entity"], docs["O"])
+    await page.wait_for_selector('[data-slot="results-rows"] tr')
+    expect(await page.locator(".entity-table, .lane-entity").count() == 0, "an entity group is shown")
+    await page.click('[data-slot="results-chips"] [data-focus="show-empty"]')
+    empty = page.locator('td.cell.empty[data-field="solvent"]')
+    await empty.first.wait_for()
+    await empty.first.click()
+    marked = await page.evaluate(
+        "[...document.querySelectorAll('.field.evidence')].map((row) => row.closest('.sample').dataset.entity)"
+    )
+    expect(marked == ["coating", "coating"], f"the marked records belong to {marked}")
 
 
 @check("the home table of a two-entity library shows the primary entity only")

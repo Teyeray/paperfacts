@@ -231,11 +231,11 @@ def consolidate_document(
 ) -> DocumentDataset:
     """Collapse source evidence, then select the most complete trustworthy sample row.
 
-    Each entity type has its own rows, holding its own fields and the paper-level decisions; with several, every
-    row and every sample-level quality row names its ``entity``. The paper row is chosen among the primary
-    entity's rows."""
+    Each entity type has its own rows, holding its own fields and the paper-level decisions; in a profile that
+    declares entity types (one is enough), every row and every sample-level quality row names its ``entity``, the
+    name its fields carry as ``FieldSpec.entity``. The paper row is chosen among the primary entity's rows."""
     profile = options.profile
-    several = len(profile.entities) > 1
+    declared = bool(profile.declared_entities)
     fingerprint = profile_comparison_fingerprint(profile)
     check_profile(report.profile_fingerprint, fingerprint, "the comparison report")
     if report.document_id != document.document_id or any(
@@ -255,7 +255,7 @@ def consolidate_document(
             MappingProxyType(
                 {
                     **metadata,
-                    **({"entity": entity} if several and entity is not None else {}),
+                    **({"entity": entity} if declared and entity is not None else {}),
                     "sample_id": sample_id,
                     "field": spec.name,
                     "decision": decision.status,
@@ -349,7 +349,7 @@ def consolidate_document(
             row = MappingProxyType(
                 {
                     **metadata,
-                    **({"entity": entity.name} if several else {}),
+                    **({"entity": entity.name} if declared else {}),
                     "sample_id": scope.sample_id,
                     "sample_label": joined([sample.label for sample in samples]),
                     "conditions": conditions,
@@ -388,7 +388,7 @@ def consolidate_document(
         MappingProxyType(
             {
                 **metadata,
-                **({"entity": profile.primary.name} if several else {}),
+                **({"entity": profile.primary.name} if declared else {}),
                 "sample_id": paper_row["sample_id"],
                 "field": "__selection__",
                 "decision": "selected_sample",

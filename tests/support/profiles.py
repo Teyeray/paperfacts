@@ -140,6 +140,16 @@ def make_entity_profile(changes: Mapping[str, Any] | None = None) -> DomainProfi
     return parse_profile(_changed(entity_profile_data(), changes), Path("profiles/demo.json"))
 
 
+def make_one_entity_profile() -> DomainProfile:
+    """:func:`entity_profile_data` declaring only its coatings: one declared entity type, which names its rows and
+    fields ("coating") although the page and the workbook group nothing."""
+    data = entity_profile_data()
+    data["entities"] = data["entities"][:1]
+    data["groups"] = [group for group in data["groups"] if group.get("entity") != "wear_test"]
+    data["fields"] = [field for field in data["fields"] if field["group"] != "wear"]
+    return parse_profile(data, Path("profiles/demo.json"))
+
+
 def reference_profile_data() -> dict[str, Any]:
     """:func:`entity_profile_data` with a reference field: each wear test names the coating it was run on."""
     data = entity_profile_data()

@@ -616,7 +616,7 @@ def passage_records(
     paper_fields: list[FieldValue] = []
     paper_ids: list[str] = []
     unattributed: list[FieldValue] = []
-    single_sample_attributed = 0
+    lone_owners: list[int] = []
     series_fanned_out = 0
     for harvest in harvests:
         for item in harvest.values:
@@ -658,7 +658,7 @@ def passage_records(
                 # belongs to. With exactly one sample in the inventory there is nothing to say: the lone
                 # sample is not a plausible neighbour, it is the only possible owner.
                 index = next(iter(own.values()))
-                single_sample_attributed += 1
+                lone_owners.append(index)
             if index is None:
                 unattributed.append(value)
                 continue
@@ -671,11 +671,11 @@ def passage_records(
             len(samples),
         )
 
-    if single_sample_attributed:
+    if lone_owners:
         logger.info(
             "attributed %d value(s) with no sample_id to the only sample of their entity (%s)",
-            single_sample_attributed,
-            ", ".join(f"{sample.entity}:{sample.sample_id}" for sample in samples),
+            len(lone_owners),
+            ", ".join(f"{samples[i].entity}:{samples[i].sample_id}" for i in dict.fromkeys(lone_owners)),
         )
 
     return ExtractedRecords(
