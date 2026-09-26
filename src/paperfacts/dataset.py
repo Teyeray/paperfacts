@@ -13,20 +13,24 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from paperfacts.columns import FieldColumn
-from paperfacts.compare import ComparisonReport, FieldComparison, check_profile
-from paperfacts.decide import CellValue, Decision, decide, joined
+from paperfacts.compare import PAPER_SCOPE, ComparisonReport, FieldComparison, check_profile
+from paperfacts.decide import Decision, decide
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
+from paperfacts.kinds import CellValue, joined
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.normalize import normalize_lane
 from paperfacts.records import LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
 Row = Mapping[str, CellValue]
+# The paper-level quality rows' sample_id as files written before round 2 spell it.
+_LEGACY_PAPER_ID = "target"
 
 
 class DatasetPayload(BaseModel):
@@ -55,6 +59,24 @@ class DatasetPayload(BaseModel):
     quality_rows: tuple[dict[str, CellValue], ...] = ()
     # keys.profile_comparison_fingerprint of the profile the table was consolidated under (None: an older file).
     profile_fingerprint: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _current_paper_id(cls, data: Any) -> Any:
+        # A file written before round 2 ids its paper-level quality rows "target". Every sample has a sample
+        # row, so a quality row whose id no sample row has can only be the paper's.
+        if not isinstance(data, dict) or not isinstance(data.get("quality_rows"), list | tuple):
+            return data
+        samples = {row.get("sample_id") for row in data.get("sample_rows") or () if isinstance(row, dict)}
+        if _LEGACY_PAPER_ID in samples:
+            return data
+        rows = [
+            row | {"sample_id": PAPER_SCOPE}
+            if isinstance(row, dict) and row.get("sample_id") == _LEGACY_PAPER_ID
+            else row
+            for row in data["quality_rows"]
+        ]
+        return data | {"quality_rows": rows}
 
 
 @dataclass(frozen=True)
@@ -132,7 +154,7 @@ def _matching_blocked(scope: _Scope | None, ambiguous_match_confidence: float) -
 
     Scope-wide rather than per-field: if the two lanes' samples were not confidently identified as the
     same sample, no value on them can be trusted, whatever the per-field comparison says. The paper-level
-    target row has no scope and so is never blocked this way.
+    row has no scope and so is never blocked this way.
     """
     if scope is None:
         return None
@@ -145,15 +167,16 @@ def _matching_blocked(scope: _Scope | None, ambiguous_match_confidence: float) -
 
 def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> tuple[_Scope, ...]:
     lane_a, lane_b = lanes[report.backend_a], lanes[report.backend_b]
+    matching = report.sample_matching()
     scopes: list[_Scope] = []
-    for pair in report.matching.pairs:
+    for pair in matching.pairs:
         a, b = lane_a.sample(pair.a_id), lane_b.sample(pair.b_id)
         if a is not None and b is not None:
             sample_id = pair.a_id if pair.a_id == pair.b_id else f"{pair.a_id} | {pair.b_id}"
             scopes.append(_Scope(sample_id, f"sample:{pair.a_id}|{pair.b_id}", a, b, pair.confidence))
     for backend, ids, side in (
-        (report.backend_a, report.matching.unmatched_a, "a"),
-        (report.backend_b, report.matching.unmatched_b, "b"),
+        (report.backend_a, matching.unmatched_a, "a"),
+        (report.backend_b, matching.unmatched_b, "b"),
     ):
         for sample_id in ids:
             sample = lanes[backend].sample(sample_id)
@@ -164,7 +187,7 @@ def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -
                         f"sample:{sample_id}",
                         sample if side == "a" else None,
                         sample if side == "b" else None,
-                        matching_failed=report.matching.failed,
+                        matching_failed=matching.failed,
                     )
                 )
     return tuple(sorted(scopes, key=lambda scope: (scope.sample_id, scope.report_scope)))
@@ -190,7 +213,7 @@ def incomplete_reason(lanes: Mapping[Backend, LaneExtraction], report: Compariso
     never retry it; unstored, the next run asks again, and only the failed request reaches the model, since
     invalid answers are never cached (llm.complete_validated).
     """
-    if report.matching.failed:
+    if report.sample_matching().failed:
         return "sample matching failed"
     unanswered = [f"{backend}:{q.field}" for backend, lane in lanes.items() for q in lane.failed_questions]
     return f"no valid answer to {', '.join(unanswered)}" if unanswered else ""
@@ -237,29 +260,29 @@ def consolidate_document(
             )
         )
 
-    target: dict[str, Decision] = {}
+    paper: dict[str, Decision] = {}
     for spec in profile.paper_fields:
         evidence = [
             (backend, field)
             for backend, lane in lanes.items()
-            if lane.target
-            for field in lane.target.fields
+            if lane.paper
+            for field in lane.paper.fields
             if field.field == spec.name
         ]
-        target[spec.name] = decide(
+        paper[spec.name] = decide(
             spec,
             evidence,
-            [c for c in report.comparisons if c.scope == "target" and c.field == spec.name],
+            [c for c in report.comparisons if c.scope == PAPER_SCOPE and c.field == spec.name],
             units=profile.units,
             unanswered=spec.name in unanswered,
         )
     for spec in profile.paper_fields:
-        record("target", spec, target[spec.name])
+        record(PAPER_SCOPE, spec, paper[spec.name])
 
     sample_rows: list[Row] = []
     for scope in _scopes(lanes, report):
         scope_comparisons = _scope_comparisons(scope, report)
-        decisions = dict(target)
+        decisions = dict(paper)
         for spec in profile.sample_fields:
             evidence = [
                 (backend, field)
@@ -322,9 +345,9 @@ def consolidate_document(
                 "sample_id": "",
                 "sample_label": "",
                 "conditions": "",
-                "available_fields": sum(d.value is not None for d in target.values()),
-                "agree_fields": sum(d.status == "agree" for d in target.values()),
-                **{spec.name: target[spec.name].value if spec.name in target else None for spec in profile.fields},
+                "available_fields": sum(d.value is not None for d in paper.values()),
+                "agree_fields": sum(d.status == "agree" for d in paper.values()),
+                **{spec.name: paper[spec.name].value if spec.name in paper else None for spec in profile.fields},
             }
         )
         selection = "未提取到可匹配样品；论文行仅保留唯一的论文级字段"

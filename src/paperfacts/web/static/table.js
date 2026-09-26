@@ -11,7 +11,7 @@ import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
 import { releaseFact } from "./facts.js";
 import { clearEvidence, showEvidence } from "./samples.js";
 import { LANE_LABEL, noSamplesReason, state, uiCopy } from "./state.js";
-import { copyTable } from "./tsv.js";
+import { copyTable, fieldText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
 // A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
@@ -41,7 +41,7 @@ const KEY_SEPARATOR = "\u0000";
 export const column = (header, html, text) => ({ header, head: `<th>${escapeHtml(header)}</th>`, html, text });
 
 // A field column. `value(item)` is the committed value this row shows in it (or null), and `html(item, value)`
-// wraps it in a <td>; the clipboard gets `value(item)` alone.
+// wraps it in a <td>; the clipboard gets `value(item)` alone, written out as the column's kind says.
 export function fieldColumn(field, value, html) {
   // With a Chinese label the header reads label over the id it exports under. The unit is not repeated on
   // screen: every decided cell carries it next to its value. The clipboard header does carry it, so the
@@ -52,7 +52,7 @@ export function fieldColumn(field, value, html) {
     header: field.unit ? `${title} (${field.unit})` : title,
     head: `<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`,
     html: (item) => html(item, value(item)),
-    text: value,
+    text: (item) => fieldText(value(item), field),
   };
 }
 
@@ -69,13 +69,17 @@ export function bodyRow(columns, item, className = "") {
   return tr;
 }
 
-// How a committed value is written out: numbers through `fmt`, everything else as its own text.
-const shownValue = (value) => (typeof value === "number" ? fmt(value) : String(value));
+// How a committed value is written out, decided by its column: the values of a `many` column joined with "；",
+// numbers through `fmt`, everything else as its own text.
+const shownValue = (value, field) => {
+  if (field?.cardinality === "many" && Array.isArray(value)) return value.map((item) => (item == null ? "" : shownValue(item))).join("；");
+  return typeof value === "number" ? fmt(value) : String(value);
+};
 
 // A value as the reader sees it in a cell: the number and the field's canonical unit, e.g. `125 nm`.
 // Text fields have no unit, and a unitless number stays a bare number.
 export function valueHtml(value, field) {
-  const shown = escapeHtml(shownValue(value));
+  const shown = escapeHtml(shownValue(value, field));
   const unit = typeof value === "number" && field?.unit ? field.unit : "";
   return unit ? `${shown} <span class="unit">${escapeHtml(unit)}</span>` : shown;
 }
@@ -106,8 +110,8 @@ export function renderResults(root) {
 
   const samples = data?.sample_rows ?? [];
   const paper = data?.paper_row ?? {};
-  const targetHasValue = (data?.fields ?? []).some((field) => field.scope === "target" && paper[field.name] != null);
-  const hasRows = Boolean(data) && (samples.length > 0 || targetHasValue);
+  const paperHasValue = (data?.fields ?? []).some((field) => field.scope === "paper" && paper[field.name] != null);
+  const hasRows = Boolean(data) && (samples.length > 0 || paperHasValue);
   download.classList.toggle("hidden", !hasRows);
   copy.classList.toggle("hidden", !hasRows);
   slot("results-table").classList.toggle("hidden", !hasRows);
@@ -125,7 +129,7 @@ export function renderResults(root) {
     fieldPicker(data.fields, rerender),
   );
   const columns = documentColumns(fields, qualityIndex(data.quality_rows ?? []), paper.sample_id ?? "");
-  const items = [{ kind: "target", row: paper }, ...samples.map((row) => ({ kind: "sample", row }))];
+  const items = [{ kind: "paper", row: paper }, ...samples.map((row) => ({ kind: "sample", row }))];
   slot("results-head").append(headRow(columns));
   const rows = slot("results-rows");
   for (const item of items) {
@@ -137,36 +141,36 @@ export function renderResults(root) {
 }
 
 function rowClass(item, paperSampleId) {
-  if (item.kind === "target") return "target-row";
+  if (item.kind === "paper") return "paper-level-row";
   return item.row.sample_id === paperSampleId ? "paper-row" : "";
 }
 
-// Target values are the same for every sample, so they sit on the target row alone, and sample values on
+// Paper-level values are the same for every sample, so they sit on the paper-level row alone, and sample values on
 // the sample rows alone: a field column is filled only on the rows of its own scope.
 function documentColumns(fields, quality, paperSampleId) {
-  const isTarget = (item) => item.kind === "target";
-  // An identity column the target row leaves blank.
+  const isPaperLevel = (item) => item.kind === "paper";
+  // An identity column the paper-level row leaves blank.
   const sampleColumn = (header, className, text) =>
     column(
       header,
-      (item) => (isTarget(item) ? "<td></td>" : `<td class="${className}" title="${escapeHtml(text(item))}">${escapeHtml(text(item))}</td>`),
-      (item) => (isTarget(item) ? "" : text(item)),
+      (item) => (isPaperLevel(item) ? "<td></td>" : `<td class="${className}" title="${escapeHtml(text(item))}">${escapeHtml(text(item))}</td>`),
+      (item) => (isPaperLevel(item) ? "" : text(item)),
     );
   const paperMark = `<span class="paper-mark" title="被选作论文行的${escapeHtml(uiCopy("entity_label_zh"))}">★ 论文行</span>`;
   const paperLabel = uiCopy("paper_level_label_zh");
   return [
     column(
       uiCopy("entity_label_zh"),
-      (item) => isTarget(item)
+      (item) => isPaperLevel(item)
         ? `<td class="mono">${escapeHtml(paperLabel)}</td>`
         : `<td class="mono">${escapeHtml(item.row.sample_id ?? "")}${item.row.sample_id === paperSampleId ? paperMark : ""}</td>`,
-      (item) => (isTarget(item) ? paperLabel : item.row.sample_id ?? ""),
+      (item) => (isPaperLevel(item) ? paperLabel : item.row.sample_id ?? ""),
     ),
     sampleColumn("标签", "label", (item) => String(item.row.sample_label ?? "")),
     sampleColumn("条件", "muted cond", (item) => String(item.row.conditions ?? "")),
     sampleColumn("可用/一致", "mono", (item) => `${item.row.available_fields ?? 0} / ${item.row.agree_fields ?? 0}`),
     ...fields.map((field) => {
-      const ownScope = (item) => (field.scope === "target") === isTarget(item);
+      const ownScope = (item) => (field.scope === "paper") === isPaperLevel(item);
       return fieldColumn(
         field,
         (item) => (ownScope(item) ? item.row[field.name] ?? null : null),
@@ -183,7 +187,7 @@ function qualityIndex(rows) {
 }
 
 function cell(value, quality, item, field) {
-  const sampleId = item.kind === "target" ? "target" : item.row.sample_id;
+  const sampleId = item.kind === "paper" ? "paper" : item.row.sample_id;
   const decision = quality.get(`${sampleId}${KEY_SEPARATOR}${field.name}`);
   const detail = decision?.detail ?? "";
   // Refused, not missing: the reason is the cell's accessible name (so it does not need a hover) and the

@@ -10,7 +10,7 @@
     "Table 1 lists literature samples; they are not samples of this paper.",
     "Deposition time is not stated (only a rate of ~1 µm/h)."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "Sn/Ta 95:5 wt.%",

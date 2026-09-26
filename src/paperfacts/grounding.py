@@ -301,12 +301,12 @@ def ground_lane(
     file. Improving the matcher therefore costs nothing and never leaves a stale verdict behind -- the same
     bargain normalisation makes.
     """
-    target = lane.target
-    if target is not None:
-        target = target.model_copy(update={"fields": ground_values(target.fields, blocks, adjacency=adjacency)})
+    paper = lane.paper
+    if paper is not None:
+        paper = paper.model_copy(update={"fields": ground_values(paper.fields, blocks, adjacency=adjacency)})
     return lane.model_copy(
         update={
-            "target": target,
+            "paper": paper,
             "samples": tuple(
                 sample.model_copy(update={"fields": ground_values(sample.fields, blocks, adjacency=adjacency)})
                 for sample in lane.samples

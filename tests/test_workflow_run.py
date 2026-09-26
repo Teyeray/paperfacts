@@ -131,7 +131,7 @@ def install_fake_pipeline(
             comparison_key="ba9876543210",
             backend_a="mineru",
             backend_b="paddleocr_vl",
-            matching=matching or SampleMatching(),
+            matchings={"sample": matching or SampleMatching()},
             counts=counts,
             profile_fingerprint=profile_comparison_fingerprint(shipped_profile()),
         )

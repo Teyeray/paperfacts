@@ -139,7 +139,7 @@ def test_only_the_substrate_thickness_is_dropped_from_the_real_response(real_art
     # Converted before it is judged: 3 mm is 3e6 nm.
     assert lane.dropped[0].startswith("thickness: '3' mm is 3e+06 nm")
     assert len(lane.samples) == 3
-    assert lane.target is not None
+    assert lane.paper is not None
 
 
 def test_the_resistivity_written_in_plain_decimal_normalizes(real_artifact, tco_profile):
@@ -235,7 +235,7 @@ def test_the_target_size_taken_from_the_methods_section_converts_to_inches(real_
         extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
     )
 
-    field = lane.target.get("inch")
+    field = lane.paper.get("inch")
     assert field.value == pytest.approx(40 / 2.54)
     assert field.unit == "inch"
     assert "2 numbers found" in field.normalization_note
@@ -246,7 +246,7 @@ def test_the_composition_text_is_kept_verbatim(real_artifact, tco_profile):
         extract_lane(real_artifact, FakeLlmClient([REAL_RESPONSE]), lane_options(mode="document")), tco_profile
     )
 
-    field = lane.target.get("component")
+    field = lane.paper.get("component")
     assert field.value_raw == "Sn/Ta target 95:5 wt.%"
     assert field.value is None  # composition is text and should not have a number forced into it
 

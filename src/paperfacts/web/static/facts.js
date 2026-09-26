@@ -94,10 +94,10 @@ export function renderRows(tbody, emptyNode) {
   }
 }
 
-// scope is "target", "sample:<a>|<b>" (each lane's own sample_id) or "unattributed" (both lanes
+// scope is "paper", "sample:<a>|<b>" (each lane's own sample_id) or "unattributed" (both lanes
 // extracted the value but neither could place it on a sample)
 function scopeLabel(scope) {
-  if (scope === "target") return uiCopy("paper_level_label_zh");
+  if (scope === "paper") return uiCopy("paper_level_label_zh");
   if (scope === "unattributed") return `未归属（两路均未对应到${uiCopy("entity_label_zh")}）`;
   const m = scope.match(/^sample:(.*)$/);
   if (!m) return scope;

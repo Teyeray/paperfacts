@@ -12,7 +12,8 @@ candidate list, each narrowing it or refusing:
    scalar at the chosen condition is a weaker statement of it and is dropped with a note; a cell holding only
    such statements is ``non_scalar``. There is no second narrowing over the scalars alone, which would let a
    bound take its own condition out of the running. A quote the paper writes a bound before ("90" out of
-   "above 90 %", :attr:`FieldValue.bound`) is a bound like any other.
+   "above 90 %", :attr:`FieldValue.bound`) is a bound like any other. A range is a scalar only under
+   ``range_policy`` lower/upper, as the end the field asks for (:mod:`paperfacts.kinds`).
 4. **Agree.** Derived once, from the final candidates only: both lanes present, their values within the
    field's tolerance, and no pair across the lanes quoting conditions that measure differently. Never from
    the comparison report's statuses, which may be about a candidate an earlier step set aside.
@@ -27,39 +28,18 @@ Conditions and source ids of a committed cell are derived from the final candida
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from paperfacts.compare import FieldComparison, condition_numbers, conditions_measure_differently
 from paperfacts.fields import FieldSpec
+from paperfacts.kinds import CellValue, joined, rules_for
 from paperfacts.models import BACKENDS, Backend
-from paperfacts.normalize import (
-    canonical_category,
-    clean_unit,
-    convert_to_canonical,
-    delatex,
-    normalize_key,
-    normalize_text,
-    parse_number,
-    read_value,
-    same_text,
-)
+from paperfacts.normalize import normalize_key, normalize_text
 from paperfacts.records import FieldValue
 from paperfacts.units import UnitRegistry
 
-CellValue = str | float | int | bool | None
-
-_NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+\.\d*|\.\d+|\d+)"
-_ATOM = rf"(?:{_NUMBER}\s*x\s*10\s*\^?\s*[-+]?\d+|10\s*\^\s*[-+]?\d+|{_NUMBER}(?:[eE][-+]?\d+)?)"
-_SCALAR = re.compile(rf"^(?P<center>{_ATOM})(?:\s*(?:±|\+/-|\+-|\\pm)\s*(?P<uncertainty>{_ATOM}))?(?P<tail>.*)$")
-# "100 nm (± 5 nm)": the uncertainty in parentheses after the unit, read as "100 ± 5 nm" when both units agree.
-_PARENTHESISED_UNCERTAINTY = re.compile(
-    rf"^(?P<center>{_ATOM})\s*(?P<unit>[^\d\s(±][^(±]*?)?\s*\(\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_ATOM})\s*(?P<again>[^)]*)\)$"
-)
-# The tilde operator U+223C and its friends are folded to "~" by normalize_text, which runs first.
-_APPROX = re.compile(r"^(?:approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅])\s*", re.IGNORECASE)
 # How a condition says it is an average; used only to break a tie inside one preference entry.
 _AVERAGE_WORDS = re.compile(r"\b(?:average[ds]?|avg|mean|avt)\b", re.IGNORECASE)
 
@@ -87,11 +67,6 @@ class _Candidate:
     scalar: CellValue
     # The reading's note, or why there is no scalar.
     note: str | None
-
-
-def joined(values: Sequence[str]) -> str:
-    """Distinct non-empty strings, in order, as one cell."""
-    return "; ".join(dict.fromkeys(value for value in values if value))
 
 
 def decide(
@@ -126,7 +101,8 @@ def decide(
     if blocked:
         return reject("ambiguous", blocked)
     trusted = [(backend, value) for backend, value in evidence if value.grounded and value.source_ids]
-    candidates = [_Candidate(backend, value, *_scalar(value, spec, units)) for backend, value in trusted]
+    rules = rules_for(spec)
+    candidates = [_Candidate(backend, value, *rules.cell(value, spec, units)) for backend, value in trusted]
     # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
     # let it take its own condition out of the running, so the scalar's condition would win although no rule
     # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
@@ -166,28 +142,25 @@ def decide(
     # same-condition values cannot disappear behind that first one.
     for backend in BACKENDS:
         same_lane = [c.scalar for c in final if c.backend == backend]
-        if any(not _same_value(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
+        if any(not rules.same(same_lane[0], scalar, spec) for scalar in same_lane[1:]):
             return reject("multiple_values", "同一解析通道在相同条件下记录了多个不同值")
     # Recipe numbers in a condition only stop an agreement the values themselves do not settle: two lanes quoting
     # the very same number agree whatever else their conditions restate; 100 against 104 needs the same state.
-    exactly_equal = all(_same_value(final[0].scalar, c.scalar, spec) for c in final)
+    exactly_equal = all(rules.same(final[0].scalar, c.scalar, spec) for c in final)
     if (_numbers_matter(spec) or not exactly_equal) and _lanes_measure_differently(final, strict=several):
         return reject("multiple_conditions", "两个解析通道的数值来自不同的测量条件")
-    # Of spellings judged the same, one naming the field's category is the cell: "rf-magnetron sputtering" is RF,
-    # its twin that lost the hyphen names nothing. A numeric field has no categories, so this never decides there.
+    # Of spellings judged the same, the kind may prefer one (text: the one naming the field's category).
     chosen = min(
         final,
         key=lambda c: (
-            canonical_category(spec.categories, c.value.value_raw) is None,
+            *rules.prefer(c.value, spec),
             -c.value.agreement,
             BACKENDS.index(c.backend),
             c.value.value_raw,
         ),
     )
-    agreed = len({c.backend for c in final}) == 2 and all(
-        _within_tolerance(chosen.scalar, c.scalar, spec) for c in final
-    )
-    if not agreed and any(not _same_value(chosen.scalar, c.scalar, spec) for c in final):
+    agreed = len({c.backend for c in final}) == 2 and all(rules.within(chosen.scalar, c.scalar, spec) for c in final)
+    if not agreed and any(not rules.same(chosen.scalar, c.scalar, spec) for c in final):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
     return _commit(spec, chosen, final, agreed=agreed, details=details)
 
@@ -289,7 +262,7 @@ def _one_number(spec: FieldSpec, candidates: Sequence[_Candidate]) -> bool:
                     candidate.value.condition, other.value.condition
                 ):
                     return False
-                if not _same_value(candidate.scalar, other.scalar, spec):
+                if not rules_for(spec).same(candidate.scalar, other.scalar, spec):
                     return False
     return True
 
@@ -414,75 +387,3 @@ def _lanes_measure_differently(final: Sequence[_Candidate], *, strict: bool) -> 
             if conditions_measure_differently(a, b):
                 return True
     return False
-
-
-# ---- Values ------------------------------------------------------------------------------------------------
-
-
-def _scalar(value: FieldValue, spec: FieldSpec, units: UnitRegistry) -> tuple[CellValue, str | None]:
-    """``(cell value, note)``, or ``(None, reason)`` when the text states no single scalar."""
-    if spec.kind != "numeric":
-        return value.value_raw.strip(), None
-    # The comparison's reading (normalize.read_value), so the cell and the report agree on what the quote says;
-    # what follows is only the cell's stricter demand of one exact scalar.
-    reading = read_value(value, spec, units)
-    if reading.bound:
-        return None, f"原文在所引数值前写有界限 {reading.bound!r}，不是唯一精确标量"
-    text = delatex(normalize_text(reading.text)).strip()
-    approx = _APPROX.match(text)
-    if approx:
-        text = text[approx.end() :].strip()
-    notes: list[str] = []
-    if reading.number_word is not None:
-        notes.append(f"原文为英文数词 {value.value_raw.strip()!r}，读作 {reading.number_word}")
-    if approx:
-        notes.append("原文为近似值，保留中心值")
-    if reading.clause:
-        notes.append(f"{reading.clause!r} 已计入测量条件")
-    if reading.compound is not None:
-        if reading.condition:
-            notes.append(f"条件 {reading.condition!r} 不计入数值")
-        compound_note = f"原文为复合时长 {reading.bare!r}，合计 {reading.compound:g} {spec.canonical_unit}"
-        return reading.compound, joined([*notes, compound_note])
-    parenthesised = _PARENTHESISED_UNCERTAINTY.fullmatch(text)
-    if parenthesised:
-        center, unit, uncertainty, again = parenthesised.group("center", "unit", "uncertainty", "again")
-        if clean_unit(unit or "") == clean_unit(again):
-            text = f"{center} ± {uncertainty} {unit or ''}"
-    match = _SCALAR.fullmatch(text)
-    if match is None:
-        return None, "不是唯一精确标量（含上下界、区间、尺寸组合或无法解析的文字）"
-    tail = match.group("tail").strip()
-    allowed_units = {clean_unit(unit) for unit in (value.unit_raw, spec.canonical_unit) if unit}
-    if tail and clean_unit(tail) not in allowed_units:
-        return None, "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
-    # No range_policy: "center" is one number, so a dataset cell refuses a range under every policy (_SCALAR above):
-    # range_policy governs the lanes' values and the comparison; a dataset cell always needs a single scalar.
-    number, _ = parse_number(match.group("center"))
-    if number is None or not math.isfinite(number):
-        return None, "数值不可解析或非有限数"
-    canonical, _, note = convert_to_canonical(spec, number, value.unit_raw, units, value_text=match.group("center"))
-    if canonical is None or not math.isfinite(canonical):
-        return None, note or "单位无法转换为标准单位"
-    notes.insert(0, note or "")
-    if match.group("uncertainty"):
-        notes.append(f"原文不确定度 ±{match.group('uncertainty')} {value.unit_raw or ''}；保留中心值")
-    return canonical, joined(notes) or None
-
-
-def _same_value(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
-    """Whether two candidate cells state the same thing. Text is judged as the comparison judges it
-    (:func:`same_text`): "DC and RF" and "DC and RF magnetron co-sputtering" are one category, "rfmagnetron" is
-    "rf-magnetron" with its hyphen lost."""
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return math.isclose(a, b, rel_tol=1e-12, abs_tol=0.0)
-    if not (isinstance(a, str) and isinstance(b, str)):
-        return False
-    return same_text(spec, a, b)
-
-
-def _within_tolerance(a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
-    """Whether two candidate cells agree the way compare.py judges agreement: within the field's tolerance."""
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return math.isclose(a, b, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
-    return _same_value(a, b, spec)

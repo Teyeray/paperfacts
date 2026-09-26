@@ -194,8 +194,8 @@ def test_another_profile_serves_its_own_copy_over_the_defaults(settings: Setting
 def test_a_b0_lane_with_no_film_still_carries_the_flag_the_no_samples_message_keys_on(
     client: TestClient, library: Library, parsed_only: str
 ):
-    """The page shows ``ui.no_samples_message_zh`` when every lane is empty with ``no_tco_film`` set. A lane
-    written before profiles existed must still arrive with that internal name."""
+    """The page shows ``ui.no_samples_message_zh`` when every lane is empty with ``no_samples`` set. A lane
+    written before round 2 stores it as ``no_tco_film`` and must still arrive under the current name."""
     b0 = json.loads((Path(__file__).parent / "fixtures" / "b0_formats" / "lane.json").read_text(encoding="utf-8"))
     b0.update(document_id=DOC_SHA, extractor_key=library.extractor_key, samples=[], no_tco_film=True)
     path = library.layout.extraction_path(DOC_SHA, "mineru", library.extractor_key)
@@ -204,7 +204,7 @@ def test_a_b0_lane_with_no_film_still_carries_the_flag_the_no_samples_message_ke
 
     body = client.get(f"/api/documents/{parsed_only}/extraction/mineru").json()
 
-    assert body["samples"] == [] and body["no_tco_film"] is True
+    assert body["samples"] == [] and body["no_samples"] is True and "no_tco_film" not in body
     assert "no_samples_message_zh" in client.get("/api/profile").json()["ui"]
 
 

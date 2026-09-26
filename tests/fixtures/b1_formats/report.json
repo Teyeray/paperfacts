@@ -1,0 +1,271 @@
+{
+  "document_id": "19227e043d928d6e0d6142991c806f2a9f71972c63b3376b274706a80e133fa0",
+  "extractor_key": "d3f0e6244743",
+  "comparison_key": "08d8bcfc3a46",
+  "backend_a": "mineru",
+  "backend_b": "paddleocr_vl",
+  "matching": {
+    "pairs": [
+      {
+        "a_id": "SnO2:Ta optimized",
+        "b_id": "SnO2:Ta (0.70 at.% Ta)",
+        "confidence": 0.9,
+        "justification": "same position",
+        "method": "llm"
+      },
+      {
+        "a_id": "SnOx:Ta O2 series",
+        "b_id": "O2 flow series",
+        "confidence": 0.9,
+        "justification": "same position",
+        "method": "llm"
+      }
+    ],
+    "unmatched_a": [],
+    "unmatched_b": [
+      "SnO2:Ta reference"
+    ],
+    "failed": false,
+    "failure": null,
+    "usage": {
+      "prompt_tokens": 200,
+      "completion_tokens": 40,
+      "total_tokens": 240
+    },
+    "raw_response": "{\"pairs\": [{\"a\": \"SnO2:Ta optimized\", \"b\": \"SnO2:Ta (0.70 at.% Ta)\", \"confidence\": 0.9, \"justification\": \"same position\"}, {\"a\": \"SnOx:Ta O2 series\", \"b\": \"O2 flow series\", \"confidence\": 0.9, \"justification\": \"same position\"}], \"unmatched_a\": [], \"unmatched_b\": [\"SnO2:Ta reference\"]}"
+  },
+  "comparisons": [
+    {
+      "scope": "target",
+      "field": "component",
+      "condition": null,
+      "status": "agree",
+      "missing_in": null,
+      "match_confidence": null,
+      "a": {
+        "field": "component",
+        "value_raw": "Sn/Ta target 95:5 wt.%",
+        "unit_raw": null,
+        "condition": null,
+        "source_ids": [
+          "mineru_p1_b4"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": null,
+        "unit": null,
+        "normalization_note": null
+      },
+      "b": {
+        "field": "component",
+        "value_raw": "Sn/Ta target 95:5 wt.%",
+        "unit_raw": null,
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p1_b4"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": null,
+        "unit": null,
+        "normalization_note": null
+      },
+      "detail": "identical after text normalization"
+    },
+    {
+      "scope": "sample:SnO2:Ta optimized|SnO2:Ta (0.70 at.% Ta)",
+      "field": "resistivity",
+      "condition": null,
+      "status": "agree",
+      "missing_in": null,
+      "match_confidence": 0.9,
+      "a": {
+        "field": "resistivity",
+        "value_raw": "0.3",
+        "unit_raw": "Ω cm",
+        "condition": null,
+        "source_ids": [
+          "mineru_p0_b8"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 0.3,
+        "unit": "Ω·cm",
+        "normalization_note": null
+      },
+      "b": {
+        "field": "resistivity",
+        "value_raw": "0.3",
+        "unit_raw": "Ω cm",
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p0_b1"
+        ],
+        "note": null,
+        "grounded": false,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 0.3,
+        "unit": "Ω·cm",
+        "normalization_note": null
+      },
+      "detail": "0.3 ≈ 0.3 Ω·cm (rel_tol=0.05, abs_tol=0)"
+    },
+    {
+      "scope": "sample:SnO2:Ta optimized|SnO2:Ta (0.70 at.% Ta)",
+      "field": "substrate_temperature",
+      "condition": null,
+      "status": "agree",
+      "missing_in": null,
+      "match_confidence": 0.9,
+      "a": {
+        "field": "substrate_temperature",
+        "value_raw": "225",
+        "unit_raw": "°C",
+        "condition": null,
+        "source_ids": [
+          "mineru_p0_b8"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 225.0,
+        "unit": "℃",
+        "normalization_note": null
+      },
+      "b": {
+        "field": "substrate_temperature",
+        "value_raw": "225",
+        "unit_raw": "°C",
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p0_b1"
+        ],
+        "note": null,
+        "grounded": false,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 225.0,
+        "unit": "℃",
+        "normalization_note": null
+      },
+      "detail": "225 ≈ 225 ℃ (rel_tol=0.02, abs_tol=2)"
+    },
+    {
+      "scope": "sample:SnO2:Ta optimized|SnO2:Ta (0.70 at.% Ta)",
+      "field": "transmittance",
+      "condition": null,
+      "status": "agree",
+      "missing_in": null,
+      "match_confidence": 0.9,
+      "a": {
+        "field": "transmittance",
+        "value_raw": ">80",
+        "unit_raw": "%",
+        "condition": null,
+        "source_ids": [
+          "mineru_p0_b8"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 80.0,
+        "unit": "%",
+        "normalization_note": "qualifier '>' dropped"
+      },
+      "b": {
+        "field": "transmittance",
+        "value_raw": ">80",
+        "unit_raw": "%",
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p0_b1"
+        ],
+        "note": null,
+        "grounded": false,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 80.0,
+        "unit": "%",
+        "normalization_note": "qualifier '>' dropped"
+      },
+      "detail": "80 ≈ 80 % (rel_tol=0, abs_tol=1)"
+    },
+    {
+      "scope": "sample:SnO2:Ta optimized|SnO2:Ta (0.70 at.% Ta)",
+      "field": "working_pressure",
+      "condition": null,
+      "status": "agree",
+      "missing_in": null,
+      "match_confidence": 0.9,
+      "a": {
+        "field": "working_pressure",
+        "value_raw": "1.1",
+        "unit_raw": "Pa",
+        "condition": null,
+        "source_ids": [
+          "mineru_p1_b4"
+        ],
+        "note": null,
+        "grounded": true,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 1.1,
+        "unit": "Pa",
+        "normalization_note": null
+      },
+      "b": {
+        "field": "working_pressure",
+        "value_raw": "1.1",
+        "unit_raw": "Pa",
+        "condition": null,
+        "source_ids": [
+          "paddleocr_vl_p0_b1"
+        ],
+        "note": null,
+        "grounded": false,
+        "series": false,
+        "agreement": 1.0,
+        "bound": null,
+        "value": 1.1,
+        "unit": "Pa",
+        "normalization_note": null
+      },
+      "detail": "1.1 ≈ 1.1 Pa (rel_tol=0.02, abs_tol=0)"
+    }
+  ],
+  "counts": {
+    "agree": 5,
+    "conflict": 0,
+    "ambiguous": 0,
+    "missing": 0,
+    "total": 5,
+    "missing_by_backend": {},
+    "samples_matched": 2,
+    "samples_unmatched": 1,
+    "low_confidence_matches": 0,
+    "matching_failed": false,
+    "unattributed_by_backend": {},
+    "unattributed_compared": 0
+  },
+  "artifact_sha256_a": "0367c4695f5cf756d15ae47f27fb168ad5d825372b922e140a456be49275244f",
+  "artifact_sha256_b": "5db6e4e8e6786a2bb57aae871bc107a916322dfa121de9d0a6e243a425a69d58",
+  "profile_fingerprint": "5ec489a6749b"
+}

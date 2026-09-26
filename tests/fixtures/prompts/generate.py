@@ -20,17 +20,18 @@ from paperfacts import extract, figures, matching, prompts
 from paperfacts.config import Settings
 from paperfacts.profile_loader import load_profile, profile_path
 from paperfacts.records import (
-    ExtractionResponse,
     FieldResponse,
     FieldValue,
-    InventoryResponse,
     InventorySample,
     SampleRecord,
+    response_models,
 )
 
 SNAPSHOT = Path(__file__).with_name("snapshot.json")
 # The shipped TCO profile, from the built-in settings so the environment cannot change what is rendered.
 PROFILE = load_profile(profile_path(Settings()))
+# The answer shapes the profile's requests are validated against (extract._response_models): its own JSON keys.
+ANSWERS = response_models(PROFILE.prompt.paper_key, PROFILE.prompt.no_samples_key)
 
 # Fixed inputs: the prompts' own text is what is pinned, so the inputs only have to be stable.
 SAMPLE_LIST = "- id: S1 | label: ITO at 100 W | conditions: power=100 W\n- id: S2 | label: - | conditions: -"
@@ -40,12 +41,12 @@ CAPTION = "Fig. 2 (a) Sheet resistance and (b) transmittance of films sputtered 
 # A rejected answer goes back to the model inside the repair prompt as ``str(ValidationError)``, so pydantic's
 # wording and the response models' class names, field names and constraints are request bytes too.
 INVALID_ANSWERS: dict[str, tuple[type[BaseModel], str]] = {
-    "missing_key": (ExtractionResponse, '{"samples": [{"sample_id": "S1", "fields": [{"value_raw": "12"}]}]}'),
-    "target_wrong_type": (ExtractionResponse, '{"target": {"fields": "12 nm"}}'),
+    "missing_key": (ANSWERS.extraction, '{"samples": [{"sample_id": "S1", "fields": [{"value_raw": "12"}]}]}'),
+    "target_wrong_type": (ANSWERS.extraction, '{"target": {"fields": "12 nm"}}'),
     "empty_value_raw": (FieldResponse, '{"values": [{"sample_id": "S1", "value_raw": ""}]}'),
-    "samples_not_list": (InventoryResponse, '{"samples": {"sample_id": "S1"}}'),
+    "samples_not_list": (ANSWERS.inventory, '{"samples": {"sample_id": "S1"}}'),
     "not_json": (FieldResponse, '{"values": [{"value_raw": "12"'),
-    "no_tco_film_type": (InventoryResponse, '{"samples": [], "no_tco_film": "maybe"}'),
+    "no_tco_film_type": (ANSWERS.inventory, '{"samples": [], "no_tco_film": "maybe"}'),
 }
 
 # What the field questions and the matching question are shown of the samples: rendered by extract.py and

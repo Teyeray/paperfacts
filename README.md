@@ -566,10 +566,21 @@ survive, so it moves both cache keys; a field without one keeps the keys it had.
 `canonical_unit` (a count, such as the battery profile's `cycle_number`) may declare one too; it is judged on
 the number as parsed.
 
-Two more numeric attributes decide how a quoted value is read. `range_policy` (`midpoint`, the default, or
-`reject`) decides what a range quoted as one value ("10-20") becomes in the lanes and in the comparison: its
-midpoint, or no value. A **dataset cell** always needs a single scalar whatever the policy, so a range never
-fills one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
+Two more numeric attributes decide how a quoted value is read. `range_policy` (`midpoint`, the default,
+`reject`, `lower` or `upper`) decides what a range quoted as one value ("10-20") becomes in the lanes and in the
+comparison: its midpoint, no value, or its lower or upper end (a calcination "at 450-500 °C" reported by the
+temperature it reached: `upper`). Under `lower` / `upper` the chosen end also fills the **dataset cell**, with
+the note 原文为区间 a–b，按字段配置取上限/下限: an end is a number the paper printed. Under `midpoint` and
+`reject` a range never fills a cell: a midpoint is a number nobody measured. Only a **clean range** has an end,
+and the lanes and the cell use the one definition of it (`normalize.read_range`): two ascending numbers, both
+plain or both in scientific notation, and after them nothing but the transcribed or the canonical unit
+("450-500", "450 °C to 500 °C", "1.2e-4 - 1.5e-4 Ω·cm"); an approximation ("~450-500") may precede it. Anything
+else is refused under `lower` / `upper` in the lanes as in the cell: a bound ("> 450-500", "below 1.2e-4 -
+1.5e-4"), a condition ("450-500 °C for 2 h"), a parenthesis ("450-500 (600)") or another unit ("450-500 K" on a
+℃ field). A bare range on a `percent_or_fraction` field is a fraction only when all of it is below 1, so both
+ends read in one unit ("0.8-1.2" is 0.8-1.2 %). A bound (">80 %", or "80" quoted out of "above 80 %") is no
+range under any policy, and a descending pair or a range whose exponent is written once (`1.2-1.5 × 10⁻³`) is
+refused under every one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."
 clause: by default "100 nm after annealing" is refused, since it describes another state of the sample; under
 `condition` ("92.5% after 100 cycles" for a capacity retention) the number is read and the clause is appended
 to the value's `condition` (`; `-joined when the model already gave one), so "after 50 cycles" and "after 100
@@ -698,8 +709,9 @@ A profile changes the words, never the shape of the answer. The shape is fixed i
   value.
 - **Paper-level fields are single-valued.** A paper-level field holds one value for the whole paper; a quantity
   that differs between samples must be sample-level.
-- **A range is a midpoint or nothing.** A value quoted as a range ("10-20") becomes its midpoint or, under
-  `range_policy: reject`, no value; a bound (">80 %") fills no dataset cell.
+- **A range is a midpoint, an end, or nothing.** A value quoted as a range ("10-20") becomes its midpoint, its
+  lower or upper end (`range_policy: lower` / `upper`) or, under `reject`, no value; only an end fills a
+  dataset cell, and a bound (">80 %") fills none.
 - **Charts are property-vs-condition only.** The opt-in figure reading reads a y value per marker off a chart
   whose caption names a `figure_readable` field; spectra, micrographs, maps and schematics are not read.
 - **The prompts are English.** The templates around the slots are English, so slots are written in English;
@@ -775,9 +787,12 @@ lessons come from the prompt comments and `.omc/research/`.
 
 A field's `condition_rule` fills rule 8 ("For `transmittance` always fill `condition` with the wavelength or
 spectral range"): without it a transmittance arrives with no wavelength and the dataset cell cannot say which
-measurement it holds. The internal names `target` (the paper-level record) and `no_tco_film` (the no-samples
-verdict) are kept in stored files and code for every profile; only the JSON keys the model sees come from
-`paper_key` and `no_samples_key`.
+measurement it holds. Internally, and in stored files and the web API, the paper-level record is `paper` and
+the no-samples verdict `no_samples` for every profile; only the JSON keys the model sees come from `paper_key`
+and `no_samples_key` (TCO keeps `target` and `no_tco_film`, the keys its corpus was extracted with). Files
+written before this rename, which say `target` / `no_tco_film`, a `"target"` comparison scope and a single
+`matching`, still load: the old names are read aliases, and the next run re-derives everything under the new
+names from the LLM cache.
 
 ### Field attributes and what they do
 
@@ -798,7 +813,7 @@ verdict) are kept in stored files and code for every profile; only the JSON keys
 | `categories` | `[]` | verdict | A text field's closed set of answers |
 | `valid_range` | none | prompt, cleaning | `{min, max}`, either end open, in `canonical_unit`: told to the model, and a converted value outside it is dropped |
 | `condition_preference` | `[]` | verdict | Which measurement fills the dataset cell when a sample has several |
-| `range_policy` | `midpoint` | cleaning, verdict | `midpoint` or `reject`: what a range quoted as one value becomes. Numeric only |
+| `range_policy` | `midpoint` | cleaning, verdict | `midpoint`, `reject`, `lower` or `upper`: what a range quoted as one value becomes; an end (`lower` / `upper`) also fills the dataset cell. Numeric only |
 | `after_clause` | `refuse` | cleaning, verdict | `refuse` or `condition`: what "92.5% after 100 cycles" becomes. Numeric only |
 | `figure_readable` | `false` | figure | Whether a chart's y axis may be read for this field; numeric with a unit only |
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
@@ -1032,8 +1047,8 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Cache | Keyed on | Invalidated by |
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
-| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader); the profile's field attributes with the PROMPT or CLEANING role, its groups and its declared units; the rendered system prompts; the document rendering; and the source of `extract.py`, `records.py`, `fields.py`, `profile.py`, `units.py`, `text.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py` and `continuation.py`. Passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, the profile's `retrieval` section and unit patterns, and `passages.py`, `continuation.py`, `units.py` and `text.py` | changing any of them |
-| Comparison (`comparison_key`) | the same field attributes plus the VERDICT ones (tolerances, categories, condition preferences, `missing_condition_note_zh`), the groups and units, `ambiguous_match_confidence`, the matching prompt, and the source of `normalize.py`, `units.py`, `text.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py`, `fields.py` and `profile.py` | changing a tolerance or a rule |
+| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader); the profile's field attributes with the PROMPT or CLEANING role, its groups and its declared units; the rendered system prompts; every prompt slot not at its default, except the `matching_*` ones; the document rendering; and the source of `extract.py`, `records.py`, `fields.py`, `profile.py`, `units.py`, `text.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`, `continuation.py` and `kinds.py`. Passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, the profile's `retrieval` section and unit patterns, and `passages.py`, `continuation.py`, `units.py`, `text.py` and `fields.py` | changing any of them |
+| Comparison (`comparison_key`) | the same field attributes plus the VERDICT ones (tolerances, categories, condition preferences, `missing_condition_note_zh`), the groups and units, `ambiguous_match_confidence`, the matching prompt and its `matching_*` slots not at their default, and the source of `normalize.py`, `units.py`, `text.py`, `kinds.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py`, `fields.py` and `profile.py` | changing a tolerance or a rule |
 | Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the `figure_readable` fields and the chart slots, and the source of `figures.py`, `normalize.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and `profile.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
@@ -1124,7 +1139,8 @@ sheets:
 
 数据质量 is where the provenance is: 最终决策 is `agree` or `single_source` for a committed value and the
 refusal name otherwise, 合并证据来源 lists the block ids behind it, **证据来源通道** says which lanes
-supplied it, and **系列级** marks a value the paper stated once for the whole sample series.
+supplied it, and **系列级** marks a value the paper stated once for the whole sample series. A paper-level
+value's row has 样品ID `paper`.
 
 The paper row selects the sample with the most usable fields, then the most two-lane agreements, then a
 stable sample-id tie break. **It never combines different samples' measurements into one row.** That
@@ -1175,7 +1191,7 @@ that sample and field. Everything else is a refusal, and the refusal has a name:
 | `unanswered` | One lane's question about this field got no valid answer. Refused in both lanes, so the other lane's value never passes as single-source; the next run asks that question again |
 | `multiple_conditions` | One lane recorded the field under several measurement conditions, so no single value is the answer |
 | `multiple_values` | One lane recorded several different values under the same condition, or several candidates were never confirmed across lanes |
-| `non_scalar` | Every candidate is a range, a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
+| `non_scalar` | Every candidate is a range (under `range_policy` `midpoint` or `reject`), a bound, or a rectangular dimension such as `40 × 10 cm`; no unique scalar exists |
 
 Two things are not refusals. A bound or range beside a scalar under the chosen condition (`>80 %` next to
 `80.6 %`) is set aside with a note and the scalar decides the cell. The condition is chosen over every

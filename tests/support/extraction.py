@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from paperfacts.config import Settings
 from paperfacts.keys import ComparisonOptions, ExtractionOptions, profile_extraction_fingerprint
 from paperfacts.models import Backend, PageGeometry, ParsedArtifact, SourceBlock
-from paperfacts.records import FieldValue, LaneExtraction, SampleRecord, TargetRecord
+from paperfacts.records import FieldValue, LaneExtraction, PaperRecord, SampleRecord
 from support.factories import DOC_ID, make_block
 from support.profiles import shipped_profile
 
@@ -96,7 +96,7 @@ def make_lane(
     *,
     backend: Backend = "mineru",
     samples: Iterable[SampleRecord] = (),
-    target: TargetRecord | None = None,
+    paper: PaperRecord | None = None,
     document_id: str = DOC_ID,
     extractor_key: str = DEFAULT_EXTRACTOR_KEY,
     model: str = DEFAULT_MODEL,
@@ -112,7 +112,7 @@ def make_lane(
         extractor_key=extractor_key,
         model=model,
         profile_fingerprint=profile_extraction_fingerprint(shipped_profile()),
-        target=target,
+        paper=paper,
         samples=tuple(samples),
         invalid_source_ids=tuple(invalid_source_ids),
         dropped=tuple(dropped),

@@ -37,6 +37,12 @@ this file is the part that is easy to get wrong.
   reaches a key as a value). Presentation: `ui_copy.py`, `workbook.py`, `columns.py`, `readings.py`. `batch.py`
   is directory runs and offline export; `stored.py` is what is stored for a document and whether it is current.
   `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists).
+- What a field's kind decides (reading a value, when two lanes agree, what a dataset cell holds, the kind's note in
+  a field line) is one row per kind in `kinds.py`; normalisation, comparison, the dataset cell and the prompts
+  ask `kinds.rules_for(spec)` and never branch on `spec.kind` (profile validation and the CLI listing still do). `records.py` and `passages.py` sit below it and read `fields.DIGIT_KINDS` instead. A dataset column
+  (`columns.FieldColumn`) carries `kind` and `cardinality` so the workbook (`format_cell`), `table.js` and `tsv.js`
+  format a cell by its column, never by the value's shape; today only `cardinality` changes anything (a `many`
+  list joined with "; ", "；" on the page), and the kinds added later format by `kind`.
 - No module converts or retrieves with a unit table of its own: every conversion goes through the
   `UnitRegistry` of the profile it runs under (`profile.units`), including in tests and fixture generators.
 
@@ -118,11 +124,16 @@ this file is the part that is easy to get wrong.
   first). The TCO profile's slots reproduce the measured prompts byte for byte, pinned by
   `tests/fixtures/prompts/snapshot.json` (sha-pinned) and `tests/fixtures/payloads/b0.json`; never re-record
   either to make a change pass.
-- Internal names are kept on purpose: `target` (the paper-level record, `TargetRecord`, scope `"target"`) and
-  `no_tco_film` (the no-samples verdict) stay in code, stored files and the web for every profile. The model
-  sees the profile's `paper_key` / `no_samples_key`, mapped onto them by `records.response_models` aliases.
-  Every persisted model ignores unknown keys, so a rename without typed fixtures of every persisted type would
-  load empty records silently.
+- Internal names: the paper-level record is `paper` (`PaperRecord`, comparison scope and quality-row id
+  `"paper"`) and the no-samples verdict `no_samples`, in code, stored files and the web for every profile. The
+  model sees the profile's `paper_key` / `no_samples_key` (TCO: `target` / `no_tco_film`), mapped onto them by
+  `records.response_models` aliases; the top-level response classes keep their names because validation errors
+  (JSON mode: top-level class plus key path, `tests/test_records.py` pins them) reach the model in repair
+  requests. A report holds `matchings: {entity: SampleMatching}` and must hold `"sample"` (the implicit entity);
+  read it with `report.sample_matching()`. Files written before that rename are read through aliases
+  (`LaneExtraction`) and before-validators (`ComparisonReport`, `DatasetPayload`); `tests/fixtures/b0_formats` and `b1_formats` hold
+  them. Every persisted model ignores unknown keys, so a rename without typed fixtures of every persisted type
+  would load empty records silently.
 - Cache keys live in `keys.py`. `extractor_key(options)` is the only extraction key: it hashes one frozen
   `ExtractionOptions` (profile, model, mode and every sampling/retrieval setting). The workflow builds it once
   with `ExtractionOptions.from_settings(settings, profile)` and hands the same object to both lanes, and readers
@@ -143,12 +154,14 @@ this file is the part that is easy to get wrong.
   zero misses) plus `scripts/diff_derived.py`.
 - Hashed module sources, by fingerprint (`keys.py` is the truth; the docs follow it):
   - extraction code: `extract`, `fields`, `profile`, `units`, `text`, `voting`, `records`, `adapters`,
-    `prompts`, `normalize`, `grounding`, `continuation`;
-  - retrieval (passage mode): `passages`, `continuation`, `units`, `text`;
-  - normalization (comparison): `normalize`, `units`, `text`;
-  - comparison code: `compare`, `matching`, `dataset`, `decide`, `fields`, `profile`;
+    `prompts`, `normalize`, `grounding`, `continuation`, `kinds`;
+  - retrieval (passage mode): `passages`, `continuation`, `units`, `text`, `fields`;
+  - normalization (comparison): `normalize`, `units`, `text`, `kinds`;
+  - comparison code: `compare`, `matching`, `dataset`, `decide`, `kinds`, `fields`, `profile`;
   - figure code: `figures`, `normalize`, `passages`, `units`, `text`, `fields`, `profile`.
-  Editing any of them re-keys. A module that holds a default the keys omit must be hashed.
+  Editing any of them re-keys. A module that holds a default the keys omit must be hashed. Besides the rendered
+  system prompts, `extractor_key` hashes every prompt slot not at its default (except the `matching_*` ones, which
+  `comparison_key` hashes), because a slot may reach only a user prompt.
 - Presentation and orchestration stay out of hashed modules: the Excel layout is `workbook.py`, not
   `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
   `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading

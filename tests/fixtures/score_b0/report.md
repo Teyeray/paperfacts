@@ -48,14 +48,14 @@ Datasets scored:
 |---|---|---|---|---|---|---|---|
 | 0000000000000001 | (unaligned) stray | stray | thickness | extra | 50 |  | row matches no gold sample; single_source \| mineru_p2_b3 |
 | 0000000000000001 | S-annealed | ann | mode | extra | RF |  |  |
-| 0000000000000001 | target | target | resistance | extra | 0.001 |  |  |
+| 0000000000000001 | paper | paper | resistance | extra | 0.001 |  |  |
 | 0000000000000001 | S-100 | 100nm-asdep | working_pressure | missing | None | 0.5 (p2) |  |
 | 0000000000000001 | S-absent |  | mode | missing | None | RF (p1) | no dataset row aligned to this gold sample |
 | 0000000000000001 | S-absent |  | thickness | missing | None | 400 (p3) | no dataset row aligned to this gold sample |
 | 0000000000000001 | S-absent |  | working_pressure | missing | None | 0.5 (p2) | no dataset row aligned to this gold sample |
 | 0000000000000001 | S-200 | 200nm | mode | wrong | DC | RF (p1) |  |
 | 0000000000000001 | S-200 | 200nm | sheet_resistance | wrong | 15 | 10 (p3) | conflict \| 15 vs 16 \| paddleocr_vl_p2_b7 |
-| 0000000000000001 | target | target | inch | wrong | 2 | 3 (p2) | agree \| both lanes \| mineru_p1_b2 |
+| 0000000000000001 | paper | paper | inch | wrong | 2 | 3 (p2) | agree \| both lanes \| mineru_p1_b2 |
 | 0000000000000002 | (unaligned) film | film | mode | extra | DC |  | row matches no gold sample;  |
 | 0000000000000002 | (unaligned) film | film | thickness | extra | 10 |  | row matches no gold sample;  |
-| 0000000000000002 | target | target | component | extra | ITO |  |  |
+| 0000000000000002 | paper | paper | component | extra | ITO |  |  |
