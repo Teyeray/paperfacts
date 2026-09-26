@@ -22,10 +22,10 @@ from paperfacts.compare import PAPER_SCOPE, ComparisonReport, FieldComparison, c
 from paperfacts.decide import Decision, decide_cell
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
-from paperfacts.kinds import NO_CONTEXT, CellValue, KindContext, joined
+from paperfacts.kinds import CellValue, joined
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.normalize import normalize_lane
-from paperfacts.records import LaneExtraction, SampleRecord
+from paperfacts.records import NO_CONTEXT, KindContext, LaneExtraction, SampleRecord
 from paperfacts.storage import write_atomic
 
 Row = Mapping[str, CellValue]

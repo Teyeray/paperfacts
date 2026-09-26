@@ -630,6 +630,29 @@ def test_a_cleaned_value_carries_only_the_citations_it_was_shown():
     assert cleaning.invalid == {"ghost"}
 
 
+@pytest.mark.parametrize(("length", "kept"), [(200, True), (201, False)])
+def test_the_cap_keeps_a_quote_at_it_and_drops_one_past_it(tco_profile, length, kept):
+    from paperfacts.fields import MAX_NUMBER_QUOTE
+
+    assert length - MAX_NUMBER_QUOTE in (0, 1)
+    cleaning = ResponseCleaning()
+    # Measured on the stripped quote, the one stored as value_raw and measured again when it is read.
+    value = cleaning.value(
+        tco_profile.by_name["thickness"],
+        value_raw=f" {'1' * length} ",
+        unit_raw="nm",
+        condition=None,
+        source_ids=["b1"],
+        note=None,
+        known_ids=KNOWN_IDS,
+    )
+
+    assert (value is not None) is kept
+    assert cleaning.dropped == (
+        [] if kept else [f"thickness: a value of {length} characters is too long to be one value"]
+    )
+
+
 def test_a_numeric_answer_too_long_to_be_one_value_is_dropped_with_the_reason(tco_profile):
     cleaning = ResponseCleaning()
     spec = tco_profile.by_name["thickness"]

@@ -29,13 +29,12 @@ from paperfacts.cli import app
 from paperfacts.config import DEFAULT_REPO_ROOT, Settings
 from paperfacts.errors import ConfigError
 from paperfacts.keys import extractor_key_for
-from paperfacts.kinds import NO_CONTEXT
 from paperfacts.models import BACKENDS, DocumentGeometry, DocumentInput
 from paperfacts.normalize import normalize_field
 from paperfacts.profile import DomainProfile
 from paperfacts.profile_loader import load_profile
 from paperfacts.prompts import inventory_system_prompt, matching_system_prompt
-from paperfacts.records import ExtractedRecords, FieldValue, SampleRecord
+from paperfacts.records import NO_CONTEXT, ExtractedRecords, FieldValue, SampleRecord
 from paperfacts.storage import DataLayout
 from paperfacts.voting import merge_passes
 from paperfacts.web.app import create_app

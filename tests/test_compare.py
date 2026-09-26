@@ -22,10 +22,9 @@ from paperfacts.compare import (
 )
 from paperfacts.config import Settings
 from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key_for
-from paperfacts.kinds import NO_CONTEXT
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import normalize_field
-from paperfacts.records import FieldValue, PaperRecord
+from paperfacts.records import NO_CONTEXT, FieldValue, PaperRecord
 from support.extraction import comparison_options, make_field, make_lane, make_sample
 from support.profiles import shipped_profile
 

@@ -13,23 +13,26 @@ without asking the model again.
 
 from __future__ import annotations
 
-import datetime
 import itertools
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING
 
 from paperfacts.fields import MAX_NUMBER_QUOTE, RANGE_ENDS, FieldSpec, RangePolicy
 from paperfacts.grounding import LOWER_BOUND_WORDS, UPPER_BOUND_WORDS
 from paperfacts.profile import DomainProfile
-from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, PaperRecord, spell_number_word
+from paperfacts.records import (
+    NO_CONTEXT,
+    ExtractedRecords,
+    FieldValue,
+    KindContext,
+    LaneExtraction,
+    PaperRecord,
+    spell_number_word,
+)
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
 from paperfacts.units import UnitRegistry
-
-if TYPE_CHECKING:
-    from paperfacts.kinds import KindContext
 
 # ---- Closed category sets --------------------------------------------------------------------------------
 # A text field may declare a closed set of answers (FieldSpec.categories). Papers write one mode many ways --
@@ -176,6 +179,16 @@ SCALAR = re.compile(
 )
 
 
+# read_value puts a bound grounding found before a quote in front of it: the longest bound word and a space. The
+# backstop in read_number leaves room for it, so a quote cleaning kept is never refused as too long there.
+_LONGEST_READ = MAX_NUMBER_QUOTE + max(len(word) for word in (*LOWER_BOUND_WORDS, *UPPER_BOUND_WORDS)) + 1
+
+
+def too_long(length: int) -> str:
+    """The refusal of a quote of ``length`` characters, longer than :data:`~paperfacts.fields.MAX_NUMBER_QUOTE`."""
+    return f"a quote of {length} characters is too long to be one number; refused"
+
+
 @dataclass(frozen=True)
 class NumberReading:
     """What :func:`read_number` reads from a quote: the number, and what the unit check needs, so no reader of
@@ -187,7 +200,7 @@ class NumberReading:
     # is neither one scalar nor one clean range, or carries a condition or a parenthesis, so no single text
     # follows "the" number. Whether it is a unit of the field is :func:`unit_of_value`'s to say.
     unit: str | None
-    # The (low, high) of a clean range (:func:`read_range`), whatever the policy; None for anything else.
+    # The (low, high) of a clean range (``readers.read_range``), whatever the policy; None for anything else.
     ends: tuple[float, float] | None
 
 
@@ -213,17 +226,16 @@ def read_number(
     ``"reject"`` refuses it, for a quantity whose range is a window rather than a scatter around one value (a
     cathode's "2.8–4.3 V" is the cycling window; its midpoint was never measured). ``"lower"`` / ``"upper"``
     read it as the end the field asks for (a calcination "at 450-500 °C" reported by its upper end): unlike
-    the midpoint, an end is a number the paper printed. Only a clean range has an end (:func:`read_range`), and
+    the midpoint, an end is a number the paper printed. Only a clean range has an end (``readers.read_range``), and
     only when the unit written after it is one of the field's (``range_unit``, required under these two); any
     other range is refused under them, exactly as the dataset cell refuses it.
     """
     if range_policy in RANGE_ENDS and range_unit is None:
         raise ValueError(f"range_policy {range_policy!r} needs range_unit: an end is read only in the field's unit")
-    if len(raw) > MAX_NUMBER_QUOTE:
-        # Cleaning drops such an answer; this keeps a lane file written before that, or any other caller, linear.
-        return NumberReading(
-            None, f"a quote of {len(raw)} characters is too long to be one number; refused", None, None
-        )
+    if len(raw) > _LONGEST_READ:
+        # A backstop that keeps any caller linear. The cap itself is measured on the quote, by cleaning and by
+        # read_value, so the two agree on which quotes are too long.
+        return NumberReading(None, too_long(len(raw)), None, None)
     bare, notes, condition = set_aside(raw)
     if _AFTER.search(bare):
         refusal = "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"
@@ -260,14 +272,14 @@ def read_number(
 def _clean_range(
     raw: str, bare: str, text: str, condition: str, ends: tuple[float, float, str | None] | None
 ) -> tuple[float, float, str] | None:
-    """``(low, high, unit)`` when the general reader found a range (``ends``) that is clean: see :func:`read_range`.
+    """``(low, high, unit)`` when the general reader found a range (``ends``) that is clean: see ``readers.read_range``.
 
     The reader's range spellings (:func:`_range`, :func:`_scientific`) decide what a range is; this only refuses
     what surrounds one. ``text`` is ``bare`` with glued digits taken out: a range that needed that ("450to500")
     was never read as a range by the reader either."""
     if ends is None or ends[2] is None or condition or text != bare or "(" in bare or ")" in bare:
         return None
-    qualifier = _QUALIFIERS.match(_typeset(raw))
+    qualifier = _QUALIFIERS.match(typeset(raw))
     if qualifier is not None and qualifier.group("q") in _BOUND_SIGNS:
         return None
     return ends[0], ends[1], ends[2]
@@ -283,7 +295,7 @@ def split_after_clause(text: str) -> tuple[str, str]:
     return text[: match.start()].strip(), text[match.start() :].strip()
 
 
-def _typeset(raw: str) -> str:
+def typeset(raw: str) -> str:
     """``raw`` with its typesetting folded away, as every reader of a value sees it."""
     # "10^(-4)" is the caret spelling with its exponent bracketed, not a parenthesised alternative.
     text = _CARET_PARENS.sub(r"^\1", delatex(normalize_text(raw)))
@@ -300,7 +312,7 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
 
     A condition is set aside only where the value before it keeps a number: "deposited for 10 min" is the
     quote of a value that opens with its verb, not a condition with no value in front of it."""
-    text = _typeset(raw)
+    text = typeset(raw)
     notes: list[str] = []
     match = _QUALIFIERS.match(text)
     if match:
@@ -750,10 +762,17 @@ class Reading:
     condition: str
     # The canonical value of a compound duration ("3 h 30 min"), or None.
     compound: float | None
+    # Why the quote is read as no value before any of the above, or None: a quote longer than MAX_NUMBER_QUOTE,
+    # measured as cleaning measures it, on value_raw.
+    refusal: str | None = None
 
 
 def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Reading:
     """The shared first steps of reading a numeric field's quote; see :class:`Reading`."""
+    if len(field.value_raw) > MAX_NUMBER_QUOTE:
+        # Cleaning drops such an answer; this refuses one in a lane file written before that, without reading it.
+        text = field.value_raw
+        return Reading(text, None, "", field.bound, text, (), "", None, refusal=too_long(len(text)))
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
     text, clause = spelled, ""
@@ -777,152 +796,10 @@ def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Readi
     )
 
 
-def read_range(raw: str, range_unit: Callable[[str], bool]) -> tuple[float, float, str] | None:
-    """``(low, high, unit)`` when ``raw`` is one clean range, else None: the one definition of a range with two
-    printed ends, for the lanes (:func:`read_number` under ``range_policy`` lower/upper) and the dataset cell
-    (``kinds``) alike, so the two never disagree about which quotes have an end.
-
-    A range is what the general reader reads as one (:func:`read_number`): two ascending numbers, both plain or
-    both in scientific notation, joined by a range separator. Clean means nothing else is around it but a unit
-    after it that ``range_unit`` accepts as the field's ("" when the range has none). A qualifier of
-    approximation or a name before "=" may precede it (:func:`set_aside`); a bound ("> 450-500", "below 1.2e-4 -
-    1.5e-4"), a condition ("450-500 °C for 2 h"), an "after" clause, a parenthesis ("450-500 (600)"), another unit
-    ("450-500 K" on a ℃ field) and an exponent written once for two numbers ("1.2-1.5 × 10^-3") are not."""
-    return _clean_ends(read_number(raw), range_unit)
-
-
-def _clean_ends(reading: NumberReading, range_unit: Callable[[str], bool]) -> tuple[float, float, str] | None:
-    """:func:`read_range` of a quote already read: its ends and unit do not depend on the range policy it was read
-    under."""
-    if reading.ends is None or reading.unit is None or (reading.unit and not range_unit(reading.unit)):
-        return None
-    return reading.ends[0], reading.ends[1], reading.unit
-
-
-# A one-sided bound written before the number: the signs, and the words grounding recognises before a quote
-# (grounding.quoted_bound), so "80" quoted out of "above 80 %" reads the way ">80" does.
-_ONE_SIDED = re.compile(
-    rf"^(?:(?P<lower>>=|≥|>|{'|'.join(LOWER_BOUND_WORDS)})"
-    rf"|(?P<upper><=|≤|<|{'|'.join(UPPER_BOUND_WORDS)}))(?![a-z])\s*(?P<rest>.*)$",
-    re.IGNORECASE,
-)
-_NO_INTERVAL = "an interval field needs two ends or a bound"
-
-
-def read_interval(
-    raw: str, range_unit: Callable[[str], bool]
-) -> tuple[tuple[float | None, float | None, str] | None, str | None]:
-    """``((low, high, unit), None)`` when ``raw`` is one clean range or one clean one-sided bound (">80 %", "at most
-    5 nm", the open end None), else ``(None, why)``. ``unit`` is what follows the number, "" when nothing does.
-
-    A bound is held to a range's contract (:func:`read_range`): one number after the bound word, and after it
-    nothing but a unit ``range_unit`` accepts. "> 450-500", "> 450 (600)", "< 500 °C for 2 h" and ">80 % at 550
-    nm" are refused, not read as the one number they start with."""
-    # One reading serves the range and, when the quote is neither a range nor a bound, the reason it is no interval.
-    whole = read_number(raw, range_policy="reject")
-    clean = _clean_ends(whole, range_unit)
-    if clean is not None:
-        return clean, None
-    match = _ONE_SIDED.match(_typeset(raw))
-    if match is None:
-        number, note = whole.value, whole.note
-        return None, _NO_INTERVAL if number is not None else _join([n for n in (note, _NO_INTERVAL) if n])
-    reading = read_number(match.group("rest"), range_policy="reject")
-    if reading.value is None:
-        return None, reading.note
-    if reading.unit is None or reading.ends is not None:
-        return None, "a bound followed by more than one number and its unit (a condition, a parenthesis); ambiguous"
-    if reading.unit and not range_unit(reading.unit):
-        return None, f"{reading.unit!r} after the bound is not a unit of the field; ambiguous"
-    lower = match.group("lower") is not None
-    return ((reading.value, None, reading.unit) if lower else (None, reading.value, reading.unit)), None
-
-
-# ---- Dates -------------------------------------------------------------------------------------------------
-
-_MONTHS = {
-    name: index
-    for index, names in enumerate(
-        (
-            ("january", "jan"),
-            ("february", "feb"),
-            ("march", "mar"),
-            ("april", "apr"),
-            ("may",),
-            ("june", "jun"),
-            ("july", "jul"),
-            ("august", "aug"),
-            ("september", "sep", "sept"),
-            ("october", "oct"),
-            ("november", "nov"),
-            ("december", "dec"),
-        ),
-        1,
-    )
-    for name in names
-}
-# "2021", "2021-03", "2021-03-12", "2021/03/12", "2021.03.12": a numeric date is read only year first.
-_YEAR_FIRST = re.compile(r"^(?P<y>\d{4})(?:(?P<sep>[-/.])(?P<m>\d{1,2})(?:(?P=sep)(?P<d>\d{1,2}))?)?$")
-# The tokens of a date written with its month's name: "12 March 2021", "March 12th, 2021", "Mar. 2021".
-_DATE_TOKEN = re.compile(r"(?P<word>[a-z]+)\.?|(?P<number>\d+)(?:st|nd|rd|th)?|(?P<gap>[\s,]+)|(?P<other>.)")
-_EARLIEST_YEAR, _LATEST_YEAR = 1800, 2100
-
-
-def read_date(raw: str) -> tuple[str | None, str | None]:
-    """``(iso, note)``: the date ``raw`` states as ISO at the precision written -- "2021", "2021-03" or
-    "2021-03-12" -- or None with the reason it is refused.
-
-    Year-first numeric dates and dates naming their month are read. Refused, because each could be read two ways
-    or names more than one date: a two-digit year ("Mar 21"), an all-numeric date that is not year first
-    ("03/04/2021" is March or April), a range ("2019-2021", "March-May 2021"), and a year outside 1800-2100."""
-    # A date quoted at the end of a sentence or in parentheses: "(March 2021)", "March 2021.".
-    text = normalize_text(raw).casefold().removesuffix(".").strip()
-    if text.startswith("(") and text.endswith(")"):
-        text = text[1:-1].strip()
-    numeric = _YEAR_FIRST.fullmatch(text)
-    if numeric is not None and numeric.group("sep") == "." and numeric.group("d") is None:
-        return None, "a year with one part after a point could be a decimal year; ambiguous"
-    if numeric is not None:
-        year, month, day = (int(part) if part else None for part in numeric.group("y", "m", "d"))
-    elif re.fullmatch(r"[\d\s/.\-]+", text) and re.search(r"\d", text):
-        return None, "an all-numeric date that is not year first, or not one date; ambiguous"
-    else:
-        year = month = day = None
-        for token in _DATE_TOKEN.finditer(text):
-            word, number = token.group("word"), token.group("number")
-            if token.group("other") is not None:
-                return None, f"{token.group('other')!r} in a date: a range or not one date; ambiguous"
-            if word is not None:
-                if word not in _MONTHS or month is not None:
-                    return None, f"{word!r} is not the one month of a date"
-                month = _MONTHS[word]
-            elif number is not None and len(number) == 4 and year is None:
-                year = int(number)
-            elif number is not None and len(number) <= 2 and day is None:
-                day = int(number)
-            elif number is not None:
-                return None, f"{number!r} is neither the day nor the year of one date; ambiguous"
-        if month is None and day is not None:
-            return None, "a date needs its month"
-        if year is None:
-            return None, "no four-digit year (a two-digit year is not read)"
-    if not _EARLIEST_YEAR <= year <= _LATEST_YEAR:
-        return None, f"year {year} outside {_EARLIEST_YEAR}-{_LATEST_YEAR}"
-    try:
-        datetime.date(year, month or 1, day or 1)
-    except ValueError:
-        return None, "no such calendar date"
-    if month is None:
-        return f"{year:04d}", None
-    if day is None:
-        return f"{year:04d}-{month:02d}", None
-    return f"{year:04d}-{month:02d}-{day:02d}", None
-
-
 def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext) -> FieldValue:
     """``field`` with ``value`` / ``unit`` filled in as its kind reads it (:mod:`paperfacts.kinds`). ``ctx`` holds the
     lane's samples a reference field resolves against; no other kind reads it, and a caller with none passes
-    ``kinds.NO_CONTEXT``."""
+    ``records.NO_CONTEXT``."""
     # Imported here, not at the top: the kind rows are built on this module's readers.
     from paperfacts.kinds import rules_for
 
@@ -940,8 +817,6 @@ def _normalize_fields(
 def normalize_lane(lane: LaneExtraction, profile: DomainProfile) -> LaneExtraction:
     """Fill in ``value`` / ``unit`` for every field, in ``profile``'s units, and a reference field's ``ref_id``
     among the lane's own samples. Pure and idempotent: always returns a new object."""
-    from paperfacts.kinds import KindContext
-
     ctx = KindContext(samples=lane.listed())
     paper: PaperRecord | None = None
     if lane.paper is not None:
@@ -970,8 +845,6 @@ def drop_implausible(records: ExtractedRecords, profile: DomainProfile) -> Extra
         if spec is None or spec.describe_range() is None:
             return True
         # No kind with a range reads a context: only a reference field does, and it has no range.
-        from paperfacts.kinds import NO_CONTEXT
-
         normalized = normalize_field(value, spec, profile.units, NO_CONTEXT)
         # A numeric value is judged on its number, an interval on each end it has.
         ends = normalized.bounds if normalized.bounds is not None else (normalized.value,)

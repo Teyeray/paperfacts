@@ -37,10 +37,10 @@ from dataclasses import dataclass, replace
 
 from paperfacts.compare import FieldComparison, condition_numbers, conditions_measure_differently
 from paperfacts.fields import FieldSpec
-from paperfacts.kinds import CellValue, KindContext, element_key, joined, rules_for
+from paperfacts.kinds import CellValue, element_key, joined, rules_for
 from paperfacts.models import BACKENDS, Backend
 from paperfacts.normalize import normalize_key, normalize_text
-from paperfacts.records import FieldValue
+from paperfacts.records import FieldValue, KindContext
 from paperfacts.units import UnitRegistry
 
 # How a condition says it is an average; used only to break a tie inside one preference entry.

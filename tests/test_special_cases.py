@@ -7,8 +7,7 @@ from paperfacts.compare import FieldComparison
 from paperfacts.dataset import DocumentDataset
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
-from paperfacts.kinds import NO_CONTEXT
-from paperfacts.records import FieldValue
+from paperfacts.records import NO_CONTEXT, FieldValue
 from paperfacts.workbook import write_dataset
 from support.extraction import make_lane
 from support.profiles import make_profile

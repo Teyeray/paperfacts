@@ -574,7 +574,7 @@ comparison: its midpoint, no value, or its lower or upper end (a calcination "at
 temperature it reached: `upper`). Under `lower` / `upper` the chosen end also fills the **dataset cell**, with
 the note 原文为区间 a–b，按字段配置取上限/下限: an end is a number the paper printed. Under `midpoint` and
 `reject` a range never fills a cell: a midpoint is a number nobody measured. Only a **clean range** has an end,
-and the lanes and the cell use the one definition of it (`normalize.read_range`): a range the general number
+and the lanes and the cell use the one definition of it (`readers.read_range`): a range the general number
 reader reads as one -- two ascending numbers, both plain or both in scientific notation -- and after it nothing
 but a unit of the field ("450-500", "450 °C to 500 °C", "1.2e-4 - 1.5e-4 Ω cm"); an approximation ("~450-500")
 may precede it. Anything else is refused under `lower` / `upper` in the lanes as in the cell: a bound ("> 450-500",
@@ -732,6 +732,8 @@ A profile changes the words, never the shape of the answer. The shape is fixed i
 - **A range is a midpoint, an end, an interval, or nothing.** A value quoted as a range ("10-20") becomes its
   midpoint, its lower or upper end (`range_policy: lower` / `upper`) or, under `reject`, no value; only an end
   fills a dataset cell, and a bound (">80 %") fills none. A field whose value *is* a range is an `interval`.
+- **A censored value is a bound, not a number.** "IC50 > 10 µM" fills no `numeric` cell, since it is a bound;
+  declare a quantity that papers often report censored as an `interval` field, whose cell holds `[10, open]`.
 - **Charts are property-vs-condition only.** The opt-in figure reading reads a y value per marker off a chart
   whose caption names a `figure_readable` field; spectra, micrographs, maps and schematics are not read.
 - **The prompts are English.** The templates around the slots are English, so slots are written in English;
@@ -891,11 +893,12 @@ A profile may declare several kinds of sample, each an **entity type**: heteroge
 - **Comparing.** Samples are matched per entity (`ComparisonReport.matchings[entity]`), with that entity's matching
   prompt, and compared under scopes `<entity>:<a>|<b>`; the implicit entity keeps `sample:`. The counts add up
   over every entity, and any failed matching leaves the run incomplete.
-- **Rows.** Each entity has its own rows, holding its own fields plus the paper-level decisions and an `entity`
-  column (whenever the profile declares entity types, a single one included: the gold set and the page find a
-  row's fields by it); the paper row is chosen among the primary entity's rows. The workbook has one data sheet per
-  entity, named after its `label_zh` (at most 40 characters, no control characters), and the web page one results
-  table per entity.
+- **Rows.** Each entity has its own rows, holding its own fields plus the paper-level decisions; the paper row is
+  chosen among the primary entity's rows. Every row carries `entity` whenever the profile declares entity types, a
+  single one included (the gold set and the page find a row's fields by it). The workbook and the page divide
+  only with several entity types: one data sheet per entity, named after its `label_zh` (at most 40 characters, no
+  control characters), a 实体 column on the 字段说明 and 数据质量 sheets, and one results table per entity on the
+  page. A single declared entity keeps the one 样品数据 sheet and no 实体 column.
 - **Linking.** A [reference field](#reference-fields) of one entity names a sample of another. The worked example
   is `profiles/catalysis.json`: catalysts, and reaction tests that each name their catalyst.
 - **Not supported.** Document mode (refused when a run loads the profile: `paperfacts profiles --check` notes
@@ -1168,7 +1171,7 @@ re-reads only them, since each costs minutes of a different model.
   stamped with it; a file whose destination already exists is left for you to look at. `figure_key` hashes the vision model and its
   sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the profile's `figures` slots, the
   `figure_readable` fields' names, descriptions, keywords, units and bare-number policies, the declared units,
-  and the source of `figures.py`, `normalize.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and
+  and the source of `figures.py`, `normalize.py`, `readers.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and
   `profile.py`. Stored readings are
   shown and exported even when the stage is switched off for a later run. With nothing under the current
   key, the newest older file is shown and marked stale (旧版本读数); readings citing figure blocks the
@@ -1232,9 +1235,9 @@ exactly its own inputs. The hashes are the `<key>` in the filenames under a docu
 | Cache | Keyed on | Invalidated by |
 |---|---|---|
 | Parser output | nothing; `raw/<backend>/meta.json` exists or it does not | `--force` |
-| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader); the profile's field attributes with the PROMPT or CLEANING role, its groups and its declared units; the rendered system prompts; every prompt slot not at its default, except the `matching_*` ones; the document rendering; and the source of `extract.py`, `records.py`, `fields.py`, `profile.py`, `units.py`, `text.py`, `adapters.py`, `prompts.py`, `normalize.py`, `grounding.py`, `voting.py`, `continuation.py` and `kinds.py`. Passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, the profile's `retrieval` section and unit patterns, and `passages.py`, `continuation.py`, `units.py`, `text.py` and `fields.py` | changing any of them |
-| Comparison (`comparison_key`) | the same field attributes plus the VERDICT ones (tolerances, categories, condition preferences, `missing_condition_note_zh`), the groups and units, `ambiguous_match_confidence`, the matching prompt and its `matching_*` slots not at their default, and the source of `normalize.py`, `units.py`, `text.py`, `kinds.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py`, `fields.py` and `profile.py` | changing a tolerance or a rule |
-| Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the `figure_readable` fields and the chart slots, and the source of `figures.py`, `normalize.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and `profile.py` | changing any of them |
+| Extraction (`extractor_key`) | the model and its sampling settings (one `ExtractionOptions`, built the same way by the writer and every reader); the profile's field attributes with the PROMPT or CLEANING role, its groups and its declared units; the rendered system prompts; every prompt slot not at its default, except the `matching_*` ones; the document rendering; and the source of `extract.py`, `records.py`, `fields.py`, `profile.py`, `units.py`, `text.py`, `adapters.py`, `prompts.py`, `normalize.py`, `readers.py`, `grounding.py`, `voting.py`, `continuation.py` and `kinds.py`. Passage mode adds its two prompts, `candidate_limit`, `context_tokens`, the inventory effort, and a retrieval fingerprint over the keywords, the profile's `retrieval` section and unit patterns, and `passages.py`, `continuation.py`, `units.py`, `text.py` and `fields.py` | changing any of them |
+| Comparison (`comparison_key`) | the same field attributes plus the VERDICT ones (tolerances, categories, condition preferences, `missing_condition_note_zh`), the groups and units, `ambiguous_match_confidence`, the matching prompt and its `matching_*` slots not at their default, and the source of `normalize.py`, `readers.py`, `units.py`, `text.py`, `kinds.py`, `compare.py`, `matching.py`, `dataset.py`, `decide.py`, `fields.py` and `profile.py` | changing a tolerance or a rule |
+| Figure readings (`figure_key`) | the vision model and its sampling, the crop settings, the per-paper limit, the `figure_readable` fields and the chart slots, and the source of `figures.py`, `normalize.py`, `readers.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and `profile.py` | changing any of them |
 | LLM requests | the entire request payload (a chart's image by its sha256) | nothing — an identical request is free |
 
 The workbook layout (`workbook.py`), where chart readings are stored and which are shown (`readings.py`), the

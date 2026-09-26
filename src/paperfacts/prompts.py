@@ -31,8 +31,9 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 
 from paperfacts.fields import FieldSpec
-from paperfacts.kinds import NO_CONTEXT, KindContext, rules_for
+from paperfacts.kinds import rules_for
 from paperfacts.profile import MARKER, DomainProfile, EntitySpec, GroupSpec, PromptSlots
+from paperfacts.records import NO_CONTEXT, KindContext
 
 # A value stated for part of the series. Left unsaid, the model reports "all films deposited at 100 °C" as one
 # value with no sample and the series flag off, and the value reaches none of the samples it names (the gold set

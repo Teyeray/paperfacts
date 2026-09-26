@@ -333,6 +333,9 @@ def _groups(entries: Any, entity_names: tuple[str, ...], where: str) -> tuple[Gr
 # A group's or an entity's label_zh names a column header's scope and a workbook sheet ("催化剂数据"): a control
 # character there corrupts the .xlsx, and a sheet title holds 31 characters.
 _LABEL_MAX = 40
+# Every C0 control character and DEL: stricter than workbook._CONTROL, which the export strips from every string and
+# which spares tab, newline and carriage return because a quoted cell may carry them. A label is one line of display
+# text, so it is refused here, with its key named, rather than silently changed in the workbook.
 _CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 
 

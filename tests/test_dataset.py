@@ -15,10 +15,9 @@ from paperfacts.dataset import (
     write_dataset_json,
 )
 from paperfacts.decide import decide
-from paperfacts.kinds import NO_CONTEXT
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
-from paperfacts.records import FailedQuestion, FieldValue, PaperRecord
+from paperfacts.records import NO_CONTEXT, FailedQuestion, FieldValue, PaperRecord
 from support.extraction import comparison_options, make_lane, make_sample
 from support.factories import DOC_ID
 from support.profiles import shipped_profile

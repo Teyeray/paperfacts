@@ -27,13 +27,13 @@ from paperfacts.dataset import consolidate_document
 from paperfacts.errors import ConfigError
 from paperfacts.grounding import ground_lane
 from paperfacts.keys import ComparisonOptions, profile_extraction_fingerprint
-from paperfacts.kinds import NO_CONTEXT, KindContext, rules_for
+from paperfacts.kinds import rules_for
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import BACKENDS, DocumentGeometry, DocumentInput
 from paperfacts.normalize import normalize_lane
 from paperfacts.profile_loader import parse_profile
 from paperfacts.prompts import field_user_prompt
-from paperfacts.records import FieldValue, LaneExtraction, SampleRecord
+from paperfacts.records import NO_CONTEXT, FieldValue, KindContext, LaneExtraction, SampleRecord
 from paperfacts.storage import DataLayout
 from paperfacts.workbook import write_dataset
 from paperfacts.workflow import load_run_profile, read_lane, run_document
@@ -489,6 +489,15 @@ def test_a_reference_to_an_id_two_listed_samples_share_is_refused_as_ambiguous()
 
     assert (read.grounded, read.ref_id) == (False, None)  # type: ignore[union-attr]
     assert "ambiguous" in (read.normalization_note or "")  # type: ignore[union-attr]
+    # The cell names the ambiguity, not an absence: the id is listed, twice.
+    _, reason = rules_for(SPEC).cell(read, SPEC, PROFILE.units, NO_CONTEXT)  # type: ignore[arg-type]
+    assert reason == "引用的样品 'Coat-1' 在本通道的coating列表中对应两个样品，有歧义"
+    unlisted = (
+        normalize_lane(_lane("paddleocr_vl", ("coat-1", "coat 1"), {"run-1": _reference("coat-9", "b")}), PROFILE)
+        .sample("run-1", "wear_test")
+        .get("tested_coating")
+    )  # type: ignore[union-attr]
+    assert "不在本通道" in (rules_for(SPEC).cell(unlisted, SPEC, PROFILE.units, NO_CONTEXT)[1] or "")  # type: ignore[arg-type]
     other = _lane("paddleocr_vl", ("coat-1", "coat 1", "coat-2"), {"run-1": _reference("coat-2", "b")})
     assert normalize_lane(other, PROFILE).sample("run-1", "wear_test").get("tested_coating").ref_id == "coat-2"  # type: ignore[union-attr]
 
@@ -521,6 +530,6 @@ def test_the_reference_context_is_required_where_forgetting_it_would_be_silent()
     from paperfacts.kinds import RULES
     from paperfacts.normalize import normalize_field
 
-    rows = [getattr(RULES[kind], method) for kind in RULES for method in ("read", "compare", "cell")]
+    rows = [getattr(RULES[kind], method) for kind in RULES for method in ("read", "compare", "cell", "note")]
     for function in (compare_values, decide, decide_cell, normalize_field, *rows):
         assert inspect.signature(function).parameters["ctx"].default is inspect.Parameter.empty, function

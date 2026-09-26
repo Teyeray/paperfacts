@@ -12,9 +12,8 @@ import dataclasses
 
 import pytest
 
-from paperfacts.kinds import NO_CONTEXT
 from paperfacts.normalize import drop_implausible, normalize_field, normalize_lane
-from paperfacts.records import ExtractedRecords, FieldValue, PaperRecord
+from paperfacts.records import NO_CONTEXT, ExtractedRecords, FieldValue, PaperRecord
 from support.extraction import make_field, make_lane, make_sample
 from support.profiles import shipped_profile
 

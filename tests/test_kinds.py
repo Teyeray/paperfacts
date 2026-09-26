@@ -13,6 +13,7 @@ from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.fields import FieldKind
 from paperfacts.kinds import RULES, NumericRules, TextRules, rules_for
 from paperfacts.profile import DomainProfile
+from paperfacts.records import NO_CONTEXT
 from paperfacts.workbook import format_cell
 
 
@@ -27,7 +28,7 @@ def test_a_field_is_dispatched_by_its_kind(tco_profile: DomainProfile):
 
 def test_no_kind_adds_a_note_to_a_field_line_yet(tco_profile: DomainProfile):
     # The field line's {note} renders "" for every kind so far, which keeps the TCO prompts byte-identical.
-    assert {rules_for(spec).note(spec) for spec in tco_profile.fields} == {""}
+    assert {rules_for(spec).note(spec, NO_CONTEXT) for spec in tco_profile.fields} == {""}
 
 
 def test_every_column_carries_its_field_kind(tco_profile: DomainProfile):

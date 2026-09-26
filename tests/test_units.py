@@ -8,12 +8,12 @@ import pytest
 
 from paperfacts.errors import ConfigError
 from paperfacts.fields import FieldSpec
-from paperfacts.kinds import NO_CONTEXT
 from paperfacts.models import SourceBlock
 from paperfacts.normalize import convert_to_canonical, normalize_field
 from paperfacts.passages import candidate_blocks, inventory_blocks, searchable
 from paperfacts.profile import RetrievalSpec
 from paperfacts.profile_loader import MAX_ALIASES, load_profile, load_units
+from paperfacts.records import NO_CONTEXT
 from paperfacts.units import BUILTIN_CONVERTERS, BUILTIN_RETRIEVAL, DeclaredUnit, UnitRegistry
 from support.extraction import make_field
 from support.factories import make_block

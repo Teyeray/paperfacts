@@ -12,9 +12,10 @@ import dataclasses
 
 import pytest
 
-from paperfacts.kinds import NO_CONTEXT, RULES, interval_text
-from paperfacts.normalize import normalize_field, parse_number, read_number, read_range, unit_of_value
-from paperfacts.records import FieldValue
+from paperfacts.kinds import RULES, interval_text
+from paperfacts.normalize import normalize_field, parse_number, read_number, unit_of_value
+from paperfacts.readers import read_range
+from paperfacts.records import NO_CONTEXT, FieldValue
 from support.profiles import make_profile, profile_data, shipped_profile
 
 TCO = shipped_profile()

@@ -202,6 +202,27 @@ def test_a_control_character_in_a_label_or_a_list_element_is_dropped_not_fatal(t
     assert coatings[1][header.index("solvent")] == "water; ethanol"
 
 
+def test_a_control_character_in_a_column_header_is_dropped_not_fatal(tmp_path):
+    # A field's name is its data column's header; a profile built in code skips the loader's name check.
+    profile = make_entity_profile()
+    fields = tuple(
+        dataclasses.replace(spec, name="sol\x03vent") if spec.name == "solvent" else spec for spec in profile.fields
+    )
+    profile = dataclasses.replace(profile, fields=fields)
+    dataset = two_entity_dataset(profile)
+    rows = tuple(
+        {("sol\x03vent" if key == "solvent" else key): v for key, v in row.items()} for row in dataset.sample_rows
+    )
+    dataset = dataclasses.replace(dataset, sample_rows=rows)
+    path = tmp_path / "demo.xlsx"
+
+    write_dataset([dataset], path, profile)
+
+    coatings = list(load_workbook(path)["涂层数据"].values)
+    assert "solvent" in coatings[0]
+    assert coatings[1][coatings[0].index("solvent")] == dataset.sample_rows[0]["sol\x03vent"]
+
+
 def test_a_sheet_title_is_cleaned_and_never_ends_in_an_apostrophe_after_the_cut(tmp_path):
     profile = make_entity_profile({"entities.1.label_zh": "x" * 30 + "'y"})
     coating, wear = profile.declared_entities

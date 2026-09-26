@@ -165,9 +165,9 @@ def extraction_code_fingerprint() -> str:
     of every question (the plausible-range sentence) and decides which fields are sample-level, which
     gates the questions asked; ``normalize.py`` and ``grounding.py`` fold the text that decides which values
     are duplicates of each other and which sample a value lands on, and ``normalize.py`` converts the value
-    ``drop_implausible`` judges (``continuation.py`` decides which blocks grounding joins across a page
-    break); ``voting.py`` decides which of the model's repeated claims survive the majority vote.
-    ``text.py`` and ``units.py`` hold the folding and the unit tables ``normalize.py`` applies, and
+    ``drop_implausible`` judges, ``readers.py`` an interval's ends (``continuation.py`` decides which blocks
+    grounding joins across a page break); ``voting.py`` decides which of the model's repeated claims survive the
+    majority vote. ``text.py`` and ``units.py`` hold the folding and the unit tables ``normalize.py`` applies, and
     ``profile.py`` the prompt-slot defaults a profile falls back on. ``kinds.py`` reads a numeric value (which
     ``drop_implausible`` judges) and adds its kind's note to a field line. ``profile_loader.py`` is left out: what it
     reads from a file reaches this key as values (the schema fingerprint and the rendered prompts), and a
@@ -189,6 +189,7 @@ def extraction_code_fingerprint() -> str:
         "adapters.py",
         "prompts.py",
         "normalize.py",
+        "readers.py",
         "grounding.py",
         "continuation.py",
         "kinds.py",
@@ -197,8 +198,8 @@ def extraction_code_fingerprint() -> str:
 
 @cache
 def normalization_fingerprint() -> str:
-    # kinds.py: normalize_field reads a value as its kind's row says.
-    return source_fingerprint("normalize.py", "units.py", "text.py", "kinds.py")
+    # kinds.py: normalize_field reads a value as its kind's row says; readers.py: a range, an interval and a date.
+    return source_fingerprint("normalize.py", "readers.py", "units.py", "text.py", "kinds.py")
 
 
 @cache
@@ -414,8 +415,8 @@ def figure_key(
 
     ``dpi`` and ``max_pixels`` change the image the model is shown; ``max_per_document`` which charts are
     read. ``figures.py`` holds the prompt template, the selection and the conversion into readings;
-    ``normalize.py``, ``units.py`` and ``text.py`` the unit arithmetic; ``passages.py`` the keyword matching
-    that selects a chart; ``fields.py`` the attribute defaults the profile material leaves out and
+    ``normalize.py``, ``readers.py``, ``units.py`` and ``text.py`` the unit arithmetic; ``passages.py`` the keyword
+    matching that selects a chart; ``fields.py`` the attribute defaults the profile material leaves out and
     ``profile.py`` which fields are figure-readable.
     """
     material = {
@@ -427,7 +428,14 @@ def figure_key(
         "max_per_document": max_per_document,
         "fields": figure_profile_fingerprint(profile),
         "code": source_fingerprint(
-            "figures.py", "normalize.py", "passages.py", "units.py", "text.py", "fields.py", "profile.py"
+            "figures.py",
+            "normalize.py",
+            "readers.py",
+            "passages.py",
+            "units.py",
+            "text.py",
+            "fields.py",
+            "profile.py",
         ),
     }
     return content_fingerprint(_dumps(material))

@@ -22,10 +22,10 @@ import logging
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
@@ -33,6 +33,9 @@ from paperfacts.fields import DIGIT_KINDS, MAX_NUMBER_QUOTE, FieldSpec
 from paperfacts.models import Backend
 from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.storage import write_text_atomic
+
+if TYPE_CHECKING:
+    from paperfacts.profile import EntitySpec
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +348,31 @@ def resolve_reference(listed: Mapping[str, str | None], value_raw: str) -> str |
     a key two of the samples share, since picking either would be a guess. A reference is resolved by the key that
     pairs and attributes samples, so the model only has to copy an id it was shown."""
     return listed.get(sample_key(value_raw))
+
+
+@dataclass(frozen=True)
+class KindContext:
+    """What a ``reference`` field is asked, read, compared and decided against beyond its own spec. Every other kind
+    ignores it. Reading, comparing and deciding take it as a required argument: a caller that forgot it would
+    silently resolve no reference, compare none as agreeing and fill no reference cell, so one with nothing of the
+    kind says so by passing :data:`NO_CONTEXT`.
+
+    Each stage fills the part it holds: the question the entity types a field may name, a lane's normalisation that
+    lane's samples, the comparison every entity's matching, the dataset every row id and the lane of the value."""
+
+    # The profile's entity types by name: the referenced one's heading and noun, for the field line's note.
+    entities: Mapping[str, EntitySpec] = field(default_factory=dict)
+    # One lane's samples of each entity type, sample_key -> sample_id (LaneExtraction.listed).
+    samples: Mapping[str, Mapping[str, str | None]] = field(default_factory=dict)
+    # Each entity type's matched pairs, (lane A's sample id, lane B's sample id).
+    pairs: Mapping[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # The dataset row id of a lane's sample: (backend, entity, the lane's sample id) -> the row's sample_id.
+    row_ids: Mapping[tuple[str, str, str], str] = field(default_factory=dict)
+    # The lane the value decided belongs to; set per candidate by paperfacts.decide.
+    backend: str | None = None
+
+
+NO_CONTEXT = KindContext()
 
 
 class FailedQuestion(BaseModel):

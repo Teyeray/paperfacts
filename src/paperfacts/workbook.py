@@ -101,6 +101,10 @@ _REFERENCE_RULE = (
     "两路所引样品未被匹配为同一样品或引用未定位到列表中的样品时留空。"
 )
 _LIST_RULE = "多值：两路已定位证据的并集，以“; ”分隔，每个元素的来源通道见数据质量说明；有分类时按分类顺序排列。"
+# The characters openpyxl refuses in a cell, removed from every string it appends. Tab, newline and carriage return
+# are legal in a cell and a quote may hold them, so they stay. profile_loader._CONTROL_CHARACTER is the stricter set
+# a label_zh is refused for at load time (a sheet title and a one-line header have no use for a tab either); this one
+# also catches what reaches the export without the loader: quotes, and a profile built in code.
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # What Excel refuses in a sheet title, and its length limit.
 _SHEET_TITLE_REFUSED = re.compile(r"[\[\]:*?/\\]")

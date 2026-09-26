@@ -31,7 +31,6 @@ from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.fields import UNIT_KINDS
 from paperfacts.figures import user_prompt as figure_user_prompt
 from paperfacts.keys import ComparisonOptions, ExtractionOptions
-from paperfacts.kinds import KindContext
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.overlay import render_overlays
@@ -46,6 +45,7 @@ from paperfacts.prompts import (
     matching_system_prompt,
     render_field_table,
 )
+from paperfacts.records import KindContext
 from paperfacts.report import render_lane, render_report
 from paperfacts.storage import DataLayout, write_text_atomic
 from paperfacts.workflow import (

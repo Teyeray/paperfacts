@@ -19,8 +19,10 @@ from paperfacts.compare import FieldComparison
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
 from paperfacts.fields import RANGE_ENDS, FieldRole
-from paperfacts.kinds import NO_CONTEXT, RULES
-from paperfacts.normalize import normalize_field, parse_number, read_range, read_value, unit_of_value
+from paperfacts.kinds import RULES
+from paperfacts.normalize import normalize_field, parse_number, read_value, unit_of_value
+from paperfacts.readers import read_range
+from paperfacts.records import NO_CONTEXT
 from support.extraction import make_field
 from support.profiles import make_profile, shipped_profile
 

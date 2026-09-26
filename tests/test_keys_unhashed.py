@@ -79,6 +79,28 @@ def test_the_kind_rules_are_hashed_with_the_stages_that_dispatch_to_them(monkeyp
     assert "fields.py" in lists["passages.py"]
 
 
+def test_the_readers_split_from_normalize_are_hashed_wherever_normalize_is(monkeypatch, tco_profile):
+    # readers.py was cut out of normalize.py only for size: every list that reads normalize.py reads it too.
+    real = keys.source_fingerprint
+    lists: list[tuple[str, ...]] = []
+
+    def recording(*module_files: str) -> str:
+        lists.append(module_files)
+        return real(*module_files)
+
+    monkeypatch.setattr(keys, "source_fingerprint", recording)
+    keys.extraction_code_fingerprint.__wrapped__()
+    keys.normalization_fingerprint.__wrapped__()
+    keys.comparison_code_fingerprint.__wrapped__()
+    keys.retrieval_fingerprint.__wrapped__(tco_profile)
+    keys.figure_key(tco_profile, "model", dpi=200, max_pixels=1, max_per_document=1)
+
+    with_normalize = [files for files in lists if "normalize.py" in files]
+    assert len(with_normalize) == 3
+    assert all("readers.py" in files for files in with_normalize)
+    assert all("normalize.py" in files for files in lists if "readers.py" in files)
+
+
 def test_a_workbook_header_edit_leaves_the_comparison_key(monkeypatch, tmp_path, tco_profile):
     # The row headers are display text in workbook.py; were they in dataset.py, renaming one would rename every
     # stored comparison. The package is copied so its sources can be edited without touching the checkout.

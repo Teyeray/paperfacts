@@ -18,11 +18,13 @@ from paperfacts.compare import FieldComparison, compare_values
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
 from paperfacts.extract import FieldHarvest, SampleInventory, _response_models, passage_records
-from paperfacts.kinds import NO_CONTEXT, RULES
-from paperfacts.normalize import drop_implausible, normalize_field, read_date
+from paperfacts.kinds import RULES
+from paperfacts.normalize import drop_implausible, normalize_field
 from paperfacts.profile import DomainProfile
 from paperfacts.prompts import extraction_system_prompt, field_system_prompt, render_field_table
+from paperfacts.readers import read_date
 from paperfacts.records import (
+    NO_CONTEXT,
     ExtractedRecords,
     FieldResponse,
     FieldValue,

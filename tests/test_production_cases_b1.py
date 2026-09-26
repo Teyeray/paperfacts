@@ -7,10 +7,9 @@ import pytest
 
 from paperfacts.compare import compare_values
 from paperfacts.grounding import ground_lane, quoted_bound
-from paperfacts.kinds import NO_CONTEXT
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import canonical_category, normalize_field, read_value, same_text
-from paperfacts.records import FieldValue, PaperRecord
+from paperfacts.records import NO_CONTEXT, FieldValue, PaperRecord
 from support.extraction import make_lane, make_sample
 from support.profiles import shipped_profile
 from test_dataset import FIELD_BY_NAME, dataset, decision, paired, value

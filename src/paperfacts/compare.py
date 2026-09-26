@@ -33,7 +33,7 @@ from paperfacts.keys import (
     profile_comparison_fingerprint,
     profile_extraction_fingerprint,
 )
-from paperfacts.kinds import KindContext, element_key, rules_for
+from paperfacts.kinds import element_key, rules_for
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
 from paperfacts.normalize import (
@@ -44,7 +44,7 @@ from paperfacts.normalize import (
     normalize_text,
 )
 from paperfacts.profile import IMPLICIT_ENTITY
-from paperfacts.records import FieldValue, LaneExtraction
+from paperfacts.records import FieldValue, KindContext, LaneExtraction
 from paperfacts.storage import write_text_atomic
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]

@@ -36,7 +36,9 @@ this file is the part that is easy to get wrong.
   checking a profile file, `field_spec`, `load_units`, the regex checks: unhashed, since everything it decides
   reaches a key as a value). Presentation: `ui_copy.py`, `workbook.py`, `columns.py`, `readings.py`. `batch.py`
   is directory runs and offline export; `stored.py` is what is stored for a document and whether it is current.
-  `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists).
+  `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists). `readers.py` holds
+  the range, interval and date readers built on `normalize.read_number`; `KindContext`/`NO_CONTEXT` live in
+  `records.py` so `normalize.py` can use them without importing `kinds.py`.
 - What a field's kind decides (reading a value, when two lanes agree, what a dataset cell holds, the kind's note in
   a field line) is one row per kind in `kinds.py`; normalisation, comparison, the dataset cell and the prompts
   ask `kinds.rules_for(spec)` and never branch on `spec.kind` (profile validation and the CLI listing still do). `records.py` and `passages.py` sit below it and read `fields.DIGIT_KINDS` instead. A dataset column
@@ -122,13 +124,14 @@ this file is the part that is easy to get wrong.
 - A reference is grounded by resolution, not text: `grounding.ground_lane(..., profile=)` resolves it by
   `sample_key` among the lane's samples of the referenced entity, and `workflow.read_lane` re-grounds on every
   read, so no stored verdict survives. An id two differently spelled samples share resolves to nothing
-  (ambiguous), never to the first. `kinds.KindContext` (a lane's samples, each entity's matched pairs, the
+  (ambiguous), never to the first. `records.KindContext` (a lane's samples, each entity's matched pairs, the
   dataset's row ids) is a required argument of the kind rows' `read`/`compare`/`cell`, `normalize_field`,
   `compare_values` and `decide`/`decide_cell`, because a forgotten one is silently wrong; a caller with no reference
   in play passes `NO_CONTEXT`. Voting (`deduplicate`, `merge_passes`) keys a reference's quote by `sample_key` via
   the required `reference_fields`.
 - A number, date or interval quote longer than `fields.MAX_NUMBER_QUOTE` characters is dropped at cleaning and
-  refused by `read_number` before parsing (the number reader is quadratic in a digit run).
+  refused by `normalize.read_value` before parsing (the number reader is quadratic in a digit run); both measure
+  the stored `value_raw`. `read_number` keeps a backstop that leaves room for the bound `read_value` prefixes.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
 - Five guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
@@ -171,11 +174,11 @@ this file is the part that is easy to get wrong.
   zero misses) plus `scripts/diff_derived.py`.
 - Hashed module sources, by fingerprint (`keys.py` is the truth; the docs follow it):
   - extraction code: `extract`, `fields`, `profile`, `units`, `text`, `voting`, `records`, `adapters`,
-    `prompts`, `normalize`, `grounding`, `continuation`, `kinds`;
+    `prompts`, `normalize`, `readers`, `grounding`, `continuation`, `kinds`;
   - retrieval (passage mode): `passages`, `continuation`, `units`, `text`, `fields`;
-  - normalization (comparison): `normalize`, `units`, `text`, `kinds`;
+  - normalization (comparison): `normalize`, `readers`, `units`, `text`, `kinds`;
   - comparison code: `compare`, `matching`, `dataset`, `decide`, `kinds`, `fields`, `profile`;
-  - figure code: `figures`, `normalize`, `passages`, `units`, `text`, `fields`, `profile`.
+  - figure code: `figures`, `normalize`, `readers`, `passages`, `units`, `text`, `fields`, `profile`.
   Editing any of them re-keys. A module that holds a default the keys omit must be hashed. Besides the rendered
   system prompts, `extractor_key` hashes every prompt slot not at its default (except the `matching_*` ones, which
   `comparison_key` hashes), because a slot may reach only a user prompt.
