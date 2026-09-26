@@ -61,14 +61,29 @@ BACKEND_A, BACKEND_B = BACKENDS
 LEGACY_EXPORT_NAME = "paperfacts"
 
 
-def load_run_profile(settings: Settings) -> DomainProfile:
+def check_mode(profile: DomainProfile, settings: Settings) -> None:
+    """Refuse to run a profile with entity types in document mode: its one whole-paper question has a single
+    sample list and no entity to put a sample under, so it cannot ask what such a profile describes."""
+    if profile.declared_entities and settings.extraction_mode == "document":
+        raise ConfigError(
+            f"{profile.source}: the profile declares entity types, which only passage mode asks about; set "
+            "extraction.mode to 'passage' (or PAPERFACTS_EXTRACTION_MODE)"
+        )
+
+
+def load_run_profile(settings: Settings, *, to_run: bool = True) -> DomainProfile:
     """The profile ``settings`` selects, as an entry point loads it: once, and refused when its name clashes.
 
     Workbooks are named after the profile (``exports/<name>.xlsx``), so a profile loaded by path under the
     name of a different repository profile would overwrite that profile's workbooks, and one named
     ``paperfacts`` the pre-profile ones. Kept out of ``profile.py``, whose source is hashed into every key.
+
+    ``to_run`` is for an entry point that extracts or compares under ``settings``: the profile must then be one
+    the configured mode can ask (:func:`check_mode`). A reader that only prints the profile passes False.
     """
     profile = load_profile(profile_path(settings))
+    if to_run:
+        check_mode(profile, settings)
     if profile.name == LEGACY_EXPORT_NAME:
         raise ConfigError(f"{profile.source}: the profile name {LEGACY_EXPORT_NAME!r} is reserved for old exports")
     shipped = settings.repo_root / PROFILES_DIRNAME / f"{profile.name}.json"
@@ -393,8 +408,13 @@ def compare_document(
             return cached
         logger.info("stored comparison of doc=%s compared other parses; comparing again", document.document_id[:16])
 
-    matching = match_samples(lane_a, lane_b, client, comparison.profile, refresh=force)
-    report = compare_lanes(lane_a, lane_b, matching, comparison)
+    # Each entity type's samples are paired on their own: a catalyst is never the same sample as a reaction test.
+    profile = comparison.profile
+    matchings = {
+        entity.name: match_samples(lane_a, lane_b, client, profile, entity=entity, refresh=force)
+        for entity in profile.entities
+    }
+    report = compare_lanes(lane_a, lane_b, matchings, comparison)
     reason = incomplete_reason(lanes, report)
     if reason:
         # An earlier run's report under these keys goes too: it came from other answers, and kept it would be

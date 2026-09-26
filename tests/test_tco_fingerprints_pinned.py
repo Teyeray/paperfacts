@@ -34,8 +34,9 @@ TCO_JSON_SHA256 = "2ef95bccbea7100ecc3d8bcdd9f9a7801852974682a8cbaf3571744a241d4
 # DomainProfile.content_hash covers every non-display attribute *at default too*, so unlike the fingerprints it
 # moves whenever FieldSpec, GroupSpec or PromptSlots gains an attribute (spec §7). It names no stored file (it
 # serves __hash__, /api/health and the CLI listing), so a step that adds an attribute updates this pin, and says
-# so in its commit; the fingerprints above must not move with it.
-TCO_CONTENT_HASH = "923c2519b56f724c48b12e37d34e3d4f91f06227477a438d5ac068e2314f5555"
+# so in its commit; the fingerprints above must not move with it. Moved in S5a by FieldSpec.entity and
+# PromptSlots.sample_list_heading, both at their defaults in TCO.
+TCO_CONTENT_HASH = "3da1139d7f8fdbd83100aeb0202fc7d490d6ea9e61a1ea8d44f8015bc40e52d8"
 
 
 def test_the_pinned_profile_file_is_unchanged():

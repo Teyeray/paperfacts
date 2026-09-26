@@ -680,13 +680,14 @@ The file is read and validated once per process, so a running server sees an edi
 
 **What the file holds.** The top-level keys are `format` (always 1), `name` (must equal the file name without
 `.json`, and match `^[a-z][a-z0-9_]{0,39}$`), `title_zh`, `maturity`, `description_zh`, `groups`, `prompt`,
-`figures`, `retrieval`, `units`, `ignored_unit_suffixes`, `ui`, `fields`, and a free `$comment`. `format`,
+`figures`, `retrieval`, `units`, `ignored_unit_suffixes`, `ui`, `fields`, `entities`, and a free `$comment`. `format`,
 `name`, `groups`, `prompt`, `retrieval` and `fields` are required. An unknown key anywhere is refused with the
 list of valid ones, and every error names the file and the key.
 
 | Key | Holds |
 |---|---|
-| `groups` | `{name, level, label_zh}` each. `level` is `paper` (one record per paper, e.g. TCO's sputtering `target`) or `sample` (one value per sample). At least one sample-level group; paper-level groups may be none. The name is shown to the model in every field line (`group: film`); `label_zh` is display only |
+| `groups` | `{name, level, label_zh, entity}` each. `level` is `paper` (one record per paper, e.g. TCO's sputtering `target`) or `sample` (one value per sample). At least one sample-level group; paper-level groups may be none. The name is shown to the model in every field line (`group: film`); `label_zh` is display only. `entity` names the [entity type](#entity-types) a sample group's fields describe: required on every sample group of a profile with `entities`, refused otherwise and on a paper group |
+| `entities` | Optional: 1 to 5 [entity types](#entity-types), `{name, label_zh, prompt, retrieval}` each. Without it the profile has one implicit entity, `sample` |
 | `fields` | The field table ([below](#field-attributes-and-what-they-do)). Declaration order is question order and column order. At least one sample-level field; more than 40 logs a cost warning, more than 100 is refused |
 | `prompt` | The prompt slots ([below](#prompt-slots)) |
 | `figures` | The chart-reading slots: `subject`, `property_noun`, `chart_definition`, `axis_example`, and optionally `symbol_axis_example` and `x_label_examples`. Required exactly when some field is `figure_readable`, refused otherwise |
@@ -699,9 +700,10 @@ list of valid ones, and every error names the file and the key.
 
 A profile changes the words, never the shape of the answer. The shape is fixed in code:
 
-- **One paper, one kind of sample.** Every paper yields at most one list of samples, all of the same kind (a
-  film, a cathode material), each one row. A paper whose facts belong to two kinds of entity at once -- devices
-  built from films, both with their own measurements -- fits only one of them per profile.
+- **Up to five kinds of sample.** A profile without `entities` has one list of samples per paper, all of the same
+  kind (a film, a cathode material), each one row. With [entity types](#entity-types) each kind (a catalyst, a
+  reaction test) has its own list, rows and matching, but nothing yet links a sample of one kind to one of
+  another, and only passage mode can ask about them.
 - **Two levels.** A field is paper-level (one record per paper) or sample-level (one value per sample). There
   is no third level: nothing per layer within a sample, per measurement within a sample, or per figure.
 - **Three kinds of field.** `numeric` (a number converted to one canonical unit), `composition` (a ratio or
@@ -783,6 +785,7 @@ lessons come from the prompt comments and `.omc/research/`.
 | `partial_collective_example` | | Field rule 5 | A collective noun covering most but not all samples ("the sputtered films" when one is not) is flagged as whole-series, and the value lands on a sample it does not belong to |
 | `multi_condition_example` | | Rule 7 | Two measurements of one quantity (transmittance at 550 nm and averaged) merged into one, or one dropped |
 | `implausible_origin` | | Every field line with a `valid_range` | Told what an out-of-range number usually is, the model checks before quoting it (TCO: "a different layer, process step or quantity") |
+| `sample_list_heading` | | The field question's sample list ("Samples this paper reports:") | Wording only; an entity type names its own list with it ("Reaction tests") |
 | `matching_condition_examples`, `matching_value_examples`, `matching_justification_example` | | The sample-matching prompt | Samples paired across the lanes by similar values rather than by the condition that defines them |
 
 A field's `condition_rule` fills rule 8 ("For `transmittance` always fill `condition` with the wavelength or
@@ -798,7 +801,7 @@ names from the LLM cache.
 
 | Attribute | Default | Role | Meaning |
 |---|---|---|---|
-| `name` | required | prompt, figure | Identifier (`^[a-z][a-z0-9_]{0,39}$`); the model answers with it. Reserved: `document_id`, `filename`, `sample_id`, `sample_label`, `conditions`, `available_fields`, `agree_fields`, `field`, `target`, `paper`, `unattributed`, `samples` |
+| `name` | required | prompt, figure | Identifier (`^[a-z][a-z0-9_]{0,39}$`); the model answers with it. Reserved: `document_id`, `filename`, `sample_id`, `sample_label`, `conditions`, `available_fields`, `agree_fields`, `field`, `target`, `paper`, `unattributed`, `samples`, `entity` |
 | `group` | required | prompt | One of the profile's groups; the field's `level` (paper or sample) is the group's, derived, never written |
 | `kind` | required | prompt | `numeric`, `composition` or `text` |
 | `description` | required | prompt, figure | What the model is told to look for |
@@ -819,6 +822,53 @@ names from the LLM cache.
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
 | `cardinality` | `one` | prompt, verdict | `one` or `many`: a list of values that hold at once (the precursors of a sample, the techniques a paper applies). Text or composition only, at either level; refused together with `figure_readable`, `condition_preference`, `condition_rule` and every numeric attribute. See [List fields](#list-fields) |
 | `prompt_categories` | derived | prompt | Never written: a `many` field's `categories`, named in its field line; empty for every other field, so a single-valued field's `categories` stay verdict only |
+| `entity` | derived | prompt, cleaning, verdict | Never written: the entity type of the field's group, none for a paper-level field and in a profile without `entities` |
+
+### Entity types
+
+A profile may declare several kinds of sample, each an **entity type**: heterogeneous catalysis has catalysts
+(composition, loading, calcination) and reaction tests (temperature, conversion) as two lists in one paper.
+
+```jsonc
+"entities": [
+  { "name": "catalyst", "label_zh": "催化剂",
+    "prompt": { "sample_definition": "One catalyst is one prepared material ...", "sample_plural": "catalysts",
+                "sample_singular": "catalyst", "sample_list_heading": "Catalysts" },
+    "retrieval": { "condition_keywords": ["calcined", "impregnated"] } },
+  { "name": "test", "label_zh": "反应测试",
+    "prompt": { "sample_definition": "One test is one set of reaction conditions ...",
+                "sample_list_heading": "Reaction tests" } }
+],
+"groups": [
+  { "name": "study", "level": "paper" },
+  { "name": "preparation", "level": "sample", "entity": "catalyst" },
+  { "name": "reaction", "level": "sample", "entity": "test" }
+]
+```
+
+- **Declaring.** 1 to 5 entities; `name` is an identifier, unique, and neither `paper` nor `unattributed`; the
+  first is the **primary** one. Every sample group names one, and every entity needs a sample group. An entity's
+  `prompt` may override only `sample_definition`, `field_scope`, `sample_plural`, `sample_singular`,
+  `sample_unit`, `sample_examples`, `sample_id_example`, `condition_noun`, `condition_examples`,
+  `no_samples_clause`, `no_samples_condition`, `samples_present_condition`, `subset_examples`,
+  `whole_series_examples`, `partial_collective_example`, `multi_condition_example`, `sample_list_heading` and the
+  `matching_*` slots; with several entities each must give its own `sample_definition`. Its `retrieval` replaces
+  either key of the profile's. Everything else is the profile's.
+- **Asking.** Each lane asks one inventory per entity, with that entity's slots and retrieval. A sample-level
+  field is asked with its entity's field system prompt and sample list; a paper-level field with the primary
+  entity's. An entity whose inventory reports no sample of its own skips only its own fields; the lane's
+  `no_samples` is true only when every entity has none.
+- **Identity.** A sample is `(entity, sample id)`: a value is placed, a series value fanned out and a vote cast
+  among the samples of its field's entity only. Unplaced values share one unattributed list.
+- **Comparing.** Samples are matched per entity (`ComparisonReport.matchings[entity]`), with that entity's matching
+  prompt, and compared under scopes `<entity>:<a>|<b>`; the implicit entity keeps `sample:`. The counts add up
+  over every entity, and any failed matching leaves the run incomplete.
+- **Rows.** Each entity has its own rows, holding its own fields plus the paper-level decisions and an `entity`
+  column; the paper row is chosen among the primary entity's rows.
+- **Not supported.** Document mode (refused when a run loads the profile: `paperfacts profiles --check` notes
+  it, `prompts` and `fields` still print it); links between entities; nesting or order (a layer stack);
+  many-to-many or multi-hop relations; a series value across entities; figures bound to an entity; more than
+  five entities.
 
 ### List fields
 
@@ -864,6 +914,7 @@ re-keying the comparison recomputes it from the stored extractions, for free.
 | `units`, `ignored_unit_suffixes` | yes | yes | yes |
 | A `prompt` slot | yes, except the three `matching_*` slots (a slot only the inventory or field prompt uses: passage mode only) | only `sample_plural`, `condition_noun` and the `matching_*` slots | — |
 | `figures` slots, `figure_readable` | — | — | yes |
+| `entities` (names, order, overridden slots, retrieval), a group's `entity` | yes (retrieval: passage mode) | yes | — |
 
 Display edits are therefore safe on a live library. The file name is in no key, but it names the workbooks
 (`exports/<name>.xlsx`) and the readings directory (`figures/<name>/`), so a renamed profile writes new ones
@@ -909,14 +960,15 @@ beside the old. Two profiles with identical non-display content share every key 
 
 Every field is one question per lane in passage mode. For one paper, uncached:
 
-    LLM calls ≈ 2 lanes × (1 inventory + passes × F) + M  [+ repairs]  [+ chart panels]
+    LLM calls ≈ 2 lanes × (E inventories + passes × F) + Σ M  [+ repairs]  [+ chart panels]
 
 - `F` is the number of fields asked in that lane, at most the profile's field count `N`: a field no block of the
   lane mentions is not asked, and neither are the sample-level fields when the inventory says the paper has no
   in-scope sample.
-- The inventory is asked once per lane whatever `extraction.passes` is.
-- `M` is 0 or 1: sample matching asks the model only when both lanes have samples left after pairing identical
-  ids.
+- The inventory is asked once per lane per entity type (`E`, 1 without `entities`) whatever
+  `extraction.passes` is.
+- Each `M` is 0 or 1, one per entity type: sample matching asks the model only when both lanes have samples of
+  that entity left after pairing identical ids.
 - A question whose answer fails validation costs one repair request, at most.
 - With the figures stage on, each chart panel is one vision request (at most `figures.max_per_document`,
   retried once on failure).

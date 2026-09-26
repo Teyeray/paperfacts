@@ -27,6 +27,9 @@ from paperfacts.units import UnitRegistry
 COMPUTED_MARKERS = ("sample_groups", "paper_groups", "condition_rules", "subset_scope", "fields", "holds_key")
 MARKER = re.compile(r"\{([a-z_]+)\}")
 Maturity = Literal["production", "example"]
+# The one entity type of a profile that declares none: its samples. Its name prefixes their comparison scopes
+# ("sample:<a>|<b>") and keys their matching in a report, so it is the name those always had.
+IMPLICIT_ENTITY = "sample"
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,8 @@ class GroupSpec:
     name: str
     level: FieldLevel
     label_zh: str = ""
+    # The entity type a sample-level group's fields describe; None in a profile that declares no entity types.
+    entity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,8 @@ class PromptSlots:
     plain_header_example: str = 'a column "Temperature (°C)" gives just "°C"'
     # Where a number outside a field's plausible range usually comes from, in every field line that has one.
     implausible_origin: str = "a different sample, state or quantity"
+    # What a field question calls the sample list it shows ("Samples this paper reports:").
+    sample_list_heading: str = "Samples"
 
 
 @dataclass(frozen=True)
@@ -99,6 +106,19 @@ class RetrievalSpec:
 
 
 @dataclass(frozen=True)
+class EntitySpec:
+    """A named kind of sample (a catalyst, a reaction test): its own inventory, sample list, field-question system
+    prompt, matching and dataset rows. ``prompt`` and ``retrieval`` are the profile's with the entity's overrides
+    applied; ``overrides`` names the prompt slots the entity set itself, which the keys hash by value."""
+
+    name: str
+    label_zh: str
+    prompt: PromptSlots
+    retrieval: RetrievalSpec
+    overrides: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class DomainProfile:
     name: str
     title_zh: str
@@ -115,6 +135,8 @@ class DomainProfile:
     # sha256 of everything but the display text, computed once by the loader.
     content_hash: str
     source: Path = field(compare=False)
+    # The entity types the file declares, the first being the primary one; () when it declares none.
+    declared_entities: tuple[EntitySpec, ...] = ()
 
     def __hash__(self) -> int:
         # Hashing the deep tuples on every lookup of a profile-keyed cache would cost more than the lookup.
@@ -143,3 +165,22 @@ class DomainProfile:
     @cached_property
     def sample_groups(self) -> tuple[GroupSpec, ...]:
         return tuple(group for group in self.groups if group.level == "sample")
+
+    @cached_property
+    def entities(self) -> tuple[EntitySpec, ...]:
+        """Never empty: the declared entity types, or the one implicit entity whose slots are ``prompt``'s."""
+        return self.declared_entities or (EntitySpec(IMPLICIT_ENTITY, "", self.prompt, self.retrieval),)
+
+    @property
+    def primary(self) -> EntitySpec:
+        """The first entity: the one paper-level questions are asked beside, and whose rows give the paper row."""
+        return self.entities[0]
+
+    def entity_of(self, spec: FieldSpec) -> EntitySpec:
+        """The entity whose sample list and system prompt ``spec``'s question is asked with: its own for a field of a
+        declared entity, the primary one for a paper-level field and for every field of a profile without entities."""
+        return next((entity for entity in self.entities if entity.name == spec.entity), self.primary)
+
+    def entity_fields(self, entity: EntitySpec) -> tuple[FieldSpec, ...]:
+        """The sample-level fields that describe ``entity``'s samples, in declaration order."""
+        return tuple(spec for spec in self.sample_fields if self.entity_of(spec).name == entity.name)

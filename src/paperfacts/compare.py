@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, Self
 
@@ -43,13 +43,13 @@ from paperfacts.normalize import (
     normalize_lane,
     normalize_text,
 )
+from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.records import FieldValue, LaneExtraction
 from paperfacts.storage import write_text_atomic
 
 FactStatus = Literal["agree", "conflict", "ambiguous", "missing"]
-# The scope of the paper-level comparisons, and the entity a profile without entity types has: its samples.
+# The scope of the paper-level comparisons.
 PAPER_SCOPE = "paper"
-IMPLICIT_ENTITY = "sample"
 # The paper-level scope as files written before round 2 spell it. Unambiguous: every sample scope is prefixed.
 _LEGACY_PAPER_SCOPE = "target"
 
@@ -59,7 +59,10 @@ class FieldComparison(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    scope: str = Field(description='"paper", "sample:<a_id>|<b_id>" (matched), or "sample:<id>" (unmatched)')
+    scope: str = Field(
+        description='"paper", "unattributed", "<entity>:<a_id>|<b_id>" (matched) or "<entity>:<id>" (unmatched); '
+        'the entity of a profile without entity types is "sample"'
+    )
     field: str
     condition: str | None = None
     status: FactStatus
@@ -138,16 +141,17 @@ class ComparisonReport(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def _has_the_implicit_entity(self) -> Self:
-        # Every profile has the implicit entity (a profile without entity types has only it), and every reader
-        # starts from its matching; a report without one is refused at load, not with a KeyError far away.
-        if IMPLICIT_ENTITY not in self.matchings:
-            raise ValueError(f"matchings has no entry for the implicit entity {IMPLICIT_ENTITY!r}")
+    def _has_a_matching(self) -> Self:
+        # Every profile has at least one entity (a profile without entity types has the implicit one), and every
+        # reader starts from their matchings; a report without one is refused at load, not far away.
+        if not self.matchings:
+            raise ValueError("matchings is empty; a report holds the matching of every entity type")
         return self
 
     def sample_matching(self) -> SampleMatching:
-        """The matching of the implicit entity's samples."""
-        return self.matchings[IMPLICIT_ENTITY]
+        """The primary entity's matching: the first entry, which for a profile without entity types is the
+        implicit entity's only one."""
+        return next(iter(self.matchings.values()))
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -158,13 +162,25 @@ class ComparisonReport(BaseModel):
 
 
 def compare_lanes(
-    lane_a: LaneExtraction, lane_b: LaneExtraction, matching: SampleMatching, options: ComparisonOptions
+    lane_a: LaneExtraction,
+    lane_b: LaneExtraction,
+    matchings: Mapping[str, SampleMatching] | SampleMatching,
+    options: ComparisonOptions,
 ) -> ComparisonReport:
+    """Compare two lanes under the sample matching of each entity type, by entity name. A single
+    :class:`SampleMatching` stands for the one matching of a profile with one entity, the implicit one included."""
     if lane_a.extractor_key != lane_b.extractor_key:
         raise ValueError(
             f"lanes have different extractor_key ({lane_a.extractor_key} vs {lane_b.extractor_key}); cannot compare"
         )
     profile = options.profile
+    if isinstance(matchings, SampleMatching):
+        matchings = {profile.primary.name: matchings}
+    names = [entity.name for entity in profile.entities]
+    if set(matchings) != set(names):
+        raise ValueError(f"the matchings are of {', '.join(matchings)}; the profile's entities are {', '.join(names)}")
+    # In the profile's order, so the primary entity's matching comes first in the report.
+    matchings = {name: matchings[name] for name in names}
     _check_lane_profiles(lane_a, lane_b, profile_extraction_fingerprint(profile))
     # Normalization is a pure, idempotent function, so it is unconditionally redone here: callers never have
     # to remember to normalize first, which rules out "forgot to normalize, so the answer was silently wrong"
@@ -181,48 +197,11 @@ def compare_lanes(
         a_name,
         b_name,
     )
-    # Matched samples: status is the real comparison outcome; pairing confidence is recorded separately
-    for pair in matching.pairs:
-        sample_a, sample_b = lane_a.sample(pair.a_id), lane_b.sample(pair.b_id)
-        if sample_a is None or sample_b is None:
-            continue
-        comparisons += _compare_records(
-            f"sample:{pair.a_id}|{pair.b_id}",
-            sample_a.fields,
-            sample_b.fields,
-            profile.sample_fields,
-            a_name,
-            b_name,
-            match_confidence=pair.confidence if pair.method == "llm" else None,
+    # Each entity's samples, under that entity's matching and against its own fields only.
+    for entity in profile.entities:
+        comparisons += _compare_entity(
+            entity.name, lane_a, lane_b, matchings[entity.name], profile.entity_fields(entity)
         )
-    # Unmatched samples: normally this just means the other lane doesn't have it; when the matching model
-    # itself failed we can't tell whether it's really missing, so mark it ambiguous and send it for review
-    one_sided: FactStatus = "ambiguous" if matching.failed else "missing"
-    reason = f"sample matching failed: {matching.failure}" if matching.failed else None
-    for sample_id in matching.unmatched_a:
-        if (sample := lane_a.sample(sample_id)) is not None:
-            comparisons += _compare_records(
-                f"sample:{sample_id}",
-                sample.fields,
-                (),
-                profile.sample_fields,
-                a_name,
-                b_name,
-                one_sided=one_sided,
-                one_sided_detail=reason,
-            )
-    for sample_id in matching.unmatched_b:
-        if (sample := lane_b.sample(sample_id)) is not None:
-            comparisons += _compare_records(
-                f"sample:{sample_id}",
-                (),
-                sample.fields,
-                profile.sample_fields,
-                a_name,
-                b_name,
-                one_sided=one_sided,
-                one_sided_detail=reason,
-            )
     # Unattributed values are extracted by both lanes yet placed on no sample. Where both lanes hold the
     # same unplaced value, agreement is real evidence about the parsers and disagreement a real signal;
     # both were invisible while unattributed values took part in no comparison at all. Only pairs are
@@ -246,13 +225,68 @@ def compare_lanes(
         comparison_key=comparison_key(options),
         backend_a=a_name,
         backend_b=b_name,
-        matchings={IMPLICIT_ENTITY: matching},
+        matchings=dict(matchings),
         comparisons=tuple(comparisons),
-        counts=_count(comparisons, matching, (lane_a, lane_b), options.ambiguous_match_confidence),
+        counts=_count(comparisons, tuple(matchings.values()), (lane_a, lane_b), options.ambiguous_match_confidence),
         artifact_sha256_a=lane_a.artifact_sha256,
         artifact_sha256_b=lane_b.artifact_sha256,
         profile_fingerprint=profile_comparison_fingerprint(profile),
     )
+
+
+def _compare_entity(
+    entity: str,
+    lane_a: LaneExtraction,
+    lane_b: LaneExtraction,
+    matching: SampleMatching,
+    specs: Sequence[FieldSpec],
+) -> list[FieldComparison]:
+    """One entity type's sample comparisons, each scoped ``"<entity>:..."``."""
+    a_name, b_name = lane_a.backend, lane_b.backend
+    comparisons: list[FieldComparison] = []
+    # Matched samples: status is the real comparison outcome; pairing confidence is recorded separately
+    for pair in matching.pairs:
+        sample_a, sample_b = lane_a.sample(pair.a_id, entity), lane_b.sample(pair.b_id, entity)
+        if sample_a is None or sample_b is None:
+            continue
+        comparisons += _compare_records(
+            f"{entity}:{pair.a_id}|{pair.b_id}",
+            sample_a.fields,
+            sample_b.fields,
+            specs,
+            a_name,
+            b_name,
+            match_confidence=pair.confidence if pair.method == "llm" else None,
+        )
+    # Unmatched samples: normally this just means the other lane doesn't have it; when the matching model
+    # itself failed we can't tell whether it's really missing, so mark it ambiguous and send it for review
+    one_sided: FactStatus = "ambiguous" if matching.failed else "missing"
+    reason = f"sample matching failed: {matching.failure}" if matching.failed else None
+    for sample_id in matching.unmatched_a:
+        if (sample := lane_a.sample(sample_id, entity)) is not None:
+            comparisons += _compare_records(
+                f"{entity}:{sample_id}",
+                sample.fields,
+                (),
+                specs,
+                a_name,
+                b_name,
+                one_sided=one_sided,
+                one_sided_detail=reason,
+            )
+    for sample_id in matching.unmatched_b:
+        if (sample := lane_b.sample(sample_id, entity)) is not None:
+            comparisons += _compare_records(
+                f"{entity}:{sample_id}",
+                (),
+                sample.fields,
+                specs,
+                a_name,
+                b_name,
+                one_sided=one_sided,
+                one_sided_detail=reason,
+            )
+    return comparisons
 
 
 def check_profile(found: str | None, expected: str, what: str) -> None:
@@ -581,12 +615,14 @@ def _by_condition(values: Sequence[FieldValue]) -> dict[str, list[FieldValue]]:
 
 def _count(
     comparisons: Sequence[FieldComparison],
-    matching: SampleMatching,
+    matchings: Sequence[SampleMatching],
     lanes: Sequence[LaneExtraction],
     ambiguous_match_confidence: float,
 ) -> ComparisonCounts:
+    """The counts over every entity's matching: pairs and unmatched samples summed, failed if any failed."""
     tally = Counter(c.status for c in comparisons)
     missing_by_backend = Counter(c.missing_in for c in comparisons if c.missing_in is not None)
+    pairs = [pair for matching in matchings for pair in matching.pairs]
     return ComparisonCounts(
         agree=tally["agree"],
         conflict=tally["conflict"],
@@ -594,10 +630,10 @@ def _count(
         missing=tally["missing"],
         total=len(comparisons),
         missing_by_backend={str(k): v for k, v in sorted(missing_by_backend.items())},
-        samples_matched=len(matching.pairs),
-        samples_unmatched=len(matching.unmatched_a) + len(matching.unmatched_b),
-        low_confidence_matches=sum(1 for p in matching.pairs if p.confidence < ambiguous_match_confidence),
-        matching_failed=matching.failed,
+        samples_matched=len(pairs),
+        samples_unmatched=sum(len(matching.unmatched_a) + len(matching.unmatched_b) for matching in matchings),
+        low_confidence_matches=sum(1 for p in pairs if p.confidence < ambiguous_match_confidence),
+        matching_failed=any(matching.failed for matching in matchings),
         unattributed_by_backend={lane.backend: len(lane.unattributed) for lane in lanes if lane.unattributed},
         unattributed_compared=sum(1 for c in comparisons if c.scope == "unattributed"),
     )

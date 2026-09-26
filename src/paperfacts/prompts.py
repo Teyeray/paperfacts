@@ -32,7 +32,7 @@ from collections.abc import Mapping, Sequence
 
 from paperfacts.fields import FieldSpec
 from paperfacts.kinds import rules_for
-from paperfacts.profile import MARKER, DomainProfile, GroupSpec
+from paperfacts.profile import MARKER, DomainProfile, EntitySpec, GroupSpec, PromptSlots
 
 # A value stated for part of the series. Left unsaid, the model reports "all films deposited at 100 °C" as one
 # value with no sample and the series flag off, and the value reaches none of the samples it names (the gold set
@@ -211,12 +211,17 @@ def condition_rules(specs: Sequence[FieldSpec]) -> str:
     return " ".join(rules) if rules else _NO_CONDITION_RULE
 
 
-def _values(profile: DomainProfile) -> dict[str, str]:
-    """Every slot and computed marker of the system prompts. The computed ones are finished text before the
-    templates are rendered, so they too are inserted verbatim."""
-    values = {**dataclasses.asdict(profile.prompt), "paper_level_rule": paper_level_rule(profile)}
+def _values(profile: DomainProfile, entity: EntitySpec | None = None) -> dict[str, str]:
+    """Every slot and computed marker of the system prompts asked about ``entity``'s samples (the primary entity's
+    by default, which for a profile without entity types is ``profile.prompt`` itself). The computed ones are
+    finished text before the templates are rendered, so they too are inserted verbatim. Rule 8 names the fields
+    asked with this entity's prompt: its own and the paper-level ones."""
+    entity = entity or profile.primary
+    values = {**dataclasses.asdict(entity.prompt), "paper_level_rule": paper_level_rule(profile)}
     values["sample_groups"] = quoted_names(profile.sample_groups)
-    values["condition_rules"] = condition_rules(profile.fields)
+    values["condition_rules"] = condition_rules(
+        [spec for spec in profile.fields if profile.entity_of(spec).name == entity.name]
+    )
     values["subset_scope"] = render(_SUBSET_SCOPE, values)
     values["holds_key"] = _HOLDS_KEY if any(spec.kind == "boolean" for spec in profile.fields) else ""
     return values
@@ -254,25 +259,34 @@ def extraction_user_prompt(markdown: str) -> str:
     return f"Paper (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now."
 
 
-def inventory_system_prompt(profile: DomainProfile) -> str:
-    return render(_INVENTORY_SYSTEM, _values(profile))
+def inventory_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:
+    """The question that lists ``entity``'s samples (the primary entity's by default)."""
+    return render(_INVENTORY_SYSTEM, _values(profile, entity))
 
 
 def inventory_user_prompt(markdown: str) -> str:
     return f"Paper excerpts (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now."
 
 
-def field_system_prompt(profile: DomainProfile) -> str:
-    """One text for every field and both lanes: what varies is the question, not the instructions."""
-    return render(_FIELD_SYSTEM, _values(profile))
+def field_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:
+    """One text for every field of ``entity`` (the primary entity's by default, which the paper-level fields are
+    asked with too) and both lanes: what varies is the question, not the instructions."""
+    return render(_FIELD_SYSTEM, _values(profile, entity))
 
 
-def field_user_prompt(spec: FieldSpec, sample_list: str, markdown: str, implausible_origin: str) -> str:
+def field_user_prompt(
+    spec: FieldSpec,
+    sample_list: str,
+    markdown: str,
+    implausible_origin: str,
+    heading: str = PromptSlots.sample_list_heading,
+) -> str:
     """``sample_list`` is rendered by the caller, which owns the record types; this module stays free of them.
-    ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`."""
+    ``implausible_origin`` is the profile's :attr:`PromptSlots.implausible_origin`, ``heading`` the
+    :attr:`PromptSlots.sample_list_heading` of the entity whose samples the list holds."""
     return (
         f"Field to extract:\n{render_field_table((spec,), implausible_origin)}\n\n"
-        f"Samples this paper reports:\n{sample_list}\n\n"
+        f"{heading} this paper reports:\n{sample_list}\n\n"
         f"Excerpts (Markdown with provenance markers):\n\n{markdown}\n\n"
         "Return the JSON object now."
     )
@@ -308,8 +322,9 @@ Rules:
 Return the JSON object only."""
 
 
-def matching_system_prompt(profile: DomainProfile) -> str:
-    return render(_MATCHING_SYSTEM, _values(profile))
+def matching_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:
+    """The question that pairs ``entity``'s samples across the lanes (the primary entity's by default)."""
+    return render(_MATCHING_SYSTEM, _values(profile, entity))
 
 
 def matching_user_prompt(lane_a_name: str, lane_a: str, lane_b_name: str, lane_b: str) -> str:

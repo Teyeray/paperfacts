@@ -31,15 +31,17 @@ from paperfacts.text import clean_unit, normalize_key
 class Scope(Enum):
     """The two scopes a value can have that are not a sample.
 
-    A sample's scope is its sample_key, a plain string, so these members cannot collide with one whatever
-    a paper calls its samples -- a promise a reserved string like ``"__paper__"`` could not make.
+    A sample's scope is its identity, a tuple (entity, sample_key), so these members cannot collide with one
+    whatever a paper calls its samples -- a promise a reserved string like ``"__paper__"`` could not make.
     """
 
     PAPER = "paper"
     UNATTRIBUTED = "unattributed"
 
 
-type ScopeKey = str | Scope
+# A sample's scope: its entity type and its sample_key, so two entities' samples named alike stay two samples.
+type SampleScope = tuple[str, str]
+type ScopeKey = SampleScope | Scope
 # (field, condition, quote, unit), then a boolean field's ``holds`` -- see ``_value_key``.
 type ValueKey = tuple[str, ...]
 # The identity the passes vote on: the same number, in the same unit, for the same field (and the same ``holds``).
@@ -138,8 +140,8 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
     # How many entries the most generous pass gave each voted identity; it decides below whether a
     # supporter's citations may be merged into a rank that kept someone else's wording.
     entry_counts: Counter[tuple[ScopeKey, VoteKey]] = Counter()
-    sample_counts: Counter[str] = Counter()
-    samples: dict[str, SampleRecord] = {}
+    sample_counts: Counter[SampleScope] = Counter()
+    samples: dict[SampleScope, SampleRecord] = {}
     paper_ids: tuple[str, ...] = ()
     for records in results:
         slot_of: dict[tuple[ScopeKey, ValueKey], VoteSlot] = {}
@@ -160,10 +162,10 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
                 cited[slot] = (*cited[slot], *value.source_ids)
         for identity, slot in slot_of.items():
             slots[slot].supporters.append((identity[1], cited[slot]))
-        for scope in {sample_key(sample.sample_id) for sample in records.samples}:
+        for scope in {_sample_scope(sample) for sample in records.samples}:
             sample_counts[scope] += 1
         for sample in records.samples:
-            samples.setdefault(sample_key(sample.sample_id), sample)
+            samples.setdefault(_sample_scope(sample), sample)
         if records.paper is not None and not paper_ids:
             paper_ids = records.paper.source_ids
 
@@ -214,11 +216,15 @@ def _values(records: ExtractedRecords) -> Iterator[tuple[ScopeKey, FieldValue]]:
     for value in records.paper.fields if records.paper else ():
         yield Scope.PAPER, value
     for sample in records.samples:
-        scope = sample_key(sample.sample_id)
+        scope = _sample_scope(sample)
         for value in sample.fields:
             yield scope, value
     for value in records.unattributed:
         yield Scope.UNATTRIBUTED, value
+
+
+def _sample_scope(sample: SampleRecord) -> SampleScope:
+    return sample.entity, sample_key(sample.sample_id)
 
 
 def _value_key(value: FieldValue) -> ValueKey:

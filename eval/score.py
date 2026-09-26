@@ -193,6 +193,9 @@ def row_text(row: dict) -> str:
 
 
 def is_candidate(specs: dict[str, Spec], sample: dict, row: dict) -> bool:
+    if sample.get("entity") != row.get("entity"):
+        # A gold sample of a profile with entity types names its entity, and only that entity's rows can be it.
+        return False
     match = sample.get("match", {})
     for field, want in match.get("fields", {}).items():
         if not value_matches(specs[field], row.get(field), {"value": want}):
@@ -205,11 +208,17 @@ def is_candidate(specs: dict[str, Spec], sample: dict, row: dict) -> bool:
     return bool(match)
 
 
+def entity_fields(specs: dict[str, Spec], entity: str | None) -> list[Spec]:
+    """The sample-level fields a row (or gold sample) of ``entity`` holds: every one when the profile declares no
+    entity types (the entity is then None on both), else the fields of that entity only."""
+    return [spec for spec in specs.values() if spec.level != "paper" and spec.entity == entity]
+
+
 def agreement(specs: dict[str, Spec], gold: dict, sample: dict, row: dict) -> int:
     return sum(
         1
-        for name, spec in specs.items()
-        if spec.level != "paper" and any(value_matches(spec, row.get(name), c) for c in gold_cells(gold, sample, name))
+        for spec in entity_fields(specs, sample.get("entity"))
+        if any(value_matches(spec, row.get(spec.name), c) for c in gold_cells(gold, sample, spec.name))
     )
 
 
@@ -234,14 +243,15 @@ def align(specs: dict[str, Spec], gold: dict, rows: list[dict]) -> dict[int, int
 # ---------------------------------------------------------------------------------------------- scoring
 
 
-def quality_index(dataset: dict) -> dict[tuple[str, str], dict]:
-    return {(q.get("sample_id"), q.get("field")): q for q in dataset.get("quality_rows", [])}
+def quality_index(dataset: dict) -> dict[tuple[str | None, str, str], dict]:
+    """The quality rows by (entity, sample id, field): two entities' rows may share a sample id."""
+    return {(q.get("entity"), q.get("sample_id"), q.get("field")): q for q in dataset.get("quality_rows", [])}
 
 
-def trace(quality: dict, sample_id: str, field: str) -> str:
-    q = quality.get((sample_id, field))
+def trace(quality: dict, sample_id: str, field: str, entity: str | None = None) -> str:
+    q = quality.get((entity, sample_id, field))
     if not q and sample_id == PAPER:
-        q = quality.get((LEGACY_PAPER, field))
+        q = quality.get((None, LEGACY_PAPER, field))
     if not q:
         return ""
     bits = [q.get("decision") or "", q.get("conditions") or "", q.get("detail") or "", q.get("source_ids") or ""]
@@ -266,26 +276,26 @@ def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Ce
             detail = trace(quality, PAPER, name)
             cells.append(Cell(doc, PAPER, PAPER, name, outcome, got, render(gcells), detail))
 
-    sample_fields = [s for s in specs.values() if s.level != "paper"]
     mapping = align(specs, gold, rows)
     for gi, sample in enumerate(gold["samples"]):
         ri = mapping.get(gi)
         row = rows[ri] if ri is not None else {}
         rid = row.get("sample_id", "")
         amb = bool(sample.get("ambiguous"))
-        for spec in sample_fields:
+        entity = sample.get("entity")
+        for spec in entity_fields(specs, entity):
             gcells = gold_cells(gold, sample, spec.name)
             for outcome, got in outcomes(spec, row.get(spec.name), gcells, amb):
-                detail = trace(quality, rid, spec.name) if rid else "no dataset row aligned to this gold sample"
+                detail = trace(quality, rid, spec.name, entity) if rid else "no dataset row aligned to this gold sample"
                 cells.append(Cell(doc, sample["id"], rid, spec.name, outcome, got, render(gcells), detail))
     aligned_rows = set(mapping.values())
     for ri, row in enumerate(rows):
         if ri in aligned_rows:
             continue
         rid = row.get("sample_id", "")
-        for spec in sample_fields:
+        for spec in entity_fields(specs, row.get("entity")):
             for _, got in outcomes(spec, row.get(spec.name), [], False):
-                detail = "row matches no gold sample; " + trace(quality, rid, spec.name)
+                detail = "row matches no gold sample; " + trace(quality, rid, spec.name, row.get("entity"))
                 cells.append(Cell(doc, f"(unaligned) {rid}", rid, spec.name, "extra", got, "", detail))
     return cells
 

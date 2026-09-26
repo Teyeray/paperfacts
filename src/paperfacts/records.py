@@ -31,6 +31,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
 from paperfacts.fields import DIGIT_KINDS, FieldSpec
 from paperfacts.models import Backend
+from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.storage import write_text_atomic
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,9 @@ class SampleRecord(BaseModel):
     conditions: dict[str, str] = Field(default_factory=dict)
     source_ids: tuple[str, ...] = ()
     fields: tuple[FieldValue, ...] = ()
+    # The entity type the sample is of; a sample's identity is (entity, sample_key(sample_id)). Left out of the file
+    # at the implicit entity, so lanes of a profile without entity types keep their bytes.
+    entity: str = Field(default=IMPLICIT_ENTITY, exclude_if=lambda entity: entity == IMPLICIT_ENTITY)
 
     def get(self, name: str) -> FieldValue | None:
         return next((f for f in self.fields if f.field == name), None)
@@ -388,8 +392,8 @@ class LaneExtraction(BaseModel):
         """Values that could not be located in the block they cite."""
         return tuple(value for value in self.values() if not value.grounded)
 
-    def sample(self, sample_id: str) -> SampleRecord | None:
-        return next((s for s in self.samples if s.sample_id == sample_id), None)
+    def sample(self, sample_id: str, entity: str = IMPLICIT_ENTITY) -> SampleRecord | None:
+        return next((s for s in self.samples if s.sample_id == sample_id and s.entity == entity), None)
 
     def write(self, path: Path) -> None:
         write_text_atomic(path, self.model_dump_json(indent=2))
@@ -508,9 +512,13 @@ class ListedSample(Protocol):
 
 
 def clean_samples(
-    listed: Sequence[ListedSample], cleaning: ResponseCleaning, known_ids: frozenset[str]
+    listed: Sequence[ListedSample],
+    cleaning: ResponseCleaning,
+    known_ids: frozenset[str],
+    entity: str = IMPLICIT_ENTITY,
 ) -> tuple[list[SampleRecord], list[int | None]]:
-    """The sample list both modes build their records on, and where each listed entry went.
+    """The sample list both modes build their records on, and where each listed entry went. Every record is of
+    ``entity``, the entity type whose inventory listed it.
 
     Returns the records (without fields) and, per listed entry, the index of the record it became: a repeat
     of an id already listed points at the first one, and an entry with no usable id points nowhere (None).
@@ -542,6 +550,7 @@ def clean_samples(
                 label=item.label.strip(),
                 conditions={str(name).strip(): str(value).strip() for name, value in item.conditions.items()},
                 source_ids=cleaning.keep_ids(item.source_ids, known_ids),
+                entity=entity,
             )
         )
     return records, placement
