@@ -83,6 +83,11 @@ RENAMED_TEXT = (
 def renamed(text: str) -> str:
     for old, new in RENAMED_TEXT:
         text = text.replace(old, new)
+    data = json.loads(text)
+    if "matching" in data:
+        # A report's one matching became the implicit entity's entry of ``matchings``.
+        data["matchings"] = {"sample": data.pop("matching")}
+        text = json.dumps(data, ensure_ascii=False, indent=2)
     return text
 
 
@@ -150,3 +155,8 @@ def test_only_the_renamed_spots_are_rewritten():
         {"scope": "paper"},
         {"scope": "sample:target|x", "field": "target"},
     ]
+    assert diff_derived.current_names("comparisons", report | {"matching": {"pairs": []}})["matchings"] == {
+        "sample": {"pairs": []}
+    }
+    current = {"matchings": {"sample": {}}, "comparisons": []}
+    assert diff_derived.current_names("comparisons", current) == current

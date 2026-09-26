@@ -10,9 +10,10 @@ usage counters).
         --old <extractor_key>.<comparison_key> --new <extractor_key>.<comparison_key> [--json report.json]
 
 Round 2 renames the paper-level record ``target`` -> ``paper`` and the no-samples verdict ``no_tco_film`` ->
-``no_samples`` in the stored files. Across that rename the old side is read under the new names first
-(``--legacy-names``), so the proof still compares content rather than spelling. By default this happens for a
-document exactly when its old lanes use the old names and its new lanes do not, so B1 against B1 is untouched.
+``no_samples`` in the stored files, and a report's ``matching`` becomes ``matchings: {"sample": ...}``. Across
+that rename the old side is read under the new names first (``--legacy-names``), so the proof still compares
+content rather than spelling. By default this happens for a document exactly when its old lanes use the old
+names and its new lanes do not, so B1 against B1 is untouched.
 
 Standard library only, so it runs from any checkout against any data root.
 """
@@ -34,10 +35,12 @@ DEFAULT_IGNORED = frozenset(
 )
 MAX_PATHS = 20
 # The round 2 rename, as it shows in each stored file: a lane's top-level keys, a report's paper-level scope, a
-# dataset's paper-level quality row id. Nothing else was renamed.
+# dataset's paper-level quality row id, and a report's one ``matching``, now the implicit entity's entry of
+# ``matchings``. Nothing else was renamed.
 LEGACY_LANE_KEYS = {"target": "paper", "no_tco_film": "no_samples"}
 LEGACY_PAPER_ID = "target"
 PAPER_ID = "paper"
+IMPLICIT_ENTITY = "sample"
 RENAMED_ROW_IDS = {"comparisons": ("comparisons", "scope"), "datasets": ("quality_rows", "sample_id")}
 
 
@@ -83,6 +86,10 @@ def current_names(kind: str, data: Any) -> Any:
         return data
     if kind.startswith("facts:"):
         return {LEGACY_LANE_KEYS.get(name, name): value for name, value in data.items()}
+    if kind == "comparisons" and "matching" in data and "matchings" not in data:
+        data = {name: value for name, value in data.items() if name != "matching"} | {
+            "matchings": {IMPLICIT_ENTITY: data["matching"]}
+        }
     rows, id_key = RENAMED_ROW_IDS[kind]
     if not isinstance(data.get(rows), list):
         return data

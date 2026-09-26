@@ -81,37 +81,37 @@ def test_unknown_keys_in_the_response_are_ignored_rather_than_fatal():
 def test_an_empty_response_is_valid_and_means_nothing_was_found():
     response = ExtractionResponse.model_validate({})
 
-    assert response.target is None and response.samples == []
+    assert response.paper is None and response.samples == []
 
 
 # ---- response_models: the JSON keys a profile names -------------------------------------
 
 
-def test_a_profile_s_keys_land_on_the_unchanged_attributes():
+def test_a_profile_s_keys_land_on_the_paper_and_no_samples_attributes():
     models = response_models("paper", "no_samples_in_scope")
 
     extraction = models.extraction.model_validate({"paper": {"fields": [{"field": "density", "value_raw": "98"}]}})
     inventory = models.inventory.model_validate({"samples": [], "no_samples_in_scope": True})
 
-    assert extraction.target is not None and extraction.target.fields[0].value_raw == "98"
-    assert inventory.no_tco_film is True
-    # The attribute names are not what this profile's model is told to emit, so they are not read.
-    assert models.extraction.model_validate({"target": {"fields": []}}).target is None
+    assert extraction.paper is not None and extraction.paper.fields[0].value_raw == "98"
+    assert inventory.no_samples is True
+    # Another profile's key is not what this profile's model is told to emit, so it is not read.
+    assert models.extraction.model_validate({"target": {"fields": []}}).paper is None
 
 
 @pytest.mark.parametrize(
     ("model", "answer"),
     [
-        ("extraction", '{"target": {"fields": "12 nm"}}'),
+        ("extraction", '{"paper": {"fields": "12 nm"}}'),
         ("extraction", '{"samples": [{"sample_id": "S1", "fields": [{"value_raw": "12"}]}]}'),
-        ("inventory", '{"samples": [], "no_tco_film": "maybe"}'),
+        ("inventory", '{"samples": [], "no_samples": "maybe"}'),
         ("inventory", '{"samples": {"sample_id": "S1"}}'),
     ],
 )
-def test_under_the_shipped_keys_a_rejected_answer_reads_exactly_as_before(model, answer):
+def test_under_keys_equal_to_the_attributes_a_rejected_answer_reads_as_the_base_class_s(model, answer):
     # The error text goes back to the model in the repair request, whose bytes are its cache key.
     base = {"extraction": ExtractionResponse, "inventory": InventoryResponse}[model]
-    keyed = getattr(response_models("target", "no_tco_film"), model)
+    keyed = getattr(response_models("paper", "no_samples"), model)
 
     with pytest.raises(ValidationError) as expected:
         base.model_validate_json(answer)
@@ -122,11 +122,26 @@ def test_under_the_shipped_keys_a_rejected_answer_reads_exactly_as_before(model,
     assert str(actual.value) == str(expected.value)
 
 
+def test_a_rejected_answer_names_the_profile_s_key_and_the_paper_record_s_frozen_class_name():
+    # The key the model wrote, and the nested class by the name it had when the corpus was extracted: both are
+    # repair-request bytes (tests/fixtures/prompts/snapshot.json pins the TCO texts in full).
+    keyed = response_models("paper_level", "nothing_here")
+
+    # Python-mode validation, where pydantic names the nested class; in JSON mode it says "an object".
+    with pytest.raises(ValidationError) as paper:
+        keyed.extraction.model_validate({"paper_level": 5})
+    with pytest.raises(ValidationError) as inventory:
+        keyed.inventory.model_validate_json('{"nothing_here": "maybe"}')
+
+    assert "\npaper_level\n  Input should be a valid dictionary or instance of ResponseTarget " in str(paper.value)
+    assert str(inventory.value).startswith("1 validation error for InventoryResponse\nnothing_here\n")
+
+
 @pytest.mark.parametrize("model", ["extraction", "inventory"])
-def test_under_the_shipped_keys_the_json_schema_is_the_base_class_s(model):
+def test_under_keys_equal_to_the_attributes_the_json_schema_is_the_base_class_s(model):
     # create_model does not inherit the docstring, which the schema publishes as its description.
     base = {"extraction": ExtractionResponse, "inventory": InventoryResponse}[model]
-    keyed = getattr(response_models("target", "no_tco_film"), model)
+    keyed = getattr(response_models("paper", "no_samples"), model)
 
     assert keyed.model_json_schema() == base.model_json_schema()
 
@@ -201,20 +216,20 @@ def test_optional_text_that_is_only_whitespace_becomes_none(blank):
 def test_a_target_without_fields_becomes_none():
     # An empty target record would add a spurious "paper level" tier to the report for nothing; better to
     # have no target at all.
-    response = ExtractionResponse.model_validate({"target": {"source_ids": ["b1"], "fields": []}, "samples": []})
+    response = ExtractionResponse.model_validate({"paper": {"source_ids": ["b1"], "fields": []}, "samples": []})
 
-    assert to_records(response).target is None
+    assert to_records(response).paper is None
 
 
 def test_a_target_with_fields_is_kept_with_its_provenance():
     response = ExtractionResponse.model_validate(
-        {"target": {"source_ids": ["b1"], "fields": [{"field": "density", "value_raw": "98.5", "unit_raw": "%"}]}}
+        {"paper": {"source_ids": ["b1"], "fields": [{"field": "density", "value_raw": "98.5", "unit_raw": "%"}]}}
     )
 
-    target = to_records(response).target
+    paper = to_records(response).paper
 
-    assert target.source_ids == ("b1",)
-    assert target.get("density").value_raw == "98.5"
+    assert paper.source_ids == ("b1",)
+    assert paper.get("density").value_raw == "98.5"
 
 
 def test_records_carry_no_normalized_values_yet():
@@ -296,12 +311,12 @@ def test_a_target_level_field_reported_under_a_sample_is_dropped_and_logged():
 
 def test_a_sample_level_field_reported_under_the_target_is_dropped_and_logged():
     response = ExtractionResponse.model_validate(
-        {"target": {"fields": [{"field": "thickness", "value_raw": "300", "unit_raw": "nm"}]}}
+        {"paper": {"fields": [{"field": "thickness", "value_raw": "300", "unit_raw": "nm"}]}}
     )
 
     records = to_records(response)
 
-    assert records.target is None
+    assert records.paper is None
     assert records.dropped == ("thickness: film-level field reported under the target",)
 
 
@@ -347,21 +362,21 @@ def test_a_series_value_under_the_target_is_written_onto_every_sample():
     # way passage mode places the same flag.
     response = ExtractionResponse.model_validate(
         {
-            "target": {"fields": [thickness(applies_to_all_samples=True)]},
+            "paper": {"fields": [thickness(applies_to_all_samples=True)]},
             "samples": [{"sample_id": "A"}, {"sample_id": "B"}],
         }
     )
 
     records = to_records(response)
 
-    assert records.target is None
+    assert records.paper is None
     for sample in records.samples:
         assert [(value.value_raw, value.series) for value in sample.fields] == [("300", True)]
     assert records.dropped == ()
 
 
 def test_a_series_value_with_no_sample_to_carry_it_is_kept_unattributed():
-    response = ExtractionResponse.model_validate({"target": {"fields": [thickness(applies_to_all_samples=True)]}})
+    response = ExtractionResponse.model_validate({"paper": {"fields": [thickness(applies_to_all_samples=True)]}})
 
     records = to_records(response)
 
@@ -372,7 +387,7 @@ def test_a_series_value_with_no_sample_to_carry_it_is_kept_unattributed():
 def test_the_series_flag_changes_nothing_on_a_paper_level_field_or_under_a_sample():
     response = ExtractionResponse.model_validate(
         {
-            "target": {"fields": [{"field": "component", "value_raw": "ITO", "applies_to_all_samples": True}]},
+            "paper": {"fields": [{"field": "component", "value_raw": "ITO", "applies_to_all_samples": True}]},
             "samples": [
                 {"sample_id": "A", "fields": [thickness(applies_to_all_samples=True)]},
                 {"sample_id": "B"},
@@ -382,7 +397,7 @@ def test_the_series_flag_changes_nothing_on_a_paper_level_field_or_under_a_sampl
 
     records = to_records(response)
 
-    assert records.target.get("component").series is False
+    assert records.paper.get("component").series is False
     assert [(value.value_raw, value.series) for value in records.samples[0].fields] == [("300", False)]
     assert records.samples[1].fields == ()
 
@@ -392,7 +407,7 @@ def test_a_correctly_scoped_field_of_every_group_survives():
     # overzealous and rejecting the right one, for every group (target, process, film).
     response = ExtractionResponse.model_validate(
         {
-            "target": {"fields": [{"field": "resistance", "value_raw": "0.3", "unit_raw": "Ω cm"}]},
+            "paper": {"fields": [{"field": "resistance", "value_raw": "0.3", "unit_raw": "Ω cm"}]},
             "samples": [
                 {
                     "sample_id": "A",
@@ -407,7 +422,7 @@ def test_a_correctly_scoped_field_of_every_group_survives():
 
     records = to_records(response)
 
-    assert records.target.get("resistance").value_raw == "0.3"
+    assert records.paper.get("resistance").value_raw == "0.3"
     assert records.samples[0].get("sputtering_time").value_raw == "30"
     assert records.samples[0].get("resistivity").value_raw == "1.2e-3"
     assert records.dropped == ()
@@ -440,23 +455,23 @@ def test_a_numeric_field_containing_a_digit_survives():
 
 def test_a_text_field_without_digits_is_not_affected_by_the_numeric_rule():
     response = ExtractionResponse.model_validate(
-        {"target": {"fields": [{"field": "component", "value_raw": "SnO2:Ta"}]}}
+        {"paper": {"fields": [{"field": "component", "value_raw": "SnO2:Ta"}]}}
     )
 
     records = to_records(response)
 
-    assert records.target.get("component").value_raw == "SnO2:Ta"
+    assert records.paper.get("component").value_raw == "SnO2:Ta"
     assert records.dropped == ()
 
 
 def test_a_target_whose_fields_are_all_dropped_becomes_none():
     response = ExtractionResponse.model_validate(
-        {"target": {"source_ids": ["ghost"], "fields": [{"field": "not_a_field", "value_raw": "x"}]}}
+        {"paper": {"source_ids": ["ghost"], "fields": [{"field": "not_a_field", "value_raw": "x"}]}}
     )
 
     records = to_records(response)
 
-    assert records.target is None
+    assert records.paper is None
     # The target's own invented id still belongs in the audit, even though every one of its fields was
     # dropped.
     assert records.invalid_source_ids == ("ghost",)

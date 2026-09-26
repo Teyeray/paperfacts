@@ -780,9 +780,12 @@ lessons come from the prompt comments and `.omc/research/`.
 
 A field's `condition_rule` fills rule 8 ("For `transmittance` always fill `condition` with the wavelength or
 spectral range"): without it a transmittance arrives with no wavelength and the dataset cell cannot say which
-measurement it holds. The internal names `target` (the paper-level record) and `no_tco_film` (the no-samples
-verdict) are kept in stored files and code for every profile; only the JSON keys the model sees come from
-`paper_key` and `no_samples_key`.
+measurement it holds. Internally, and in stored files and the web API, the paper-level record is `paper` and
+the no-samples verdict `no_samples` for every profile; only the JSON keys the model sees come from `paper_key`
+and `no_samples_key` (TCO keeps `target` and `no_tco_film`, the keys its corpus was extracted with). Files
+written before this rename, which say `target` / `no_tco_film`, a `"target"` comparison scope and a single
+`matching`, still load: the old names are read aliases, and the next run re-derives everything under the new
+names from the LLM cache.
 
 ### Field attributes and what they do
 
@@ -1129,7 +1132,8 @@ sheets:
 
 数据质量 is where the provenance is: 最终决策 is `agree` or `single_source` for a committed value and the
 refusal name otherwise, 合并证据来源 lists the block ids behind it, **证据来源通道** says which lanes
-supplied it, and **系列级** marks a value the paper stated once for the whole sample series.
+supplied it, and **系列级** marks a value the paper stated once for the whole sample series. A paper-level
+value's row has 样品ID `paper`.
 
 The paper row selects the sample with the most usable fields, then the most two-lane agreements, then a
 stable sample-id tie break. **It never combines different samples' measurements into one row.** That

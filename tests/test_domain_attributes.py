@@ -136,7 +136,7 @@ def test_a_unitless_field_takes_a_range_judged_on_the_number(battery):
     assert spec.canonical_unit is None
     assert spec.describe_range() == "between 1 and 100000"
     records = ExtractedRecords(
-        target=None,
+        paper=None,
         samples=(
             SampleRecord(
                 sample_id="S1",

@@ -3,9 +3,9 @@
 Round 2 renames the persisted ``target`` / ``no_tco_film`` to ``paper`` / ``no_samples`` and the report's
 ``"target"`` scope to ``"paper"``. Every persisted model ignores unknown keys, so a renamed attribute without a
 read alias would load a B1 file with its paper record silently gone. ``tests/fixtures/b1_formats/`` holds the
-files as B1's own code writes them (``generate.py``); these tests read them through the current models and must
-pass on both sides of the rename. That is why an attribute is looked up under either name: the one the model
-declares is the one that must hold the value.
+files as B1's own code writes them (``generate.py``); these tests read them through the current models, which
+must put every renamed value under its new name: ``paper``, ``no_samples``, the ``"paper"`` scope, and the one
+``matching`` as the implicit entity's entry of ``matchings``.
 """
 
 from __future__ import annotations
@@ -14,21 +14,14 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
 
-from paperfacts.compare import ComparisonReport
+from paperfacts.compare import IMPLICIT_ENTITY, ComparisonReport
 from paperfacts.dataset import DatasetPayload, DocumentDataset
 from paperfacts.readings import StoredReadings
 from paperfacts.records import LaneExtraction
 
 FIXTURES = Path(__file__).parent / "fixtures" / "b1_formats"
 PAPER_COMPONENT = "Sn/Ta target 95:5 wt.%"
-
-
-def declared(model: BaseModel, *names: str):
-    """The attribute the model declares under the first of ``names`` it has: ``(new, legacy)`` spellings."""
-    name = next(name for name in names if name in type(model).model_fields)
-    return getattr(model, name)
 
 
 def raw(name: str) -> dict:
@@ -55,21 +48,21 @@ def test_the_fixtures_are_b1_shaped():
 def test_a_b1_lane_loads_with_its_paper_record(name: str):
     lane = LaneExtraction.read(FIXTURES / name)
 
-    paper = declared(lane, "paper", "target")
+    paper = lane.paper
     assert paper is not None
     assert [(value.field, value.value_raw, value.grounded) for value in paper.fields] == [
         ("component", PAPER_COMPONENT, True)
     ]
-    assert declared(lane, "no_samples", "no_tco_film") is False
+    assert lane.no_samples is False
     assert lane.samples and lane.samples[0].fields
 
 
 def test_a_b1_lane_that_found_no_samples_still_says_so():
     lane = LaneExtraction.read(FIXTURES / "lane_no_samples.json")
 
-    assert declared(lane, "no_samples", "no_tco_film") is True
+    assert lane.no_samples is True
     assert lane.samples == ()
-    assert declared(lane, "paper", "target") is not None
+    assert lane.paper is not None
 
 
 # ---- comparison report ------------------------------------------------------------------------------------
@@ -79,10 +72,26 @@ def test_a_b1_report_loads_with_its_paper_comparison_and_unmatched_sample():
     report = ComparisonReport.read(FIXTURES / "report.json")
 
     paper_scopes = [c for c in report.comparisons if not c.scope.startswith("sample:")]
-    assert [(c.scope in {"paper", "target"}, c.field, c.status) for c in paper_scopes] == [(True, "component", "agree")]
+    assert [(c.scope, c.field, c.status) for c in paper_scopes] == [("paper", "component", "agree")]
     assert report.counts.samples_matched == 2
     assert report.counts.samples_unmatched == 1
-    assert report.matching.unmatched_b == ("SnO2:Ta reference",)
+    assert list(report.matchings) == [IMPLICIT_ENTITY]
+    assert len(report.matchings[IMPLICIT_ENTITY].pairs) == 2
+    assert report.matchings[IMPLICIT_ENTITY].unmatched_b == ("SnO2:Ta reference",)
+
+
+def test_a_b1_report_is_written_back_under_the_new_names():
+    written = ComparisonReport.read(FIXTURES / "report.json").model_dump(mode="json")
+
+    assert "matching" not in written and set(written["matchings"]) == {IMPLICIT_ENTITY}
+    assert "target" not in {comparison["scope"] for comparison in written["comparisons"]}
+
+
+def test_a_b1_lane_is_written_back_under_the_new_names():
+    written = LaneExtraction.read(FIXTURES / "lane_no_samples.json").model_dump(mode="json")
+
+    assert written["no_samples"] is True and written["paper"] is not None
+    assert "target" not in written and "no_tco_film" not in written
 
 
 # ---- dataset ----------------------------------------------------------------------------------------------
@@ -95,7 +104,8 @@ def test_a_b1_dataset_loads_with_its_paper_level_cell():
     assert dataset.paper_row["component"] == PAPER_COMPONENT
     assert len(dataset.sample_rows) == 3
     paper_quality = [row for row in dataset.quality_rows if row["field"] == "component"]
-    assert [(row["sample_id"] in {"paper", "target"}, row["decision"]) for row in paper_quality] == [(True, "agree")]
+    # Quality rows are stored as plain rows, so a B1 dataset keeps its "target" id until it is rebuilt.
+    assert [(row["sample_id"], row["decision"]) for row in paper_quality] == [("target", "agree")]
 
 
 # ---- figure readings --------------------------------------------------------------------------------------

@@ -8,23 +8,23 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from paperfacts.compare import ComparisonReport, FieldComparison
+from paperfacts.compare import IMPLICIT_ENTITY, ComparisonReport, FieldComparison
 from paperfacts.records import FieldValue, LaneExtraction
 
 
 def render_lane(lane: LaneExtraction) -> Iterator[str]:
     passes = f" passes={lane.passes}" if lane.passes != 1 else ""
     yield (
-        f"[{lane.backend}] samples={len(lane.samples)} target_fields={len(lane.target.fields) if lane.target else 0} "
+        f"[{lane.backend}] samples={len(lane.samples)} paper_fields={len(lane.paper.fields) if lane.paper else 0} "
         f"invalid_source_ids={len(lane.invalid_source_ids)} dropped={len(lane.dropped)} "
         f"ungrounded={len(lane.ungrounded())} unattributed={len(lane.unattributed)}{passes} "
         f"tokens={lane.usage.get('total_tokens', '?')} model={lane.model} key={lane.extractor_key}"
     )
     for question in lane.failed_questions:
         yield f"    (no valid answer to the {question.field} question; asked again next run: {question.detail})"
-    if lane.target:
-        for field in lane.target.fields:
-            yield f"    target.{_value(field)}  ← {', '.join(field.source_ids) or '(no source)'}"
+    if lane.paper:
+        for field in lane.paper.fields:
+            yield f"    paper.{_value(field)}  ← {', '.join(field.source_ids) or '(no source)'}"
     for sample in lane.samples:
         yield f"    {sample.sample_id}  ({sample.label})"
         for field in sample.fields:
@@ -38,14 +38,15 @@ def render_lane(lane: LaneExtraction) -> Iterator[str]:
 
 def render_report(report: ComparisonReport) -> Iterator[str]:
     yield f"counts: {report.counts.model_dump()}"
-    for pair in report.matching.pairs:
+    matching = report.matchings[IMPLICIT_ENTITY]
+    for pair in matching.pairs:
         yield f"  match {pair.a_id} ↔ {pair.b_id}  conf={pair.confidence:.2f} ({pair.method}): {pair.justification}"
-    for sample_id in report.matching.unmatched_a:
+    for sample_id in matching.unmatched_a:
         yield f"  only in {report.backend_a}: {sample_id}"
-    for sample_id in report.matching.unmatched_b:
+    for sample_id in matching.unmatched_b:
         yield f"  only in {report.backend_b}: {sample_id}"
-    if report.matching.failed:
-        yield f"  sample matching FAILED: {report.matching.failure}"
+    if matching.failed:
+        yield f"  sample matching FAILED: {matching.failure}"
     for comparison in report.comparisons:
         yield _comparison_line(comparison)
 

@@ -9,7 +9,7 @@
     "Deposition pressure is a range (4.4e-3 to 5.1e-3 Torr) depending on O2 flow, never per sample.",
     "Table 5 figure of merit is not a field; sheet resistance is never stated."
   ],
-  "target": {
+  "paper": {
     "component": [
       {
         "value": "SnO (99.99%)",

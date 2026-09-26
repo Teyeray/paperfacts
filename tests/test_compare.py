@@ -24,7 +24,7 @@ from paperfacts.config import Settings
 from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key_for
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import normalize_field
-from paperfacts.records import FieldValue, TargetRecord
+from paperfacts.records import FieldValue, PaperRecord
 from support.extraction import comparison_options, make_field, make_lane, make_sample
 from support.profiles import shipped_profile
 
@@ -207,14 +207,12 @@ def test_a_mode_naming_no_category_falls_back_to_plain_text_comparison():
 
 
 def test_target_fields_are_compared_at_the_paper_level():
-    lane_a = make_lane(backend="mineru", target=TargetRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
-    lane_b = make_lane(
-        backend="paddleocr_vl", target=TargetRecord(fields=(make_field("density", "98.6", unit_raw="%"),))
-    )
+    lane_a = make_lane(backend="mineru", paper=PaperRecord(fields=(make_field("density", "98.5", unit_raw="%"),)))
+    lane_b = make_lane(backend="paddleocr_vl", paper=PaperRecord(fields=(make_field("density", "98.6", unit_raw="%"),)))
 
     report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
 
-    assert [(c.scope, c.field, c.status) for c in report.comparisons] == [("target", "density", "agree")]
+    assert [(c.scope, c.field, c.status) for c in report.comparisons] == [("paper", "density", "agree")]
 
 
 def test_a_target_field_that_shows_up_inside_a_sample_is_ignored():
@@ -366,7 +364,7 @@ def test_equal_text_values_pair_across_differently_worded_conditions():
     reported three MISSING rows for one fact."""
     lane_a = make_lane(
         backend="mineru",
-        target=TargetRecord(
+        paper=PaperRecord(
             fields=[
                 make_field("component", "SnO2:Sb2O3 (95:5)", condition="Alloy target"),
                 make_field("component", "95% SnO2 and 5% Sb2O3"),
@@ -375,7 +373,7 @@ def test_equal_text_values_pair_across_differently_worded_conditions():
     )
     lane_b = make_lane(
         backend="paddleocr_vl",
-        target=TargetRecord(
+        paper=PaperRecord(
             fields=[
                 make_field(
                     "component", "SnO2 : Sb2O3 (95:5)", condition="alloy target used for all ATO film depositions"

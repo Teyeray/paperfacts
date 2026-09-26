@@ -118,11 +118,15 @@ this file is the part that is easy to get wrong.
   first). The TCO profile's slots reproduce the measured prompts byte for byte, pinned by
   `tests/fixtures/prompts/snapshot.json` (sha-pinned) and `tests/fixtures/payloads/b0.json`; never re-record
   either to make a change pass.
-- Internal names are kept on purpose: `target` (the paper-level record, `TargetRecord`, scope `"target"`) and
-  `no_tco_film` (the no-samples verdict) stay in code, stored files and the web for every profile. The model
-  sees the profile's `paper_key` / `no_samples_key`, mapped onto them by `records.response_models` aliases.
-  Every persisted model ignores unknown keys, so a rename without typed fixtures of every persisted type would
-  load empty records silently.
+- Internal names: the paper-level record is `paper` (`PaperRecord`, comparison scope and quality-row id
+  `"paper"`) and the no-samples verdict `no_samples`, in code, stored files and the web for every profile. The
+  model sees the profile's `paper_key` / `no_samples_key` (TCO: `target` / `no_tco_film`), mapped onto them by
+  `records.response_models` aliases; the response classes keep their names (`ResponseTarget` included) because
+  validation errors reach the model in repair requests. A report holds `matchings: {entity: SampleMatching}`
+  (`"sample"` for a profile without entity types). Files written before that rename are read through aliases
+  (`LaneExtraction`) and before-validators (`ComparisonReport`); `tests/fixtures/b0_formats` and `b1_formats` hold
+  them. Every persisted model ignores unknown keys, so a rename without typed fixtures of every persisted type
+  would load empty records silently.
 - Cache keys live in `keys.py`. `extractor_key(options)` is the only extraction key: it hashes one frozen
   `ExtractionOptions` (profile, model, mode and every sampling/retrieval setting). The workflow builds it once
   with `ExtractionOptions.from_settings(settings, profile)` and hands the same object to both lanes, and readers
