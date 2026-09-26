@@ -46,6 +46,7 @@ from paperfacts.profile import (
     COMPUTED_MARKERS,
     MARKER,
     DomainProfile,
+    EntitySpec,
     FigureSlots,
     GroupSpec,
     Maturity,
@@ -84,12 +85,40 @@ RESERVED_FIELD_NAMES = frozenset(
         "paper",
         "unattributed",
         "samples",
+        "entity",
     }
 )
 # Every field is one question per lane in passage mode: past this many a run costs noticeably more.
 FIELD_WARNING_COUNT = 40
 MAX_FIELDS = 100
 MAX_SLOT_LENGTH = 2000
+# Every entity is one inventory question per lane plus its own matching: past this many a profile describes a
+# database schema rather than what a paper reports.
+MAX_ENTITIES = 5
+# What an entity's samples mean may be reworded per entity; the rules around them, the answer keys and the
+# domain are the profile's. ``matching_*`` slots are overridable too (checked by prefix).
+ENTITY_SLOTS = (
+    "sample_definition",
+    "field_scope",
+    "sample_plural",
+    "sample_singular",
+    "sample_unit",
+    "sample_examples",
+    "sample_id_example",
+    "condition_noun",
+    "condition_examples",
+    "no_samples_clause",
+    "no_samples_condition",
+    "samples_present_condition",
+    "subset_examples",
+    "whole_series_examples",
+    "partial_collective_example",
+    "multi_condition_example",
+    "sample_list_heading",
+)
+_ENTITY_KEYS = ("name", "label_zh", "prompt", "retrieval")
+# Names an entity may not take: the paper-level and unplaced scopes of a comparison and a vote.
+_RESERVED_ENTITY_NAMES = frozenset({"paper", "unattributed"})
 
 
 def profile_path(settings: Settings) -> Path:
@@ -151,6 +180,7 @@ _TOP_KEYS = (
     "ignored_unit_suffixes",
     "ui",
     "fields",
+    "entities",
 )
 _REQUIRED_KEYS = ("format", "name", "groups", "prompt", "retrieval", "fields")
 
@@ -185,12 +215,14 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     if maturity not in get_args(Maturity):
         errors.append(f"{where}: maturity must be one of {', '.join(get_args(Maturity))}, got {maturity!r}")
 
-    groups = checked(lambda: _groups(data["groups"], where)) if "groups" in data else None
+    entity_names = checked(lambda: _entity_names(data["entities"], where)) if "entities" in data else ()
+    groups = None
+    if "groups" in data and entity_names is not None:
+        groups = checked(lambda: _groups(data["groups"], entity_names, where))
     units = checked(lambda: load_units(data.get("units", {}), where, data.get("ignored_unit_suffixes", [])))
     fields = None
     if groups is not None and "fields" in data:
-        levels = {group.name: group.level for group in groups}
-        fields = checked(lambda: _fields(data["fields"], levels, units, where, errors))
+        fields = checked(lambda: _fields(data["fields"], groups, units, where, errors))
     prompt = None
     if "prompt" in data:
         prompt = checked(lambda: _text_record(PromptSlots, data["prompt"], f"{where}: prompt", slot=True))
@@ -202,6 +234,9 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     if fields is not None and any(spec.figure_readable for spec in fields) != (data.get("figures") is not None):
         errors.append(f"{where}: figures must be given exactly when some field is figure_readable")
     retrieval = checked(lambda: _retrieval(data["retrieval"], f"{where}: retrieval")) if "retrieval" in data else None
+    entities: tuple[EntitySpec, ...] | None = ()
+    if entity_names and prompt is not None and retrieval is not None:
+        entities = checked(lambda: _entities(data["entities"], prompt, retrieval, where))
     ui = checked(lambda: _text_record(UiCopy, data.get("ui", {}), f"{where}: ui", slot=False))
     title_zh = checked(lambda: _display_text(data, "title_zh", name, where))
     description_zh = checked(lambda: _display_text(data, "description_zh", "", where))
@@ -210,15 +245,25 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     # Every step above succeeded, so none of these is None; the asserts only tell the type checker so.
     assert groups is not None and units is not None and fields is not None and prompt is not None
     assert retrieval is not None and ui is not None and title_zh is not None and description_zh is not None
+    assert entities is not None
 
     material = {
-        "groups": [[group.name, group.level] for group in groups],
+        "groups": [[group.name, group.level, *([group.entity] if group.entity else [])] for group in groups],
         "fields": [_hashed_attributes(spec) for spec in fields],
         "prompt": dataclasses.asdict(prompt),
         "figures": None if figures is None else dataclasses.asdict(figures),
         "retrieval": dataclasses.asdict(retrieval),
         "units": units.material(),
     }
+    if entities:
+        material["entities"] = [
+            {
+                "name": entity.name,
+                "prompt": {name: getattr(entity.prompt, name) for name in sorted(entity.overrides)},
+                "retrieval": dataclasses.asdict(entity.retrieval),
+            }
+            for entity in entities
+        ]
     return DomainProfile(
         name=name,
         title_zh=title_zh,
@@ -233,6 +278,7 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
         ui=ui,
         content_hash=hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
         source=source,
+        declared_entities=entities,
     )
 
 
@@ -249,7 +295,8 @@ def _display_text(data: Mapping[str, Any], key: str, default: str, where: str) -
     return value
 
 
-def _groups(entries: Any, where: str) -> tuple[GroupSpec, ...]:
+def _groups(entries: Any, entity_names: tuple[str, ...], where: str) -> tuple[GroupSpec, ...]:
+    """The groups; with ``entity_names`` (the profile declares entity types) each sample group names one of them."""
     if not isinstance(entries, list):
         raise ConfigError(f"{where}: groups must be a list, got {type(entries).__name__}")
     groups: list[GroupSpec] = []
@@ -268,14 +315,98 @@ def _groups(entries: Any, where: str) -> tuple[GroupSpec, ...]:
             raise ConfigError(f"{at}: label_zh must be a string, got {label!r}")
         if any(group.name == name for group in groups):
             raise ConfigError(f"{where}: groups has more than one group named {name!r}")
-        groups.append(GroupSpec(name=name, level=level, label_zh=label))
+        entity = entry.get("entity")
+        if entity is not None and not entity_names:
+            raise ConfigError(f"{at}: entity names an entity type, but the profile declares no entities")
+        if entity is not None and level == "paper":
+            raise ConfigError(f"{at}: a paper-level group belongs to the paper, so it names no entity")
+        if level == "sample" and entity_names and entity not in entity_names:
+            raise ConfigError(f"{at}: entity must name one of the declared entities ({', '.join(entity_names)})")
+        groups.append(GroupSpec(name=name, level=level, label_zh=label, entity=entity))
     if not any(group.level == "sample" for group in groups):
         raise ConfigError(f"{where}: groups needs at least one group with level 'sample'")
+    idle = [name for name in entity_names if not any(group.entity == name for group in groups)]
+    if idle:
+        # Its inventory would be asked for samples no question ever fills.
+        raise ConfigError(f"{where}: entity {idle[0]!r} has no sample group; name it in one or remove it")
     return tuple(groups)
 
 
+def _entity_names(entries: Any, where: str) -> tuple[str, ...]:
+    """The declared entity names, checked before the groups that name them."""
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENTITIES:
+        raise ConfigError(f"{where}: entities must be a list of 1 to {MAX_ENTITIES} entity types")
+    names: list[str] = []
+    for index, entry in enumerate(entries):
+        at = f"{where}: entities[{index}]"
+        if not isinstance(entry, Mapping):
+            raise ConfigError(f"{at} must be an object, got {type(entry).__name__}")
+        name = entry.get("name")
+        if not isinstance(name, str) or not IDENTIFIER.fullmatch(name):
+            raise ConfigError(f"{at}: name must match {IDENTIFIER.pattern}, got {name!r}")
+        if name in _RESERVED_ENTITY_NAMES:
+            raise ConfigError(f"{at}: the name {name!r} is reserved; reserved names are paper, unattributed")
+        if name in names:
+            raise ConfigError(f"{where}: entities has more than one entity named {name!r}")
+        names.append(name)
+    return tuple(names)
+
+
+def _entities(entries: list[Any], prompt: PromptSlots, retrieval: RetrievalSpec, where: str) -> tuple[EntitySpec, ...]:
+    """The declared entity types, each with the profile's slots and retrieval under its own overrides."""
+    entities: list[EntitySpec] = []
+    for index, entry in enumerate(entries):
+        at = f"{where}: entities[{index}]"
+        _refuse_unknown(entry, _ENTITY_KEYS, at)
+        label = entry.get("label_zh", "")
+        if not isinstance(label, str):
+            raise ConfigError(f"{at}: label_zh must be a string, got {label!r}")
+        overrides = entry.get("prompt", {})
+        if not isinstance(overrides, Mapping):
+            raise ConfigError(f"{at}: prompt must be an object, got {type(overrides).__name__}")
+        refused = sorted(key for key in overrides if key not in ENTITY_SLOTS and not key.startswith("matching_"))
+        if refused:
+            raise ConfigError(
+                f"{at}: prompt may not override {', '.join(refused)}; an entity overrides only"
+                f" {', '.join(ENTITY_SLOTS)} and the matching_* slots"
+            )
+        if len(entries) > 1 and "sample_definition" not in overrides:
+            # Two entities under one definition would be asked for the same samples twice.
+            raise ConfigError(f"{at}: prompt needs its own sample_definition when a profile has several entities")
+        # Validated as the profile's own slots are (strings, bounded, no template marker), over the whole record
+        # so an unknown matching_* key is refused by name.
+        resolved = _text_record(PromptSlots, {**_slot_values(prompt), **overrides}, f"{at}: prompt", slot=True)
+        entities.append(
+            EntitySpec(
+                name=entry["name"],
+                label_zh=label,
+                prompt=resolved,
+                retrieval=_entity_retrieval(entry.get("retrieval", {}), retrieval, f"{at}: retrieval"),
+                overrides=frozenset(overrides),
+            )
+        )
+    return tuple(entities)
+
+
+def _slot_values(prompt: PromptSlots) -> dict[str, str]:
+    """The profile's slots as a slot record's input: the ones it set, and every slot left at a default (a None
+    ``paper_level_rule`` stays unset, so the entity's record keeps generating it)."""
+    return {name: value for name, value in dataclasses.asdict(prompt).items() if value is not None}
+
+
+def _entity_retrieval(data: Any, profile: RetrievalSpec, where: str) -> RetrievalSpec:
+    """An entity's retrieval: the profile's, with whichever of its two keys the entity gives replaced."""
+    if not isinstance(data, Mapping):
+        raise ConfigError(f"{where} must be an object, got {type(data).__name__}")
+    inherited = {
+        "condition_keywords": list(profile.condition_keywords),
+        "condition_unit_pattern": profile.condition_unit_pattern,
+    }
+    return _retrieval({**inherited, **data}, where)
+
+
 def _fields(
-    entries: Any, levels: Mapping[str, FieldLevel], units: UnitRegistry | None, where: str, errors: list[str]
+    entries: Any, groups: tuple[GroupSpec, ...], units: UnitRegistry | None, where: str, errors: list[str]
 ) -> tuple[FieldSpec, ...] | None:
     """The field table, or None when some entry is invalid; each invalid entry adds its own line to ``errors``.
     Without ``units`` (their section failed) canonical units are not checked against them."""
@@ -291,9 +422,14 @@ def _fields(
         )
     specs: list[FieldSpec] = []
     failed = False
+    levels = {group.name: group.level for group in groups}
+    entities = {group.name: group.entity for group in groups}
     for index, entry in enumerate(entries):
         try:
             spec = _field(entry, index, levels, units, where)
+            if entities.get(spec.group) is not None:
+                # Derived from the group like the level, never written in a field entry.
+                spec = dataclasses.replace(spec, entity=entities[spec.group])
         except ConfigError as exc:
             errors.append(str(exc))
             failed = True
@@ -446,7 +582,7 @@ def _backtracks(items: Any, *, repeated: bool) -> bool:
 # A number as a measurement condition states it: "550", "400" and "800" in "average 400–800 nm".
 CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # Attributes a field entry never states: the loader derives them.
-_DERIVED = {"level", "prompt_categories"}
+_DERIVED = {"level", "prompt_categories", "entity"}
 # The kinds a list field may have, and the attributes it refuses: a list of numbers would need its own tolerance,
 # condition and chart semantics, which do not exist yet.
 _LIST_KINDS = ("text", "composition")

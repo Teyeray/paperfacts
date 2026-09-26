@@ -29,6 +29,7 @@ file that still says `"target"` (the id before round 2) is read the same, with a
   "samples": [
     {
       "id": "ICO-30nm-1H2-annealed",
+      "entity": "catalyst",                         // only for a profile with entity types: whose sample it is
       "description": "30 nm RPD ICO, 1% H2, annealed 180 °C",
       "ambiguous": false, "why": "...",           // optional; see below
       "match": { "fields": {"thickness": 30}, "label": "regex", "label_not": "regex" },
@@ -61,7 +62,9 @@ Values are text/table values only. A field the paper does not state has no entry
 
 **Paper-level fields** are compared with the dataset's `paper_row` (every row repeats them).
 
-**Sample alignment.** A dataset row is a candidate for a gold sample when every `match.fields` value equals the
+**Sample alignment.** A dataset row is a candidate for a gold sample only when both name the same `entity` (both
+none for a profile without entity types), and a gold sample is scored on its entity's fields only. It is then a
+candidate when every `match.fields` value equals the
 row's value within the field tolerance, `match.label` matches `sample_id + " | " + sample_label`
 (case-insensitive) and `match.label_not` does not. Candidate pairs are then taken greedily, one-to-one, by the
 number of the row's cells that agree with that gold sample (descending), ties by gold order then row order.

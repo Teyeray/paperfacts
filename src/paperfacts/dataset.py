@@ -141,6 +141,7 @@ def write_dataset_json(dataset: DocumentDataset, path: Path) -> None:
 
 @dataclass(frozen=True)
 class _Scope:
+    entity: str
     sample_id: str
     report_scope: str
     a: SampleRecord | None
@@ -165,26 +166,28 @@ def _matching_blocked(scope: _Scope | None, ambiguous_match_confidence: float) -
     return None
 
 
-def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport) -> tuple[_Scope, ...]:
+def _scopes(lanes: Mapping[Backend, LaneExtraction], report: ComparisonReport, entity: str) -> tuple[_Scope, ...]:
+    """The rows of one entity type: its matched pairs and its samples only one lane has."""
     lane_a, lane_b = lanes[report.backend_a], lanes[report.backend_b]
-    matching = report.sample_matching()
+    matching = report.matchings[entity]
     scopes: list[_Scope] = []
     for pair in matching.pairs:
-        a, b = lane_a.sample(pair.a_id), lane_b.sample(pair.b_id)
+        a, b = lane_a.sample(pair.a_id, entity), lane_b.sample(pair.b_id, entity)
         if a is not None and b is not None:
             sample_id = pair.a_id if pair.a_id == pair.b_id else f"{pair.a_id} | {pair.b_id}"
-            scopes.append(_Scope(sample_id, f"sample:{pair.a_id}|{pair.b_id}", a, b, pair.confidence))
+            scopes.append(_Scope(entity, sample_id, f"{entity}:{pair.a_id}|{pair.b_id}", a, b, pair.confidence))
     for backend, ids, side in (
         (report.backend_a, matching.unmatched_a, "a"),
         (report.backend_b, matching.unmatched_b, "b"),
     ):
         for sample_id in ids:
-            sample = lanes[backend].sample(sample_id)
+            sample = lanes[backend].sample(sample_id, entity)
             if sample is not None:
                 scopes.append(
                     _Scope(
+                        entity,
                         f"{backend}:{sample_id}",
-                        f"sample:{sample_id}",
+                        f"{entity}:{sample_id}",
                         sample if side == "a" else None,
                         sample if side == "b" else None,
                         matching_failed=matching.failed,
@@ -213,8 +216,9 @@ def incomplete_reason(lanes: Mapping[Backend, LaneExtraction], report: Compariso
     never retry it; unstored, the next run asks again, and only the failed request reaches the model, since
     invalid answers are never cached (llm.complete_validated).
     """
-    if report.sample_matching().failed:
-        return "sample matching failed"
+    failed = [entity for entity, matching in report.matchings.items() if matching.failed]
+    if failed:
+        return "sample matching failed" + (f" ({', '.join(failed)})" if len(report.matchings) > 1 else "")
     unanswered = [f"{backend}:{q.field}" for backend, lane in lanes.items() for q in lane.failed_questions]
     return f"no valid answer to {', '.join(unanswered)}" if unanswered else ""
 
@@ -225,8 +229,13 @@ def consolidate_document(
     report: ComparisonReport,
     options: ComparisonOptions,
 ) -> DocumentDataset:
-    """Collapse source evidence, then select the most complete trustworthy sample row."""
+    """Collapse source evidence, then select the most complete trustworthy sample row.
+
+    Each entity type has its own rows, holding its own fields and the paper-level decisions; with several, every
+    row and every sample-level quality row names its ``entity``. The paper row is chosen among the primary
+    entity's rows."""
     profile = options.profile
+    several = len(profile.entities) > 1
     fingerprint = profile_comparison_fingerprint(profile)
     check_profile(report.profile_fingerprint, fingerprint, "the comparison report")
     if report.document_id != document.document_id or any(
@@ -241,11 +250,12 @@ def consolidate_document(
     metadata: dict[str, CellValue] = {"document_id": document.document_id, "filename": document.display_filename}
     quality: list[Row] = []
 
-    def record(sample_id: str, spec: FieldSpec, decision: Decision) -> None:
+    def record(sample_id: str, spec: FieldSpec, decision: Decision, entity: str | None = None) -> None:
         quality.append(
             MappingProxyType(
                 {
                     **metadata,
+                    **({"entity": entity} if several and entity is not None else {}),
                     "sample_id": sample_id,
                     "field": spec.name,
                     "decision": decision.status,
@@ -280,49 +290,52 @@ def consolidate_document(
         record(PAPER_SCOPE, spec, paper[spec.name])
 
     sample_rows: list[Row] = []
-    for scope in _scopes(lanes, report):
-        scope_comparisons = _scope_comparisons(scope, report)
-        decisions = dict(paper)
-        for spec in profile.sample_fields:
-            evidence = [
-                (backend, field)
-                for backend, sample in ((report.backend_a, scope.a), (report.backend_b, scope.b))
-                if sample is not None
-                for field in sample.fields
-                if field.field == spec.name
-            ]
-            row_sources = frozenset(
-                source
-                for sample in (scope.a, scope.b)
-                if sample is not None
-                for field in sample.fields
-                if field.field != spec.name and field.grounded
-                for source in field.source_ids
+    primary_rows: list[Row] = []
+    for entity in profile.entities:
+        entity_fields = profile.entity_fields(entity)
+        for scope in _scopes(lanes, report, entity.name):
+            scope_comparisons = _scope_comparisons(scope, report)
+            decisions = dict(paper)
+            for spec in entity_fields:
+                evidence = [
+                    (backend, field)
+                    for backend, sample in ((report.backend_a, scope.a), (report.backend_b, scope.b))
+                    if sample is not None
+                    for field in sample.fields
+                    if field.field == spec.name
+                ]
+                row_sources = frozenset(
+                    source
+                    for sample in (scope.a, scope.b)
+                    if sample is not None
+                    for field in sample.fields
+                    if field.field != spec.name and field.grounded
+                    for source in field.source_ids
+                )
+                decision = decide_cell(
+                    spec,
+                    evidence,
+                    [c for c in scope_comparisons if c.field == spec.name],
+                    units=profile.units,
+                    blocked=_matching_blocked(scope, options.ambiguous_match_confidence),
+                    unanswered=spec.name in unanswered,
+                    row_sources=row_sources,
+                )
+                decisions[spec.name] = decision
+                record(scope.sample_id, spec, decision, entity.name)
+            samples = [sample for sample in (scope.a, scope.b) if sample is not None]
+            conditions = joined(
+                [f"{key}={value}" for sample in samples for key, value in sorted(sample.conditions.items())]
+                + [
+                    f"{spec.name}: {decisions[spec.name].conditions}"
+                    for spec in entity_fields
+                    if decisions[spec.name].conditions
+                ]
             )
-            decision = decide_cell(
-                spec,
-                evidence,
-                [c for c in scope_comparisons if c.field == spec.name],
-                units=profile.units,
-                blocked=_matching_blocked(scope, options.ambiguous_match_confidence),
-                unanswered=spec.name in unanswered,
-                row_sources=row_sources,
-            )
-            decisions[spec.name] = decision
-            record(scope.sample_id, spec, decision)
-        samples = [sample for sample in (scope.a, scope.b) if sample is not None]
-        conditions = joined(
-            [f"{key}={value}" for sample in samples for key, value in sorted(sample.conditions.items())]
-            + [
-                f"{spec.name}: {decisions[spec.name].conditions}"
-                for spec in profile.sample_fields
-                if decisions[spec.name].conditions
-            ]
-        )
-        sample_rows.append(
-            MappingProxyType(
+            row = MappingProxyType(
                 {
                     **metadata,
+                    **({"entity": entity.name} if several else {}),
                     "sample_id": scope.sample_id,
                     "sample_label": joined([sample.label for sample in samples]),
                     "conditions": conditions,
@@ -331,10 +344,12 @@ def consolidate_document(
                     **{name: decision.value for name, decision in decisions.items()},
                 }
             )
-        )
-    if sample_rows:
+            sample_rows.append(row)
+            if entity.name == profile.primary.name:
+                primary_rows.append(row)
+    if primary_rows:
         paper_row = min(
-            sample_rows,
+            primary_rows,
             key=lambda row: (-int(row["available_fields"] or 0), -int(row["agree_fields"] or 0), str(row["sample_id"])),
         )
         selection = "按可用字段数最多、双路一致字段数最多、样品ID稳定排序，选择整行；未跨样品拼接字段"
@@ -347,7 +362,11 @@ def consolidate_document(
                 "conditions": "",
                 "available_fields": sum(d.value is not None for d in paper.values()),
                 "agree_fields": sum(d.status == "agree" for d in paper.values()),
-                **{spec.name: paper[spec.name].value if spec.name in paper else None for spec in profile.fields},
+                **{
+                    spec.name: paper[spec.name].value if spec.name in paper else None
+                    for spec in profile.fields
+                    if profile.entity_of(spec).name == profile.primary.name
+                },
             }
         )
         selection = "未提取到可匹配样品；论文行仅保留唯一的论文级字段"
@@ -355,6 +374,7 @@ def consolidate_document(
         MappingProxyType(
             {
                 **metadata,
+                **({"entity": profile.primary.name} if several else {}),
                 "sample_id": paper_row["sample_id"],
                 "field": "__selection__",
                 "decision": "selected_sample",

@@ -17,7 +17,7 @@ from paperfacts.columns import FieldColumn
 from paperfacts.compare import FieldComparison, compare_values
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
-from paperfacts.extract import FieldHarvest, _response_models, passage_records
+from paperfacts.extract import FieldHarvest, SampleInventory, _response_models, passage_records
 from paperfacts.kinds import RULES
 from paperfacts.normalize import drop_implausible, normalize_field, read_date
 from paperfacts.profile import DomainProfile
@@ -155,7 +155,8 @@ def test_holds_survives_a_passage_mode_answer_and_a_boolean_without_it_is_droppe
     inventory = InventoryResponse(samples=[InventorySample(sample_id="S1"), InventorySample(sample_id="S2")])
     harvest = FieldHarvest(spec=SPECS["doped"], values=tuple(answer.values), known_ids=frozenset({"b1"}))
 
-    records = passage_records(inventory, [harvest], inventory_ids=frozenset())
+    listed = SampleInventory(inventory, "", {}, frozenset(), PROFILE.primary)
+    records = passage_records([listed], [harvest], PROFILE)
 
     assert [(s.sample_id, [v.holds for v in s.fields]) for s in records.samples] == [("S1", [False]), ("S2", [])]
     assert "doped: boolean field without holds 'doped'" in records.dropped

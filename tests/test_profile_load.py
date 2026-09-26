@@ -33,7 +33,7 @@ from support.profiles import make_profile
 # config.json table as it was.
 NAME_BASED = {"condition_rule", "missing_condition_note_zh", "figure_readable", "display_format"}
 # Attributes added after B0 was recorded, with the value that is B0's behaviour.
-AFTER_B0 = {"after_clause": "refuse", "cardinality": "one", "prompt_categories": []}
+AFTER_B0 = {"after_clause": "refuse", "cardinality": "one", "prompt_categories": [], "entity": None}
 B0 = json.loads(
     (Path(__file__).parent / "fixtures" / "b0_field_table" / "field_table.json").read_text(encoding="utf-8")
 )

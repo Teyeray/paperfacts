@@ -23,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -95,11 +96,15 @@ def _field_material(spec: FieldSpec, *roles: FieldRole) -> dict[str, object]:
 def _schema_material(profile: DomainProfile, *roles: FieldRole) -> dict[str, object]:
     material: dict[str, object] = {
         "fields": [_field_material(spec, *roles) for spec in profile.fields],
-        # A group's level decides the scope rules; its Chinese label is display text.
-        "groups": [[group.name, group.level] for group in profile.groups],
+        # A group's level decides the scope rules and its entity which samples its fields describe (written only
+        # when set, so a profile without entity types keeps its material); its Chinese label is display text.
+        "groups": [[group.name, group.level, *([group.entity] if group.entity else [])] for group in profile.groups],
     }
     if profile.units.material():
         material["units"] = profile.units.material()
+    if profile.declared_entities:
+        # In order: the first is the primary entity, which the paper-level questions are asked beside.
+        material["entities"] = [entity.name for entity in profile.declared_entities]
     return material
 
 
@@ -143,6 +148,11 @@ def retrieval_fingerprint(profile: DomainProfile) -> str:
     ]
     if unit_patterns:
         material["units"] = unit_patterns
+    if profile.declared_entities:
+        # Each entity's inventory is shown the blocks its own condition words and unit pattern find.
+        material["entities"] = {
+            entity.name: dataclasses.asdict(entity.retrieval) for entity in profile.declared_entities
+        }
     return content_fingerprint(_dumps(material))
 
 
@@ -235,6 +245,11 @@ class ExtractionOptions:
 
     @classmethod
     def from_settings(cls, settings: Settings, profile: DomainProfile, model: str | None = None) -> ExtractionOptions:
+        # Refused with a ConfigError where a profile is loaded to run (workflow.check_mode); only asserted here,
+        # where readers pass too.
+        assert not (profile.declared_entities and settings.extraction_mode == "document"), (
+            f"{profile.name} declares entity types, which document mode cannot ask about"
+        )
         return cls(
             profile=profile,
             model=model or settings.llm_model,
@@ -250,17 +265,37 @@ class ExtractionOptions:
 
 
 def _slot_material(profile: DomainProfile, *, matching: bool) -> dict[str, object]:
-    """The prompt slots that differ from their :class:`PromptSlots` default: the matching ones or all the others.
+    """The prompt slots that differ from their :class:`PromptSlots` default: the matching ones or all the others,
+    plus, per declared entity, the ones it overrides (under ``"entities"``, only when an entity overrides one).
 
     Hashed by value because a slot may reach only a user prompt (``implausible_origin`` in a passage-mode field
-    line), which no system-prompt hash sees; a slot at its default is left out like a field attribute, and a
-    required slot (no default) is always in."""
-    return {
+    line, an entity's ``sample_list_heading``), which no system-prompt hash sees; a slot at its default is left
+    out like a field attribute, and a required slot (no default) is always in. An entity's override is hashed
+    whatever its value: it is what that entity's requests are rendered from."""
+
+    def wanted(name: str) -> bool:
+        return name.startswith(_MATCHING_SLOT_PREFIX) == matching
+
+    material: dict[str, object] = {
         name: value
         for name, value in dataclasses.asdict(profile.prompt).items()
-        if name.startswith(_MATCHING_SLOT_PREFIX) == matching
-        and value != _PROMPT_SLOT_DEFAULTS.get(name, dataclasses.MISSING)
+        if wanted(name) and value != _PROMPT_SLOT_DEFAULTS.get(name, dataclasses.MISSING)
     }
+    overrides = {
+        entity.name: {name: getattr(entity.prompt, name) for name in sorted(entity.overrides) if wanted(name)}
+        for entity in profile.declared_entities
+    }
+    if any(overrides.values()):
+        material["entities"] = overrides
+    return material
+
+
+def _per_entity(profile: DomainProfile, render: Callable[..., str]) -> str | dict[str, str]:
+    """A system prompt as key material: the one text of a profile with one entity (rendered for the primary one,
+    which for a profile without entity types is ``profile.prompt`` itself), or each entity's text by name."""
+    if len(profile.entities) == 1:
+        return render(profile)
+    return {entity.name: render(profile, entity) for entity in profile.entities}
 
 
 def extractor_key(options: ExtractionOptions) -> str:
@@ -284,8 +319,8 @@ def extractor_key(options: ExtractionOptions) -> str:
     passage = options.mode != "document"
     if passage:
         material["mode"] = options.mode
-        material["inventory_system"] = inventory_system_prompt(profile)
-        material["field_system"] = field_system_prompt(profile)
+        material["inventory_system"] = _per_entity(profile, inventory_system_prompt)
+        material["field_system"] = _per_entity(profile, field_system_prompt)
         material["retrieval"] = retrieval_fingerprint(profile)
     for option in dataclasses.fields(ExtractionOptions):
         if (
@@ -329,7 +364,7 @@ def comparison_key(options: ComparisonOptions) -> str:
         "ambiguous_confidence": options.ambiguous_match_confidence,
         "normalization": normalization_fingerprint(),
         "code": comparison_code_fingerprint(),
-        "matching_system": matching_system_prompt(profile),
+        "matching_system": _per_entity(profile, matching_system_prompt),
         "matching_slots": _slot_material(profile, matching=True),
     }
     return content_fingerprint(_dumps(material))

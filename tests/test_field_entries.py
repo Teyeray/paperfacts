@@ -301,6 +301,7 @@ EXTRACTION_CELLS = {
     "after_clause",
     "cardinality",
     "prompt_categories",
+    "entity",
 }
 
 

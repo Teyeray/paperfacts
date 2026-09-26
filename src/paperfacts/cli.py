@@ -218,10 +218,11 @@ def _env_settings() -> Settings:
         _fail("config", exc)
 
 
-def _profile(settings: Settings) -> DomainProfile:
-    """The profile this command runs under, loaded once here and passed to everything it calls."""
+def _profile(settings: Settings, *, to_run: bool = True) -> DomainProfile:
+    """The profile this command runs under, loaded once here and passed to everything it calls. A command that
+    only prints the profile passes ``to_run=False``, so it still shows one the configured mode could not run."""
     try:
-        return load_run_profile(settings)
+        return load_run_profile(settings, to_run=to_run)
     except ConfigError as exc:
         _fail("profile", exc)
 
@@ -496,7 +497,7 @@ def fields(profile_name: ProfileOpt = None) -> None:
     settings = _env_settings()
     if profile_name is not None:
         settings = dataclasses.replace(settings, profile=profile_name)
-    for spec in _profile(settings).fields:
+    for spec in _profile(settings, to_run=False).fields:
         unit = spec.canonical_unit or "-"
         tolerance = f"rel={spec.rel_tol:g} abs={spec.abs_tol:g}" if spec.kind in UNIT_KINDS else "-"
         hint = f"  condition: {spec.condition_hint}" if spec.condition_hint else ""
@@ -532,7 +533,7 @@ def profiles(
             # The checks a run makes too (a reserved name, a clash with a repository profile of the same name),
             # so a file that passes here is not refused by the run it was written for. Resolved, so the value is
             # read as a path even when it has no "/" and no ".json".
-            profile = load_run_profile(Settings(repo_root=repo_root, profile=str(check.resolve())))
+            profile = load_run_profile(Settings(repo_root=repo_root, profile=str(check.resolve())), to_run=False)
         except ConfigError as exc:
             # Validation names every problem, one per line; each gets its own "error:".
             for line in str(exc).splitlines():
@@ -542,6 +543,9 @@ def profiles(
             package_logger.removeHandler(handler)
         typer.echo(_profile_line(profile))
         _echo_lines(f"warning: {record.getMessage()}" for record in handler.buffer)
+        if profile.declared_entities:
+            names = ", ".join(entity.name for entity in profile.declared_entities)
+            typer.echo(f"note: entity types {names}; runs only in passage mode (extraction.mode 'passage')")
         typer.echo("ok")
         return
     directory = repo_root / PROFILES_DIRNAME
@@ -570,7 +574,7 @@ def prompts(
     settings = _env_settings()
     if profile_name is not None:
         settings = dataclasses.replace(settings, profile=profile_name)
-    profile = _profile(settings)
+    profile = _profile(settings, to_run=False)
     if field is not None:
         spec = profile.by_name.get(field)
         if spec is None:
@@ -578,13 +582,30 @@ def prompts(
                 f"no field {field!r} in {profile.name}; it has: {', '.join(profile.by_name)}", fg="red", err=True
             )
             raise typer.Exit(code=1)
+        # Asked with its entity's system prompt and sample list.
+        entity = profile.entity_of(spec)
         sections = {
-            "field system prompt (passage mode)": field_system_prompt(profile),
+            "field system prompt (passage mode)": field_system_prompt(profile, entity),
             f"field line ({field})": render_field_table((spec,), profile.prompt.implausible_origin),
             # The question's framing; the two placeholders are what a run fills from the paper.
             f"field user prompt ({field}, passage mode)": field_user_prompt(
-                spec, "<sample list>", "<excerpts>", profile.prompt.implausible_origin
+                spec,
+                "<sample list>",
+                "<excerpts>",
+                profile.prompt.implausible_origin,
+                entity.prompt.sample_list_heading,
             ),
+        }
+    elif len(profile.entities) > 1:
+        # Passage mode only: each entity type has its own inventory, field and matching prompts.
+        sections = {
+            f"{title} ({entity.name})": render(profile, entity)
+            for entity in profile.entities
+            for title, render in (
+                ("inventory system prompt", inventory_system_prompt),
+                ("field system prompt", field_system_prompt),
+                ("matching system prompt", matching_system_prompt),
+            )
         }
     else:
         # Passage mode (the default) sends the inventory and field prompts and never the extraction prompt;
@@ -595,11 +616,11 @@ def prompts(
             "extraction system prompt (document mode)": extraction_system_prompt(profile),
             "matching system prompt (compare, both modes)": matching_system_prompt(profile),
         }
-        if profile.figures is not None and profile.figure_fields:
-            # Sent once per chart panel, with that figure's own caption and only the fields the caption names.
-            sections["figure user prompt (figures stage, only when figures.enabled; one per chart panel)"] = (
-                figure_user_prompt("<caption>", profile.figure_fields, profile.figures)
-            )
+    if field is None and profile.figures is not None and profile.figure_fields:
+        # Sent once per chart panel, with that figure's own caption and only the fields the caption names.
+        sections["figure user prompt (figures stage, only when figures.enabled; one per chart panel)"] = (
+            figure_user_prompt("<caption>", profile.figure_fields, profile.figures)
+        )
     for title, text in sections.items():
         typer.echo(f"===== {title} =====")
         typer.echo(text)

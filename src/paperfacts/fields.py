@@ -149,6 +149,10 @@ class FieldSpec:
     # loader, never written in a field entry: ``categories`` when the field is ``many``, () otherwise, so a
     # single-valued field with categories (whose line names none) keeps its extraction key.
     prompt_categories: tuple[str, ...] = field(default=(), metadata=_roles(FieldRole.PROMPT))
+    # The entity type a sample-level field describes, from its group like ``level``; None for a paper-level field
+    # and for every field of a profile that declares no entity types. It decides which sample list and system
+    # prompt the field's question is asked with, which samples its values may land on, and which rows it fills.
+    entity: str | None = field(default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT))
 
     @property
     def is_sample_level(self) -> bool:
