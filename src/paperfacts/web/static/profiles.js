@@ -9,21 +9,43 @@
 import { api, profileApi } from "./api.js";
 import { toast } from "./html.js";
 import { documentFromHash, hashFor, navigate, pageFromHash, reloadView } from "./router.js";
-import { applyUiCopy, state } from "./state.js";
+import { applyUiCopy, state, viewShows } from "./state.js";
 
 // The same pause as the job poll's (job.js), without importing it: job.js draws the document view.
 const RETRY_MS = 1500;
 const MAX_RETRY_MS = 15000;
 const MAX_RETRIES = 5;
 
-const views = new Map(); // profile key -> Promise of its view; a failed one is dropped, so the next load asks again
+// profile key -> { hash, view }: the Promise of its view and the content hash /api/profiles gave that profile when it
+// was asked (null: unknown). A failed one is dropped, so the next load asks again.
+const views = new Map();
 const retries = new Map(); // profile key -> { failures, timer }
 const keyOf = (profile) => profile ?? "";
+const backoff = (failures) => Math.min(RETRY_MS * 2 ** failures, MAX_RETRY_MS);
+// Arrowing through the closed select fires a change per key; the switch waits for the reader to settle (or Enter).
+const SWITCH_SETTLE_MS = 400;
 
-export async function loadProfiles() {
-  const list = await api("/api/profiles");
+// A list that fails at start is asked again with the same growing pause as a profile's view; once one lands, the
+// switcher appears and the view on screen is re-read (the router can now tell a served profile from a missing one).
+export async function loadProfiles({ failures = 0 } = {}) {
+  let list;
+  try {
+    list = await api("/api/profiles");
+  } catch (error) {
+    if (failures < MAX_RETRIES) {
+      setTimeout(() => loadProfiles({ failures: failures + 1 }).then(reloadView, () => {}), backoff(failures + 1));
+    } else {
+      toast(`读取领域配置列表失败：${error.message}`, true);
+    }
+    throw error;
+  }
   state.profiles = list;
   state.defaultProfile = list.default ?? null;
+  // A view read under other content (or before the list said which) is read again when next asked.
+  for (const [key, entry] of views) {
+    const hash = servedProfile(key || null)?.content_hash ?? null;
+    if (hash !== null && hash !== entry.hash) views.delete(key);
+  }
   renderSwitcher();
   return list;
 }
@@ -33,14 +55,15 @@ export async function loadProfiles() {
 export function profileView(profile) {
   const key = keyOf(profile);
   if (!views.has(key)) {
-    const pending = profileApi(profile, "/api/profile").catch((error) => {
-      views.delete(key);
+    const entry = { hash: servedProfile(profile)?.content_hash ?? null, view: null };
+    entry.view = profileApi(profile, "/api/profile").catch((error) => {
+      if (views.get(key) === entry) views.delete(key);
       scheduleRetry(profile, error);
       return null;
     });
-    views.set(key, pending);
+    views.set(key, entry);
   }
-  return views.get(key);
+  return views.get(key).view;
 }
 
 function scheduleRetry(profile, error) {
@@ -58,8 +81,8 @@ function scheduleRetry(profile, error) {
     const view = await profileView(profile);
     if (!view) return; // profileView scheduled the next attempt
     retries.delete(key);
-    if (state.profileName === profile) reloadView();
-  }, Math.min(RETRY_MS * 2 ** entry.failures, MAX_RETRY_MS));
+    if (viewShows(undefined, profile)) reloadView();
+  }, backoff(entry.failures));
   retries.set(key, entry);
 }
 
@@ -145,11 +168,40 @@ export function syncSwitcher() {
 
 // Switching keeps the reader on the same paper: "show me this one under the other domain" is the point. The fact
 // index is dropped, since it numbers another profile's comparisons. On the profile page it shows the other profile's.
+//
+// A pick with the mouse switches at once. A change made from the keyboard waits until the reader settles on an option,
+// presses Enter or leaves the select, so arrowing past a profile does not open it.
 export function setupSwitcher() {
-  document.getElementById("profile-select").addEventListener("change", (event) => {
-    const name = event.target.value;
+  const select = document.getElementById("profile-select");
+  let keyed = false;
+  let timer = null;
+  const go = () => {
+    clearTimeout(timer);
+    timer = null;
+    const name = select.value;
+    if (name === (state.profileName ?? state.defaultProfile)) return;
     const id = documentFromHash();
     const profile = name === state.defaultProfile ? null : name;
     navigate(hashFor({ profile, id: /^[0-9a-f]{16}$/.test(id ?? "") ? id : null, page: pageFromHash() }));
+  };
+  select.addEventListener("pointerdown", () => {
+    keyed = false;
+  });
+  select.addEventListener("keydown", (event) => {
+    keyed = true;
+    if (event.key === "Enter" && timer) go();
+  });
+  select.addEventListener("blur", () => {
+    if (timer) go();
+  });
+  select.addEventListener("change", () => {
+    const fromKeyboard = keyed;
+    keyed = false;
+    if (!fromKeyboard) {
+      go();
+      return;
+    }
+    clearTimeout(timer);
+    timer = setTimeout(go, SWITCH_SETTLE_MS);
   });
 }

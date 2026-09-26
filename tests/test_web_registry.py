@@ -182,6 +182,26 @@ def test_a_broken_symlink_outside_profiles_does_not_leak_its_absolute_path(tmp_p
     assert any("alias.json" in error for error in alias.errors)
 
 
+@pytest.mark.parametrize("kind", ["outside non-JSON", "dangling", "relative dangling"])
+def test_a_link_out_of_profiles_or_to_nothing_names_the_link_only(tmp_path: Path, kind: str):
+    repo = _repo(tmp_path)
+    outside = tmp_path / "elsewhere" / "hosts"
+    outside.parent.mkdir()
+    outside.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+    target = {
+        "outside non-JSON": outside,
+        "dangling": tmp_path / "nonexistent.json",
+        "relative dangling": Path("../../nowhere/x.json"),
+    }[kind]
+    (repo / "profiles" / "alias.json").symlink_to(target)
+
+    registry = ProfileRegistry.build(_settings(repo))
+
+    alias = registry.invalid_named("alias")
+    assert alias is not None
+    assert alias.errors == ("alias.json: did not load (see the server log)",)
+
+
 def test_the_same_profile_named_twice_in_the_profiles_seam_is_deduped(tmp_path: Path, tco_profile):
     settings = _settings(_repo(tmp_path))
 

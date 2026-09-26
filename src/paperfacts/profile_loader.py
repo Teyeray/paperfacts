@@ -185,6 +185,22 @@ _TOP_KEYS = (
 _REQUIRED_KEYS = ("format", "name", "groups", "prompt", "retrieval", "fields")
 
 
+def _lone_surrogate(value: Any) -> str | None:
+    """The first string (key or value) in a parsed JSON value that holds a lone surrogate, or None."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if any("\ud800" <= character <= "\udfff" for character in item):
+                return item
+        elif isinstance(item, Mapping):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return None
+
+
 def parse_profile(data: Any, source: Path) -> DomainProfile:
     """A profile from its parsed JSON. ``source`` names it in errors, and its stem must be the profile's name.
 
@@ -193,6 +209,11 @@ def parse_profile(data: Any, source: Path) -> DomainProfile:
     where = str(source)
     if not isinstance(data, Mapping):
         raise ConfigError(f"{where} must hold a JSON object, got {type(data).__name__}")
+    # JSON lets a string escape half a surrogate pair; no UTF-8 answer (the web's profile list, a workbook) can carry
+    # it, so it is refused here rather than failing wherever the text is first encoded.
+    lone = _lone_surrogate(data)
+    if lone is not None:
+        raise ConfigError(f"{where}: {lone!r} holds an unpaired surrogate escape; every string must be valid Unicode")
     errors: list[str] = []
 
     def checked[T](step: Callable[[], T]) -> T | None:

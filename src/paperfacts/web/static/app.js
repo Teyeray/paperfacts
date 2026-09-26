@@ -18,9 +18,11 @@ import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
 
 // Another profile routed to: the rail lists its documents, the old profile's home table is hidden until the new one
-// lands, and the switcher and header link follow.
+// lands, and the switcher and header link follow. The old profile's document stays on screen while the new one loads,
+// but inert: a fact picked or a rerun pressed there would act under the old profile beneath the new one's address.
 function onProfile() {
   document.getElementById("corpus-view").classList.add("hidden");
+  document.getElementById("document-view").inert = true;
   syncSwitcher();
   loadLibrary();
 }

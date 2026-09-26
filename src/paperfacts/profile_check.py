@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -43,22 +44,29 @@ MEMORY_LIMIT_BYTES = 1 << 30
 # A valid profile's preview is bounded by the loader's caps (100 fields, 2000-character slots); anything larger is
 # not the child's answer.
 MAX_OUTPUT_BYTES = 16 << 20
+# The options line ahead of the text on the child's stdin (the served names and hashes, the mode, the field).
+MAX_OPTIONS_BYTES = 1 << 20
 # The child finds the package by the path it is handed, not by its environment, which it runs without.
 _CHILD = "import sys; sys.path.insert(0, sys.argv[1]); from paperfacts.profile_check import child_main; child_main()"
+# One escape inside a JSON string: \uXXXX, or a backslash and the one character it escapes.
+_ESCAPE = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.S)
 
 
 def run_check(
     raw: bytes, *, served: Mapping[str, str], extraction_mode: str, field: str | None = None, timeout: float = TIMEOUT_S
 ) -> bytes:
     """The check result of ``raw`` as JSON bytes, computed in a child process. ``served`` maps each served profile's
-    name to its content hash. Raises ProfileCheckError when the child times out or does not answer."""
+    name to its content hash. Raises ProfileCheckError when the child cannot start, times out or does not answer.
+
+    The options go on stdin, one JSON line ahead of the text, never on argv: the field name is the caller's, and an
+    argument list has an OS-wide size limit."""
     options = json.dumps({"served": dict(served), "extraction_mode": extraction_mode, "field": field})
     package_root = str(Path(__file__).resolve().parent.parent)
     try:
         done = subprocess.run(
             # -I: no PYTHON* variables, user site or script directory; -B: no bytecode written.
-            [sys.executable, "-I", "-B", "-c", _CHILD, package_root, options],
-            input=raw,
+            [sys.executable, "-I", "-B", "-c", _CHILD, package_root],
+            input=options.encode("utf-8") + b"\n" + raw,
             capture_output=True,
             timeout=timeout,
             env={},
@@ -69,6 +77,9 @@ def run_check(
         # subprocess.run has already killed and reaped the child.
         logger.warning("a profile check ran past %.0f s and was killed", timeout)
         raise ProfileCheckError("检查超时 (the check ran out of time)") from None
+    except OSError as exc:
+        logger.warning("a profile check could not start: %s", exc)
+        raise ProfileCheckError("检查未能启动 (the check process could not start)") from None
     output = done.stdout
     if done.returncode != 0 or not output.startswith(b"{") or len(output) > MAX_OUTPUT_BYTES:
         logger.warning(
@@ -81,7 +92,7 @@ def run_check(
 def child_main() -> None:
     """The child's body: limits first, then one check of stdin, answered as JSON on stdout."""
     _limit_resources()
-    options = json.loads(sys.argv[2])
+    options = json.loads(sys.stdin.buffer.readline(MAX_OPTIONS_BYTES))
     raw = sys.stdin.buffer.read(MAX_CHECK_BYTES + 1)
     result = check_profile(raw, **options)
     sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"))
@@ -179,9 +190,33 @@ def _parse(raw: bytes) -> tuple[Any, str | None]:
     if nesting_exceeds(text, MAX_DEPTH):
         return None, f"the profile nests objects and lists more than {MAX_DEPTH} deep"
     try:
-        return json.loads(text, parse_constant=_refuse_constant, parse_float=_finite), None
+        value = json.loads(text, parse_constant=_refuse_constant, parse_float=_finite)
     except (ValueError, RecursionError) as exc:
         return None, f"the profile is not valid JSON: {exc}"
+    # json.loads accepts a lone \ud800, which no UTF-8 answer can carry.
+    position = unpaired_surrogate_at(text)
+    if position is not None:
+        return None, f"the profile holds an unpaired surrogate escape at position {position}"
+    return value, None
+
+
+def unpaired_surrogate_at(text: str) -> int | None:
+    """Where the first \\u escape of half a surrogate pair starts in ``text`` (JSON that parsed, so every backslash is
+    inside a string), or None. A high half counts as paired only when its low half is the very next escape."""
+    high = None  # (start, end) of a high half waiting for its low half
+    for match in _ESCAPE.finditer(text):
+        if high is not None and match.start() != high[1]:
+            return high[0]
+        code = int(match.group(1)[1:], 16) if match.group(1)[0] == "u" and len(match.group(1)) == 5 else None
+        if code is not None and 0xDC00 <= code <= 0xDFFF:
+            if high is None:
+                return match.start()
+            high = None
+        elif high is not None:
+            return high[0]
+        elif code is not None and 0xD800 <= code <= 0xDBFF:
+            high = (match.start(), match.end())
+    return None if high is None else high[0]
 
 
 def nesting_exceeds(text: str, limit: int) -> bool:

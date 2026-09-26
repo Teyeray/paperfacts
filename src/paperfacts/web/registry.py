@@ -188,7 +188,7 @@ def _scan(settings: Settings, default: str) -> tuple[list[ServedProfile], list[I
             loaded = load_run_profile(named, to_run=False)
         except ConfigError as exc:
             logger.warning("not serving profile %s: %s", path.name, exc)
-            errors = tuple(_strip(line, directory, path) for line in str(exc).splitlines())
+            errors = _shown_errors(str(exc), directory, path)
             invalid.append(InvalidProfile(path.stem, path.name, errors))
             continue
         except Exception as exc:
@@ -234,6 +234,16 @@ def _served(settings: Settings, profile: DomainProfile, origin: Path) -> ServedP
         reason = str(exc).replace(str(profile.source), profile.source.name)
         return ServedProfile(profile, origin, None, not_runnable=reason)
     return ServedProfile(profile, origin, Library(settings, profile))
+
+
+def _shown_errors(text: str, directory: Path, path: Path) -> tuple[str, ...]:
+    """The loader's error lines as the browser may see them. A file under ``profiles/`` gets them with the directory
+    taken off (``_strip``); a link that leads outside it, or nowhere, gets one line naming the link only: its target's
+    path can reach the error text in forms no prefix replacement catches, and the full text is in the server log."""
+    target = path.resolve()
+    if not target.is_file() or not target.is_relative_to(directory.resolve()):
+        return (f"{path.name}: did not load (see the server log)",)
+    return tuple(_strip(line, directory, path) for line in text.splitlines())
 
 
 def _strip(line: str, directory: Path, path: Path) -> str:

@@ -6,7 +6,7 @@ import { api, profileApi } from "./api.js";
 import { escapeHtml, keepFocus, toast } from "./html.js";
 import { profileTitle, servedProfile } from "./profiles.js";
 import { documentHash, navigate, reloadView } from "./router.js";
-import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, isCurrent, state } from "./state.js";
+import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, isCurrent, slot, state, viewShows } from "./state.js";
 
 // While anything is queued or running, the rail refreshes itself: a bulk run's progress would otherwise
 // stay frozen until the reader pressed ↻. A failed refresh is retried with a growing pause, like job
@@ -47,6 +47,12 @@ export async function loadLibrary() {
   refreshFailures = 0;
   state.docs = docs;
   state.activeDocs = activeDocs;
+  // The open paper's note on another profile's job lasts as long as the rail still sees that job active.
+  const other = state.otherJob;
+  if (other && !(activeDocs.get(other.document_id) ?? []).includes(other.profile)) {
+    state.otherJob = null;
+    slot("other-job")?.classList.add("hidden");
+  }
   renderLibrary();
   refreshTimer = state.activeDocs.size ? setTimeout(loadLibrary, REFRESH_MS) : null;
 }
@@ -212,8 +218,7 @@ export function setupRunAll() {
       await loadLibrary();
       // The open document may be one of them: re-read it so its view follows the new job -- only while it is still
       // shown under the profile the jobs run under.
-      const shown = state.current && state.currentProfile === profile && state.profileName === profile;
-      if (shown && result.submitted.some((job) => job.document_id === state.current)) reloadView();
+      if (result.submitted.some((job) => viewShows(job.document_id, profile))) reloadView();
     } catch (error) {
       toast(`批量处理失败：${error.message}`, true);
     } finally {

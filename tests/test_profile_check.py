@@ -5,6 +5,7 @@ request that could spend server time.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import dataclasses
 import functools
@@ -16,13 +17,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from paperfacts import profile_loader
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError, ProfileCheckError
-from paperfacts.profile_check import MAX_CHECK_BYTES, check_profile, nesting_exceeds, run_check
+from paperfacts.profile_check import MAX_CHECK_BYTES, check_profile, nesting_exceeds, run_check, unpaired_surrogate_at
 from paperfacts.profile_loader import MAX_SPELLING_LENGTH, parse_profile
 from paperfacts.profile_view import profile_definition, prompt_sections
 from paperfacts.web.app import create_app
@@ -131,6 +133,37 @@ def test_malformed_text_is_an_error_line_not_a_server_error(client: TestClient, 
     assert any(expected in line for line in result["errors"])
 
 
+def test_a_lone_surrogate_escape_is_an_error_line_with_its_position(client: TestClient):
+    response = post(client, b'{"format": 1, "name": "x\\ud800"}')
+
+    assert response.status_code == 200
+    assert response.json()["errors"] == ["the profile holds an unpaired surrogate escape at position 24"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('"\\ud800"', 1),
+        ('"\\udc00"', 1),
+        ('"ok \\ud83d\\ude00"', None),
+        ('"\\\\ud800"', None),  # an escaped backslash, then plain text
+        ('"x\\ud83dy"', 2),
+        ('"\\ud83d\\n"', 1),
+        ('"\\ud83d\\ud83d\\ude00"', 1),
+        ('"\\u00e9"', None),
+    ],
+)
+def test_unpaired_surrogates_are_found_where_they_start(text: str, expected: int | None):
+    assert unpaired_surrogate_at(text) == expected
+
+
+def test_the_loader_refuses_a_lone_surrogate_too():
+    data = tco_data()
+    data["title_zh"] = "\ud800"
+    with pytest.raises(ConfigError, match="unpaired surrogate"):
+        parse_profile(data, Path("tco.json"))
+
+
 def test_the_reserved_name_is_refused_like_the_cli_refuses_it():
     data = tco_data()
     data["name"] = "paperfacts"
@@ -211,6 +244,52 @@ def test_a_child_that_fails_is_not_a_result(monkeypatch):
 
     with pytest.raises(ProfileCheckError, match="检查未能完成"):
         run_check(b"{}", served={}, extraction_mode="passage")
+
+
+def test_a_child_that_cannot_start_is_a_check_error(monkeypatch):
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr("paperfacts.profile_check.subprocess.run", refuse)
+
+    with pytest.raises(ProfileCheckError, match="检查未能启动"):
+        run_check(b"{}", served={}, extraction_mode="passage")
+
+
+@pytest.mark.parametrize("field", ["Bad-Name", "x" * 5000, "../etc"])
+def test_a_field_that_is_not_a_field_name_is_refused_before_the_check(client: TestClient, field: str):
+    response = post(client, SHIPPED_PROFILE_PATH.read_bytes(), params={"field": field})
+
+    assert response.status_code == 422
+
+
+def test_a_body_that_trickles_in_holds_no_slot_and_times_out(client: TestClient, monkeypatch):
+    monkeypatch.setattr("paperfacts.web.app.CHECK_BODY_TIMEOUT_S", 0.3)
+    app = client.app
+    slots = app.state.check_slots
+
+    async def trickle() -> Any:
+        yield b'{"format": 1,'
+        await asyncio.sleep(5)
+        yield b"}"
+
+    async def scenario() -> tuple[int, bool]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+            pending = asyncio.create_task(async_client.post("/api/profile-check", content=trickle()))
+            await asyncio.sleep(0.1)
+            # While its body is still arriving, both check slots are free for others.
+            free = slots.acquire(blocking=False) and slots.acquire(blocking=False)
+            if free:
+                slots.release()
+                slots.release()
+            response = await pending
+            return response.status_code, free
+
+    status, free = asyncio.run(scenario())
+
+    assert free
+    assert status == 408
 
 
 def test_more_than_two_checks_at_once_are_refused(client: TestClient):

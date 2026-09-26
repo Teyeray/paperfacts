@@ -5,7 +5,7 @@
 // not unselect it, and anything else that takes over the viewer releases it (and the URL) explicitly.
 
 import { caveats, escapeHtml, keepFocus, onActivate, toast } from "./html.js";
-import { documentHash } from "./router.js";
+import { hashFor } from "./router.js";
 import { LANES, LANE_LABEL, STATUS, STATUS_ORDER, entityGroups, entityLabel, noSamplesReason, slot, state, uiCopy } from "./state.js";
 import { readingText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
@@ -136,6 +136,10 @@ function markRows() {
   }
 }
 
+// The open document's address under the profile its view was drawn under, never the routed one: during a switch the
+// old view is still on screen, and its fact n would name another profile's comparison.
+const shownHash = (fact = null) => hashFor({ profile: state.currentProfile, id: state.current, fact });
+
 // A reader's click (or Enter): highlight both lanes' blocks, put the fact in the URL (without a history
 // entry), and bring the viewer on screen when it sits below the fold.
 function selectFact(index, { reveal = false } = {}) {
@@ -145,7 +149,7 @@ function selectFact(index, { reveal = false } = {}) {
   markRows();
   const ids = [...(comparison.a?.source_ids ?? []), ...(comparison.b?.source_ids ?? [])];
   state.viewer?.highlight(ids);
-  history.replaceState(null, "", documentHash(state.current, index));
+  history.replaceState(null, "", shownHash(index));
   if (!reveal) return;
   if (!ids.length) toast("这条事实没有 source_id（模型没有引用来源块）");
   revealViewer();
@@ -157,7 +161,7 @@ export function releaseFact() {
   if (state.selectedFact == null) return;
   state.selectedFact = null;
   markRows();
-  if (state.current) history.replaceState(null, "", documentHash(state.current));
+  if (state.current) history.replaceState(null, "", shownHash());
 }
 
 // The router's entry point, after a load or on Back/Forward: the URL is the truth. No fact, or one that does
@@ -169,7 +173,7 @@ export function selectRowByIndex(index) {
     state.selectedFact = null;
     markRows();
     if (hadFact) state.viewer?.highlight([], { jump: false });
-    if (index != null && state.current) history.replaceState(null, "", documentHash(state.current));
+    if (index != null && state.current) history.replaceState(null, "", shownHash());
     return;
   }
   // A shared link must show its row, whatever filter this page happened to have on.

@@ -38,6 +38,7 @@ that changes something, frame and sniffing headers, and an upload size counted a
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import logging
@@ -85,6 +86,8 @@ UPLOAD_OVERHEAD_BYTES = 64 * 1024
 EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # A check is a child process of its own (profile_check); more than this many at once are refused, not queued.
 MAX_CONCURRENT_CHECKS = 2
+# uvicorn has no body-read timeout of its own: a check's text that has not all arrived by then is refused (408).
+CHECK_BODY_TIMEOUT_S = 15.0
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # On every response, the login prompt included: nothing here is meant to be framed (the run buttons could
 # otherwise be clickjacked), and no response should be sniffed into a type it was not served as.
@@ -637,25 +640,33 @@ def create_app(
         """Check a pasted profile: the errors ``paperfacts profiles --check`` prints, or, when it is valid, the
         definition and system prompts it would get. The text is untrusted: its size is counted as it arrives, and it
         is parsed and rendered only in a time- and memory-limited child process (``profile_check.run_check``), so
-        nothing it costs or caches stays in this one. Nothing is stored, and its name is never a path."""
+        nothing it costs or caches stays in this one. Nothing is stored, and its name is never a path.
+
+        The body is read (and timed) before a slot is taken: a slot is a child process, and a client trickling its
+        body must not hold one."""
+        if field is not None and not IDENTIFIER.fullmatch(field):
+            raise HTTPException(status_code=422, detail=f"field must match {IDENTIFIER.pattern}")
+        too_large = f"The profile exceeds {MAX_CHECK_BYTES // 1024} KiB"
+        declared = request.headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > MAX_CHECK_BYTES):
+            raise HTTPException(status_code=413, detail=too_large)
+        try:
+            async with asyncio.timeout(CHECK_BODY_TIMEOUT_S):
+                raw = await _capped(request, MAX_CHECK_BYTES, too_large).body()
+        except TimeoutError:
+            raise HTTPException(status_code=408, detail="The profile did not arrive in time") from None
         if not check_slots.acquire(blocking=False):
             raise HTTPException(status_code=429, detail="已有检查在进行，请稍后再试 (too many checks at once)")
         try:
-            too_large = f"The profile exceeds {MAX_CHECK_BYTES // 1024} KiB"
-            declared = request.headers.get("content-length")
-            if declared is not None and (not declared.isdigit() or int(declared) > MAX_CHECK_BYTES):
-                raise HTTPException(status_code=413, detail=too_large)
-            raw = await _capped(request, MAX_CHECK_BYTES, too_large).body()
             served = {name: entry.profile.content_hash for name, entry in registry.served.items()}
-            try:
-                answer = await run_in_threadpool(
-                    run_check, raw, served=served, extraction_mode=settings.extraction_mode, field=field
-                )
-            except ProfileCheckError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from None
-            return Response(content=answer, media_type="application/json")
+            answer = await run_in_threadpool(
+                run_check, raw, served=served, extraction_mode=settings.extraction_mode, field=field
+            )
+        except ProfileCheckError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
         finally:
             check_slots.release()
+        return Response(content=answer, media_type="application/json")
 
     app.mount("/", _RevalidatedStaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

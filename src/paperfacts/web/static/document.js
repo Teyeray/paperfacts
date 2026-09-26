@@ -8,8 +8,8 @@
 import { api, optional, profileApi } from "./api.js";
 import { toast } from "./html.js";
 import { renderDefinition } from "./profile.js";
-import { adoptProfile, profileTitle, profileView, servedProfile } from "./profiles.js";
-import { LANES, applyUiCopy, currentJob, isActive, isCurrent, jobInProfile, slot, state, uiCopy } from "./state.js";
+import { adoptProfile, profileTitle, profileView, servedProfile, syncSwitcher } from "./profiles.js";
+import { LANES, applyUiCopy, currentJob, isActive, isCurrent, jobInProfile, slot, state, uiCopy, viewShows } from "./state.js";
 import { PageViewer } from "./viewer.js";
 import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts.js";
 import { renderLanes } from "./samples.js";
@@ -57,8 +57,9 @@ export async function showEmpty() {
   const profile = state.profileName;
   leaveDocument();
   const intro = document.getElementById("empty-state");
-  // The table last drawn stays up while it is refreshed, unless it is another profile's.
-  const shown = state.corpus?.rows?.length && state.corpusProfile === profile;
+  // The table last drawn stays up while it is refreshed, unless it or the labels on screen are another profile's: a
+  // chip or a column toggle on it would draw with the other profile's groups and store under its key.
+  const shown = state.corpus?.rows?.length && state.corpusProfile === profile && state.shownProfile === profile;
   showViews("empty-state", ...(shown ? ["corpus-view"] : []));
   renderLibrary();
   const [corpus, view] = await Promise.all([
@@ -132,7 +133,9 @@ export function showMissing(id, error = null, { heading = null, message = null }
   renderLibrary();
 }
 
-// A URL naming a profile this server does not serve, one that did not load, or one it cannot run.
+// A URL naming a profile this server does not serve, one that did not load, or one it cannot run. The router has
+// left state.profileName on the last profile it could show, so the switcher returns to it and the link home goes
+// there.
 export function showMissingProfile(name, refusal) {
   leaveDocument();
   showViews("missing-view");
@@ -147,7 +150,8 @@ export function showMissingProfile(name, refusal) {
   view.querySelector('[data-slot="missing-message"]').textContent =
     refusal.reason === "missing" ? `没有名为「${name}」的领域配置。` : `「${name}」：${errors.join("；")}`;
   view.querySelector('[data-action="retry"]').classList.add("hidden");
-  homeLink(view, "#/");
+  homeLink(view, hashFor({ profile: state.profileName }));
+  syncSwitcher();
   renderLibrary();
 }
 
@@ -227,6 +231,7 @@ async function loadDocumentData(id, profile) {
 function renderDocument() {
   const view = document.getElementById("document-view");
   showViews("document-view");
+  view.inert = false; // made inert by a profile switch (app.js) until this profile's view is drawn
   const viewerState = state.viewer?.getState() ?? null; // re-rendering after a job finishes must not lose the page or highlight the viewer was on
   view.innerHTML = "";
   const node = document.getElementById("tpl-document").content.cloneNode(true);
@@ -328,16 +333,15 @@ async function rerun(button, force) {
   button.disabled = true; // lock the button while queued; the backend's resubmission for the same document is idempotent too
   const id = state.current;
   const profile = state.currentProfile;
-  const owned = () => state.current === id && state.currentProfile === profile && state.profileName === profile;
   try {
     const job = await submitRun(id, profile, force);
-    if (!owned()) return;
+    if (!viewShows(id, profile)) return;
     state.job = job;
     toast(force ? "已排队：全部重跑" : "已排队：按缓存增量处理");
     renderJobPanels();
     startPolling(job.job_id, pollCallbacks);
   } catch (error) {
     toast(`无法重新处理：${error.message}`, true);
-    if (owned()) button.disabled = false;
+    if (viewShows(id, profile)) button.disabled = false;
   }
 }

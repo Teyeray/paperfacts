@@ -991,6 +991,33 @@ async def selected_profile(page: Page) -> str:
     return await page.eval_on_selector("#profile-select", "select => select.value")
 
 
+def settled(page: Page, fragment: str) -> asyncio.Event:
+    """Set once a request whose URL holds ``fragment`` has finished (or failed): its answer has reached the page."""
+    event = asyncio.Event()
+
+    def done(request: object) -> None:
+        if fragment in request.url:  # type: ignore[attr-defined]
+            event.set()
+
+    page.on("requestfinished", done)
+    page.on("requestfailed", done)
+    return event
+
+
+# Every job of the server is done: nothing is left to redraw a later check's page.
+JOBS_IDLE = """() => fetch('/api/jobs').then((response) => response.json())
+  .then((jobs) => jobs.every((job) => job.status !== 'queued' && job.status !== 'running'))"""
+JOB_WAIT_S = len(stage_names()) * STAGE_SECONDS * 3 + 10
+
+
+async def jobs_idle(page: Page) -> None:
+    # Polled from here: wait_for_function takes a returned Promise as truthy rather than awaiting it.
+    deadline = time.monotonic() + JOB_WAIT_S
+    while not await page.evaluate(JOBS_IDLE):
+        expect(time.monotonic() < deadline, "the server's jobs did not finish")
+        await asyncio.sleep(0.2)
+
+
 @check("a one-profile server shows no profile switcher")
 async def single_profile_unchanged(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
@@ -1015,10 +1042,12 @@ async def profile_switch_race(page: Page, _: str, docs: dict[str, str], __: Path
     await page.goto(f"{docs['multi']}/")
     await page.wait_for_selector("#doc-list .doc-item")
     await page.route(f"**/api/documents/{docs['M']}/report", delayed(1.5))
-    await page.evaluate(f"location.hash = '#/doc/{docs['M']}/fact/1'")
-    await page.wait_for_timeout(200)
+    old_report = settled(page, f"/api/documents/{docs['M']}/report")
+    async with page.expect_request(lambda request: f"/api/documents/{docs['M']}/report" in request.url):
+        await page.evaluate(f"location.hash = '#/doc/{docs['M']}/fact/1'")
     await page.select_option("#profile-select", DEMO)
-    await page.wait_for_timeout(2500)
+    await old_report.wait()
+    await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr')
     hash_ = await page.evaluate("location.hash")
     expect(hash_ == f"#/p/{DEMO}/doc/{docs['M']}", f"the switch went to {hash_!r} (the fact must be dropped)")
     await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr')
@@ -1029,6 +1058,82 @@ async def profile_switch_race(page: Page, _: str, docs: dict[str, str], __: Path
     expect(await page.locator("tr.selected").count() == 0, "a fact of the old profile's report stays selected")
 
 
+@check("while another profile loads, the old profile's view takes no clicks: no fact of its report reaches the URL")
+async def stale_view_inert(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await open_doc(page, docs["multi"], docs["M"])
+    await page.route(lambda url: f"/report?profile={DEMO}" in url, delayed(1.5))
+    report = settled(page, f"/report?profile={DEMO}")
+    await page.select_option("#profile-select", DEMO)
+    await page.wait_for_function("document.getElementById('document-view').inert")
+    # A reader's click on a fact of the view still on screen (the default's): it must not select it.
+    row = page.locator('[data-slot="rows"] tr[data-index="1"]')
+    await row.evaluate("(node) => node.scrollIntoView({ block: 'center' })")
+    box = await row.bounding_box()
+    expect(box is not None, "the old view's facts are not on screen")
+    await page.mouse.click(box["x"] + 20, box["y"] + box["height"] / 2)  # type: ignore[index]
+    hash_ = await page.evaluate("location.hash")
+    expect(hash_ == f"#/p/{DEMO}/doc/{docs['M']}", f"a click on the old view wrote {hash_!r}")
+    await report.wait()
+    await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr')
+    expect(not await page.evaluate("document.getElementById('document-view').inert"), "the new view is inert")
+    expect(await page.locator("tr.selected").count() == 0, "a fact is selected")
+    await page.click('[data-slot="rows"] tr[data-index="1"]')
+    hash_ = await page.evaluate("location.hash")
+    expect(hash_ == f"#/p/{DEMO}/doc/{docs['M']}/fact/1", f"a fact of the new view wrote {hash_!r}")
+
+
+@check("home drops a table drawn under other labels until its own profile's answer lands")
+async def home_table_labels(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['multi']}/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await page.evaluate(f"location.hash = '#/p/{DEMO}/doc/{docs['M']}'")
+    await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr')
+    # Back home under the default: its table is still the one last read, but the labels on screen are the demo's.
+    await page.route(lambda url: url.endswith("/api/dataset"), delayed(1.5))
+    corpus = settled(page, "/api/dataset")
+    await page.evaluate("location.hash = '#/'")
+    await page.wait_for_selector("#empty-state:not(.hidden)")
+    expect(await page.is_hidden("#corpus-view"), "the old table is shown under the other profile's labels")
+    await corpus.wait()
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+
+
+@check("a profile list that failed at start is asked again, and the switcher appears once it lands")
+async def profiles_retry(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    failed = []
+
+    async def fail_once(route: Route) -> None:
+        if not failed:
+            failed.append(route.request.url)
+            await route.fulfill(status=503, body="down")
+        else:
+            await route.continue_()
+
+    await page.route(lambda url: url.endswith("/api/profiles"), fail_once)
+    await page.goto(f"{docs['multi']}/")
+    await page.wait_for_selector("#doc-list .doc-item")
+    expect(await page.is_hidden("#profile-switch"), "a switcher without a list")
+    await page.wait_for_selector("#profile-switch:not(.hidden)", timeout=10000)
+    expect(await selected_profile(page) == "tco", f"the switcher shows {await selected_profile(page)!r}")
+
+
+@check("arrowing through the switcher opens no profile until the reader settles")
+async def switcher_keyboard(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['multi']}/")
+    await page.wait_for_selector("#profile-switch:not(.hidden)")
+    label = await page.get_attribute("#profile-select", "aria-label")
+    expect(label is None, f"the select is labelled twice ({label!r} beside its <label>)")
+    # What a closed select does on an arrow key: a keydown, then a change per option passed.
+    await page.evaluate(f"""() => {{
+      const select = document.getElementById("profile-select");
+      select.dispatchEvent(new KeyboardEvent("keydown", {{ key: "ArrowDown", bubbles: true }}));
+      select.value = "{DEMO}";
+      select.dispatchEvent(new Event("change", {{ bubbles: true }}));
+    }}""")
+    expect(await page.evaluate("location.hash") in ("", "#/"), "one arrow key switched at once")
+    await page.wait_for_function(f"location.hash === '#/p/{DEMO}'", timeout=3000)
+
+
 @check("a profile's labels never draw another profile's data, however late they arrive")
 async def profile_view_late(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
     await open_doc(page, docs["multi"], docs["M"])
@@ -1036,18 +1141,20 @@ async def profile_view_late(page: Page, _: str, docs: dict[str, str], __: Path) 
         """() => {
           window.__scopes = [];
           const view = document.getElementById("document-view");
-          new MutationObserver(() => {
+          window.__observer = new MutationObserver(() => {
             window.__scopes.push([...view.querySelectorAll('[data-slot="rows"] td.mono')].map((td) => td.textContent));
-          }).observe(view, { childList: true, subtree: true });
+          });
+          window.__observer.observe(view, { childList: true, subtree: true });
         }"""
     )
     await page.route(lambda url: f"/api/profile?profile={DEMO}" in url, delayed(1.5))
+    report = settled(page, f"/report?profile={DEMO}")
     await page.select_option("#profile-select", DEMO)
-    await page.wait_for_timeout(800)
+    await report.wait()  # the new profile's data is in; its labels are still on their way
     title_ = await page.text_content("#profile-title") or ""
     expect("示例领域" not in title_, "the new profile's title came before its view was read")
     await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr', timeout=5000)
-    scopes = await page.evaluate("window.__scopes")
+    scopes = await page.evaluate("() => { window.__observer.disconnect(); return window.__scopes; }")
     expect(["S1", "S1"] not in scopes, "the entity profile's report was drawn with the default's labels")
     expect("示例领域" in (await page.text_content("#profile-title") or ""), "the header does not name the new profile")
 
@@ -1076,6 +1183,23 @@ async def unknown_profile(page: Page, _: str, docs: dict[str, str], __: Path) ->
         expect(f"没有名为「{name}」的领域配置" in text, f"the missing view says {text!r}")
         expect(await page.get_attribute("#missing-view .missing-actions a", "href") == "#/", "no link home")
         expect(await page.is_hidden("#corpus-view"), "the default's home table is shown under a missing profile")
+
+
+@check("a refused profile leaves the switcher and the link home on the last profile shown")
+async def refused_profile_keeps_last(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['multi']}/#/p/{DEMO}")
+    await page.wait_for_selector("#doc-list .doc-item")
+    # An option the server does not serve, as a list read before a profile was removed would still offer it.
+    await page.evaluate("""() => {
+      const option = document.createElement("option");
+      option.value = option.textContent = "gone";
+      document.getElementById("profile-select").append(option);
+    }""")
+    await page.select_option("#profile-select", "gone")
+    await page.wait_for_selector("#missing-view:not(.hidden)")
+    expect(await selected_profile(page) == DEMO, f"the switcher stays on {await selected_profile(page)!r}")
+    href = await page.get_attribute("#missing-view .missing-actions a", "href")
+    expect(href == f"#/p/{DEMO}", f"the link home goes to {href!r}")
 
 
 @check("a document link under a profile keeps the profile on the missing view's link home")
@@ -1123,6 +1247,9 @@ async def per_profile_run(page: Page, _: str, docs: dict[str, str], __: Path) ->
 async def other_profile_busy(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
     await page.goto(f"{docs['multi']}/#/p/{DEMO}")
     await page.wait_for_selector("#doc-list .doc-item")
+    # This profile's own earlier job, finished: the log panel must keep showing it.
+    await page.evaluate(f"fetch('/api/documents/{docs['M']}/run?profile={DEMO}', {{method: 'POST'}})")
+    await jobs_idle(page)
     reports: list[str] = []
     page.on("request", lambda request: reports.append(request.url) if "/report" in request.url else None)
     await page.evaluate(f"fetch('/api/documents/{docs['M']}/run?profile=tco', {{method: 'POST'}})")
@@ -1131,7 +1258,7 @@ async def other_profile_busy(page: Page, _: str, docs: dict[str, str], __: Path)
     note = await page.text_content('#document-view [data-slot="other-job"]') or ""
     expect("透明导电" in note and "排队" in note, f"the note reads {note!r}")
     expect(await page.locator("#document-view .stage.running").count() == 0, "the other job's progress is drawn")
-    # The log panel is this profile's last job's (an earlier check ran one), never the running one of the other.
+    # The log panel is this profile's last job's, never the running one of the other.
     status = await page.text_content('#document-view [data-slot="job-status"]') or ""
     expect("处理中" not in status and "排队中" not in status, f"the other job's log is shown: {status!r}")
     expect(not await page.is_disabled('#document-view [data-action="run"]'), "the run button is locked by it")
@@ -1139,7 +1266,10 @@ async def other_profile_busy(page: Page, _: str, docs: dict[str, str], __: Path)
     queued = await page.get_attribute(f'.doc-item[data-focus="doc:{docs["M"]}"] .queued', "title") or ""
     expect("透明导电" in queued, f"the busy marker reads {queued!r}")
     loads = len(reports)
-    await page.wait_for_timeout(len(stage_names()) * STAGE_SECONDS * 1000 + 2500)
+    await jobs_idle(page)
+    # The note goes once the rail sees the other job done; by then a reload it wrongly caused would be out too.
+    await page.wait_for_selector('#document-view [data-slot="other-job"]', state="hidden", timeout=15000)
+    await page.wait_for_selector(f'.doc-item[data-focus="doc:{docs["M"]}"] .queued', state="detached")
     expect(len(reports) == loads, f"the other profile's job reloaded this view: {reports[loads:]}")
     toasts = await page.locator(".toast").all_text_contents()
     expect("处理完成" not in toasts, "the other profile's job toasted over this view")
@@ -1176,7 +1306,8 @@ async def api_profile_param(page: Page, _: str, docs: dict[str, str], pdf: Path)
     fresh = make_blank_pdf(pdf.parent / "upload-demo-2.pdf", [(420.0, 620.0)])
     async with page.expect_response(lambda response: "/api/documents?force=" in response.url):
         await page.set_input_files("#file-input", str(fresh))
-    await page.wait_for_timeout(500)
+    await page.wait_for_function(f"location.hash.startsWith('#/p/{DEMO}/doc/')")
+    await jobs_idle(page)  # neither job is left to run into a later check
     unnamed = []
     for method, url in requests:
         parts = urlsplit(url)

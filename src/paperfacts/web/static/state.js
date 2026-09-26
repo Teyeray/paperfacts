@@ -65,6 +65,12 @@ export const state = {
 
 export const isCurrent = (generation) => generation === state.generation;
 
+// The one sanctioned exception to the generation rule: a handler that must outlive a finish reload (which bumps the
+// generation while its request is out) -- a rerun, a bulk run, a profile view's retry -- asks instead whether the
+// page still shows document `id` under routed `profile`. `id` undefined: any view under that profile.
+export const viewShows = (id, profile) =>
+  state.profileName === profile && (id === undefined || (state.current === id && state.currentProfile === profile));
+
 // ui_copy.UiCopy's domain-free defaults, mirrored here (tests/test_web_copy.py holds the two equal): until the
 // profile has loaded, or when it never does, the page still names things, just generically.
 const GENERIC_UI_COPY = {

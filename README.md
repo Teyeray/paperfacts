@@ -784,11 +784,11 @@ or out of scope. What still does not fit needs a code change, not a profile.
    checks a run makes too: the name `paperfacts` is reserved, and a file named like a repository profile but
    differing from it is refused, since their workbooks would overwrite each other. Without a shell, the web
    page 检查配置 (`#/check`, linked from the header) does the same for pasted JSON: every error one per line, or,
-   when it is valid, its fields and the system prompts it would send, and whether a served profile of the same
-   name has the same content hash (a display-only edit) or not (the edit re-extracts). It stores nothing; to use
-   the profile, put the file in `profiles/` and restart the server. The text is checked in a short-lived child
-   process with a 10 s timeout and a memory limit, at most 256 KiB and two checks at a time
-   (`POST /api/profile-check`).
+   when it is valid, the page the profile would get (fields, units, the system prompts and each field's question),
+   and whether a served profile of the same name has the same content hash (a display-only edit) or not (the edit
+   re-extracts). It stores nothing; to use the profile, put the file in `profiles/` and restart the server. The
+   text is checked in a short-lived child process with a 10 s timeout and a memory limit, at most 256 KiB, sent
+   within 15 s, and two checks at a time (`POST /api/profile-check`).
 7. **Read what the model will be asked.** `uv run paperfacts prompts --profile perovskite` prints the inventory,
    field, extraction and matching system prompts exactly as sent; `--field NAME` prints the per-field system
    prompt, that field's line, and the question around it with `<sample list>` and `<excerpts>` standing for what

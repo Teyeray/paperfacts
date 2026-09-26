@@ -247,7 +247,9 @@ this file is the part that is easy to get wrong.
   only noted, never polled or drawn (`jobInProfile`).
 - Async ownership: the router bumps `state.generation` on every navigation to another view. Every load, poll
   and finish handler notes it before its first `await` and draws nothing once it has changed; do not add a
-  per-feature "is this still the current document" check instead. Polling retries with backoff and a loop is
+  per-feature "is this still the current document" check instead. The one sanctioned exception is
+  `viewShows(id, profile)` (`state.js`), for a handler that must outlive a finish reload, which bumps the generation
+  while its request is out (a rerun, a bulk run, a profile view's retry). Polling retries with backoff and a loop is
   owned by a token, so it cannot run twice.
 - Progress is the server's: `DocumentSummary.stages` (every `stage_names()` stage) and `runnable`. The
   frontend never rebuilds a stage list of its own.
@@ -260,8 +262,9 @@ this file is the part that is easy to get wrong.
   only the fallback), and frame/nosniff headers on every response. The upload size is the upload route's
   own first step: a declared `Content-Length` is the fast path, the bytes that arrive are counted anyway,
   so a chunked body is fine. `/api/jobs` is briefs without logs; finished jobs are pruned to the newest 200.
-- `POST /api/profile-check` takes untrusted profile JSON: 256 KiB counted as it arrives, at most two at once (429),
-  and parsed and rendered only in `profile_check.run_check`'s child process (10 s wall clock, RLIMIT_AS/CPU/FSIZE,
+- `POST /api/profile-check` takes untrusted profile JSON: 256 KiB counted as it arrives and read within 15 s (408)
+  before one of the two check slots is taken (429), `?field=` an identifier (422), and parsed and rendered only in
+  `profile_check.run_check`'s child process (options on its stdin, never argv; 10 s wall clock, RLIMIT_AS/CPU/FSIZE,
   empty environment), because validation folds unit spellings through `text._HTML_SUB`, which backtracks
   polynomially and holds the GIL, and fills unbounded caches (`units._compiled`). Never validate pasted text in the
   server process, never pass it to `load_profile` or a key function, and never use its name as a path;
