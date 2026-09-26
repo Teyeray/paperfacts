@@ -19,12 +19,19 @@ const tsvCell = (value) => {
   return FORMULA_START.test(text) && !isNumber(text) ? `'${text}` : text;
 };
 
+// An interval cell, [low, high] with null for an open end: "2.8–4.3", "≥ 80", "≤ 5".
+export const intervalText = ([low, high]) =>
+  high == null ? `≥ ${fmt(low)}` : low == null ? `≤ ${fmt(high)}` : `${fmt(low)}–${fmt(high)}`;
+
 // A field's value as the clipboard gets it, decided by its column (a dataset field: `kind`, `cardinality`): the
-// values of a `many` column joined with "; ", every other value as it is.
+// values of a `many` column joined with "; ", an interval as its two ends, a boolean as true/false, every other
+// value as it is.
 export function fieldText(value, field) {
   if (field?.cardinality === "many" && Array.isArray(value)) {
     return value.map((item) => (typeof item === "number" ? fmt(item) : String(item ?? ""))).join("; ");
   }
+  if (field?.kind === "interval" && Array.isArray(value)) return intervalText(value);
+  if (typeof value === "boolean") return String(value);
   return value;
 }
 

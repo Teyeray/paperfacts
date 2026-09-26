@@ -136,14 +136,26 @@ class FieldResponse(BaseModel):
 
 @dataclass(frozen=True)
 class ResponseModels:
-    """The two answer shapes whose keys a profile names: document mode's and the inventory's."""
+    """The answer shapes whose keys a profile names: document mode's, the inventory's and a field question's."""
 
     extraction: type[ExtractionResponse]
     inventory: type[InventoryResponse]
+    field: type[FieldResponse]
+
+
+def _rebuilt[M: BaseModel](base: type[M], **fields: Any) -> type[M]:
+    """``base`` under its own name and docstring, with ``fields`` replaced or added. The name is kept because a
+    rejected answer goes back to the model as ``str(ValidationError)``, which names the class."""
+    return create_model(base.__name__, __base__=base, __doc__=base.__doc__, **fields)
+
+
+# ``holds`` as a boolean field's answer carries it: true when the quoted words affirm the field, false when they
+# deny it. Every other field leaves it null.
+_HOLDS = (bool | None, Field(default=None, description="a boolean field: whether the quoted words affirm it"))
 
 
 @cache
-def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
+def response_models(paper_key: str, no_samples_key: str, *, holds: bool = False) -> ResponseModels:
     """The answer shapes for a profile that tells the model to emit ``paper_key`` and ``no_samples_key``.
 
     The keys are validation aliases onto the attributes ``paper`` and ``no_samples``, so every profile's answer
@@ -151,17 +163,31 @@ def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
     back to the model as ``str(ValidationError)``, which names the class and the key the model wrote, so under
     the keys the corpus was extracted with the text is byte-identical to what it was before the rename, as is
     every request that carries it.
+
+    ``holds`` is for a profile with a boolean field. Every class that contains a value is then rebuilt with the
+    ``holds`` key, down to the value itself: ``extra="ignore"`` would otherwise drop the key silently at whichever
+    container still pointed at a class without it. Without it the module-level classes are used as they are, so a
+    profile with no boolean field (TCO) validates its answers exactly as before.
     """
-    extraction = create_model(
-        ExtractionResponse.__name__,
-        __base__=ExtractionResponse,
-        __doc__=ExtractionResponse.__doc__,
-        paper=(ResponsePaper | None, Field(default=None, validation_alias=paper_key)),
+    field_model: type[ResponseField] = ResponseField
+    sample_model: type[ResponseSample] = ResponseSample
+    paper_model: type[ResponsePaper] = ResponsePaper
+    extraction_fields: dict[str, Any] = {}
+    field_response: type[FieldResponse] = FieldResponse
+    if holds:
+        field_model = _rebuilt(ResponseField, holds=_HOLDS)
+        sample_model = _rebuilt(ResponseSample, fields=(list[field_model], Field(default_factory=list)))
+        paper_model = _rebuilt(ResponsePaper, fields=(list[field_model], Field(default_factory=list)))
+        extraction_fields["samples"] = (list[sample_model], Field(default_factory=list))
+        value_model = _rebuilt(ResponseValue, holds=_HOLDS)
+        field_response = _rebuilt(FieldResponse, values=(list[value_model], Field(default_factory=list)))
+    extraction = _rebuilt(
+        ExtractionResponse,
+        paper=(paper_model | None, Field(default=None, validation_alias=paper_key)),
+        **extraction_fields,
     )
-    inventory = create_model(
-        InventoryResponse.__name__,
-        __base__=InventoryResponse,
-        __doc__=InventoryResponse.__doc__,
+    inventory = _rebuilt(
+        InventoryResponse,
         no_samples=(
             bool,
             Field(
@@ -171,7 +197,7 @@ def response_models(paper_key: str, no_samples_key: str) -> ResponseModels:
             ),
         ),
     )
-    return ResponseModels(extraction=extraction, inventory=inventory)
+    return ResponseModels(extraction=extraction, inventory=inventory, field=field_response)
 
 
 # ---- Stored records --------------------------------------------------------------------------
@@ -200,10 +226,18 @@ class FieldValue(BaseModel):
         default=None,
         description="a bound ('above', '<') the cited block writes right before value_raw; set by grounding",
     )
+    # A boolean field's answer: whether the quoted words affirm it. Null, and then left out of the file, for every
+    # other kind, so files of profiles without a boolean field keep their bytes.
+    holds: bool | None = Field(default=None, exclude_if=lambda holds: holds is None)
     # Filled in by paperfacts.normalize at read time; always null in the stored file.
     value: float | None = None
     unit: str | None = None
     normalization_note: str | None = None
+    # Filled in at read time for a date or interval field, and left out of every file when null: the date as ISO
+    # at the precision written ("2021", "2021-03", "2021-03-12"), and an interval's (low, high) in the canonical
+    # unit, None for an open end.
+    iso_date: str | None = Field(default=None, exclude_if=lambda iso_date: iso_date is None)
+    bounds: tuple[float | None, float | None] | None = Field(default=None, exclude_if=lambda bounds: bounds is None)
 
 
 class PaperRecord(BaseModel):
@@ -442,11 +476,16 @@ class ResponseCleaning:
         source_ids: Sequence[str],
         note: str | None,
         known_ids: frozenset[str],
+        holds: bool | None = None,
     ) -> FieldValue | None:
-        """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``)."""
+        """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``). ``holds`` is kept
+        for a boolean field only, which is dropped without it: the quote alone does not say yes or no."""
         text = value_raw.strip()
         if spec.kind in DIGIT_KINDS and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
+            return None
+        if spec.kind == "boolean" and holds is None:
+            self.dropped.append(f"{spec.name}: boolean field without holds {text!r}")
             return None
         return FieldValue(
             field=spec.name,
@@ -455,6 +494,7 @@ class ResponseCleaning:
             condition=_clean(condition),
             source_ids=self.keep_ids(source_ids, known_ids),
             note=_clean(note),
+            holds=holds if spec.kind == "boolean" else None,
         )
 
 
@@ -558,6 +598,8 @@ def response_to_records(
             source_ids=item.source_ids,
             note=item.note,
             known_ids=known_ids,
+            # Only response_models(..., holds=True) has the key.
+            holds=getattr(item, "holds", None),
         )
 
     def in_schema(item: ResponseField) -> FieldSpec | None:

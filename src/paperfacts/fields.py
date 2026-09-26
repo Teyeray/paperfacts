@@ -34,11 +34,15 @@ from typing import Literal
 
 # Whether a field belongs to the paper as a whole or to each of its samples. A profile declares it per group.
 FieldLevel = Literal["paper", "sample"]
-# numeric: a number with a unit; composition: a chemical formula; text: anything else
-FieldKind = Literal["numeric", "composition", "text"]
-# The kinds whose value is quoted as a number, so an answer or a block without a digit cannot hold one. Here
+# numeric: a number with a unit; composition: a chemical formula; text: anything else; boolean: a yes/no the paper
+# states in words (the model says which with ``holds``); date: a calendar date, read to ISO at the precision
+# written; interval: a range with two ends, or a one-sided bound, in a unit.
+FieldKind = Literal["numeric", "composition", "text", "boolean", "date", "interval"]
+# The kinds whose value is quoted with digits, so an answer or a block without a digit cannot hold one. Here
 # rather than in paperfacts.kinds because cleaning (records.py) and retrieval (passages.py) sit below that module.
-DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric"})
+DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric", "date", "interval"})
+# The kinds read as numbers in a canonical unit, so a unit, a plausible range and a tolerance mean something.
+UNIT_KINDS: frozenset[FieldKind] = frozenset({"numeric", "interval"})
 # How many values of a field one sample (or the paper) holds: one, or a list of several that hold at once (the
 # precursors of a sample). "many" is for text and composition only; a dataset column carries it so that the workbook
 # and the web format a cell by its column.

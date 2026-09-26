@@ -28,6 +28,7 @@ import typer
 from paperfacts.batch import run_batch
 from paperfacts.config import DEFAULT_REPO_ROOT, ENV_PREFIX, EXTRACTION_MODES, Settings
 from paperfacts.errors import ConfigError, PaperFactsError, ParserError
+from paperfacts.fields import UNIT_KINDS
 from paperfacts.figures import user_prompt as figure_user_prompt
 from paperfacts.keys import ComparisonOptions, ExtractionOptions
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
@@ -497,7 +498,7 @@ def fields(profile_name: ProfileOpt = None) -> None:
         settings = dataclasses.replace(settings, profile=profile_name)
     for spec in _profile(settings).fields:
         unit = spec.canonical_unit or "-"
-        tolerance = f"rel={spec.rel_tol:g} abs={spec.abs_tol:g}" if spec.kind == "numeric" else "-"
+        tolerance = f"rel={spec.rel_tol:g} abs={spec.abs_tol:g}" if spec.kind in UNIT_KINDS else "-"
         hint = f"  condition: {spec.condition_hint}" if spec.condition_hint else ""
         typer.echo(
             f"{spec.name:<26} {spec.group:<8} {spec.kind:<12} {unit:<8} {tolerance:<22} {spec.bare_number}{hint}"

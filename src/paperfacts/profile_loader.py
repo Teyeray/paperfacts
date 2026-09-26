@@ -30,6 +30,7 @@ from typing import Any, get_args
 from paperfacts.config import Settings
 from paperfacts.errors import ConfigError
 from paperfacts.fields import (
+    UNIT_KINDS,
     AfterClause,
     BareNumberPolicy,
     Cardinality,
@@ -319,7 +320,7 @@ def _field(
         # The note is what a dataset cell without the condition says. Built from the label instead, it would be
         # display text stored inside a verdict, which no key covers.
         raise ConfigError(f"{at}: condition_rule needs missing_condition_note_zh, the note a cell without it gets")
-    if spec.kind == "numeric" and spec.canonical_unit is not None and units is not None:
+    if spec.kind in UNIT_KINDS and spec.canonical_unit is not None and units is not None:
         units.check(spec.canonical_unit, at)
     return spec
 
@@ -546,7 +547,20 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         )
 
     numeric = entry.get("kind") == "numeric"
+    kind = choice("kind", get_args(FieldKind))
+    canonical_unit, valid_range = text_or_none("canonical_unit"), _valid_range(entry, where)
+    unit_attributes = {"canonical_unit": canonical_unit, "valid_range": valid_range, "bare_number": bare_number}
+    for key, value in unit_attributes.items():
+        # A unit, a plausible range and a bare number's meaning are about numbers in a unit. Written at its default
+        # (tco.json spells every attribute out) it says nothing.
+        if value != _FIELD_DEFAULTS[key] and kind not in UNIT_KINDS:
+            raise ConfigError(f"{where}: {key} is only meaningful for a numeric or interval field, not a {kind!r} one")
+    if kind == "interval" and bare_number != "reject":
+        # Both ends of a range would have to be guessed into one unit; the model is asked for the unit instead.
+        raise ConfigError(f"{where}: bare_number must be 'reject' for an interval field, got {bare_number!r}")
     condition_rule = text_or_none("condition_rule")
+    if condition_rule is not None and kind == "boolean":
+        raise ConfigError(f"{where}: condition_rule is not meaningful for a boolean field")
     if condition_rule is not None and (not condition_rule.strip() or entry.get("condition_hint") is None):
         # The rule tells the model to fill a condition that the field line must first say the field has.
         raise ConfigError(f"{where}: condition_rule must be a non-empty string and needs a condition_hint")
@@ -569,10 +583,10 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
     return FieldSpec(
         name=name,
         group=group,
-        kind=choice("kind", get_args(FieldKind)),  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]
         description=description,
         keywords=tuple(keywords),
-        canonical_unit=text_or_none("canonical_unit"),
+        canonical_unit=canonical_unit,
         label=label,
         description_zh=description_zh,
         rel_tol=tolerance("rel_tol"),
@@ -580,7 +594,7 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         condition_hint=text_or_none("condition_hint"),
         bare_number=bare_number,  # type: ignore[arg-type]
         categories=tuple(categories),
-        valid_range=_valid_range(entry, where),
+        valid_range=valid_range,
         condition_preference=tuple(preference),
         level=levels[group],
         condition_rule=condition_rule,
@@ -600,8 +614,6 @@ def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, fl
     bounds = entry["valid_range"]
     if not isinstance(bounds, Mapping) or not set(bounds) <= {"min", "max"}:
         raise ConfigError(f"{where}: valid_range must be an object with 'min' and/or 'max', got {bounds!r}")
-    if entry.get("kind") != "numeric":
-        raise ConfigError(f"{where}: valid_range is only meaningful for a numeric field, not a {entry.get('kind')!r}")
     low, high = bounds.get("min"), bounds.get("max")
     for key, value in (("min", low), ("max", high)):
         if value is not None and type(value) not in (int, float):

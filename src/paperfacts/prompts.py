@@ -57,6 +57,9 @@ _NO_PAPER_LEVEL_RULE = (
     'No field is paper-level. Use "{paper_key}" only for a whole-series value as rule 10 describes; otherwise set'
     " it to null."
 )
+# The answer key a boolean field needs, shown only to a profile that has one, so every other profile's prompts
+# keep their bytes.
+_HOLDS_KEY = ',\n         "holds": <true|false for a boolean field, else null>'
 _CONDITION_RULE = "For `{name}` always fill `condition` with {rule}."
 _NO_CONDITION_RULE = "When a field's line names a condition, always fill `condition` with it."
 
@@ -81,7 +84,7 @@ Output ONLY a JSON object with this exact shape (no prose):
 FIELD = {"field": "<field name from the table below>", "value_raw": "<exactly as written in the paper>",
          "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
          "source_ids": ["<id of the block where this value appears>", ...], "note": "<optional remark or null>",
-         "applies_to_all_samples": <true|false>}
+         "applies_to_all_samples": <true|false>{holds_key}}
 
 Rules:
 1. `value_raw` must be copied verbatim from the paper (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
@@ -147,7 +150,7 @@ Output ONLY a JSON object with this exact shape (no prose):
 VALUE = {"sample_id": "<sample id from the list, or null>", "value_raw": "<exactly as written in the paper>",
          "unit_raw": "<unit exactly as written, or null>", "condition": "<measurement condition, or null>",
          "source_ids": ["<id of the excerpt where this value appears>", ...], "note": "<optional remark or null>",
-         "applies_to_all_samples": <true|false>}
+         "applies_to_all_samples": <true|false>{holds_key}}
 
 Rules:
 1. `value_raw` must be copied verbatim from the excerpt (keep "1.2 × 10^-4", "≈ 2", "> 80", "12 (60)" as written). Never convert units or round numbers; the code does that.
@@ -167,7 +170,8 @@ Rules:
 
 Return the JSON object only."""
 
-# ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" but for a list field.
+# ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" for numeric, and for single-valued
+# text and composition.
 _FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{note}{condition}{plausible}"
 # Told to the model so it checks what it is quoting before it answers; the code drops what still falls outside.
 _PLAUSIBLE = (
@@ -214,6 +218,7 @@ def _values(profile: DomainProfile) -> dict[str, str]:
     values["sample_groups"] = quoted_names(profile.sample_groups)
     values["condition_rules"] = condition_rules(profile.fields)
     values["subset_scope"] = render(_SUBSET_SCOPE, values)
+    values["holds_key"] = _HOLDS_KEY if any(spec.kind == "boolean" for spec in profile.fields) else ""
     return values
 
 

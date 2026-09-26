@@ -50,6 +50,20 @@ _BLOCKS = (
 )
 _SAMPLE_LIST = "- S1: films annealed at 500 °C"
 _FIELD_TYPES = typing.get_type_hints(FieldSpec)
+# One field of each kind that adds to a request (the holds key, a field-line note).
+_KIND_FIELDS = [
+    {"name": "doped", "group": "coating", "kind": "boolean", "description": "Doped or not.", "keywords": ["doped"]},
+    {"name": "made_on", "group": "precursor", "kind": "date", "description": "Date made.", "keywords": ["prepared"]},
+    {
+        "name": "anneal_window",
+        "group": "coating",
+        "kind": "interval",
+        "description": "Annealing window.",
+        "keywords": ["annealed"],
+        "canonical_unit": "℃",
+        "valid_range": {"max": 1500},
+    },
+]
 
 
 def _profiles() -> dict[str, DomainProfile]:
@@ -58,6 +72,7 @@ def _profiles() -> dict[str, DomainProfile]:
         "battery_cathode": load_profile(_REPOSITORY / "profiles" / "battery_cathode.json"),
         "demo": make_profile(),
         "many": _list_profile(),
+        "kinds": make_profile({"fields": [*profile_data()["fields"], *_KIND_FIELDS]}),
     }
 
 
@@ -175,7 +190,7 @@ def _variants(profile: DomainProfile) -> Iterator[tuple[str, DomainProfile, bool
         yield label, _edited(profile, label, ui=ui), True
 
 
-@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo", "many"])
+@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo", "many", "kinds"])
 def test_every_value_that_changes_a_request_changes_its_key(name: str):
     profile = _profiles()[name]
     requests, keys = _requests(profile), _keys(profile)
@@ -191,7 +206,7 @@ def test_every_value_that_changes_a_request_changes_its_key(name: str):
     assert uncovered == []
 
 
-@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo", "many"])
+@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo", "many", "kinds"])
 def test_every_prompt_slot_is_hashed_by_value(name: str):
     # Whether or not a system prompt shows it today: a slot at its default in one profile, or read only by a user
     # prompt, must still move the key its prompts are filed under.

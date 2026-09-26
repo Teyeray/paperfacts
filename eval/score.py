@@ -87,14 +87,28 @@ def value_matches(spec: Spec, got: object, cell: dict) -> bool:
     gold = cell.get("value")
     if gold is None or got is None:
         return False
-    if isinstance(got, list):
-        # A list cell (cardinality "many") holds the gold value when one of its elements does.
+    if isinstance(got, list) and spec.kind != "interval":
+        # A list cell (cardinality "many") holds the gold value when one of its elements does; an interval's
+        # [low, high] is one value, scored below.
         return any(value_matches(spec, element, cell) for element in got)
     if spec.kind == "numeric":
         try:
             return math.isclose(float(got), float(gold), rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
         except (TypeError, ValueError):
             return False
+    if spec.kind == "boolean":
+        return isinstance(got, bool) and got == gold
+    if spec.kind == "date":
+        return str(got) == str(gold)
+    if spec.kind == "interval":
+        # [low, high], null for an open end, which only an open end matches.
+        if not (isinstance(got, list) and isinstance(gold, list) and len(got) == len(gold) == 2):
+            return False
+        return all(
+            (a is None and b is None)
+            or (a is not None and b is not None and math.isclose(a, b, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol))
+            for a, b in zip(got, gold, strict=True)
+        )
     # A field with closed categories: 'RF magnetron sputtering' is 'RF'. Text that names no category is
     # compared as text below, exactly as the pipeline falls back.
     wanted = canonical_category(spec.categories, str(gold))

@@ -40,10 +40,11 @@ class Scope(Enum):
 
 
 type ScopeKey = str | Scope
-type ValueKey = tuple[str, str, str, str]
-# The identity the passes vote on: the same number, in the same unit, for the same field. The
-# condition is deliberately absent -- see ``_vote_key``.
-type VoteKey = tuple[str, str, str]
+# (field, condition, quote, unit), then a boolean field's ``holds`` -- see ``_value_key``.
+type ValueKey = tuple[str, ...]
+# The identity the passes vote on: the same number, in the same unit, for the same field (and the same ``holds``).
+# The condition is deliberately absent -- see ``_vote_key``.
+type VoteKey = tuple[str, ...]
 # What a vote is actually cast for: the nth entry a pass gave one voted identity. Rank 1 is the first
 # condition a pass reported that number under, rank 2 the second, and so on -- see ``merge_passes``.
 type VoteSlot = tuple[ScopeKey, VoteKey, int]
@@ -226,9 +227,13 @@ def _value_key(value: FieldValue) -> ValueKey:
 
     Within a pass the condition belongs in the identity -- two conditions are two measurements and must not
     be merged. Across passes it does not; ``_vote_key`` is what the passes vote on.
+
+    A boolean field's ``holds`` is appended when set: "doped" quoted as true and as false are two answers, never
+    one fact. Every other value keeps the four-part key it always had.
     """
     unit = clean_unit(value.unit_raw) if value.unit_raw else ""
-    return value.field, normalize_key(value.condition), grounding_key(value.value_raw), unit
+    key = (value.field, normalize_key(value.condition), grounding_key(value.value_raw), unit)
+    return key if value.holds is None else (*key, str(value.holds))
 
 
 def _vote_key(value: FieldValue) -> VoteKey:
@@ -240,4 +245,4 @@ def _vote_key(value: FieldValue) -> VoteKey:
     vote until nothing reached a majority.
     """
     key = _value_key(value)
-    return key[0], key[2], key[3]
+    return key[0], key[2], *key[3:]
