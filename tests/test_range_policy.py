@@ -20,7 +20,7 @@ from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
 from paperfacts.fields import RANGE_ENDS, FieldRole
 from paperfacts.kinds import RULES
-from paperfacts.normalize import normalize_field, parse_number, read_range, read_value
+from paperfacts.normalize import normalize_field, parse_number, read_range, read_value, unit_of_value
 from support.extraction import make_field
 from support.profiles import make_profile, shipped_profile
 
@@ -50,6 +50,17 @@ def _named_spec(name: str, policy: str):
     return dataclasses.replace(TCO.by_name[name], range_policy=policy)
 
 
+def _units_of(*names: str):
+    """Whether a unit written in a quote is one of these TCO fields' (in their canonical unit), as the registry
+    reads it."""
+    specs = [TCO.by_name[name] for name in names]
+    return lambda written: any(unit_of_value(spec, spec.canonical_unit, written, UNITS) is not None for spec in specs)
+
+
+THICKNESS_UNIT = _units_of("thickness")
+TEMPERATURE_UNIT = _units_of("annealing_temperature")
+
+
 # ---- parse_number ---------------------------------------------------------------------------------------
 
 
@@ -63,8 +74,8 @@ def _named_spec(name: str, policy: str):
     ],
 )
 def test_lower_and_upper_read_the_chosen_end_with_a_note(raw, low, high, shown):
-    lower_value, lower_note = parse_number(raw, range_policy="lower", range_units=("nm",))
-    upper_value, upper_note = parse_number(raw, range_policy="upper", range_units=("nm",))
+    lower_value, lower_note = parse_number(raw, range_policy="lower", range_unit=THICKNESS_UNIT)
+    upper_value, upper_note = parse_number(raw, range_policy="upper", range_unit=THICKNESS_UNIT)
 
     assert lower_value == pytest.approx(low)
     assert upper_value == pytest.approx(high)
@@ -76,7 +87,7 @@ def test_lower_and_upper_read_the_chosen_end_with_a_note(raw, low, high, shown):
 @pytest.mark.parametrize("policy", ["midpoint", "reject", "lower", "upper"])
 @pytest.mark.parametrize("raw", ["20-10", "300-200 °C", "1.5 × 10^-3 to 1.2 × 10^-3", "1.2-1.5 × 10^-3"])
 def test_a_descending_range_or_one_exponent_for_two_numbers_is_refused_under_every_policy(policy, raw):
-    value, note = parse_number(raw, range_policy=policy)
+    value, note = parse_number(raw, range_policy=policy, range_unit=TEMPERATURE_UNIT)
 
     assert value is None
     assert "ambiguous" in note
@@ -85,23 +96,26 @@ def test_a_descending_range_or_one_exponent_for_two_numbers_is_refused_under_eve
 @pytest.mark.parametrize("policy", ENDS)
 @pytest.mark.parametrize("raw", ["above 80", ">80", "≥ 80 %", "12", "3.5 ± 0.2", "1.2 × 10^-4 at 300 K", "1:4"])
 def test_lower_and_upper_leave_everything_that_is_not_a_range_alone(policy, raw):
-    assert parse_number(raw, range_policy=policy) == parse_number(raw)
+    assert parse_number(raw, range_policy=policy, range_unit=TEMPERATURE_UNIT) == parse_number(raw)
 
 
 @pytest.mark.parametrize("policy", ENDS)
-def test_the_end_policies_move_only_the_corpus_strings_read_as_a_midpoint(policy):
+@pytest.mark.parametrize("field_units", [True, False], ids=["field-units", "no-unit-accepted"])
+def test_the_end_policies_move_only_the_corpus_strings_read_as_a_midpoint(policy, field_units):
     # Over every numeric string of the real corpus: a string that is no range reads exactly as under the default;
     # one read as a midpoint reads as the end of a clean range with the same notes but the last, and any other
-    # range is refused.
+    # range is refused. Every corpus range is clean in its field's unit; accepting no unit at all refuses the one
+    # that writes one ("500 °C to 530 °C").
     moved = refused = 0
     for row in CORPUS_VALUES:
         raw = row["value_raw"]
+        accepts = _units_of(row["field"]) if field_units else (lambda written: False)
         midpoint = parse_number(raw)
-        chosen = parse_number(raw, range_policy=policy)
+        chosen = parse_number(raw, range_policy=policy, range_unit=accepts)
         if midpoint[1] is None or not midpoint[1].endswith(" → midpoint"):
             assert chosen == midpoint, raw
             continue
-        if read_range(raw) is None:
+        if read_range(raw, accepts) is None:
             refused += 1
             assert chosen[0] is None, raw
             assert chosen[1].endswith(f"has no {policy} end: not one clean range in the field's unit; ambiguous")
@@ -111,7 +125,7 @@ def test_the_end_policies_move_only_the_corpus_strings_read_as_a_midpoint(policy
         assert chosen[0] != midpoint[0]
 
     assert moved > 0
-    assert refused > 0
+    assert (refused > 0) != field_units
 
 
 # ---- The comparison's reading ---------------------------------------------------------------------------
@@ -135,13 +149,18 @@ def test_a_bound_grounding_found_reads_as_under_midpoint(policy):
 
 def test_read_range_reads_the_text_read_value_built():
     reading = read_value(_field("~450-500 °C"), _spec("upper"), UNITS)
-    assert read_range(reading.text, ("°C",)) == (450.0, 500.0, "°C")
+    assert read_range(reading.text, TEMPERATURE_UNIT) == (450.0, 500.0, "°C")
     # Number words are never a range (records.spell_number_word), here as in the comparison.
     spec = TCO.by_name["annealing_time"]
-    assert read_range(read_value(_field("two to three", unit_raw="h"), spec, UNITS).text, ("h",)) is None
+    assert (
+        read_range(read_value(_field("two to three", unit_raw="h"), spec, UNITS).text, _units_of("annealing_time"))
+        is None
+    )
     # A bound grounding found before the quote is put in front of the text.
-    assert read_range(read_value(_field("450-500", bound="above"), _spec("upper"), UNITS).text) is None
-    assert read_range("450") is None
+    assert (
+        read_range(read_value(_field("450-500", bound="above"), _spec("upper"), UNITS).text, TEMPERATURE_UNIT) is None
+    )
+    assert read_range("450", TEMPERATURE_UNIT) is None
 
 
 @pytest.mark.parametrize(
@@ -174,7 +193,7 @@ def test_read_range_reads_the_text_read_value_built():
     ],
 )
 def test_read_range_is_the_one_definition_of_a_clean_range(raw, expected):
-    found = read_range(raw, ("°C", "℃", "%", "Ω·cm"))
+    found = read_range(raw, _units_of("annealing_temperature", "o2_ratio", "resistivity"))
 
     if expected is None:
         assert found is None

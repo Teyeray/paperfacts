@@ -16,11 +16,12 @@ from __future__ import annotations
 import datetime
 import itertools
 import re
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
 from paperfacts.fields import RANGE_ENDS, FieldSpec, RangePolicy
+from paperfacts.grounding import LOWER_BOUND_WORDS, UPPER_BOUND_WORDS
 from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, PaperRecord, spell_number_word
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
@@ -158,12 +159,44 @@ measurement condition ("550 nm") and must use the same notion of "a number" this
 _QUALIFIERS = re.compile(
     r"^(?P<q>>=|<=|approximately|approx\.?|roughly|around|about|circa|ca\.?|[~≈≃≅≥≤<>])\s*", re.IGNORECASE
 )
+# A qualifier that makes what follows a one-sided bound: "> 450-500" is no range with two printed ends.
+_BOUND_SIGNS = frozenset({">=", "<=", "≥", "≤", "<", ">"})
+# One number as a scalar is written -- plain, "1.2 x 10^-4", "10^-4" or "1.2e-4" -- optionally "± another", then
+# whatever follows it (``tail``). The dataset cell demands the tail be a unit of the field; the lanes read the
+# unit a quote writes after its number from the same tail.
+NUMBER_ATOM = rf"(?:{_NUM}\s*x\s*10\s*\^?\s*[-+]?\d+|10\s*\^\s*[-+]?\d+|{_NUM}(?:[eE][-+]?\d+)?)"
+SCALAR = re.compile(
+    rf"^(?P<center>{NUMBER_ATOM})(?:\s*(?:±|\+/-|\+-|\\pm)\s*(?P<uncertainty>{NUMBER_ATOM}))?(?P<tail>.*)$"
+)
+
+
+@dataclass(frozen=True)
+class NumberReading:
+    """What :func:`read_number` reads from a quote: the number, and what the unit check needs, so no reader of
+    the same quote parses it a second time."""
+
+    value: float | None
+    note: str | None
+    # What the quote writes after its number or its clean range, stripped: "" when nothing, None when the quote
+    # is neither one scalar nor one clean range, or carries a condition or a parenthesis, so no single text
+    # follows "the" number. Whether it is a unit of the field is :func:`unit_of_value`'s to say.
+    unit: str | None
+    # The (low, high) of a clean range (:func:`read_range`), whatever the policy; None for anything else.
+    ends: tuple[float, float] | None
 
 
 def parse_number(
-    raw: str, *, range_policy: RangePolicy = "midpoint", range_units: Collection[str] = ()
+    raw: str, *, range_policy: RangePolicy = "midpoint", range_unit: Callable[[str], bool] | None = None
 ) -> tuple[float | None, str | None]:
-    """``(value, note)``: the number ``raw`` spells, or None with the reason it was refused.
+    """``(value, note)`` of :func:`read_number`."""
+    reading = read_number(raw, range_policy=range_policy, range_unit=range_unit)
+    return reading.value, reading.note
+
+
+def read_number(
+    raw: str, *, range_policy: RangePolicy = "midpoint", range_unit: Callable[[str], bool] | None = None
+) -> NumberReading:
+    """The number ``raw`` spells, or None with the reason it was refused.
 
     A qualifier ("~", ">", "about") is dropped and recorded first; what is left must then match one of the
     spellings in :data:`_SPELLINGS`, tried in order. Each spelling either claims the text -- with a value, or
@@ -174,43 +207,59 @@ def parse_number(
     ``"reject"`` refuses it, for a quantity whose range is a window rather than a scatter around one value (a
     cathode's "2.8–4.3 V" is the cycling window; its midpoint was never measured). ``"lower"`` / ``"upper"``
     read it as the end the field asks for (a calcination "at 450-500 °C" reported by its upper end): unlike
-    the midpoint, an end is a number the paper printed. Only a clean range has an end (:func:`read_range`, whose
-    unit must be one of ``range_units``, the field's); any other range is refused under them, exactly as the
-    dataset cell refuses it.
+    the midpoint, an end is a number the paper printed. Only a clean range has an end (:func:`read_range`), and
+    only when the unit written after it is one of the field's (``range_unit``, required under these two); any
+    other range is refused under them, exactly as the dataset cell refuses it.
     """
-    text, notes, refusal = _prepare(raw)
-    if refusal is not None:
-        return None, _join([*notes, refusal])
-    if range_policy in RANGE_ENDS:
-        clean = read_range(raw, range_units)
-        if clean is not None:
-            low, high, unit = clean
-            unit_note = [f"trailing unit {unit!r} in value ignored"] if unit else []
-            end = f"range {low:g}-{high:g} → {range_policy} end"
-            return (low if range_policy == "lower" else high), _join([*set_aside(raw)[1], *unit_note, end])
-    value, reading, ends = _read(text)
-    if ends is None:
-        return value, _join([*notes, *reading])
-    low, high = ends
-    if range_policy == "midpoint":
-        return value, _join([*notes, *reading, f"range {low:g}-{high:g} → midpoint"])
-    if range_policy == "reject":
-        return None, _join([*notes, *reading, f"range {low:g}-{high:g} refused (range_policy 'reject')"])
-    unclean = f"range {low:g}-{high:g} has no {range_policy} end: not one clean range in the field's unit; ambiguous"
-    return None, _join([*notes, *reading, unclean])
-
-
-def _prepare(raw: str) -> tuple[str, list[str], str | None]:
-    """``(value text, notes, refusal)``: what :func:`parse_number` reads a spelling from, or why it reads none."""
-    text, notes, _ = set_aside(raw)
-    if _AFTER.search(text):
-        return text, notes, "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"
+    if range_policy in RANGE_ENDS and range_unit is None:
+        raise ValueError(f"range_policy {range_policy!r} needs range_unit: an end is read only in the field's unit")
+    bare, notes, condition = set_aside(raw)
+    if _AFTER.search(bare):
+        refusal = "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"
+        return NumberReading(None, _join([*notes, refusal]), None, None)
     # The digits of a formula or a unit exponent are set aside before the value's own numbers are counted.
+    text = bare
     unglued = _GLUED_DIGITS.sub(" ", text)
     if unglued != text:
         notes.append("digits of a formula or unit exponent ignored")
         text = unglued.strip()
-    return text, notes, None
+    value, reading, ends = _read(text)
+    clean = _clean_range(raw, bare, text, condition, ends)
+    if ends is None:
+        alone = value is not None and not condition and "(" not in bare and ")" not in bare
+        scalar = SCALAR.fullmatch(bare) if alone else None
+        unit = scalar.group("tail").strip() if scalar is not None else None
+        return NumberReading(value, _join([*notes, *reading]), unit, None)
+    low, high, _ = ends
+    unit = None if clean is None else clean[2]
+    clean_ends = None if clean is None else (low, high)
+    if range_policy == "midpoint":
+        return NumberReading(value, _join([*notes, *reading, f"range {low:g}-{high:g} → midpoint"]), unit, clean_ends)
+    if range_policy == "reject":
+        note = _join([*notes, *reading, f"range {low:g}-{high:g} refused (range_policy 'reject')"])
+        return NumberReading(None, note, unit, clean_ends)
+    if clean is not None and (not clean[2] or (range_unit is not None and range_unit(clean[2]))):
+        end = f"range {low:g}-{high:g} → {range_policy} end"
+        chosen = low if range_policy == "lower" else high
+        return NumberReading(chosen, _join([*notes, *reading, end]), unit, clean_ends)
+    unclean = f"range {low:g}-{high:g} has no {range_policy} end: not one clean range in the field's unit; ambiguous"
+    return NumberReading(None, _join([*notes, *reading, unclean]), unit, clean_ends)
+
+
+def _clean_range(
+    raw: str, bare: str, text: str, condition: str, ends: tuple[float, float, str | None] | None
+) -> tuple[float, float, str] | None:
+    """``(low, high, unit)`` when the general reader found a range (``ends``) that is clean: see :func:`read_range`.
+
+    The reader's range spellings (:func:`_range`, :func:`_scientific`) decide what a range is; this only refuses
+    what surrounds one. ``text`` is ``bare`` with glued digits taken out: a range that needed that ("450to500")
+    was never read as a range by the reader either."""
+    if ends is None or ends[2] is None or condition or text != bare or "(" in bare or ")" in bare:
+        return None
+    qualifier = _QUALIFIERS.match(_typeset(raw))
+    if qualifier is not None and qualifier.group("q") in _BOUND_SIGNS:
+        return None
+    return ends[0], ends[1], ends[2]
 
 
 def split_after_clause(text: str) -> tuple[str, str]:
@@ -258,9 +307,10 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
     return text, notes, ""
 
 
-# (value, notes, ends): ends is the (low, high) of a spelling that reads a whole range as its midpoint, which is
-# what range_policy decides on (parse_number writes the range's note); None for every other reading.
-_Reading = tuple[float | None, list[str], tuple[float, float] | None]
+# (value, notes, ends): ends is the (low, high, unit) of a spelling that reads a whole range as its midpoint, which
+# is what range_policy decides on (read_number writes the range's note); None for every other reading. The unit is
+# what follows the range, "" when nothing does, None when something stands before it too.
+_Reading = tuple[float | None, list[str], tuple[float, float, str | None] | None]
 
 
 def _read(text: str) -> _Reading:
@@ -326,7 +376,8 @@ def _scientific(text: str) -> _Reading | None:
         if not NUMBER_RE.search(rest) and _RANGE_SEPARATOR.fullmatch(between):
             low, high = values
             if low < high:
-                return (low + high) / 2, [], (low, high)
+                alone = not text[: matches[0].start()].strip()
+                return (low + high) / 2, [], (low, high, text[matches[1].end() :].strip() if alone else None)
             return _refuse("descending range in scientific notation; ambiguous")
     if len(matches) > 1 or NUMBER_RE.search(rest):
         return _refuse("numbers outside the scientific notation; ambiguous")
@@ -353,7 +404,7 @@ def _range(text: str) -> _Reading | None:
         return _refuse("descending range, or an exponent without its caret; ambiguous")
     unit = second or first
     notes = [f"trailing unit {unit!r} in value ignored"] if unit else []
-    return (low + high) / 2, notes, (low, high)
+    return (low + high) / 2, notes, (low, high, unit or "")
 
 
 def _first_number(text: str) -> _Reading:
@@ -552,6 +603,54 @@ def convert_to_canonical(
     return _apply(value, factor, offset), canonical, scale_note
 
 
+def unit_of_value(
+    spec: FieldSpec, unit_raw: str | None, written: str, units: UnitRegistry
+) -> tuple[str | None, bool] | None:
+    """``(unit, own)``: the unit a number is converted from when its quote writes ``written`` after it, and
+    whether that is the quote's own unit rather than ``unit_raw``; None when ``written`` is no unit of the field.
+
+    Units are compared as the registry converts them, never as spellings: "Ω cm", "Ω-cm" and "ohm cm" are all
+    "Ω·cm". A written unit that converts exactly as ``unit_raw`` does -- the same factor and offset, a header's
+    power of ten included -- changes nothing, and ``unit_raw`` is kept. One that converts otherwise is the more
+    specific statement and is converted from: "1.5e-4 Ω·cm" under unit_raw "mΩ·cm" is 1.5e-4 Ω·cm, not 1.5e-7,
+    and "1.2 Ω·cm" under a header "×10^-4 Ω·cm" states its own unit, so the header's power of ten is not applied.
+    Anything the registry cannot read as a unit of the field ("Ω cm (sample A)", "K" on a ℃ field) is refused
+    rather than guessed. A field without a canonical unit has no registry to ask, so there the written unit must
+    be spelled as ``unit_raw``."""
+    if not clean_unit(written):
+        return unit_raw, False
+    if spec.canonical_unit is None:
+        return (unit_raw, False) if unit_raw and clean_unit(unit_raw) == clean_unit(written) else None
+    conversion = _conversion(spec, written, units)
+    if conversion is None:
+        return None
+    if unit_raw and _conversion(spec, unit_raw, units) == conversion:
+        return unit_raw, False
+    return written, True
+
+
+def _conversion(spec: FieldSpec, unit: str, units: UnitRegistry) -> tuple[float, float] | None:
+    """``(factor, offset)`` that :func:`convert_to_canonical` applies to a value quoted in ``unit``, a header's power
+    of ten folded into the factor; None when ``unit`` names no unit of the field (a bare power of ten included)."""
+    canonical = spec.canonical_unit
+    assert canonical is not None
+
+    def convert(spelling: str) -> tuple[float, float] | None:
+        return units.convert(canonical, spelling)
+
+    scale, rest = split_scale_factor(unit, convert)
+    if scale is None or not rest:
+        return None
+    conversion = convert(rest)
+    if conversion is None:
+        gasless = units.without_ignored_suffix(rest)
+        conversion = convert(gasless) if gasless and gasless != rest else None
+    if conversion is None:
+        return None
+    factor, offset = conversion
+    return factor * scale, offset
+
+
 def _apply(value: float, factor: float, offset: float) -> float:
     # A zero offset is not added at all: -0.0 + 0.0 is 0.0, and a factor-only unit keeps the bits it always gave.
     return value * factor + offset if offset else value * factor
@@ -667,66 +766,58 @@ def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Readi
     )
 
 
-# A qualifier that makes what follows a one-sided bound: "> 450-500" is no range with two printed ends.
-_BOUND_SIGNS = frozenset({">=", "<=", "≥", "≤", "<", ">"})
-# "10-20", "80%–85%", "500 °C to 530 °C", "10-20 Ω cm": two plain bounds, the first with an optional unit of its
-# own, then whatever follows the second.
-_PLAIN_RANGE = re.compile(rf"^(?P<a>{_NUM})\s*(?P<ua>{_UNIT_TOKEN})?\s*{_RANGE_SEP}\s*(?P<b>{_NUM})(?P<rest>.*)$")
-
-
-def read_range(raw: str, units: Collection[str] = ()) -> tuple[float, float, str] | None:
+def read_range(raw: str, range_unit: Callable[[str], bool]) -> tuple[float, float, str] | None:
     """``(low, high, unit)`` when ``raw`` is one clean range, else None: the one definition of a range with two
-    printed ends, for the lanes (:func:`parse_number` under ``range_policy`` lower/upper) and the dataset cell
+    printed ends, for the lanes (:func:`read_number` under ``range_policy`` lower/upper) and the dataset cell
     (``kinds``) alike, so the two never disagree about which quotes have an end.
 
-    Clean means two ascending numbers, both plain or both in scientific notation, joined by a range separator,
-    and after them nothing but a unit that is one of ``units`` ("" when the range has none). A qualifier of
+    A range is what the general reader reads as one (:func:`read_number`): two ascending numbers, both plain or
+    both in scientific notation, joined by a range separator. Clean means nothing else is around it but a unit
+    after it that ``range_unit`` accepts as the field's ("" when the range has none). A qualifier of
     approximation or a name before "=" may precede it (:func:`set_aside`); a bound ("> 450-500", "below 1.2e-4 -
     1.5e-4"), a condition ("450-500 °C for 2 h"), an "after" clause, a parenthesis ("450-500 (600)"), another unit
     ("450-500 K" on a ℃ field) and an exponent written once for two numbers ("1.2-1.5 × 10^-3") are not."""
-    bare, _, condition = set_aside(raw)
-    qualifier = _QUALIFIERS.match(_typeset(raw))
-    if condition or _AFTER.search(bare) or (qualifier is not None and qualifier.group("q") in _BOUND_SIGNS):
+    reading = read_number(raw)
+    if reading.ends is None or reading.unit is None or (reading.unit and not range_unit(reading.unit)):
         return None
-    scientific = list(_SCI.finditer(bare))
-    if scientific:
-        if len(scientific) != 2 or bare[: scientific[0].start()].strip():
-            return None
-        first, second = scientific
-        if not _RANGE_SEPARATOR.fullmatch(bare[first.end() : second.start()].strip()):
-            return None
-        low, high, unit = _sci_value(first), _sci_value(second), bare[second.end() :].strip()
-    else:
-        match = _PLAIN_RANGE.match(bare)
-        if match is None:
-            return None
-        own, unit = match.group("ua") or "", match.group("rest").strip()
-        if own and unit and own != unit:
-            return None
-        low, high, unit = float(_plain(match.group("a"))), float(_plain(match.group("b"))), unit or own
-    if low >= high or (unit and clean_unit(unit) not in {clean_unit(allowed) for allowed in units}):
-        return None
-    return low, high, unit
+    return reading.ends[0], reading.ends[1], reading.unit
 
 
 # A one-sided bound written before the number: the signs, and the words grounding recognises before a quote
-# (grounding._BOUND_BEFORE), so "80" quoted out of "above 80 %" reads the way ">80" does.
+# (grounding.quoted_bound), so "80" quoted out of "above 80 %" reads the way ">80" does.
 _ONE_SIDED = re.compile(
-    r"^(?:(?P<lower>>=|≥|>|above|over|more than|greater than|higher than|exceeding|at least)"
-    r"|(?P<upper><=|≤|<|below|less than|lower than|up to|at most))(?![a-z])\s*(?P<rest>.*)$",
+    rf"^(?:(?P<lower>>=|≥|>|{'|'.join(LOWER_BOUND_WORDS)})"
+    rf"|(?P<upper><=|≤|<|{'|'.join(UPPER_BOUND_WORDS)}))(?![a-z])\s*(?P<rest>.*)$",
     re.IGNORECASE,
 )
+_NO_INTERVAL = "an interval field needs two ends or a bound"
 
 
-def read_bound(raw: str) -> tuple[bool, float | None, str | None] | None:
-    """``(is_lower, number, note)`` when ``raw`` is a one-sided bound (">80 %", "at most 5 nm"), else None. The
-    number is None, with the reason, when what follows the bound is not one number: "> 450-500" has no single
-    end."""
+def read_interval(
+    raw: str, range_unit: Callable[[str], bool]
+) -> tuple[tuple[float | None, float | None, str] | None, str | None]:
+    """``((low, high, unit), None)`` when ``raw`` is one clean range or one clean one-sided bound (">80 %", "at most
+    5 nm", the open end None), else ``(None, why)``. ``unit`` is what follows the number, "" when nothing does.
+
+    A bound is held to a range's contract (:func:`read_range`): one number after the bound word, and after it
+    nothing but a unit ``range_unit`` accepts. "> 450-500", "> 450 (600)", "< 500 °C for 2 h" and ">80 % at 550
+    nm" are refused, not read as the one number they start with."""
+    clean = read_range(raw, range_unit)
+    if clean is not None:
+        return clean, None
     match = _ONE_SIDED.match(_typeset(raw))
     if match is None:
-        return None
-    number, note = parse_number(match.group("rest"), range_policy="reject")
-    return match.group("lower") is not None, number, note
+        number, note = parse_number(raw, range_policy="reject")
+        return None, _NO_INTERVAL if number is not None else _join([n for n in (note, _NO_INTERVAL) if n])
+    reading = read_number(match.group("rest"), range_policy="reject")
+    if reading.value is None:
+        return None, reading.note
+    if reading.unit is None or reading.ends is not None:
+        return None, "a bound followed by more than one number and its unit (a condition, a parenthesis); ambiguous"
+    if reading.unit and not range_unit(reading.unit):
+        return None, f"{reading.unit!r} after the bound is not a unit of the field; ambiguous"
+    lower = match.group("lower") is not None
+    return ((reading.value, None, reading.unit) if lower else (None, reading.value, reading.unit)), None
 
 
 # ---- Dates -------------------------------------------------------------------------------------------------

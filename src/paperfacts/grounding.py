@@ -238,10 +238,11 @@ _BOUND_SIGNS = {"geq": "≥", "ge": "≥", "leq": "≤", "le": "≤", "gt": ">",
 # LaTeX ("\geq", not "\left") and HTML ("&gt;") spellings of the signs.
 _BOUND_SIGN = re.compile(r"\\(geq|ge|leq|le|gt|lt)(?![A-Za-z])|&(gt|lt);")
 _BOUND_DECORATION = re.compile(f"[^^<>≥≤{KEY_CHARACTERS}]+")
-_BOUND_BEFORE = re.compile(
-    r"(?:^|[^a-z])(above|over|more than|greater than|higher than|exceeding|at least|below|less than|lower than"
-    r"|up to|at most|[<>≥≤])\s*$"
-)
+# The words that make the number after them a one-sided bound, lower then upper. normalize reads a quote's own
+# bound with the same words, so a bound found before a quote and one quoted with it read alike.
+LOWER_BOUND_WORDS = ("above", "over", "more than", "greater than", "higher than", "exceeding", "at least")
+UPPER_BOUND_WORDS = ("below", "less than", "lower than", "up to", "at most")
+_BOUND_BEFORE = re.compile(rf"(?:^|[^a-z])({'|'.join((*LOWER_BOUND_WORDS, *UPPER_BOUND_WORDS))}|[<>≥≤])\s*$")
 
 
 def _bound_key(text: str) -> str:

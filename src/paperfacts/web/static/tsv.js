@@ -19,9 +19,10 @@ const tsvCell = (value) => {
   return FORMULA_START.test(text) && !isNumber(text) ? `'${text}` : text;
 };
 
-// An interval cell, [low, high] with null for an open end: "2.8–4.3", "≥ 80", "≤ 5".
+// An interval cell, [low, high] with null for an open end: "2.8–4.3", "≥ 80", "≤ 5". Its ends are written in full,
+// exactly as the workbook writes them (kinds.interval_text), never cut to a number of significant digits.
 export const intervalText = ([low, high]) =>
-  high == null ? `≥ ${fmt(low)}` : low == null ? `≤ ${fmt(high)}` : `${fmt(low)}–${fmt(high)}`;
+  high == null ? `≥ ${String(low)}` : low == null ? `≤ ${String(high)}` : `${String(low)}–${String(high)}`;
 
 // A field's value as the clipboard gets it, decided by its column (a dataset field: `kind`, `cardinality`): the
 // values of a `many` column joined with "; ", an interval as its two ends, a boolean as true/false, every other

@@ -572,12 +572,22 @@ comparison: its midpoint, no value, or its lower or upper end (a calcination "at
 temperature it reached: `upper`). Under `lower` / `upper` the chosen end also fills the **dataset cell**, with
 the note 原文为区间 a–b，按字段配置取上限/下限: an end is a number the paper printed. Under `midpoint` and
 `reject` a range never fills a cell: a midpoint is a number nobody measured. Only a **clean range** has an end,
-and the lanes and the cell use the one definition of it (`normalize.read_range`): two ascending numbers, both
-plain or both in scientific notation, and after them nothing but the transcribed or the canonical unit
-("450-500", "450 °C to 500 °C", "1.2e-4 - 1.5e-4 Ω·cm"); an approximation ("~450-500") may precede it. Anything
-else is refused under `lower` / `upper` in the lanes as in the cell: a bound ("> 450-500", "below 1.2e-4 -
-1.5e-4"), a condition ("450-500 °C for 2 h"), a parenthesis ("450-500 (600)") or another unit ("450-500 K" on a
-℃ field). A bare range on a `percent_or_fraction` field is a fraction only when all of it is below 1, so both
+and the lanes and the cell use the one definition of it (`normalize.read_range`): a range the general number
+reader reads as one -- two ascending numbers, both plain or both in scientific notation -- and after it nothing
+but a unit of the field ("450-500", "450 °C to 500 °C", "1.2e-4 - 1.5e-4 Ω cm"); an approximation ("~450-500")
+may precede it. Anything else is refused under `lower` / `upper` in the lanes as in the cell: a bound ("> 450-500",
+"below 1.2e-4 - 1.5e-4"), a condition ("450-500 °C for 2 h"), a parenthesis ("450-500 (600)") or another unit
+("450-500 K" on a ℃ field).
+
+A unit written inside the quote ("1.5e-4 Ω·cm", "450-500 °C", ">80 mW") is checked by one rule
+(`normalize.unit_of_value`) in the lanes, the cell and an interval's range or bound: units are compared as the
+profile's unit registry converts them, never as spellings, so "Ω cm", "Ω-cm" and "ohm cm" are all Ω·cm. One that
+converts exactly as `unit_raw` does (a header's power of ten included) changes nothing. One that converts
+otherwise is the more specific statement and the number is converted from it: "1.5e-4 Ω·cm" under `unit_raw`
+"mΩ·cm" is 1.5e-4 Ω·cm, and "1.2-1.5 Ω·cm" under a header "×10^-4 Ω·cm" does not take the header's power of ten.
+With no `unit_raw` the written unit is the unit ("0.6%" is 0.6 %, not a fraction). One the registry cannot read
+for the field ("K" or "oC" on a built-in ℃ field; a profile adds spellings with a declared unit) keeps the cell
+empty, and the range or bound out. A bare range on a `percent_or_fraction` field is a fraction only when all of it is below 1, so both
 ends read in one unit ("0.8-1.2" is 0.8-1.2 %). A bound (">80 %", or "80" quoted out of "above 80 %") is no
 range under any policy, and a descending pair or a range whose exponent is written once (`1.2-1.5 × 10⁻³`) is
 refused under every one. `after_clause` (`refuse`, the default, or `condition`) decides a value quoted with an "after ..."

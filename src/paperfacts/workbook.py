@@ -20,7 +20,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.dataset import DocumentDataset, Row
-from paperfacts.kinds import CellValue
+from paperfacts.kinds import CellValue, interval_text
 from paperfacts.profile import DomainProfile
 from paperfacts.storage import write_atomic
 
@@ -56,12 +56,7 @@ def format_cell(value: CellValue, column: FieldColumn) -> CellValue:
     if column.cardinality == "many" and isinstance(value, list):
         return "; ".join("" if item is None else str(item) for item in value)
     if column.kind == "interval" and isinstance(value, list):
-        low, high = value
-        if high is None:
-            return f"≥ {low:g}"
-        if low is None:
-            return f"≤ {high:g}"
-        return f"{low:g}–{high:g}"
+        return interval_text(value)  # type: ignore[arg-type]
     return value
 
 
