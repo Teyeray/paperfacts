@@ -2,7 +2,7 @@
 
 import { releaseFact } from "./facts.js";
 import { caveats, escapeHtml, fmt, toast } from "./html.js";
-import { LANES, LANE_LABEL, state, uiCopy } from "./state.js";
+import { LANES, LANE_LABEL, entityGroups, entityOf, inEntity, state, uiCopy } from "./state.js";
 import { revealViewer } from "./viewer.js";
 
 // The paper-level record (under the profile's short name for it) and the unplaced values are told apart from
@@ -23,7 +23,13 @@ function laneNode(lane, data) {
   if (!data) { box.append(note("还没有抽取结果。")); return box; }
   if (data.paper) box.append(sampleNode({ sample_id: uiCopy("paper_level_short_zh"), label: uiCopy("paper_level_label_zh"), conditions: {}, fields: data.paper.fields }, "paper"));
   if (!data.samples.length) box.append(note(`模型没有识别出${uiCopy("entity_label_zh")}。`));
-  for (const sample of data.samples) box.append(sampleNode(sample));
+  // With several entity types each entity's samples come under its label; with one, they are just listed.
+  const groups = entityGroups();
+  for (const group of groups) {
+    const samples = data.samples.filter((sample) => inEntity(group, sample));
+    if (groups.length > 1 && data.samples.length) box.append(entityHead(group, samples.length));
+    for (const sample of samples) box.append(sampleNode(sample));
+  }
   // Values the model found but could not place on any sample. Shown apart because nothing compares them:
   // hiding them would make the lane look emptier than it was.
   if (data.unattributed?.length) {
@@ -39,6 +45,13 @@ function laneNode(lane, data) {
   return box;
 }
 
+function entityHead(group, count) {
+  const head = document.createElement("div");
+  head.className = "entity-head lane-entity";
+  head.textContent = `${group.label} · ${count}`;
+  return head;
+}
+
 function note(text) {
   const div = document.createElement("div");
   div.className = "lane-empty";
@@ -51,6 +64,7 @@ function sampleNode(sample, kind = "sample") {
   div.className = "sample";
   div.dataset.kind = kind;
   div.dataset.sample = sample.sample_id ?? "";
+  div.dataset.entity = entityOf(sample);
   const conditions = Object.entries(sample.conditions ?? {}).map(([k, v]) => `${k}: ${v}`).join(" · ");
   div.innerHTML = `<span class="sid">${escapeHtml(sample.sample_id)}</span><span class="label">${escapeHtml(sample.label ?? "")}</span>${conditions ? `<div class="cond">${escapeHtml(conditions)}</div>` : ""}`;
   for (const f of sample.fields) div.append(fieldNode(f));
@@ -91,8 +105,9 @@ export function clearEvidence(host) {
 }
 
 // `kind` is "paper" for the results table's paper-level row (it matches the lanes' paper-level records,
-// whatever their name) and "sample" for a sample row (matched by id among real samples only).
-export function showEvidence(host, fieldName, rowSampleId, kind = "sample") {
+// whatever their name) and "sample" for a sample row (matched by id among real samples of its `entity` only: two
+// entity types may each have an "S1").
+export function showEvidence(host, fieldName, rowSampleId, kind = "sample", entity = null) {
   if (!host) return;
   clearEvidence(host);
   const wanted = new Set(String(rowSampleId ?? "").split(ID_SEPARATOR).map((id) => id.trim()).filter(Boolean));
@@ -100,6 +115,7 @@ export function showEvidence(host, fieldName, rowSampleId, kind = "sample") {
   for (const sample of host.querySelectorAll(".sample")) {
     if (sample.dataset.kind !== kind) continue;
     if (kind === "sample" && !wanted.has(sample.dataset.sample ?? "")) continue;
+    if (kind === "sample" && entity && sample.dataset.entity !== entity) continue;
     for (const row of sample.querySelectorAll(".field")) {
       if ((row.dataset.field ?? "") === fieldName) rows.push(row);
     }

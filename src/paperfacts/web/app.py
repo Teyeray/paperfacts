@@ -162,7 +162,19 @@ def profile_view(profile: DomainProfile) -> dict[str, Any]:
         "maturity": profile.maturity,
         "description_zh": profile.description_zh,
         "ui": dataclasses.asdict(profile.ui),
-        "groups": [{"name": group.name, "level": group.level, "label_zh": group.label_zh} for group in profile.groups],
+        "groups": [
+            {"name": group.name, "level": group.level, "label_zh": group.label_zh, "entity": group.entity}
+            for group in profile.groups
+        ],
+        # The kinds of sample, the primary first; a profile without entity types has the one implicit entity.
+        "entities": [
+            {
+                "name": entity.name,
+                "label_zh": entity.label_zh,
+                "fields": [spec.name for spec in profile.entity_fields(entity)],
+            }
+            for entity in profile.entities
+        ],
         "fields": [
             {
                 "name": spec.name,
@@ -170,6 +182,7 @@ def profile_view(profile: DomainProfile) -> dict[str, Any]:
                 "group": spec.group,
                 "level": spec.level,
                 "unit": spec.canonical_unit,
+                "entity": spec.entity,
             }
             for spec in profile.fields
         ],

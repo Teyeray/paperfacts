@@ -34,6 +34,9 @@ class FieldColumn(BaseModel):
     # every list the server hands out is built by field_columns, which always sets it.
     kind: FieldKind = "text"
     cardinality: Cardinality = "one"
+    # The entity type a sample-level column describes, in a profile that declares entity types; None for a
+    # paper-level column and for every column of a profile without them (all of whose samples are one kind).
+    entity: str | None = None
 
 
 def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
@@ -47,6 +50,7 @@ def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
             description=spec.description_zh,
             kind=spec.kind,
             cardinality=spec.cardinality,
+            entity=spec.entity,
         )
         for spec in profile.fields
     )

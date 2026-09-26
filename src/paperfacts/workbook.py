@@ -21,13 +21,16 @@ from openpyxl.worksheet.worksheet import Worksheet
 from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.dataset import DocumentDataset, Row
 from paperfacts.kinds import CellValue, interval_text
-from paperfacts.profile import DomainProfile
+from paperfacts.profile import IMPLICIT_ENTITY, DomainProfile, EntitySpec
 from paperfacts.storage import write_atomic
 
 
-def data_columns(profile: DomainProfile) -> tuple[tuple[str, str], ...]:
-    """``(key, header)`` of a paper or sample row, in order: who the row is, then one column per field.
-    Here rather than in :mod:`paperfacts.dataset`: a header is display text, and that module is hashed."""
+def data_columns(profile: DomainProfile, entity: EntitySpec | None = None) -> tuple[tuple[str, str], ...]:
+    """``(key, header)`` of a paper or sample row, in order: who the row is, then one column per field -- the
+    paper-level fields and ``entity``'s own (the primary entity's by default, which in a profile without entity
+    types is every field). Here rather than in :mod:`paperfacts.dataset`: a header is display text, and that
+    module is hashed."""
+    entity = entity or profile.primary
     return (
         ("document_id", "文档ID"),
         ("filename", "文件名"),
@@ -39,6 +42,7 @@ def data_columns(profile: DomainProfile) -> tuple[tuple[str, str], ...]:
         *(
             (key, key)
             for spec in profile.fields
+            if not spec.is_sample_level or profile.entity_of(spec).name == entity.name
             for key in (_interval_keys(spec.name) if spec.kind == "interval" else (spec.name,))
         ),
     )
@@ -94,6 +98,9 @@ _KIND_ZH = {"boolean": "是/否", "date": "日期（ISO）"}
 _INTERVAL_RULE = "区间：下限、上限各占一列，开口一端留空；冲突、多条件或无引用定位时两列都留空。"
 _LIST_RULE = "多值：两路已定位证据的并集，以“; ”分隔，每个元素的来源通道见数据质量说明；有分类时按分类顺序排列。"
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+# What Excel refuses in a sheet title, and its length limit.
+_SHEET_TITLE_REFUSED = re.compile(r"[\[\]:*?/\\]")
+_SHEET_TITLE_MAX = 31
 _QUALITY_COLUMNS = (
     ("document_id", "文档ID"),
     ("filename", "文件名"),
@@ -144,7 +151,9 @@ def _worksheet(
     sheet.append([label for _, label in columns])
     for row in rows:
         sheet.append([row.get(key) for key, _ in columns])
-    sheet.freeze_panes = "D2" if title in {"论文数据", "样品数据", "数据质量"} else "A2"
+    # A sheet of sample rows keeps who each row is in view: every column up to the sample id.
+    keys = [key for key, _ in columns]
+    sheet.freeze_panes = f"{get_column_letter(keys.index('sample_id') + 2)}2" if "sample_id" in keys else "A2"
     sheet.auto_filter.ref = sheet.dimensions
     sheet.sheet_view.showGridLines = False
     sheet.row_dimensions[1].height = 30
@@ -186,6 +195,25 @@ def _worksheet(
     return sheet
 
 
+def _entity_sheets(profile: DomainProfile) -> list[tuple[EntitySpec, str]]:
+    """Each entity type's data sheet and its title. A profile without entity types keeps the one 样品数据 sheet;
+    with several, each sheet is named after its entity ("催化剂数据"), cleaned of what Excel refuses in a title and
+    kept distinct from every other sheet."""
+    if len(profile.entities) == 1:
+        return [(profile.primary, "样品数据")]
+    taken = {"论文数据", "字段说明", "数据质量", "图中读数", "运行记录"}
+    sheets: list[tuple[EntitySpec, str]] = []
+    for entity in profile.entities:
+        base = _SHEET_TITLE_REFUSED.sub("", f"{entity.label_zh or entity.name}数据").strip("'")
+        title, n = base[:_SHEET_TITLE_MAX], 1
+        while title.casefold() in {name.casefold() for name in taken}:
+            n += 1
+            title = f"{base[: _SHEET_TITLE_MAX - len(str(n)) - 1]} {n}"
+        taken.add(title)
+        sheets.append((entity, title))
+    return sheets
+
+
 def write_dataset(
     documents: Sequence[DocumentDataset],
     output: Path,
@@ -204,13 +232,27 @@ def write_dataset(
     )
     workbook = Workbook()
     workbook.remove(workbook.active)
-    columns = data_columns(profile)
+    several = len(profile.entities) > 1
     by_name = {column.name: column for column in field_columns(profile)}
     scientific = frozenset(spec.name for spec in profile.fields if spec.display_format == "scientific")
     papers = _formatted([doc.paper_row for doc in unique], by_name)
-    _worksheet(workbook, "论文数据", columns, papers, "Papers", scientific=scientific)
-    samples = _formatted([row for doc in unique for row in doc.sample_rows], by_name)
-    _worksheet(workbook, "样品数据", columns, samples, "Samples", scientific=scientific)
+    _worksheet(workbook, "论文数据", data_columns(profile), papers, "Papers", scientific=scientific)
+    for entity, title in _entity_sheets(profile):
+        rows = [
+            row
+            for doc in unique
+            for row in doc.sample_rows
+            if not several or row.get("entity", IMPLICIT_ENTITY) == entity.name
+        ]
+        _worksheet(
+            workbook,
+            title,
+            data_columns(profile, entity),
+            _formatted(rows, by_name),
+            f"Samples_{entity.name}" if several else "Samples",
+            scientific=scientific,
+        )
+    entity_labels = {entity.name: entity.label_zh or entity.name for entity in profile.entities}
     descriptions: list[Row] = [
         column.model_dump()
         | {
@@ -224,6 +266,7 @@ def write_dataset(
             {"unit": "文本（多值）", "rule": _LIST_RULE} if column.cardinality == "many" else {}
         )
         | ({"rule": _INTERVAL_RULE} if column.kind == "interval" else {})
+        | ({"entity": entity_labels.get(column.entity or "", "")} if several else {})
         for column in by_name.values()
     ]
     _worksheet(
@@ -233,6 +276,7 @@ def write_dataset(
             ("name", "字段"),
             ("label", "中文名"),
             ("scope", "层级"),
+            *((("entity", "实体"),) if several else ()),
             ("unit", "标准单位"),
             ("description", "中文说明"),
             ("rule", "单值与缺失规则"),
@@ -241,7 +285,20 @@ def write_dataset(
         "Fields",
     )
     quality = _formatted([row for doc in unique for row in doc.quality_rows], by_name, quality=True)
-    _worksheet(workbook, "数据质量", _QUALITY_COLUMNS, quality, "Quality")
+    # With several entity types a quality row says whose sample it is about; a paper-level one names none.
+    quality_columns = (
+        (*_QUALITY_COLUMNS[:2], ("entity", "实体"), *_QUALITY_COLUMNS[2:]) if several else _QUALITY_COLUMNS
+    )
+    _worksheet(
+        workbook,
+        "数据质量",
+        quality_columns,
+        [
+            {**row, "entity": entity_labels[str(row["entity"])]} if row.get("entity") in entity_labels else row
+            for row in quality
+        ],
+        "Quality",
+    )
     _worksheet(workbook, "图中读数", _FIGURE_COLUMNS, figure_rows, "Figures")
     runs: list[Row] = [
         {
