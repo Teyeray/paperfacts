@@ -82,10 +82,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   max-width: 260px; font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper);
   border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 3px 6px;
 }
-/* On a phone the switcher takes the model line's place; a one-profile page keeps it. */
+/* On a phone the switcher and the profile page link take the model line's place. */
 @media (max-width: 520px) {
   .profile-switch select { max-width: 150px; }
-  .topbar-right:has(.profile-switch:not(.hidden)) .topbar-meta { display: none; }
+  .topbar-meta { display: none; }
 }
 .topbar-meta {
   color: var(--ink-3); font-size: 11.5px; font-family: var(--font-mono);
@@ -426,3 +426,37 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .results-table tr.paper-row > td:first-child { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
 .results-table tr.paper-row:hover > td:first-child { background: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
 .results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+
+/* ---------- the profile page (read-only) and the home table's entity chips ---------- */
+.topbar-link { font-size: 12px; color: var(--ink-2); white-space: nowrap; text-underline-offset: 3px; }
+.entity-switch { padding-right: 10px; border-right: 1px solid var(--line); }
+.profile-head h1 { font-family: var(--font-display); font-weight: 600; font-size: 28px; line-height: 1.2; margin: 0 0 6px; }
+.profile-head .profile-badge { font-family: var(--font-body); font-size: 12px; vertical-align: middle; }
+.profile-meta { margin: 0 0 8px; font-size: 12.5px; }
+.profile-description { margin: 0 0 8px; color: var(--ink-2); max-width: 80ch; }
+.profile-warning { margin: 6px 0; padding: 6px 10px; border: 1px solid var(--warn); border-radius: var(--radius); }
+.profile-section { margin-top: var(--gap-section); }
+.profile-section h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+/* Nothing here is clickable; a long value wraps at words, so a short one never breaks letter by letter. */
+.profile-table tr { cursor: default; }
+.profile-table th { white-space: nowrap; }
+.profile-table td.profile-cell { vertical-align: top; min-width: 5em; max-width: 32em; overflow-wrap: break-word; }
+.profile-table td.profile-cell.empty { color: var(--ink-3); }
+.profile-table th small { display: block; font-family: var(--font-mono); font-weight: 400; color: var(--ink-3); }
+.profile-entities, .profile-documents { margin: 0; padding-left: 20px; line-height: 1.8; }
+.profile-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 8px 0 0; }
+.profile-list dt { color: var(--ink-3); }
+.profile-list dd { margin: 0; overflow-wrap: anywhere; }
+.prompt-preview { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
+.prompt-preview > summary { padding: 8px 12px; cursor: pointer; font-weight: 600; }
+.prompt-sections { padding: 0 12px 10px; }
+.prompt-section h3 { font-size: 13px; margin: 10px 0 4px; font-family: var(--font-mono); font-weight: 500; color: var(--ink-2); }
+.prompt-section pre {
+  margin: 0; padding: 10px 12px; max-height: 480px; overflow: auto; font-size: 11.5px; line-height: 1.5;
+  white-space: pre-wrap; background: var(--paper-2); border-radius: var(--radius-sm);
+}
+.prompt-field-label { display: block; padding: 0 12px 6px; font-size: 12.5px; }
+.prompt-field {
+  font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper); max-width: 100%;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 3px 6px;
+}

@@ -1,11 +1,13 @@
 // Document view: load every artifact for one document, render the template, and take over its background job.
-// Also the other things the content area can show: the home view and the "no such document / profile" states.
+// Also the other things the content area can show: the home view, the profile page and the "no such document /
+// profile" states.
 //
 // Every view is loaded under the profile the URL routes to, read once before the first await, with that profile's
 // view (profiles.js) fetched beside the data and adopted only together with it.
 
 import { api, optional, profileApi } from "./api.js";
 import { toast } from "./html.js";
+import { renderDefinition } from "./profile.js";
 import { adoptProfile, profileTitle, profileView, servedProfile } from "./profiles.js";
 import { LANES, applyUiCopy, currentJob, isActive, isCurrent, jobInProfile, slot, state, uiCopy } from "./state.js";
 import { PageViewer } from "./viewer.js";
@@ -16,9 +18,9 @@ import { renderFigures } from "./figures.js";
 import { loadCorpus, renderCorpus } from "./corpus.js";
 import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from "./job.js";
 import { loadLibrary, renderLibrary } from "./library.js";
-import { factFromHash, hashFor, reloadView } from "./router.js";
+import { documentHash, factFromHash, hashFor, reloadView } from "./router.js";
 
-const VIEWS = ["empty-state", "corpus-view", "document-view", "missing-view"];
+const VIEWS = ["empty-state", "corpus-view", "document-view", "profile-view", "missing-view"];
 
 function showViews(...visible) {
   for (const id of VIEWS) document.getElementById(id).classList.toggle("hidden", !visible.includes(id));
@@ -68,18 +70,57 @@ export async function showEmpty() {
   renderCorpus(root);
 }
 
+// The read-only page of the routed profile. Its definition is asked by name, so the default's name comes from the
+// profile list, or from the profile's own view when that list did not load.
+export async function showProfilePage() {
+  const generation = state.generation;
+  const profile = state.profileName;
+  leaveDocument();
+  const root = document.getElementById("profile-view");
+  root.replaceChildren();
+  showViews("profile-view");
+  renderLibrary();
+  let view;
+  let definition;
+  try {
+    view = await profileView(profile);
+    const name = profile ?? state.defaultProfile ?? view?.name;
+    if (name == null) throw new Error("不知道默认领域配置的名字");
+    definition = await api(`/api/profiles/${encodeURIComponent(name)}`);
+  } catch (error) {
+    if (!isCurrent(generation)) return;
+    showMissing(null, error, { heading: "读取领域配置失败", message: `领域配置暂时读不出来：${error.message}` });
+    return;
+  }
+  if (!isCurrent(generation)) return; // the reader went elsewhere while the definition was on its way
+  adoptProfile(profile, view);
+  const name = definition.name;
+  renderDefinition(root, definition, {
+    // Asked only when a preview is opened; an answer that lands after the reader left draws nothing.
+    loadPrompts: async (field) => {
+      const query = field == null ? "" : `?field=${encodeURIComponent(field)}`;
+      const answer = await api(`/api/profiles/${encodeURIComponent(name)}/prompts${query}`);
+      return isCurrent(generation) ? answer : null;
+    },
+    documentHref: (id) => documentHash(id),
+    documentName: (id) => state.docs.find((doc) => doc.document_id === id)?.name ?? id,
+  });
+}
+
 // A link that names no document (or one that could not be read) says so, instead of leaving the previous
 // page on screen under the new address or falling back to the empty-library intro.
-export function showMissing(id, error = null) {
+export function showMissing(id, error = null, { heading = null, message = null } = {}) {
   leaveDocument();
   showViews("missing-view");
   const view = document.getElementById("missing-view");
   const notFound = !error || error.status === 404;
-  view.querySelector("h1").textContent = notFound ? "找不到这篇文档" : "读取文档失败";
-  view.querySelector('[data-slot="missing-message"]').textContent = notFound
-    ? `文档库里没有编号为「${id}」的文档：链接可能写错了，或者这篇文档已被删除。`
-    : `文档 ${id} 暂时读不出来：${error.message}`;
-  view.querySelector('[data-action="retry"]').classList.toggle("hidden", notFound);
+  view.querySelector("h1").textContent = heading ?? (notFound ? "找不到这篇文档" : "读取文档失败");
+  view.querySelector('[data-slot="missing-message"]').textContent =
+    message ??
+    (notFound
+      ? `文档库里没有编号为「${id}」的文档：链接可能写错了，或者这篇文档已被删除。`
+      : `文档 ${id} 暂时读不出来：${error.message}`);
+  view.querySelector('[data-action="retry"]').classList.toggle("hidden", notFound && !heading);
   homeLink(view, hashFor({ profile: state.profileName }));
   renderLibrary();
 }

@@ -230,8 +230,10 @@ this file is the part that is easy to get wrong.
 ## Web interface
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
-  offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `library`, `document`, `table`,
+  offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `profile`, `library`, `document`, `table`,
   `fieldpicker`, `tsv`, `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`; `app.js` is only the entry point.
+  `profile.js`'s `renderDefinition(root, definition, …)` draws any profile definition (the read-only page,
+  `(#/p/<name>)/profile`); its fields table takes its columns from the definition's attributes, never a hand list.
 - Profiles in the page: the router reads `#/p/<name>/…` (no prefix = the default, which is `null` in the frontend,
   never its name) into `state.profileName`; a profile change is a new view (bumps the generation, reloads the
   rail, drops `/fact/n` and the filter). Every per-profile request goes through `profileApi(profile, path)` /

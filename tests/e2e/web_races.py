@@ -337,7 +337,8 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     # A second server under a profile with two entity types, one seeded paper: the page groups by entity there. Its
     # address travels in `docs` beside that paper's id, so every check keeps the one signature.
     entity_settings = Settings(data_root=root / "entities", repo_root=root, llm_api_key="sk-test", llm_model="fake")
-    entity_profile = make_reference_profile()
+    # Its paper-level group's label holds markup, which the profile page must show as text.
+    entity_profile = make_reference_profile({"groups.0.label_zh": MARKUP})
     entity_library = Library(entity_settings, entity_profile)
     docs["E"] = seed_entity_document(entity_library, root)
     entity_app = create_app(
@@ -827,14 +828,143 @@ async def one_entity_evidence(page: Page, _: str, docs: dict[str, str], __: Path
     expect(marked == ["coating", "coating"], f"the marked records belong to {marked}")
 
 
-@check("the home table of a two-entity library shows the primary entity only")
+@check("the home table of a two-entity library switches between its entity types, and copies what it shows")
 async def entity_corpus(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
     await page.goto(f"{docs['entities']}/#/")
     await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    chips = await page.locator("#corpus-view .entity-switch .chip").all_text_contents()
+    expect(chips == ["涂层", "磨损测试"], f"the entity chips read {chips}")
     text = await page.text_content("#corpus-view") or ""
     expect("coating_thickness" in text and "test_temperature" not in text, f"the corpus table reads {text!r}")
-    expect("这里只列出涂层" in text, "the corpus view does not say it shows the primary entity only")
+    expect("只列出" not in text, "the corpus view still says it shows the primary entity only")
     expect("2 个涂层" in text, f"the sample count counts another entity's rows: {text!r}")
+    download = await page.get_attribute("#corpus-view a.download", "href")
+    # A keyboard switch keeps the focus on the chip it pressed.
+    await page.focus('#corpus-view [data-focus="entity:wear_test"]')
+    await page.keyboard.press("Enter")
+    await page.wait_for_selector('#corpus-view [data-focus="entity:wear_test"][aria-pressed="true"]')
+    focused = await page.evaluate("document.activeElement.dataset.focus")
+    expect(focused == "entity:wear_test", f"the focus moved to {focused!r}")
+    heads = await page.locator("#corpus-view thead th").all_text_contents()
+    expect(heads[:3] == ["论文", "磨损测试", "可用/一致"], f"the wear test table's heads read {heads}")
+    expect(any("test_temperature" in head for head in heads), f"the wear test table lacks its field: {heads}")
+    expect(not any("coating_thickness" in head or "precursor" in head for head in heads), f"other fields: {heads}")
+    rows = page.locator("#corpus-view tbody tr")
+    expect(await rows.count() == 1, f"the wear test table has {await rows.count()} rows")
+    cells = await rows.first.locator("td").all_text_contents()
+    expect(cells[1] == "S1" and any(cell.startswith("S1 涂层") for cell in cells[2:]), f"the row reads {cells}")
+    expect(await page.evaluate("location.hash") == "#/", "the entity choice changed the address")
+    expect(await page.get_attribute("#corpus-view a.download", "href") == download, "the Excel link changed")
+    await page.evaluate("navigator.clipboard.writeText = async (text) => { window.__copied = text; }")
+    await page.click("#corpus-view button.copy-table")
+    copied = (await page.evaluate("window.__copied") or "").split("\n")
+    expect(len(copied) == 2, f"the copy has {len(copied)} lines: {copied}")
+    header, line = (row.split("\t") for row in copied)
+    expect(header[:3] == heads[:3] and len(header) == len(heads), f"the copied header reads {header}")
+    expect(line[0] == cells[0] and line[1] == "S1" and "S1" in line[3:], f"the copied row reads {line}")
+    await page.click('#corpus-view [data-focus="entity:coating"]')
+    await page.wait_for_selector('#corpus-view [data-focus="entity:coating"][aria-pressed="true"]')
+    expect("2 个涂层" in (await page.text_content("#corpus-view") or ""), "the primary table did not come back")
+
+
+# ---- the profile page -------------------------------------------------------------------------------------------
+
+# A label a profile may carry: shown as text, never parsed as an element.
+MARKUP = '<img src=x onerror="window.__xss=1">'
+
+
+async def open_profile_page(page: Page, url: str) -> None:
+    await page.goto(url)
+    await page.wait_for_selector("#profile-view:not(.hidden) .profile-fields tbody tr")
+
+
+@check("the profile page shows the default profile's fields and asks for a prompt only when it is opened")
+async def profile_page(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    prompts: list[str] = []
+    page.on("request", lambda request: prompts.append(request.url) if "/prompts" in request.url else None)
+    await page.goto(f"{base}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await page.click("#profile-link")
+    await page.wait_for_selector("#profile-view:not(.hidden) .profile-fields tbody tr")
+    expect(await page.evaluate("location.hash") == "#/profile", "the header link does not open the profile page")
+    expect(await page.is_hidden("#corpus-view") and await page.is_hidden("#empty-state"), "home is still shown")
+    attributes = set(await page.locator("#profile-view .profile-fields thead th small").all_text_contents())
+    wanted = {"name", "kind", "level", "entity", "canonical_unit", "categories", "cardinality", "range_policy"}
+    wanted |= {"references", "condition_rule", "valid_range"}
+    expect(wanted <= attributes, f"the fields table lacks {sorted(wanted - attributes)}")
+    definition = await page.evaluate("fetch('/api/profile').then((response) => response.json())")
+    rows = await page.locator("#profile-view .profile-fields tbody tr").count()
+    expect(rows == len(definition["fields"]), f"{rows} field rows for {len(definition['fields'])} fields")
+    expect(not prompts, f"a prompt was asked before any preview was opened: {prompts}")
+    system = page.locator("#profile-view .prompt-preview").first
+    await system.locator("summary").click()
+    await system.locator(".prompt-section pre").first.wait_for()
+    expect(len(prompts) == 1, f"opening the preview asked {prompts}")
+    titles = await system.locator(".prompt-section h3").all_text_contents()
+    expect("inventory system prompt (passage mode)" in titles, f"the sections read {titles}")
+    await system.locator("summary").click()
+    await system.locator("summary").click()
+    expect(len(prompts) == 1, "reopening the preview asked again")
+    per_field = page.locator("#profile-view .prompt-preview").nth(1)
+    await per_field.locator("summary").click()
+    name = definition["fields"][0]["name"]
+    await per_field.locator("select").select_option(name)
+    await per_field.locator(".prompt-section pre").first.wait_for()
+    expect(len(prompts) == 2 and f"field={name}" in prompts[1], f"the field question was asked as {prompts}")
+    await page.click(".brand")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await page.is_hidden("#profile-view"), "the profile page stays up at home")
+
+
+@check("a two-entity profile's page lists its entities and its reference field; the switcher keeps the page")
+async def profile_page_entities(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await open_profile_page(page, f"{docs['multi']}/#/p/{DEMO}/profile")
+    expect(await selected_profile(page) == DEMO, f"the switcher shows {await selected_profile(page)!r}")
+    expect("示例领域" in (await page.text_content("#profile-view h1") or ""), "the page does not name the profile")
+    expect(await page.get_attribute("#profile-link", "href") == f"#/p/{DEMO}/profile", "the header link is not DEMO's")
+    entities = " ".join(await page.locator("#profile-view .profile-entities li").all_text_contents())
+    expect("涂层" in entities and "磨损测试" in entities and "主实体" in entities, f"the entities read {entities!r}")
+    reference = page.locator("#profile-view .profile-fields tbody tr", has_text="tested_coating")
+    cells = await reference.locator("td").all_text_contents()
+    expect("reference" in cells and "涂层 coating" in cells and "磨损测试 wear_test" in cells, f"it reads {cells}")
+    link = page.locator(f'#profile-view .profile-documents a[href="#/p/{DEMO}/doc/{docs["M"]}"]')
+    expect(await link.count() == 1, "the paper with results under the profile is not linked")
+    await page.select_option("#profile-select", "tco")
+    await page.wait_for_function("location.hash === '#/profile'")
+    await page.wait_for_function("!document.querySelector('#profile-view h1')?.textContent.includes('示例领域')")
+    expect(await page.locator("#profile-view .profile-entities").count() == 0, "the default's page lists entities")
+
+
+@check("profile text holding markup is shown as text on the profile page, prompts included")
+async def profile_page_markup(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    await open_profile_page(page, f"{docs['entities']}/#/profile")
+    text = await page.text_content("#profile-view") or ""
+    expect(MARKUP in text, "the markup label is not shown as text")
+    expect(await page.locator("#profile-view img, #profile-view script").count() == 0, "the label became an element")
+    per_field = page.locator("#profile-view .prompt-preview").nth(1)
+    await per_field.locator("summary").click()
+    await per_field.locator("select").select_option("tested_coating")
+    await per_field.locator(".prompt-section pre").first.wait_for()
+    question = " ".join(await per_field.locator(".prompt-section pre").all_text_contents())
+    expect("Coatings" in question, "the reference field's question does not name the entity it refers to")
+    await page.wait_for_timeout(300)
+    expect(await page.evaluate("window.__xss") is None and not errors, f"markup ran: {errors}")
+
+
+@check("a profile page answer that lands after the reader left draws nothing")
+async def profile_page_late(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['multi']}/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await page.route(lambda url: f"/api/profiles/{DEMO}" in url, delayed(1.5))
+    await page.evaluate(f"location.hash = '#/p/{DEMO}/profile'")
+    await page.wait_for_timeout(200)
+    await page.evaluate(f"location.hash = '#/doc/{docs['M']}'")
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    await page.wait_for_timeout(2000)
+    expect(await page.is_hidden("#profile-view"), "the late profile page drew over the document")
+    expect(await page.is_visible("#document-view"), "the document view was hidden")
 
 
 @check("a profile without entity types names no entity on the page")
