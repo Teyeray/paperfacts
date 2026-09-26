@@ -8,7 +8,7 @@
 
 import { api, profileApi } from "./api.js";
 import { toast } from "./html.js";
-import { documentFromHash, hashFor, navigate, reloadView } from "./router.js";
+import { documentFromHash, hashFor, navigate, pageFromHash, reloadView } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
 
 // The same pause as the job poll's (job.js), without importing it: job.js draws the document view.
@@ -138,14 +138,16 @@ export function syncSwitcher() {
   const name = state.profileName ?? state.defaultProfile;
   if (name != null && [...select.options].some((option) => option.value === name)) select.value = name;
   document.querySelector(".brand").setAttribute("href", hashFor({ profile: state.profileName }));
+  document.getElementById("profile-link").setAttribute("href", hashFor({ profile: state.profileName, page: "profile" }));
 }
 
 // Switching keeps the reader on the same paper: "show me this one under the other domain" is the point. The fact
-// index is dropped, since it numbers another profile's comparisons.
+// index is dropped, since it numbers another profile's comparisons. On the profile page it shows the other profile's.
 export function setupSwitcher() {
   document.getElementById("profile-select").addEventListener("change", (event) => {
     const name = event.target.value;
     const id = documentFromHash();
-    navigate(hashFor({ profile: name === state.defaultProfile ? null : name, id: /^[0-9a-f]{16}$/.test(id ?? "") ? id : null }));
+    const profile = name === state.defaultProfile ? null : name;
+    navigate(hashFor({ profile, id: /^[0-9a-f]{16}$/.test(id ?? "") ? id : null, page: pageFromHash() }));
   });
 }

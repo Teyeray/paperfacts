@@ -215,7 +215,8 @@ paper that is already running waits for that run to end.
 
 **The home page** is 论文结果总表: one row per processed paper, showing the sample that paper selected
 across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
-library.
+library. Under a profile with several entity types, a chip per entity type picks what a row is: the primary one
+gives the table above, any other one row per sample of that type across the papers, with that type's fields.
 
 **A document page** reads top to bottom.
 
@@ -746,7 +747,7 @@ A profile changes the words, never the shape of the answer. The shape is fixed i
 Still not supported: a list of numbers, dates or references (`many` is text and composition only); a
 many-to-many or multi-hop link (a reference names one sample); nesting or order between samples (a layer stack);
 a value stated for a whole series across entity types; figures bound to an entity; more than five entity types;
-entity types in document mode; the home table (corpus view) beyond the primary entity. When a domain does not
+entity types in document mode. When a domain does not
 fit, narrow it until it does rather than stretch a slot: pick the entities the gold data is about, move a
 per-layer quantity into one field per layer that matters (`etl_thickness`, `absorber_thickness`), model a relation
 that belongs to no one entity as a third entity with two references, and leave curves and spectra to the charts
@@ -1110,6 +1111,12 @@ Switching keeps you on the same paper. The library, its progress dots and tallie
 paper with results under other profiles says so in the library (另有 N 个领域的结果) and links to them from its
 page, and a paper busy under another profile says so above its stages -- your run queues behind it. A link to a
 profile the server does not serve, or one that did not load, says so instead of falling back to the default.
+
+「配置说明」 in the header opens the current profile's read-only page (`#/profile`, `#/p/<name>/profile`): its
+title, maturity and content hash, its entity types and groups, a table of every field with every attribute a field
+sets (kind, level, entity, unit, categories, cardinality, range policy, reference, condition rule, valid range, …),
+its declared units and retrieval words, the papers with results under it, and a preview of the prompts it renders
+-- the same text `paperfacts prompts` prints, the system prompts or one field's question, fetched when opened.
 
 The HTTP interface names the profile with `?profile=<name>` on every route whose answer depends on one:
 `/api/profile`, `/api/documents` (upload, run, run-all, and every per-document read but the parse artifact and

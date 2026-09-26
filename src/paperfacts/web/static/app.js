@@ -2,13 +2,14 @@
 // open whatever document the URL points at.
 // No build step; module breakdown: state (state & shared constants), api, html (small utilities),
 // router (routes, the profile prefix and the view generation), profiles (the header switcher and each profile's
-// view), library (left rail), document (document view, home view and the missing-document / missing-profile
-// states), table (the results table and the column model), fieldpicker (which field columns are shown), tsv (the
-// clipboard copy), corpus (the home view's library-wide results table), facts (fact comparison), figures (chart
-// readings), samples (sample records), job (job progress), viewer (page-level provenance).
+// view), library (left rail), document (document view, home view, profile page and the missing-document /
+// missing-profile states), profile (the read-only profile page's renderers), table (the results table and the
+// column model), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
+// library-wide results table), facts (fact comparison), figures (chart readings), samples (sample records), job
+// (job progress), viewer (page-level provenance).
 
 import { api } from "./api.js";
-import { showDocument, showEmpty, showMissing, showMissingProfile } from "./document.js";
+import { showDocument, showEmpty, showMissing, showMissingProfile, showProfilePage } from "./document.js";
 import { toast } from "./html.js";
 import { loadLibrary, setupLibraryDisclosure, setupRunAll, setupUpload } from "./library.js";
 import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
@@ -50,7 +51,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("health").textContent = "后端不可用";
     toast(health.reason.message, true);
   }
-  installRouter({ onDocument: showDocument, onEmpty: showEmpty, onMissing: showMissing, onMissingProfile: showMissingProfile, onProfile });
+  installRouter({
+    onDocument: showDocument,
+    onEmpty: showEmpty,
+    onMissing: showMissing,
+    onMissingProfile: showMissingProfile,
+    onProfile,
+    onProfilePage: showProfilePage,
+  });
   route();
   // The router loads the rail itself when the URL names a profile; for the default it is loaded here.
   if (state.profileName === null) {
