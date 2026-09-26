@@ -72,7 +72,7 @@ export function bodyRow(columns, item, className = "") {
 // How a committed value is written out, decided by its column: the values of a `many` column joined with "；",
 // numbers through `fmt`, everything else as its own text.
 const shownValue = (value, field) => {
-  if (field?.cardinality === "many" && Array.isArray(value)) return value.map((item) => shownValue(item)).join("；");
+  if (field?.cardinality === "many" && Array.isArray(value)) return value.map((item) => (item == null ? "" : shownValue(item))).join("；");
   return typeof value === "number" ? fmt(value) : String(value);
 };
 

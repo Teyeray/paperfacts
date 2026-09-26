@@ -253,7 +253,8 @@ def _slot_material(profile: DomainProfile, *, matching: bool) -> dict[str, objec
     """The prompt slots that differ from their :class:`PromptSlots` default: the matching ones or all the others.
 
     Hashed by value because a slot may reach only a user prompt (``implausible_origin`` in a passage-mode field
-    line), which no system-prompt hash sees; a slot at its default is left out like a field attribute."""
+    line), which no system-prompt hash sees; a slot at its default is left out like a field attribute, and a
+    required slot (no default) is always in."""
     return {
         name: value
         for name, value in dataclasses.asdict(profile.prompt).items()

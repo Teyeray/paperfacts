@@ -268,7 +268,7 @@ class NumericRules:
     def within(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             return math.isclose(a, b, rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
-        return self.same(a, b, spec)
+        return False
 
     def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
         return ()

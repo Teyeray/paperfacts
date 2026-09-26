@@ -214,7 +214,7 @@ def set_aside(raw: str) -> tuple[str, list[str], str]:
     """``(value text, notes, condition)``: ``raw`` without what surrounds the value -- typesetting, a qualifier,
     a name before "=", a condition after it -- a note for each thing set aside, and the condition itself ("" when
     there is none). The same for every spelling, scientific, plain or compound, and for the dataset cell
-    (``decide``), so none of them reads a condition's number as the value.
+    (``kinds``), so none of them reads a condition's number as the value.
 
     A condition is set aside only where the value before it keeps a number: "deposited for 10 min" is the
     quote of a value that opens with its verb, not a condition with no value in front of it."""
@@ -571,7 +571,7 @@ def compound_value(spec: FieldSpec, text: str, units: UnitRegistry) -> float | N
     is the value alone: callers set aside what surrounds it (:func:`set_aside`).
 
     The one reader of compound durations, for the comparison (:func:`normalize_field`) and for the dataset
-    cell (``decide``) alike, so the two never read one string differently."""
+    cell (``kinds``) alike, so the two never read one string differently."""
     if spec.canonical_unit not in _SUMMED_UNITS:
         return None
     match = _COMPOUND.match(normalize_text(text).strip())
@@ -595,7 +595,7 @@ def compound_value(spec: FieldSpec, text: str, units: UnitRegistry) -> float | N
 @dataclass(frozen=True)
 class Reading:
     """What every reader of a numeric value -- the comparison (:func:`normalize_field`) and the dataset cell
-    (``decide``) -- takes from a quote before deciding what its number is. One function builds it, so the two
+    (``kinds``) -- takes from a quote before deciding what its number is. One function builds it, so the two
     never read one string differently."""
 
     # The value text to parse: number words spelled out, an "after" clause cut off, a bound put back in front.

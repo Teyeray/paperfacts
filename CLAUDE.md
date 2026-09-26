@@ -38,10 +38,11 @@ this file is the part that is easy to get wrong.
   is directory runs and offline export; `stored.py` is what is stored for a document and whether it is current.
   `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists).
 - What a field's kind decides (reading a value, when two lanes agree, what a dataset cell holds, the kind's note in
-  a field line) is one row per kind in `kinds.py`; a stage asks `kinds.rules_for(spec)` and never branches on
-  `spec.kind`. `records.py` and `passages.py` sit below it and read `fields.DIGIT_KINDS` instead. A dataset column
-  (`columns.FieldColumn`) carries `kind` and `cardinality`, and the workbook (`format_cell`), `table.js` and `tsv.js`
-  format a cell by its column, never by the value's shape.
+  a field line) is one row per kind in `kinds.py`; normalisation, comparison, the dataset cell and the prompts
+  ask `kinds.rules_for(spec)` and never branch on `spec.kind` (profile validation and the CLI listing still do). `records.py` and `passages.py` sit below it and read `fields.DIGIT_KINDS` instead. A dataset column
+  (`columns.FieldColumn`) carries `kind` and `cardinality` so the workbook (`format_cell`), `table.js` and `tsv.js`
+  format a cell by its column, never by the value's shape; today only `cardinality` changes anything (a `many`
+  list joined with "; ", "；" on the page), and the kinds added later format by `kind`.
 - No module converts or retrieves with a unit table of its own: every conversion goes through the
   `UnitRegistry` of the profile it runs under (`profile.units`), including in tests and fixture generators.
 

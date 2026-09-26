@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import typing
+from pathlib import Path
 
 import pytest
 
+from paperfacts import normalize
 from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.fields import DIGIT_KINDS, FieldKind
 from paperfacts.kinds import RULES, NumericRules, TextRules, rules_for
@@ -58,3 +61,11 @@ def _column(kind: FieldKind, cardinality: typing.Literal["one", "many"] = "one")
 )
 def test_a_cell_is_written_as_its_column_says(column: FieldColumn, value, written):
     assert format_cell(value, column) == written
+
+
+def test_normalize_imports_the_kind_rows_only_inside_normalize_field():
+    # kinds.py is built on normalize.py's readers; a top-level import the other way would be a cycle that breaks
+    # whichever module a process happens to import first.
+    source = (Path(normalize.__file__)).read_text(encoding="utf-8")
+
+    assert not re.search(r"^from paperfacts\.kinds import|^import paperfacts\.kinds", source, re.MULTILINE)
