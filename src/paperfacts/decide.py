@@ -348,7 +348,8 @@ def _only_about(comparison: FieldComparison, aside: set[tuple[object, ...]]) -> 
 def _identity(value: FieldValue) -> tuple[object, ...]:
     """What identifies one extracted value between the lane and a comparison of it. Not the whole model: a
     stored report may carry grounding verdicts older than the lane's re-derived ones."""
-    return (value.field, value.value_raw, value.unit_raw, value.condition, tuple(value.source_ids))
+    # ``holds`` too: two quotes of the same words, one read as true and one as false, are two values.
+    return (value.field, value.value_raw, value.unit_raw, value.condition, tuple(value.source_ids), value.holds)
 
 
 # ---- Narrowing ---------------------------------------------------------------------------------------------

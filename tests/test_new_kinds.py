@@ -507,6 +507,17 @@ def test_the_workbook_gives_an_interval_two_numeric_columns(tmp_path: Path):
     assert [cell.value for cell in quality[2]][5] == "450–500"
     fields = {row[0].value: row[3].value for row in book["字段说明"].iter_rows(min_row=2)}
     assert (fields["doped"], fields["prepared_on"], fields["annealing_window"]) == ("是/否", "日期（ISO）", "℃")
+    header = [cell.value for cell in book["字段说明"][1]]
+    rules = {row[0].value: row[header.index("单值与缺失规则")].value for row in book["字段说明"].iter_rows(min_row=2)}
+    assert rules["annealing_window"].startswith("区间：")
+    assert "范围" in rules["doped"]
+
+
+def test_two_quotes_read_as_opposite_booleans_are_two_values():
+    from paperfacts.decide import _identity
+
+    base = dict(field="doped", value_raw="Al-doped", unit_raw=None, condition=None, source_ids=["mineru_p0_b1"])
+    assert _identity(FieldValue(**base, holds=True)) != _identity(FieldValue(**base, holds=False))
 
 
 def test_a_power_of_ten_in_both_the_bound_and_the_unit_is_refused():

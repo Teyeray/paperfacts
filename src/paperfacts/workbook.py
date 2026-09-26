@@ -96,6 +96,7 @@ _KIND_ZH = {"boolean": "是/否", "date": "日期（ISO）"}
 
 
 # The 字段说明 rule of a list column (cardinality "many").
+_INTERVAL_RULE = "区间：下限、上限各占一列，开口一端留空；冲突、多条件或无引用定位时两列都留空。"
 _LIST_RULE = "多值：两路已定位证据的并集，以“; ”分隔，每个元素的来源通道见数据质量说明；有分类时按分类顺序排列。"
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _QUALITY_COLUMNS = (
@@ -227,6 +228,7 @@ def write_dataset(
             # A list column says so, and that its cell is the union of both lanes, not one agreed value.
             {"unit": "文本（多值）", "rule": _LIST_RULE} if column.cardinality == "many" else {}
         )
+        | ({"rule": _INTERVAL_RULE} if column.kind == "interval" else {})
         for column in by_name.values()
     ]
     _worksheet(
