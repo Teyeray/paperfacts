@@ -19,7 +19,7 @@ it decides which of the model's claims are stored.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import NamedTuple
@@ -74,8 +74,9 @@ type VoteSlot = tuple[ScopeKey, VoteKey, int]
 # ---- Repeats within one pass ---------------------------------------------------------------------------------
 
 
-def deduplicate(records: ExtractedRecords) -> ExtractedRecords:
-    """Collapse repeats of the same fact, keeping every citation they brought.
+def deduplicate(records: ExtractedRecords, *, reference_fields: Collection[str]) -> ExtractedRecords:
+    """Collapse repeats of the same fact, keeping every citation they brought. ``reference_fields`` names the
+    profile's reference fields, whose quotes are sample ids and are compared as such (``_value_key``).
 
     One field question routinely gets the same number back more than once: quoted from the table, and again
     from the sentence discussing it. They are one fact with two citations. Keeping both inflates every count
@@ -85,19 +86,20 @@ def deduplicate(records: ExtractedRecords) -> ExtractedRecords:
     """
     paper = records.paper
     if paper is not None:
-        paper = paper.model_copy(update={"fields": _merge_repeats(paper.fields)})
+        paper = paper.model_copy(update={"fields": _merge_repeats(paper.fields, reference_fields)})
     return records.model_copy(
         update={
             "paper": paper,
             "samples": tuple(
-                sample.model_copy(update={"fields": _merge_repeats(sample.fields)}) for sample in records.samples
+                sample.model_copy(update={"fields": _merge_repeats(sample.fields, reference_fields)})
+                for sample in records.samples
             ),
-            "unattributed": _merge_repeats(records.unattributed),
+            "unattributed": _merge_repeats(records.unattributed, reference_fields),
         }
     )
 
 
-def _merge_repeats(values: Sequence[FieldValue]) -> tuple[FieldValue, ...]:
+def _merge_repeats(values: Sequence[FieldValue], reference_fields: Collection[str]) -> tuple[FieldValue, ...]:
     """One entry per distinct fact, in first-seen order, with the citations of its repeats merged in.
 
     Order decides which copy is kept, except between a series value and a sample-specific one: there the
@@ -105,7 +107,7 @@ def _merge_repeats(values: Sequence[FieldValue]) -> tuple[FieldValue, ...]:
     """
     merged: dict[ValueKey, FieldValue] = {}
     for value in values:
-        key = _value_key(value)
+        key = _value_key(value, reference_fields)
         previous = merged.get(key)
         if previous is None:
             merged[key] = value
@@ -132,8 +134,9 @@ class _Tally:
     supporters: list[tuple[ValueKey, tuple[str, ...]]] = field(default_factory=list)
 
 
-def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
-    """Keep the values a majority of ``results`` agree on, annotated with their agreement.
+def merge_passes(results: Sequence[ExtractedRecords], *, reference_fields: Collection[str]) -> ExtractedRecords:
+    """Keep the values a majority of ``results`` agree on, annotated with their agreement. ``reference_fields`` as
+    in :func:`deduplicate`.
 
     The vote is on ``_vote_key`` -- field, number, unit -- and not on the condition, because the condition
     is free text the model rewords between passes ("at 550 nm", "550 nm wavelength"). Voting on the full
@@ -167,10 +170,10 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
         ranks: Counter[tuple[ScopeKey, VoteKey]] = Counter()
         cited: dict[VoteSlot, tuple[str, ...]] = {}
         for scope, value in _values(records):
-            identity = (scope, _value_key(value))
+            identity = (scope, _value_key(value, reference_fields))
             slot = slot_of.get(identity)
             if slot is None:
-                vote = (scope, _vote_key(value))
+                vote = (scope, _vote_key(identity[1]))
                 ranks[vote] += 1
                 slot = (*vote, ranks[vote])
                 slot_of[identity] = slot
@@ -194,7 +197,7 @@ def merge_passes(results: Sequence[ExtractedRecords]) -> ExtractedRecords:
     # conditions in opposite orders. Merge only when the identity has a single entry everywhere -- there is
     # then no other condition the citation could belong to -- or when the two conditions normalise alike.
     for (scope, vote, _rank), tally in slots.items():
-        condition = _value_key(tally.exemplar).condition
+        condition = _value_key(tally.exemplar, reference_fields).condition
         unambiguous = entry_counts[(scope, vote)] == 1
         cited = list(tally.exemplar.source_ids)
         for value_key, source_ids in tally.supporters:
@@ -246,7 +249,7 @@ def _sample_scope(sample: SampleRecord) -> SampleScope:
     return sample.entity, sample_key(sample.sample_id)
 
 
-def _value_key(value: FieldValue) -> ValueKey:
+def _value_key(value: FieldValue, reference_fields: Collection[str]) -> ValueKey:
     """Full identity, used to merge repeats *within* one pass: the same number in the same unit under the
     same condition, however it is spelled.
 
@@ -254,13 +257,15 @@ def _value_key(value: FieldValue) -> ValueKey:
     be merged. Across passes it does not; ``_vote_key`` is what the passes vote on.
 
     A boolean field's ``holds`` is part of it: "doped" quoted as true and as false are two answers, never one
-    fact.
+    fact. A reference field's quote is a sample id, keyed by :func:`sample_key` as the sample it names is: "Cat-1"
+    and "cat 1" resolve to one listed sample, so they are one answer, where the text key would split the vote.
     """
     unit = clean_unit(value.unit_raw) if value.unit_raw else ""
-    return ValueKey(value.field, normalize_key(value.condition), grounding_key(value.value_raw), unit, value.holds)
+    quote = sample_key(value.value_raw) if value.field in reference_fields else grounding_key(value.value_raw)
+    return ValueKey(value.field, normalize_key(value.condition), quote, unit, value.holds)
 
 
-def _vote_key(value: FieldValue) -> VoteKey:
+def _vote_key(key: ValueKey) -> VoteKey:
     """Condition-free identity: what "the passes agree on this number" means.
 
     The unit belongs in it: "2.1 μm" and "2.1 nm" are a thousand-fold disagreement, and treating them as
@@ -268,5 +273,4 @@ def _vote_key(value: FieldValue) -> VoteKey:
     text the model paraphrases between passes, and counting paraphrases as separate candidates split the
     vote until nothing reached a majority.
     """
-    key = _value_key(value)
     return VoteKey(key.field, key.quote, key.unit, key.holds)

@@ -152,9 +152,10 @@ def _worksheet(
 ) -> Worksheet:
     """``scientific`` names the columns whose numbers the profile displays as ``display_format: scientific``."""
     sheet = workbook.create_sheet(title)
-    sheet.append([label for _, label in columns])
+    # openpyxl refuses a control character as it appends, so a stray \x01 in a quote would fail the whole export.
+    sheet.append([_clean(label) for _, label in columns])
     for row in rows:
-        sheet.append([row.get(key) for key, _ in columns])
+        sheet.append([_clean(row.get(key)) for key, _ in columns])
     # A sheet of sample rows keeps who each row is in view: every column up to the sample id.
     keys = [key for key, _ in columns]
     sheet.freeze_panes = f"{get_column_letter(keys.index('sample_id') + 2)}2" if "sample_id" in keys else "A2"
@@ -186,7 +187,6 @@ def _worksheet(
                 # openpyxl writes a bool as Excel TRUE/FALSE; a number format would be misleading.
                 pass
             elif isinstance(cell.value, str):
-                cell.value = _CONTROL.sub("", cell.value)
                 # PDF-derived strings are data even when their first character is '='.
                 cell.data_type = "s"
             elif isinstance(cell.value, (int, float)):
@@ -199,6 +199,10 @@ def _worksheet(
     return sheet
 
 
+def _clean(value: object) -> object:
+    return _CONTROL.sub("", value) if isinstance(value, str) else value
+
+
 def _entity_sheets(profile: DomainProfile) -> list[tuple[EntitySpec, str]]:
     """Each entity type's data sheet and its title. A profile without entity types keeps the one 样品数据 sheet;
     with several, each sheet is named after its entity ("催化剂数据"), cleaned of what Excel refuses in a title and
@@ -208,8 +212,9 @@ def _entity_sheets(profile: DomainProfile) -> list[tuple[EntitySpec, str]]:
     taken = {"论文数据", "字段说明", "数据质量", "图中读数", "运行记录"}
     sheets: list[tuple[EntitySpec, str]] = []
     for entity in profile.entities:
-        base = _SHEET_TITLE_REFUSED.sub("", f"{entity.label_zh or entity.name}数据").strip("'")
-        title, n = base[:_SHEET_TITLE_MAX], 1
+        base = _SHEET_TITLE_REFUSED.sub("", _CONTROL.sub("", f"{entity.label_zh or entity.name}数据")).strip("'")
+        # Excel refuses a title ending in an apostrophe, which the cut may leave.
+        title, n = base[:_SHEET_TITLE_MAX].rstrip("'"), 1
         while title.casefold() in {name.casefold() for name in taken}:
             n += 1
             title = f"{base[: _SHEET_TITLE_MAX - len(str(n)) - 1]} {n}"

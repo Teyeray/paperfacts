@@ -8,6 +8,7 @@ import pytest
 
 from paperfacts.errors import ConfigError
 from paperfacts.fields import FieldSpec
+from paperfacts.kinds import NO_CONTEXT
 from paperfacts.models import SourceBlock
 from paperfacts.normalize import convert_to_canonical, normalize_field
 from paperfacts.passages import candidate_blocks, inventory_blocks, searchable
@@ -276,8 +277,10 @@ def test_normalize_field_converts_with_the_registry_it_is_given():
     registry = load_units(KELVIN, WHERE)
     field = make_field("annealing_temperature", "573", unit_raw="K")
 
-    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], registry).value == pytest.approx(299.85)
-    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], TCO_UNITS).value is None
+    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], registry, NO_CONTEXT).value == pytest.approx(
+        299.85
+    )
+    assert normalize_field(field, FIELD_BY_NAME["annealing_temperature"], TCO_UNITS, NO_CONTEXT).value is None
 
 
 @pytest.mark.parametrize(("spelling", "factor"), list(BATTERY_CAPACITY["aliases"].items()))

@@ -270,7 +270,11 @@ def extract_lane(
         raw_response = raw_response or text
         _add_usage(usage, pass_usage)
 
-    records = drop_implausible(deduplicate(merge_passes(results)), profile)
+    # A reference field's quotes are sample ids, which the vote and the repeats compare as sample ids.
+    references = frozenset(spec.name for spec in profile.fields if spec.references is not None)
+    records = drop_implausible(
+        deduplicate(merge_passes(results, reference_fields=references), reference_fields=references), profile
+    )
     lane = LaneExtraction(
         document_id=artifact.document_id,
         backend=artifact.backend,

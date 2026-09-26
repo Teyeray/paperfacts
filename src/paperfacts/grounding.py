@@ -246,6 +246,20 @@ UPPER_BOUND_WORDS = ("below", "less than", "lower than", "up to", "at most")
 _BOUND_BEFORE = re.compile(rf"(?:^|[^a-z])({'|'.join((*LOWER_BOUND_WORDS, *UPPER_BOUND_WORDS))}|[<>≥≤])\s*$")
 
 
+# How far before its trailing whitespace a match of _BOUND_BEFORE reaches: the longest bound word and the character
+# before it.
+_BOUND_REACH = max(len(word) for word in (*LOWER_BOUND_WORDS, *UPPER_BOUND_WORDS)) + 1
+
+
+def _bound_before(haystack: str, start: int) -> re.Match[str] | None:
+    """:data:`_BOUND_BEFORE` over ``haystack[:start]``, searched only within its reach of the whitespace before
+    ``start``: searching the block from its beginning for every occurrence of the quote was quadratic in the block."""
+    end = start
+    while end and haystack[end - 1].isspace():
+        end -= 1
+    return _BOUND_BEFORE.search(haystack, max(0, end - _BOUND_REACH), start)
+
+
 def _bound_key(text: str) -> str:
     """:func:`grounding_key` keeping the comparison signs, which the containment test folds away."""
     text = _BOUND_SIGN.sub(lambda match: f" {_BOUND_SIGNS[match.group(1) or match.group(2)]} ", text)
@@ -267,7 +281,7 @@ def quoted_bound(value: FieldValue, blocks: Mapping[str, str]) -> str | None:
         for match in re.finditer(re.escape(needle), haystack):
             if _continues_before(haystack, match.start()) or _continues_after(haystack, match.end()):
                 continue
-            bound = _BOUND_BEFORE.search(haystack, 0, match.start())
+            bound = _bound_before(haystack, match.start())
             if bound is not None:
                 return bound.group(1)
     return None

@@ -12,6 +12,7 @@ import dataclasses
 
 import pytest
 
+from paperfacts.kinds import NO_CONTEXT
 from paperfacts.normalize import normalize_field, parse_number, read_range
 from support.extraction import make_field
 from support.profiles import shipped_profile
@@ -113,8 +114,10 @@ def test_number_words_under_either_range_policy(policy):
     # policy gives it a value; a single number word is one value, which reject has no reason to refuse.
     spec = dataclasses.replace(shipped_profile().by_name["thickness"], range_policy=policy)
 
-    words_range = normalize_field(make_field("thickness", "two to three", unit_raw="nm"), spec, shipped_profile().units)
-    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, shipped_profile().units)
+    words_range = normalize_field(
+        make_field("thickness", "two to three", unit_raw="nm"), spec, shipped_profile().units, NO_CONTEXT
+    )
+    one_word = normalize_field(make_field("thickness", "two", unit_raw="nm"), spec, shipped_profile().units, NO_CONTEXT)
 
     assert words_range.value is None
     assert "midpoint" not in (words_range.normalization_note or "")
@@ -437,3 +440,33 @@ def test_real_spellings_read_as_the_value_or_are_refused(raw, expected, fragment
 def test_parse_number_has_no_unit_context_and_so_reads_no_number_word(raw):
     # Whether "four" is a value depends on its unit, which parse_number does not see; normalize_field decides.
     assert parse_number(raw) == (None, "no number found")
+
+
+# ---- A quote too long to be one number --------------------------------------------------------------------------
+
+
+def test_a_quote_longer_than_the_cap_is_refused_before_it_is_parsed():
+    import time
+
+    from paperfacts.fields import MAX_NUMBER_QUOTE
+    from paperfacts.normalize import read_interval
+
+    started = time.perf_counter()
+    value, note = parse_number("1" * 20_000)
+    clean, why = read_interval("1" * 20_000, lambda unit: True)
+    assert time.perf_counter() - started < 0.5
+    assert value is None and "20000 characters is too long" in (note or "")
+    assert clean is None and "too long" in (why or "")
+    # The cap is a guard, not a reading rule: a quote at it is still read.
+    assert parse_number(" " * (MAX_NUMBER_QUOTE - 2) + "12")[0] == 12.0
+
+
+def test_the_cap_is_above_every_corpus_value():
+    import json
+    from pathlib import Path
+
+    from paperfacts.fields import MAX_NUMBER_QUOTE
+
+    corpus = Path(__file__).parent / "fixtures" / "corpus" / "values.json"
+    longest = max(len(entry["value_raw"]) for entry in json.loads(corpus.read_text(encoding="utf-8")))
+    assert longest < MAX_NUMBER_QUOTE / 2

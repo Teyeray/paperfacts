@@ -22,7 +22,7 @@ from paperfacts.compare import PAPER_SCOPE, ComparisonReport, FieldComparison, c
 from paperfacts.decide import Decision, decide_cell
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
-from paperfacts.kinds import CellValue, KindContext, joined
+from paperfacts.kinds import NO_CONTEXT, CellValue, KindContext, joined
 from paperfacts.models import Backend, DocumentInput
 from paperfacts.normalize import normalize_lane
 from paperfacts.records import LaneExtraction, SampleRecord
@@ -285,6 +285,8 @@ def consolidate_document(
             [c for c in report.comparisons if c.scope == PAPER_SCOPE and c.field == spec.name],
             units=profile.units,
             unanswered=spec.name in unanswered,
+            # A reference field is sample-level, so no paper-level cell names a row.
+            ctx=NO_CONTEXT,
         )
     for spec in profile.paper_fields:
         record(PAPER_SCOPE, spec, paper[spec.name])

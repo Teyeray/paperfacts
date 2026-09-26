@@ -628,3 +628,26 @@ def test_a_cleaned_value_carries_only_the_citations_it_was_shown():
 
     assert value.source_ids == ("b1",)
     assert cleaning.invalid == {"ghost"}
+
+
+def test_a_numeric_answer_too_long_to_be_one_value_is_dropped_with_the_reason(tco_profile):
+    cleaning = ResponseCleaning()
+    spec = tco_profile.by_name["thickness"]
+
+    kept = cleaning.value(
+        spec, value_raw="1" * 500, unit_raw="nm", condition=None, source_ids=["b1"], note=None, known_ids=KNOWN_IDS
+    )
+
+    assert kept is None
+    assert cleaning.dropped == ["thickness: a value of 500 characters is too long to be one value"]
+    # A text answer is no number, so its length is no concern here.
+    text = cleaning.value(
+        tco_profile.by_name["mode"],
+        value_raw="RF " * 100,
+        unit_raw=None,
+        condition=None,
+        source_ids=["b1"],
+        note=None,
+        known_ids=KNOWN_IDS,
+    )
+    assert text is not None

@@ -42,7 +42,7 @@ def test_a_single_pass_is_returned_unchanged():
     # single-pass extraction already produces.
     one = records(samples=[make_sample("A", [make_field("sheet_resistance", "12.5")])])
 
-    assert merge_passes([one]) is one
+    assert merge_passes([one], reference_fields=()) is one
 
 
 # ---- Majority voting on values -----------------------------------------------------------
@@ -51,7 +51,7 @@ def test_a_single_pass_is_returned_unchanged():
 def test_a_value_produced_by_every_pass_gets_full_agreement():
     passes = [records(samples=[make_sample("A", [make_field("sheet_resistance", "12.5")])]) for _ in range(3)]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     field = find(merged, "A").get("sheet_resistance")
     assert field.value_raw == "12.5"
@@ -65,7 +65,7 @@ def test_a_value_produced_by_a_bare_majority_survives_with_partial_agreement():
         records(samples=[make_sample("A", [])]),  # this pass saw the sample but found nothing on it
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     field = find(merged, "A").get("sheet_resistance")
     assert field.agreement == pytest.approx(2 / 3)
@@ -78,7 +78,7 @@ def test_a_value_produced_by_only_one_pass_is_dropped_with_a_reason():
         records(samples=[make_sample("A", [])]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert find(merged, "A").get("thickness") is None
     assert "thickness: only 1/3 passes produced '300'" in merged.dropped
@@ -93,7 +93,7 @@ def test_a_condition_spelled_differently_across_passes_still_counts_as_one_vote(
         records(samples=[make_sample("A", [])]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     field = find(merged, "A").get("transmittance")
     assert field.agreement == pytest.approx(2 / 3)
@@ -107,7 +107,7 @@ def test_the_surviving_value_keeps_the_first_passs_wording_and_every_passs_citat
     second = make_field("sheet_resistance", "12.5", source_ids=("paddleocr_vl_p0_b3",))
     passes = [records(samples=[make_sample("A", [first])]), records(samples=[make_sample("A", [second])])]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     field = find(merged, "A").get("sheet_resistance")
     assert field.source_ids == ("mineru_p0_b1", "paddleocr_vl_p0_b3")
@@ -126,7 +126,7 @@ def test_a_sample_agreed_on_by_a_majority_survives_even_when_none_of_its_fields_
         records(samples=[make_sample("B", [])]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     sample = find(merged, "B")
     assert sample is not None
@@ -136,7 +136,7 @@ def test_a_sample_agreed_on_by_a_majority_survives_even_when_none_of_its_fields_
 def test_a_sample_reported_by_only_a_minority_of_passes_is_dropped_entirely():
     passes = [records(samples=[make_sample("C", [make_field("thickness", "300")])]), records(), records()]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert find(merged, "C") is None
 
@@ -150,7 +150,7 @@ def test_passes_spelling_the_sample_id_differently_still_merge_into_one_sample()
         records(samples=[make_sample(" SAMPLE  A ", [make_field("sheet_resistance", "12.5")])]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert len(merged.samples) == 1
     assert merged.samples[0].sample_id == "Sample A"  # the spelling of the first pass to report it wins
@@ -164,7 +164,7 @@ def test_the_targets_fields_are_merged_by_the_same_majority_rule():
     without_density = PaperRecord(source_ids=("mineru_p0_b0",), fields=())
     passes = [records(paper=with_density), records(paper=with_density), records(paper=without_density)]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert merged.paper.get("density").agreement == pytest.approx(2 / 3)
     assert merged.paper.source_ids == ("mineru_p0_b0",)
@@ -179,7 +179,7 @@ def test_a_target_with_no_surviving_fields_is_dropped_entirely():
         records(paper=None),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert merged.paper is None
 
@@ -190,7 +190,7 @@ def test_a_target_with_no_surviving_fields_is_dropped_entirely():
 def test_invalid_source_ids_are_the_sorted_union_of_every_pass():
     passes = [records(invalid=["b"]), records(invalid=["a"]), records(invalid=["a", "c"])]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert merged.invalid_source_ids == ("a", "b", "c")
 
@@ -202,7 +202,7 @@ def test_pre_existing_dropped_reasons_are_kept_and_exact_duplicates_collapsed():
         records(dropped=[]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert merged.dropped.count("carrier_concentration: not in schema") == 1
 
@@ -220,7 +220,7 @@ def test_a_sample_value_never_leaks_into_the_target_record():
     blank = SampleRecord(sample_id=" ", fields=(make_field("sheet_resistance", "15.6", unit_raw="Ω/sq"),))
     results = [ExtractedRecords(paper=None, samples=(blank,), invalid_source_ids=(), dropped=()) for _ in range(2)]
 
-    merged = merge_passes(results)
+    merged = merge_passes(results, reference_fields=())
 
     assert merged.paper is None
     assert [v.field for s in merged.samples for v in s.fields] == ["sheet_resistance"]
@@ -244,7 +244,7 @@ def test_a_paraphrased_condition_is_one_value_carrying_the_first_passs_wording()
         records(samples=[make_sample("A", [make_field("transmittance", "85", condition="550 nm wavelength")])]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
     assert len(fields) == 1
@@ -260,7 +260,7 @@ def test_two_different_numbers_under_the_same_condition_still_fail_the_vote():
         records(samples=[make_sample("A", [make_field("transmittance", "90", condition="at 550 nm")])]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     assert [v for v in find(merged, "A").fields if v.field == "transmittance"] == []
     assert "transmittance: only 1/2 passes produced '85'" in merged.dropped
@@ -283,7 +283,7 @@ def test_one_number_under_two_genuine_conditions_keeps_both_entries():
             ]
         )
 
-    merged = merge_passes([pass_with_both(), pass_with_both()])
+    merged = merge_passes([pass_with_both(), pass_with_both()], reference_fields=())
 
     fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
     assert [v.condition for v in fields] == ["at 550 nm", "at 600 nm"]
@@ -297,7 +297,7 @@ def test_a_paraphrase_seen_in_two_of_three_passes_keeps_the_partial_agreement():
         records(samples=[make_sample("A", [])]),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
     assert len(fields) == 1
@@ -314,7 +314,7 @@ def test_unattributed_values_are_voted_on_condition_free_too():
             unattributed=(make_field("transmittance", "85", condition=condition),),
         )
 
-    merged = merge_passes([unplaced("at 550 nm"), unplaced("550 nm wavelength")])
+    merged = merge_passes([unplaced("at 550 nm"), unplaced("550 nm wavelength")], reference_fields=())
 
     assert len(merged.unattributed) == 1
     assert merged.unattributed[0].condition == "at 550 nm"
@@ -342,7 +342,7 @@ def test_a_paraphrase_that_loses_its_wording_still_contributes_its_citation():
         ),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
     assert len(fields) == 1
@@ -367,7 +367,7 @@ def test_a_second_condition_only_one_pass_reported_is_dropped_like_any_lone_valu
         ),
     ]
 
-    merged = merge_passes(passes)
+    merged = merge_passes(passes, reference_fields=())
 
     fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
     assert [(v.condition, v.agreement) for v in fields] == [("at 550 nm", 1.0)]
@@ -400,7 +400,7 @@ def test_citations_are_not_carried_across_conditions_when_the_passes_disagree_on
         ]
     )
 
-    merged = merge_passes([first, second])
+    merged = merge_passes([first, second], reference_fields=())
 
     fields = [v for v in find(merged, "A").fields if v.field == "transmittance"]
     assert [(v.condition, v.agreement) for v in fields] == [("at 550 nm", 1.0), ("at 600 nm", 1.0)]

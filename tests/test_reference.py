@@ -27,7 +27,7 @@ from paperfacts.dataset import consolidate_document
 from paperfacts.errors import ConfigError
 from paperfacts.grounding import ground_lane
 from paperfacts.keys import ComparisonOptions, profile_extraction_fingerprint
-from paperfacts.kinds import KindContext, rules_for
+from paperfacts.kinds import NO_CONTEXT, KindContext, rules_for
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import BACKENDS, DocumentGeometry, DocumentInput
 from paperfacts.normalize import normalize_lane
@@ -265,7 +265,7 @@ def test_the_kind_row_needs_its_context_and_ignores_every_other():
     rules = rules_for(SPEC)
     value = FieldValue(field="tested_coating", value_raw="C1", ref_id="C1")
 
-    assert rules.cell(value, SPEC, PROFILE.units) == (None, "引用的coating样品 'C1' 没有数据行")
+    assert rules.cell(value, SPEC, PROFILE.units, NO_CONTEXT) == (None, "引用的coating样品 'C1' 没有数据行")
     row_ids = KindContext(row_ids={("mineru", "coating", "C1"): "C1 | coat-1"}, backend="mineru")
     assert rules.cell(value, SPEC, PROFILE.units, row_ids) == ("C1 | coat-1", None)
     assert rules.distance(value, value) is None
@@ -471,3 +471,52 @@ def test_the_prompts_command_prints_a_reference_question(tmp_path: Path, monkeyp
     assert printed.exit_code == 0, printed.output
     assert 'Copy the id of the referenced coating exactly from the list "Coatings" below.' in printed.output
     assert "Coatings this paper reports:\n<referenced sample list>" in printed.output
+
+
+# ---- S6 review follow-ups ---------------------------------------------------------------------------------------
+
+
+def test_a_reference_to_an_id_two_listed_samples_share_is_refused_as_ambiguous():
+    # "coat-1" and "coat 1" are one sample_key: resolving to whichever came first would be a guess.
+    lane = _lane("paddleocr_vl", ("coat-1", "coat 1", "coat-2"), {"run-1": _reference("Coat-1", "b")})
+
+    grounded = ground_lane(lane, {}, profile=PROFILE)
+    read = normalize_lane(grounded, PROFILE).sample("run-1", "wear_test").get("tested_coating")  # type: ignore[union-attr]
+
+    assert (read.grounded, read.ref_id) == (False, None)  # type: ignore[union-attr]
+    assert "ambiguous" in (read.normalization_note or "")  # type: ignore[union-attr]
+    other = _lane("paddleocr_vl", ("coat-1", "coat 1", "coat-2"), {"run-1": _reference("coat-2", "b")})
+    assert normalize_lane(other, PROFILE).sample("run-1", "wear_test").get("tested_coating").ref_id == "coat-2"  # type: ignore[union-attr]
+
+
+def test_two_spellings_of_one_referenced_id_vote_as_one_answer():
+    from paperfacts.records import ExtractedRecords
+    from paperfacts.voting import deduplicate, merge_passes
+
+    def one_pass(*quotes: str) -> ExtractedRecords:
+        values = tuple(_reference(quote, f"b{i}") for i, quote in enumerate(quotes))
+        sample = SampleRecord(sample_id="run-1", entity="wear_test", fields=values)
+        return ExtractedRecords(paper=None, samples=(sample,), invalid_source_ids=(), dropped=())
+
+    passes = [one_pass("Cat-1"), one_pass("cat 1"), one_pass("CAT1")]
+    merged = merge_passes(passes, reference_fields={"tested_coating"})
+    (value,) = merged.samples[0].fields
+    assert (value.value_raw, value.agreement) == ("Cat-1", 1.0)
+    # Keyed as text, the three spellings split the vote and none reaches a majority.
+    assert merge_passes(passes, reference_fields=()).samples[0].fields == ()
+    # Within one pass, the two spellings are one fact quoted twice.
+    repeated = deduplicate(one_pass("Cat-1", "cat 1"), reference_fields={"tested_coating"})
+    assert [v.source_ids for v in repeated.samples[0].fields] == [("b0", "b1")]
+
+
+def test_the_reference_context_is_required_where_forgetting_it_would_be_silent():
+    import inspect
+
+    from paperfacts.compare import compare_values
+    from paperfacts.decide import decide, decide_cell
+    from paperfacts.kinds import RULES
+    from paperfacts.normalize import normalize_field
+
+    rows = [getattr(RULES[kind], method) for kind in RULES for method in ("read", "compare", "cell")]
+    for function in (compare_values, decide, decide_cell, normalize_field, *rows):
+        assert inspect.signature(function).parameters["ctx"].default is inspect.Parameter.empty, function

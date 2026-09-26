@@ -33,7 +33,7 @@ from paperfacts.keys import (
     profile_comparison_fingerprint,
     profile_extraction_fingerprint,
 )
-from paperfacts.kinds import NO_CONTEXT, KindContext, element_key, rules_for
+from paperfacts.kinds import KindContext, element_key, rules_for
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
 from paperfacts.normalize import (
@@ -245,7 +245,7 @@ def _compare_entity(
     lane_b: LaneExtraction,
     matching: SampleMatching,
     specs: Sequence[FieldSpec],
-    ctx: KindContext = NO_CONTEXT,
+    ctx: KindContext,
 ) -> list[FieldComparison]:
     """One entity type's sample comparisons, each scoped ``"<entity>:..."``."""
     a_name, b_name = lane_a.backend, lane_b.backend
@@ -323,9 +323,7 @@ def _check_lane_profiles(lane_a: LaneExtraction, lane_b: LaneExtraction, expecte
         check_profile(lane.profile_fingerprint, expected, f"the {lane.backend} lane")
 
 
-def compare_values(
-    a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext = NO_CONTEXT
-) -> tuple[FactStatus, str]:
+def compare_values(a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext) -> tuple[FactStatus, str]:
     """Decide the outcome when both sides have a value; ``ctx`` holds the matchings a reference field reads."""
     return rules_for(spec).compare(a, b, spec, ctx)
 
@@ -344,7 +342,7 @@ def _compare_records(
     emit_one_sided: bool = True,
     pair_leftovers_ambiguous: bool = False,
     detail_prefix: str = "",
-    ctx: KindContext = NO_CONTEXT,
+    ctx: KindContext,
 ) -> list[FieldComparison]:
     """Pair up both sides' values field by field and compare them. When ``fields_b`` is empty this
     naturally degenerates to "everything is only in lane a".
@@ -450,7 +448,7 @@ def _split_off_first_leftover_pair(
 
 
 def _pair_values(
-    values_a: Sequence[FieldValue], values_b: Sequence[FieldValue], spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    values_a: Sequence[FieldValue], values_b: Sequence[FieldValue], spec: FieldSpec, ctx: KindContext
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
     """Pair up both sides' values for one field, so that every value is accounted for.
 
@@ -564,7 +562,7 @@ def condition_numbers(condition: str | None) -> tuple[float, ...]:
 
 
 def _equal_pairs(
-    rest_a: list[FieldValue], rest_b: list[FieldValue], spec: FieldSpec, ctx: KindContext = NO_CONTEXT
+    rest_a: list[FieldValue], rest_b: list[FieldValue], spec: FieldSpec, ctx: KindContext
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
     """Stage 2: pair leftovers whose values are equal, whatever their conditions say.
 

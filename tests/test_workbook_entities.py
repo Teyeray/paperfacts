@@ -9,6 +9,7 @@ Regenerate the snapshot only for an intended change to the TCO workbook::
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -183,6 +184,33 @@ def test_an_entity_without_a_label_names_its_sheet_by_its_name_and_a_clash_is_nu
     write_dataset([two_entity_dataset(profile)], path, profile)
 
     assert load_workbook(path).sheetnames[1:3] == ["coating数据", "论文数据 2"]
+
+
+def test_a_control_character_in_a_label_or_a_list_element_is_dropped_not_fatal(tmp_path):
+    # openpyxl refuses \x01 as it appends a row, which used to fail the whole export.
+    profile = make_entity_profile({"fields.2.cardinality": "many"})
+    dataset = two_entity_dataset(profile)
+    first = dataset.sample_rows[0] | {"sample_label": "S\x01one", "solvent": ["wa\x01ter", "ethanol"]}
+    dataset = dataclasses.replace(dataset, sample_rows=(first, *dataset.sample_rows[1:]))
+    path = tmp_path / "demo.xlsx"
+
+    write_dataset([dataset], path, profile)
+
+    coatings = list(load_workbook(path)["涂层数据"].values)
+    header = coatings[0]
+    assert coatings[1][header.index("样品标签")] == "Sone"
+    assert coatings[1][header.index("solvent")] == "water; ethanol"
+
+
+def test_a_sheet_title_is_cleaned_and_never_ends_in_an_apostrophe_after_the_cut(tmp_path):
+    profile = make_entity_profile({"entities.1.label_zh": "x" * 30 + "'y"})
+    coating, wear = profile.declared_entities
+    profile = dataclasses.replace(profile, declared_entities=(dataclasses.replace(coating, label_zh="涂\x02层"), wear))
+    path = tmp_path / "demo.xlsx"
+
+    write_dataset([two_entity_dataset(profile)], path, profile)
+
+    assert load_workbook(path).sheetnames[1:3] == ["涂层数据", "x" * 30]
 
 
 if __name__ == "__main__":

@@ -154,6 +154,10 @@ def test_a_field_takes_its_entity_from_its_group_and_a_paper_field_has_none():
         ),
         pytest.param({"fields.3.entity": "coating"}, "unknown key(s) entity", id="derived-not-written"),
         pytest.param({"fields.3.name": "entity"}, "the name is reserved", id="reserved-field-name"),
+        pytest.param({"entities.1.label_zh": "磨损\x01"}, "label_zh may not contain a control", id="label-control"),
+        pytest.param({"groups.2.label_zh": "磨\t损"}, "label_zh may not contain a control", id="group-label-control"),
+        pytest.param({"entities.1.label_zh": "长" * 41}, "label_zh is at most 40 characters", id="label-long"),
+        pytest.param({"groups.1.label_zh": "长" * 41}, "label_zh is at most 40 characters", id="group-label-long"),
     ],
 )
 def test_the_loader_refuses_a_malformed_entity_declaration(changes, message):
@@ -280,7 +284,7 @@ def test_the_vote_keeps_two_entities_samples_of_one_name_apart():
         dropped=(),
     )
 
-    merged = merge_passes([one_pass, one_pass, one_pass])
+    merged = merge_passes([one_pass, one_pass, one_pass], reference_fields=())
 
     assert _fields(merged) == {
         ("coating", "S1"): [("solvent", "ethanol")],

@@ -42,6 +42,9 @@ FieldKind = Literal["numeric", "composition", "text", "boolean", "date", "interv
 # The kinds whose value is quoted with digits, so an answer or a block without a digit cannot hold one. Here
 # rather than in paperfacts.kinds because cleaning (records.py) and retrieval (passages.py) sit below that module.
 DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric", "date", "interval"})
+# The longest quote read as a number, date or interval. The number reader is quadratic in a run of digits (20 000
+# of them took seconds), and no quantity is written in 200 characters: the corpus's longest value is 68.
+MAX_NUMBER_QUOTE = 200
 # The kinds read as numbers in a canonical unit, so a unit, a plausible range and a tolerance mean something.
 UNIT_KINDS: frozenset[FieldKind] = frozenset({"numeric", "interval"})
 # How many values of a field one sample (or the paper) holds: one, or a list of several that hold at once (the

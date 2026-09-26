@@ -22,6 +22,7 @@ from paperfacts.compare import (
 )
 from paperfacts.config import Settings
 from paperfacts.keys import FINGERPRINT_LENGTH, comparison_key_for
+from paperfacts.kinds import NO_CONTEXT
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.normalize import normalize_field
 from paperfacts.records import FieldValue, PaperRecord
@@ -36,7 +37,7 @@ TCO_UNITS = shipped_profile().units
 
 def normalized(field: FieldValue) -> FieldValue:
     """The comparison layer always receives normalized values; unit tests for compare_values add this step by hand."""
-    return normalize_field(field, FIELD_BY_NAME[field.field], TCO_UNITS)
+    return normalize_field(field, FIELD_BY_NAME[field.field], TCO_UNITS, NO_CONTEXT)
 
 
 def exact_match(a_id: str = "A", b_id: str = "A") -> SampleMatching:
@@ -58,7 +59,7 @@ def test_two_numbers_within_the_field_tolerance_agree():
         normalized(make_field("thickness", "305", unit_raw="nm")),
     )
 
-    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"])
+    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"], NO_CONTEXT)
 
     assert status == "agree"
     assert "rel_tol=0.05" in detail
@@ -70,7 +71,7 @@ def test_two_numbers_outside_the_tolerance_conflict():
         normalized(make_field("thickness", "400", unit_raw="nm")),
     )
 
-    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"])
+    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"], NO_CONTEXT)
 
     assert status == "conflict"
     assert "300 vs 400" in detail
@@ -83,7 +84,7 @@ def test_the_same_length_written_in_different_units_agrees_after_conversion():
         normalized(make_field("thickness", "0.3", unit_raw="μm")),
     )
 
-    assert compare_values(a, b, FIELD_BY_NAME["thickness"])[0] == "agree"
+    assert compare_values(a, b, FIELD_BY_NAME["thickness"], NO_CONTEXT)[0] == "agree"
 
 
 def test_a_value_that_could_not_be_parsed_makes_the_pair_ambiguous():
@@ -94,7 +95,7 @@ def test_a_value_that_could_not_be_parsed_makes_the_pair_ambiguous():
         normalized(make_field("thickness", "n.a.", unit_raw="nm")),
     )
 
-    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"])
+    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"], NO_CONTEXT)
 
     assert status == "ambiguous"
     assert "unparsed" in detail
@@ -106,7 +107,7 @@ def test_two_unparseable_values_with_identical_raw_text_still_agree():
     a = normalized(make_field("thickness", "n.a.", unit_raw="nm"))
     b = normalized(make_field("thickness", "n.a.", unit_raw="nm"))
 
-    assert compare_values(a, b, FIELD_BY_NAME["thickness"]) == (
+    assert compare_values(a, b, FIELD_BY_NAME["thickness"], NO_CONTEXT) == (
         "agree",
         "identical raw text (not parsed as a number)",
     )
@@ -116,7 +117,7 @@ def test_identical_unparseable_text_with_different_units_is_ambiguous():
     a = normalized(make_field("resistance", "n.a.", unit_raw="mΩ·cm"))
     b = normalized(make_field("resistance", "n.a.", unit_raw="Ω·cm"))
 
-    assert compare_values(a, b, FIELD_BY_NAME["resistance"])[0] == "ambiguous"
+    assert compare_values(a, b, FIELD_BY_NAME["resistance"], NO_CONTEXT)[0] == "ambiguous"
 
 
 def test_the_unit_comparison_is_case_sensitive_so_milli_never_matches_mega():
@@ -129,7 +130,7 @@ def test_the_unit_comparison_is_case_sensitive_so_milli_never_matches_mega():
     a = normalized(make_field("resistance", "n.a.", unit_raw="mΩ·cm"))
     b = normalized(make_field("resistance", "n.a.", unit_raw="MΩ·cm"))
 
-    assert compare_values(a, b, FIELD_BY_NAME["resistance"])[0] == "ambiguous"
+    assert compare_values(a, b, FIELD_BY_NAME["resistance"], NO_CONTEXT)[0] == "ambiguous"
 
 
 def test_units_that_differ_after_normalization_are_ambiguous():
@@ -137,7 +138,7 @@ def test_units_that_differ_after_normalization_are_ambiguous():
     a = FieldValue(field="thickness", value_raw="1", value=1.0, unit="nm")
     b = FieldValue(field="thickness", value_raw="1", value=1.0, unit="μm")
 
-    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"])
+    status, detail = compare_values(a, b, FIELD_BY_NAME["thickness"], NO_CONTEXT)
 
     assert status == "ambiguous"
     assert "units differ" in detail
@@ -149,13 +150,16 @@ def test_units_that_differ_after_normalization_are_ambiguous():
 def test_text_values_agree_when_their_normalized_keys_match():
     a, b = make_field("component", "SnO2:Ta"), make_field("component", "sno2 : ta")
 
-    assert compare_values(a, b, FIELD_BY_NAME["component"]) == ("agree", "identical after text normalization")
+    assert compare_values(a, b, FIELD_BY_NAME["component"], NO_CONTEXT) == (
+        "agree",
+        "identical after text normalization",
+    )
 
 
 def test_text_values_that_differ_conflict_and_quote_both_sides():
     a, b = make_field("component", "SnO2:Ta"), make_field("component", "ITO")
 
-    status, detail = compare_values(a, b, FIELD_BY_NAME["component"])
+    status, detail = compare_values(a, b, FIELD_BY_NAME["component"], NO_CONTEXT)
 
     assert status == "conflict"
     assert "SnO2:Ta" in detail and "ITO" in detail
@@ -173,7 +177,7 @@ def test_text_values_that_differ_conflict_and_quote_both_sides():
 def test_a_closed_category_field_agrees_across_the_paper_wording(a_raw, b_raw):
     a, b = make_field("mode", a_raw), make_field("mode", b_raw)
 
-    status, detail = compare_values(a, b, FIELD_BY_NAME["mode"])
+    status, detail = compare_values(a, b, FIELD_BY_NAME["mode"], NO_CONTEXT)
 
     assert status == "agree"
     assert "name" in detail
@@ -182,7 +186,7 @@ def test_a_closed_category_field_agrees_across_the_paper_wording(a_raw, b_raw):
 def test_a_closed_category_field_still_separates_two_different_modes():
     a, b = make_field("mode", "DC"), make_field("mode", "RF magnetron sputtering")
 
-    status, detail = compare_values(a, b, FIELD_BY_NAME["mode"])
+    status, detail = compare_values(a, b, FIELD_BY_NAME["mode"], NO_CONTEXT)
 
     assert status == "conflict"
     assert "DC" in detail and "RF magnetron sputtering" in detail
@@ -192,15 +196,15 @@ def test_one_mode_is_not_collapsed_into_a_combination_of_two():
     # The whole point of the token-set rule: DC alone is not the DC+RF co-sputtering run.
     a, b = make_field("mode", "DC"), make_field("mode", "DC and RF")
 
-    assert compare_values(a, b, FIELD_BY_NAME["mode"])[0] == "conflict"
+    assert compare_values(a, b, FIELD_BY_NAME["mode"], NO_CONTEXT)[0] == "conflict"
 
 
 def test_a_mode_naming_no_category_falls_back_to_plain_text_comparison():
     spec = FIELD_BY_NAME["mode"]
     unresolvable = ("mode", "magnetron sputtering")
 
-    assert compare_values(make_field(*unresolvable), make_field(*unresolvable), spec)[0] == "agree"
-    assert compare_values(make_field(*unresolvable), make_field("mode", "DC"), spec)[0] == "conflict"
+    assert compare_values(make_field(*unresolvable), make_field(*unresolvable), spec, NO_CONTEXT)[0] == "agree"
+    assert compare_values(make_field(*unresolvable), make_field("mode", "DC"), spec, NO_CONTEXT)[0] == "conflict"
 
 
 # ---- compare_lanes: scope levels -------------------------------------------------------------
@@ -837,7 +841,10 @@ def test_a_number_word_that_is_not_the_whole_value_is_never_read_as_a_number(raw
 
     assert field.value is None
     status, _ = compare_values(
-        field, normalized(make_field("sputtering_power", "100", unit_raw="W")), FIELD_BY_NAME["sputtering_power"]
+        field,
+        normalized(make_field("sputtering_power", "100", unit_raw="W")),
+        FIELD_BY_NAME["sputtering_power"],
+        NO_CONTEXT,
     )
     assert status == "ambiguous"
 

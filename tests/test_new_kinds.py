@@ -18,7 +18,7 @@ from paperfacts.compare import FieldComparison, compare_values
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
 from paperfacts.extract import FieldHarvest, SampleInventory, _response_models, passage_records
-from paperfacts.kinds import RULES
+from paperfacts.kinds import NO_CONTEXT, RULES
 from paperfacts.normalize import drop_implausible, normalize_field, read_date
 from paperfacts.profile import DomainProfile
 from paperfacts.prompts import extraction_system_prompt, field_system_prompt, render_field_table
@@ -85,7 +85,7 @@ def _value(field: str, value_raw: str, **update: object) -> FieldValue:
 
 
 def _read(field: str, value_raw: str, **update: object) -> FieldValue:
-    return normalize_field(_value(field, value_raw, **update), SPECS[field], UNITS)
+    return normalize_field(_value(field, value_raw, **update), SPECS[field], UNITS, NO_CONTEXT)
 
 
 # ---- Response models ----------------------------------------------------------------------------------------
@@ -211,21 +211,24 @@ def _pass(*holds: bool) -> ExtractedRecords:
 
 
 def test_a_true_pass_and_a_false_pass_never_vote_as_one_value():
-    merged = merge_passes([_pass(True), _pass(False)])
+    merged = merge_passes([_pass(True), _pass(False)], reference_fields=())
 
     assert merged.samples[0].fields == ()
     assert any("only 1/2 passes" in entry for entry in merged.dropped)
 
 
 def test_the_majority_of_passes_decides_holds():
-    merged = merge_passes([_pass(True), _pass(False), _pass(True)])
+    merged = merge_passes([_pass(True), _pass(False), _pass(True)], reference_fields=())
 
     (value,) = merged.samples[0].fields
     assert (value.holds, value.agreement) == (True, pytest.approx(2 / 3))
 
 
 def test_one_pass_keeps_a_true_and_a_false_quote_apart():
-    assert [value.holds for value in deduplicate(_pass(True, False, True)).samples[0].fields] == [True, False]
+    assert [value.holds for value in deduplicate(_pass(True, False, True), reference_fields=()).samples[0].fields] == [
+        True,
+        False,
+    ]
 
 
 # ---- Boolean ------------------------------------------------------------------------------------------------
@@ -237,14 +240,19 @@ def test_one_pass_keeps_a_true_and_a_false_quote_apart():
 )
 def test_two_booleans_agree_when_their_holds_do(a, b, status):
     spec = SPECS["doped"]
-    assert compare_values(_value("doped", "doped", holds=a), _value("doped", "Doped", holds=b), spec)[0] == status
+    assert (
+        compare_values(_value("doped", "doped", holds=a), _value("doped", "Doped", holds=b), spec, NO_CONTEXT)[0]
+        == status
+    )
 
 
 def test_a_boolean_cell_is_its_holds():
     field = _value("doped", "undoped", holds=False)
     comparison = FieldComparison(scope="sample:S1", field="doped", status="agree", a=field, b=field)
 
-    decision = decide(SPECS["doped"], [("mineru", field), ("paddleocr_vl", field)], [comparison], units=UNITS)
+    decision = decide(
+        SPECS["doped"], [("mineru", field), ("paddleocr_vl", field)], [comparison], units=UNITS, ctx=NO_CONTEXT
+    )
 
     assert (decision.status, decision.value) == ("agree", False)
 
@@ -313,11 +321,11 @@ def test_a_date_that_could_be_read_two_ways_is_refused(raw: str, why: str):
 )
 def test_two_dates_agree_when_their_iso_dates_do(a: str, b: str, status: str):
     spec = SPECS["prepared_on"]
-    assert compare_values(_read("prepared_on", a), _read("prepared_on", b), spec)[0] == status
+    assert compare_values(_read("prepared_on", a), _read("prepared_on", b), spec, NO_CONTEXT)[0] == status
 
 
 def test_a_date_cell_is_its_iso_string():
-    assert RULES["date"].cell(_value("prepared_on", "12 March 2021"), SPECS["prepared_on"], UNITS) == (
+    assert RULES["date"].cell(_value("prepared_on", "12 March 2021"), SPECS["prepared_on"], UNITS, NO_CONTEXT) == (
         "2021-03-12",
         None,
     )
@@ -379,7 +387,7 @@ def test_two_intervals_agree_end_by_end(a, b, status):
     side_a = _value("annealing_window", "x", bounds=a, unit="℃")
     side_b = _value("annealing_window", "y", bounds=b, unit="℃" if b else None)
 
-    assert compare_values(side_a, side_b, spec)[0] == status
+    assert compare_values(side_a, side_b, spec, NO_CONTEXT)[0] == status
 
 
 def test_the_pairing_distance_sums_the_finite_ends():
@@ -391,7 +399,9 @@ def test_the_pairing_distance_sums_the_finite_ends():
 
 
 def test_an_interval_cell_is_its_two_ends():
-    cell = RULES["interval"].cell(_value("coverage", "80", unit_raw="%", bound="above"), SPECS["coverage"], UNITS)
+    cell = RULES["interval"].cell(
+        _value("coverage", "80", unit_raw="%", bound="above"), SPECS["coverage"], UNITS, NO_CONTEXT
+    )
 
     assert cell == ([80.0, None], None)
 
@@ -560,7 +570,7 @@ def test_equal_answers_pair_first_whatever_order_the_lanes_list_them(field: str)
             for answer in answers
         ]
 
-    pairs = _pair_values(side(first, second), side(second, first), SPECS[field])
+    pairs = _pair_values(side(first, second), side(second, first), SPECS[field], NO_CONTEXT)
 
-    assert all(compare_values(a, b, SPECS[field])[0] == "agree" for a, b in pairs if a and b)
+    assert all(compare_values(a, b, SPECS[field], NO_CONTEXT)[0] == "agree" for a, b in pairs if a and b)
     assert len(pairs) == 2

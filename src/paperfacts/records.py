@@ -29,7 +29,7 @@ from typing import Any, Protocol, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
-from paperfacts.fields import DIGIT_KINDS, FieldSpec
+from paperfacts.fields import DIGIT_KINDS, MAX_NUMBER_QUOTE, FieldSpec
 from paperfacts.models import Backend
 from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.storage import write_text_atomic
@@ -339,10 +339,11 @@ def sample_key(sample_id: str | None) -> str:
     return key
 
 
-def resolve_reference(listed: Mapping[str, str], value_raw: str) -> str | None:
+def resolve_reference(listed: Mapping[str, str | None], value_raw: str) -> str | None:
     """The id of the sample ``value_raw`` names among ``listed`` (one entity type's samples of a lane, by
-    :func:`sample_key`, as :meth:`LaneExtraction.listed` gives them), or None. A reference is resolved by the key
-    that pairs and attributes samples, so the model only has to copy an id it was shown."""
+    :func:`sample_key`, as :meth:`LaneExtraction.listed` gives them), or None: when it names none, and when it names
+    a key two of the samples share, since picking either would be a guess. A reference is resolved by the key that
+    pairs and attributes samples, so the model only has to copy an id it was shown."""
     return listed.get(sample_key(value_raw))
 
 
@@ -423,12 +424,16 @@ class LaneExtraction(BaseModel):
     def sample(self, sample_id: str, entity: str = IMPLICIT_ENTITY) -> SampleRecord | None:
         return next((s for s in self.samples if s.sample_id == sample_id and s.entity == entity), None)
 
-    def listed(self) -> dict[str, dict[str, str]]:
+    def listed(self) -> dict[str, dict[str, str | None]]:
         """Each entity type's samples in this lane, ``sample_key`` -> ``sample_id``: what a reference field's value
-        resolves against (:func:`resolve_reference`)."""
-        listed: dict[str, dict[str, str]] = {}
+        resolves against (:func:`resolve_reference`). A key two differently spelled ids of one entity share maps to
+        None, so a reference to it is refused as ambiguous rather than resolved to whichever came first; the
+        inventory merges such repeats (:func:`clean_samples`), but a lane file need not have come from it."""
+        listed: dict[str, dict[str, str | None]] = {}
         for sample in self.samples:
-            listed.setdefault(sample.entity, {}).setdefault(sample_key(sample.sample_id), sample.sample_id)
+            ids = listed.setdefault(sample.entity, {})
+            key = sample_key(sample.sample_id)
+            ids[key] = sample.sample_id if ids.get(key, sample.sample_id) == sample.sample_id else None
         return listed
 
     def write(self, path: Path) -> None:
@@ -521,6 +526,9 @@ class ResponseCleaning:
         """One cleaned value, or None when it cannot be one (the reason lands in ``dropped``). ``holds`` is kept
         for a boolean field only, which is dropped without it: the quote alone does not say yes or no."""
         text = value_raw.strip()
+        if spec.kind in DIGIT_KINDS and len(text) > MAX_NUMBER_QUOTE:
+            self.dropped.append(f"{spec.name}: a value of {len(text)} characters is too long to be one value")
+            return None
         if spec.kind in DIGIT_KINDS and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
             return None

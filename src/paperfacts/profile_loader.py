@@ -306,13 +306,11 @@ def _groups(entries: Any, entity_names: tuple[str, ...], where: str) -> tuple[Gr
         if not isinstance(entry, Mapping):
             raise ConfigError(f"{at} must be an object, got {type(entry).__name__}")
         _refuse_unknown(entry, valid, at)
-        name, level, label = entry.get("name"), entry.get("level"), entry.get("label_zh", "")
+        name, level, label = entry.get("name"), entry.get("level"), _label_zh(entry, at)
         if not isinstance(name, str) or not IDENTIFIER.fullmatch(name):
             raise ConfigError(f"{at}: name must match {IDENTIFIER.pattern}, got {name!r}")
         if level not in get_args(FieldLevel):
             raise ConfigError(f"{at}: level must be one of {', '.join(get_args(FieldLevel))}, got {level!r}")
-        if not isinstance(label, str):
-            raise ConfigError(f"{at}: label_zh must be a string, got {label!r}")
         if any(group.name == name for group in groups):
             raise ConfigError(f"{where}: groups has more than one group named {name!r}")
         entity = entry.get("entity")
@@ -330,6 +328,23 @@ def _groups(entries: Any, entity_names: tuple[str, ...], where: str) -> tuple[Gr
         # Its inventory would be asked for samples no question ever fills.
         raise ConfigError(f"{where}: entity {idle[0]!r} has no sample group; name it in one or remove it")
     return tuple(groups)
+
+
+# A group's or an entity's label_zh names a column header's scope and a workbook sheet ("催化剂数据"): a control
+# character there corrupts the .xlsx, and a sheet title holds 31 characters.
+_LABEL_MAX = 40
+_CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _label_zh(entry: Mapping[str, Any], at: str) -> str:
+    label = entry.get("label_zh", "")
+    if not isinstance(label, str):
+        raise ConfigError(f"{at}: label_zh must be a string, got {label!r}")
+    if _CONTROL_CHARACTER.search(label):
+        raise ConfigError(f"{at}: label_zh may not contain a control character, got {label!r}")
+    if len(label) > _LABEL_MAX:
+        raise ConfigError(f"{at}: label_zh is at most {_LABEL_MAX} characters, got {len(label)}")
+    return label
 
 
 def _entity_names(entries: Any, where: str) -> tuple[str, ...]:
@@ -358,9 +373,7 @@ def _entities(entries: list[Any], prompt: PromptSlots, retrieval: RetrievalSpec,
     for index, entry in enumerate(entries):
         at = f"{where}: entities[{index}]"
         _refuse_unknown(entry, _ENTITY_KEYS, at)
-        label = entry.get("label_zh", "")
-        if not isinstance(label, str):
-            raise ConfigError(f"{at}: label_zh must be a string, got {label!r}")
+        label = _label_zh(entry, at)
         overrides = entry.get("prompt", {})
         if not isinstance(overrides, Mapping):
             raise ConfigError(f"{at}: prompt must be an object, got {type(overrides).__name__}")

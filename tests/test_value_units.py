@@ -12,7 +12,7 @@ import dataclasses
 
 import pytest
 
-from paperfacts.kinds import RULES, interval_text
+from paperfacts.kinds import NO_CONTEXT, RULES, interval_text
 from paperfacts.normalize import normalize_field, parse_number, read_number, read_range, unit_of_value
 from paperfacts.records import FieldValue
 from support.profiles import make_profile, profile_data, shipped_profile
@@ -31,7 +31,7 @@ def _field(name: str, value_raw: str, unit_raw: str | None, **update: object) ->
 
 def _lane_and_cell(name: str, raw: str, unit_raw: str | None, policy: str = "midpoint"):
     field, spec = _field(name, raw, unit_raw), _spec(name, policy)
-    return normalize_field(field, spec, UNITS), RULES["numeric"].cell(field, spec, UNITS)
+    return normalize_field(field, spec, UNITS, NO_CONTEXT), RULES["numeric"].cell(field, spec, UNITS, NO_CONTEXT)
 
 
 # ---- The helper ---------------------------------------------------------------------------------------------
@@ -194,7 +194,7 @@ PROFILE = make_profile({"fields": [*profile_data()["fields"], *_INTERVALS]})
 
 
 def _interval(name: str, raw: str, unit_raw: str | None = None, **update: object) -> FieldValue:
-    return normalize_field(_field(name, raw, unit_raw, **update), PROFILE.by_name[name], PROFILE.units)
+    return normalize_field(_field(name, raw, unit_raw, **update), PROFILE.by_name[name], PROFILE.units, NO_CONTEXT)
 
 
 @pytest.mark.parametrize(
@@ -231,8 +231,8 @@ def test_a_date_quoted_after_a_bound_is_no_date():
     spec = PROFILE.by_name["made_on"]
     field = _field("made_on", "2021", None, bound="up to")
 
-    assert normalize_field(field, spec, PROFILE.units).iso_date is None
-    assert RULES["date"].cell(field, spec, PROFILE.units)[0] is None
+    assert normalize_field(field, spec, PROFILE.units, NO_CONTEXT).iso_date is None
+    assert RULES["date"].cell(field, spec, PROFILE.units, NO_CONTEXT)[0] is None
 
 
 @pytest.mark.parametrize(

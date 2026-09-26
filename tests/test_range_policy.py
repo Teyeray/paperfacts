@@ -19,7 +19,7 @@ from paperfacts.compare import FieldComparison
 from paperfacts.decide import decide
 from paperfacts.errors import ConfigError
 from paperfacts.fields import RANGE_ENDS, FieldRole
-from paperfacts.kinds import RULES
+from paperfacts.kinds import NO_CONTEXT, RULES
 from paperfacts.normalize import normalize_field, parse_number, read_range, read_value, unit_of_value
 from support.extraction import make_field
 from support.profiles import make_profile, shipped_profile
@@ -132,7 +132,7 @@ def test_the_end_policies_move_only_the_corpus_strings_read_as_a_midpoint(policy
 
 
 def test_normalize_field_takes_the_upper_end_in_the_canonical_unit():
-    value = normalize_field(_field("450-500"), _spec("upper"), UNITS)
+    value = normalize_field(_field("450-500"), _spec("upper"), UNITS, NO_CONTEXT)
 
     assert value.value == pytest.approx(500.0)
     assert value.unit == "℃"
@@ -144,7 +144,9 @@ def test_a_bound_grounding_found_reads_as_under_midpoint(policy):
     # "80" quoted out of "above 80": the reading is "above 80", which no policy reads as a range.
     field = _field("80", bound="above")
 
-    assert normalize_field(field, _spec(policy), UNITS) == normalize_field(field, _spec("midpoint"), UNITS)
+    assert normalize_field(field, _spec(policy), UNITS, NO_CONTEXT) == normalize_field(
+        field, _spec("midpoint"), UNITS, NO_CONTEXT
+    )
 
 
 def test_read_range_reads_the_text_read_value_built():
@@ -211,14 +213,14 @@ def test_read_range_is_the_one_definition_of_a_clean_range(raw, expected):
     [("upper", 500.0, "上限"), ("lower", 450.0, "下限")],
 )
 def test_an_end_fills_the_cell_with_a_note(policy, expected, word):
-    value, note = RULES["numeric"].cell(_field("450-500"), _spec(policy), UNITS)
+    value, note = RULES["numeric"].cell(_field("450-500"), _spec(policy), UNITS, NO_CONTEXT)
 
     assert value == pytest.approx(expected)
     assert f"原文为区间 450–500，按字段配置取{word}" in note
 
 
 def test_an_approximate_range_keeps_its_end_not_a_centre():
-    value, note = RULES["numeric"].cell(_field("~450-500"), _spec("lower"), UNITS)
+    value, note = RULES["numeric"].cell(_field("~450-500"), _spec("lower"), UNITS, NO_CONTEXT)
 
     assert value == pytest.approx(450.0)
     assert "原文为近似值" in note
@@ -228,7 +230,10 @@ def test_an_approximate_range_keeps_its_end_not_a_centre():
 def test_a_scientific_range_fills_the_cell_with_its_end():
     spec = dataclasses.replace(TCO.by_name["resistivity"], range_policy="upper")
     value, note = RULES["numeric"].cell(
-        make_field("resistivity", "1.2 × 10^-3 to 1.5 × 10^-3", unit_raw="Ω·cm", source_ids=("b",)), spec, UNITS
+        make_field("resistivity", "1.2 × 10^-3 to 1.5 × 10^-3", unit_raw="Ω·cm", source_ids=("b",)),
+        spec,
+        UNITS,
+        NO_CONTEXT,
     )
 
     assert value == pytest.approx(1.5e-3)
@@ -237,7 +242,7 @@ def test_a_scientific_range_fills_the_cell_with_its_end():
 
 @pytest.mark.parametrize("policy", ["midpoint", "reject"])
 def test_midpoint_and_reject_still_keep_a_range_out_of_the_cell(policy):
-    value, note = RULES["numeric"].cell(_field("450-500"), _spec(policy), UNITS)
+    value, note = RULES["numeric"].cell(_field("450-500"), _spec(policy), UNITS, NO_CONTEXT)
 
     assert value is None
     assert note == "含多个数值、范围、上下界或附加条件，不能取中点或第一个数"
@@ -260,7 +265,7 @@ def test_midpoint_and_reject_still_keep_a_range_out_of_the_cell(policy):
     ids=["above", "qualifier", "bound", "bound-scalar", "gt", "descending", "condition", "alternative", "exponent"],
 )
 def test_a_bound_or_anything_but_one_clean_range_stays_out_of_the_cell(policy, field):
-    value, _ = RULES["numeric"].cell(field, _spec(policy), UNITS)
+    value, _ = RULES["numeric"].cell(field, _spec(policy), UNITS, NO_CONTEXT)
 
     assert value is None
 
@@ -287,8 +292,8 @@ UNCLEAN = [
 def test_an_unclean_range_has_no_end_in_the_lanes_or_the_cell(policy, name, raw, unit_raw):
     field, spec = _field(raw, unit_raw=unit_raw, name=name), _named_spec(name, policy)
 
-    lane = normalize_field(field, spec, UNITS)
-    cell, _ = RULES["numeric"].cell(field, spec, UNITS)
+    lane = normalize_field(field, spec, UNITS, NO_CONTEXT)
+    cell, _ = RULES["numeric"].cell(field, spec, UNITS, NO_CONTEXT)
 
     assert lane.value is None
     assert cell is None
@@ -314,8 +319,8 @@ def test_an_unclean_range_has_no_end_in_the_lanes_or_the_cell(policy, name, raw,
 def test_the_lanes_and_the_cell_take_the_same_end(policy, name, raw, unit_raw):
     field, spec = _field(raw, unit_raw=unit_raw, name=name), _named_spec(name, policy)
 
-    lane = normalize_field(field, spec, UNITS)
-    cell, _ = RULES["numeric"].cell(field, spec, UNITS)
+    lane = normalize_field(field, spec, UNITS, NO_CONTEXT)
+    cell, _ = RULES["numeric"].cell(field, spec, UNITS, NO_CONTEXT)
 
     assert lane.value == (None if cell is None else pytest.approx(cell))
 
@@ -329,14 +334,14 @@ def test_a_bare_range_is_a_fraction_or_a_percent_as_a_whole(raw, lower, upper):
     for policy, expected in (("lower", lower), ("upper", upper)):
         field, spec = _field(raw, unit_raw=None, name="o2_ratio"), _named_spec("o2_ratio", policy)
 
-        assert normalize_field(field, spec, UNITS).value == pytest.approx(expected)
-        assert RULES["numeric"].cell(field, spec, UNITS)[0] == pytest.approx(expected)
+        assert normalize_field(field, spec, UNITS, NO_CONTEXT).value == pytest.approx(expected)
+        assert RULES["numeric"].cell(field, spec, UNITS, NO_CONTEXT)[0] == pytest.approx(expected)
 
 
 def test_a_bare_midpoint_still_decides_from_the_midpoint():
     field = _field("0.8-1.2", unit_raw=None, name="o2_ratio")
 
-    value = normalize_field(field, _named_spec("o2_ratio", "midpoint"), UNITS)
+    value = normalize_field(field, _named_spec("o2_ratio", "midpoint"), UNITS, NO_CONTEXT)
 
     assert value.value == pytest.approx(1.0)
     assert value.normalization_note == "range 0.8-1.2 → midpoint; no unit; read as percent"
@@ -345,7 +350,7 @@ def test_a_bare_midpoint_still_decides_from_the_midpoint():
 def _decision(policy: str):
     field = _field("450-500")
     comparison = FieldComparison(scope="sample:A", field="annealing_temperature", status="missing", a=field)
-    return decide(_spec(policy), [("mineru", field)], [comparison], units=UNITS)
+    return decide(_spec(policy), [("mineru", field)], [comparison], units=UNITS, ctx=NO_CONTEXT)
 
 
 def test_an_upper_cell_is_committed_and_a_midpoint_one_is_non_scalar():

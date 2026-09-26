@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING
 
-from paperfacts.fields import RANGE_ENDS, FieldSpec, RangePolicy
+from paperfacts.fields import MAX_NUMBER_QUOTE, RANGE_ENDS, FieldSpec, RangePolicy
 from paperfacts.grounding import LOWER_BOUND_WORDS, UPPER_BOUND_WORDS
 from paperfacts.profile import DomainProfile
 from paperfacts.records import ExtractedRecords, FieldValue, LaneExtraction, PaperRecord, spell_number_word
@@ -219,6 +219,11 @@ def read_number(
     """
     if range_policy in RANGE_ENDS and range_unit is None:
         raise ValueError(f"range_policy {range_policy!r} needs range_unit: an end is read only in the field's unit")
+    if len(raw) > MAX_NUMBER_QUOTE:
+        # Cleaning drops such an answer; this keeps a lane file written before that, or any other caller, linear.
+        return NumberReading(
+            None, f"a quote of {len(raw)} characters is too long to be one number; refused", None, None
+        )
     bare, notes, condition = set_aside(raw)
     if _AFTER.search(bare):
         refusal = "a value stated 'after' a treatment belongs to another state of the sample; ambiguous"
@@ -783,7 +788,12 @@ def read_range(raw: str, range_unit: Callable[[str], bool]) -> tuple[float, floa
     approximation or a name before "=" may precede it (:func:`set_aside`); a bound ("> 450-500", "below 1.2e-4 -
     1.5e-4"), a condition ("450-500 °C for 2 h"), an "after" clause, a parenthesis ("450-500 (600)"), another unit
     ("450-500 K" on a ℃ field) and an exponent written once for two numbers ("1.2-1.5 × 10^-3") are not."""
-    reading = read_number(raw)
+    return _clean_ends(read_number(raw), range_unit)
+
+
+def _clean_ends(reading: NumberReading, range_unit: Callable[[str], bool]) -> tuple[float, float, str] | None:
+    """:func:`read_range` of a quote already read: its ends and unit do not depend on the range policy it was read
+    under."""
     if reading.ends is None or reading.unit is None or (reading.unit and not range_unit(reading.unit)):
         return None
     return reading.ends[0], reading.ends[1], reading.unit
@@ -808,12 +818,14 @@ def read_interval(
     A bound is held to a range's contract (:func:`read_range`): one number after the bound word, and after it
     nothing but a unit ``range_unit`` accepts. "> 450-500", "> 450 (600)", "< 500 °C for 2 h" and ">80 % at 550
     nm" are refused, not read as the one number they start with."""
-    clean = read_range(raw, range_unit)
+    # One reading serves the range and, when the quote is neither a range nor a bound, the reason it is no interval.
+    whole = read_number(raw, range_policy="reject")
+    clean = _clean_ends(whole, range_unit)
     if clean is not None:
         return clean, None
     match = _ONE_SIDED.match(_typeset(raw))
     if match is None:
-        number, note = parse_number(raw, range_policy="reject")
+        number, note = whole.value, whole.note
         return None, _NO_INTERVAL if number is not None else _join([n for n in (note, _NO_INTERVAL) if n])
     reading = read_number(match.group("rest"), range_policy="reject")
     if reading.value is None:
@@ -907,16 +919,14 @@ def read_date(raw: str) -> tuple[str | None, str | None]:
     return f"{year:04d}-{month:02d}-{day:02d}", None
 
 
-def normalize_field(
-    field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext | None = None
-) -> FieldValue:
+def normalize_field(field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext) -> FieldValue:
     """``field`` with ``value`` / ``unit`` filled in as its kind reads it (:mod:`paperfacts.kinds`). ``ctx`` holds the
-    lane's samples a reference field resolves against; no other kind reads it. None rather than ``NO_CONTEXT`` as the
-    default only because the kind rows are imported lazily here."""
+    lane's samples a reference field resolves against; no other kind reads it, and a caller with none passes
+    ``kinds.NO_CONTEXT``."""
     # Imported here, not at the top: the kind rows are built on this module's readers.
-    from paperfacts.kinds import NO_CONTEXT, rules_for
+    from paperfacts.kinds import rules_for
 
-    return rules_for(spec).read(field, spec, units, ctx or NO_CONTEXT)
+    return rules_for(spec).read(field, spec, units, ctx)
 
 
 def _normalize_fields(
@@ -959,7 +969,10 @@ def drop_implausible(records: ExtractedRecords, profile: DomainProfile) -> Extra
         spec = profile.by_name.get(value.field)
         if spec is None or spec.describe_range() is None:
             return True
-        normalized = normalize_field(value, spec, profile.units)
+        # No kind with a range reads a context: only a reference field does, and it has no range.
+        from paperfacts.kinds import NO_CONTEXT
+
+        normalized = normalize_field(value, spec, profile.units, NO_CONTEXT)
         # A numeric value is judged on its number, an interval on each end it has.
         ends = normalized.bounds if normalized.bounds is not None else (normalized.value,)
         number = next((end for end in ends if end is not None and not spec.in_range(end)), None)
