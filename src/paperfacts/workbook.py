@@ -64,6 +64,8 @@ def _formatted(rows: Sequence[Row], columns: dict[str, FieldColumn], *, quality:
     ]
 
 
+# The 字段说明 rule of a list column (cardinality "many").
+_LIST_RULE = "多值：两路已定位证据的并集，以“; ”分隔，每个元素的来源通道见数据质量说明；有分类时按分类顺序排列。"
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _QUALITY_COLUMNS = (
     ("document_id", "文档ID"),
@@ -190,6 +192,10 @@ def write_dataset(
             "unit": column.unit or "文本",
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
+        | (
+            # A list column says so, and that its cell is the union of both lanes, not one agreed value.
+            {"unit": "文本（多值）", "rule": _LIST_RULE} if column.cardinality == "many" else {}
+        )
         for column in by_name.values()
     ]
     _worksheet(

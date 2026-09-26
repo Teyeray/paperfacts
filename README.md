@@ -817,6 +817,35 @@ names from the LLM cache.
 | `after_clause` | `refuse` | cleaning, verdict | `refuse` or `condition`: what "92.5% after 100 cycles" becomes. Numeric only |
 | `figure_readable` | `false` | figure | Whether a chart's y axis may be read for this field; numeric with a unit only |
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
+| `cardinality` | `one` | prompt, verdict | `one` or `many`: a list of values that hold at once (the precursors of a sample, the techniques a paper applies). Text or composition only, at either level; refused together with `figure_readable`, `condition_preference`, `condition_rule` and every numeric attribute. See [List fields](#list-fields) |
+| `prompt_categories` | derived | prompt | Never written: a `many` field's `categories`, named in its field line; empty for every other field, so a single-valued field's `categories` stay verdict only |
+
+### List fields
+
+`"cardinality": "many"` makes a text or composition field a list: several values that hold at once, such as each
+precursor of a sample. A categorical list is `kind: text` with `categories` and `cardinality: many`:
+
+```jsonc
+{ "name": "characterization_techniques", "group": "study", "kind": "text", "cardinality": "many",
+  "categories": ["XRD", "XPS", "TEM", "SEM", "BET"],
+  "description": "Each characterization technique the paper applies to its catalysts." }
+```
+
+- **Prompt.** The field line adds "Several values may hold at once: report each as its own entry.", and with
+  categories "Name each with one of: XRD, XPS, …." Nothing else in the prompts changes.
+- **Comparison.** The lanes' values pair as a set, by element: the category a value names, or else its text
+  with Unicode and spacing folded (and case, for `text` but not `composition`). This is stricter than a
+  single-valued field's text equality, which drops Greek letters: `α-Al2O3` and `γ-Al2O3` are two elements. What
+  only one lane read is `missing` on the other. A list never reports `conflict`.
+- **Dataset cell.** The **union** of the elements either lane grounded and cited, after the usual refusals
+  (`unanswered`, `missing`, the sample-match `ambiguous`, a troubled comparison, `unreviewed`). With categories
+  an element is the category it names, in the categories' order, and a quote naming none -- including one naming
+  two, "XRD and XPS" -- is refused as an element with a note; without, elements keep their first-seen order, MinerU
+  first. The cell is `agree` when both lanes hold every element and `single_source` otherwise, and its 数据质量
+  detail names each element's lanes, so the union never hides which lane an element rests on. A cell left with no
+  element is `non_scalar`. A non-empty list counts as one available field.
+- **Display.** Joined with "; " in Excel and the clipboard copy, and with "；" on the web page; 字段说明 marks the
+  column 多值. The eval scorer scores a list per element (eval/README.md).
 
 ### Which edit re-keys what
 
@@ -828,8 +857,8 @@ re-keying the comparison recomputes it from the stored extractions, for free.
 | Edit | `extractor_key` | `comparison_key` | `figure_key` |
 |---|---|---|---|
 | Display: `label`, `description_zh`, `display_format`, a group's `label_zh`, `title_zh`, `description_zh`, `maturity`, `ui`, `$comment`, the file name | — | — | — |
-| Verdict: `rel_tol`, `abs_tol`, `categories`, `condition_preference`, `missing_condition_note_zh` | — | yes | — |
-| Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number` |
+| Verdict: `rel_tol`, `abs_tol`, `categories` (of a `many` field: also extraction, as its `prompt_categories`), `condition_preference`, `missing_condition_note_zh` | — | yes | — |
+| Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, `cardinality`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number` |
 | `keywords` | passage mode | — | for a `figure_readable` field |
 | `retrieval` | passage mode | — | — |
 | `units`, `ignored_unit_suffixes` | yes | yes | yes |

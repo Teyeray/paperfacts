@@ -33,7 +33,7 @@ from paperfacts.keys import (
     profile_comparison_fingerprint,
     profile_extraction_fingerprint,
 )
-from paperfacts.kinds import rules_for
+from paperfacts.kinds import element_key, rules_for
 from paperfacts.matching import SampleMatching
 from paperfacts.models import Backend
 from paperfacts.normalize import (
@@ -311,7 +311,9 @@ def _compare_records(
     lanes did report the field, with different values under differently worded conditions, which is
     exactly what a reviewer needs to see. One positional row keeps it visible. It is always ambiguous,
     never a conflict: the pairing is positional, so the two readings may equally well be two different
-    measurements.
+    measurements. A list field is exempt: its leftovers are elements one lane did not read, not two readings
+    of one value, so a positional row would claim a disagreement the lanes never had; its unplaced values go
+    unreported like any other one-sided unplaced value.
     """
     spec_by_name = {spec.name: spec for spec in specs}
     names = sorted({f.field for f in (*fields_a, *fields_b)} & spec_by_name.keys())
@@ -321,7 +323,9 @@ def _compare_records(
         values_a = [f for f in fields_a if f.field == name]
         values_b = [f for f in fields_b if f.field == name]
         pairs = _pair_values(values_a, values_b, spec)
-        leftover = _split_off_first_leftover_pair(pairs) if pair_leftovers_ambiguous else None
+        # A list's leftovers are elements one lane did not read, never two readings of one value.
+        positional = pair_leftovers_ambiguous and spec.cardinality != "many"
+        leftover = _split_off_first_leftover_pair(pairs) if positional else None
         for a, b in pairs:
             if a is None or b is None:
                 if not emit_one_sided:
@@ -416,7 +420,13 @@ def _pair_values(
     condition, which silently discarded a second reading of the same quantity -- exactly the case worth
     reporting, since a lane that reads a resistivity as both ``10^-2`` and ``10^2`` has an OCR problem the
     other lane may not share.
+
+    A list field (``cardinality: many``) pairs as a set (:func:`_set_pairs`): its values are several facts that
+    hold at once, so pairing "LiOH" with "NiSO4" because they came first would report a conflict the paper never
+    made. What one lane has and the other lacks is reported one-sided, so a list never reports ``conflict``.
     """
+    if spec.cardinality == "many":
+        return _set_pairs(values_a, values_b, spec)
     groups_a, groups_b = _by_condition(values_a), _by_condition(values_b)
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     rest_a: list[FieldValue] = []
@@ -434,6 +444,30 @@ def _pair_values(
     pairs += [(a, None) for a in rest_a]
     pairs += [(None, b) for b in rest_b]
     return pairs
+
+
+def _set_pairs(
+    values_a: Sequence[FieldValue], values_b: Sequence[FieldValue], spec: FieldSpec
+) -> list[tuple[FieldValue | None, FieldValue | None]]:
+    """A list field's pairing: each value of lane A with the first of lane B holding the same element
+    (:func:`~paperfacts.kinds.element_key`, the union cell's identity too) under conditions that do not measure
+    differently; everything else one-sided. A value naming no category pairs with nothing."""
+    rest_b = list(values_b)
+    pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
+    for a in values_a:
+        key = element_key(spec, a.value_raw)
+        j = next(
+            (
+                j
+                for j, b in enumerate(rest_b)
+                if key is not None
+                and element_key(spec, b.value_raw) == key
+                and not conditions_measure_differently(a.condition, b.condition)
+            ),
+            None,
+        )
+        pairs.append((a, None if j is None else rest_b.pop(j)))
+    return pairs + [(None, b) for b in rest_b]
 
 
 def conditions_measure_differently(condition_a: str | None, condition_b: str | None) -> bool:

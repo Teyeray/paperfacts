@@ -32,6 +32,7 @@ from paperfacts.errors import ConfigError
 from paperfacts.fields import (
     AfterClause,
     BareNumberPolicy,
+    Cardinality,
     DisplayFormat,
     FieldKind,
     FieldLevel,
@@ -444,7 +445,23 @@ def _backtracks(items: Any, *, repeated: bool) -> bool:
 # A number as a measurement condition states it: "550", "400" and "800" in "average 400–800 nm".
 CONDITION_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 # Attributes a field entry never states: the loader derives them.
-_DERIVED = {"level"}
+_DERIVED = {"level", "prompt_categories"}
+# The kinds a list field may have, and the attributes it refuses: a list of numbers would need its own tolerance,
+# condition and chart semantics, which do not exist yet.
+_LIST_KINDS = ("text", "composition")
+_NOT_WITH_MANY = (
+    "figure_readable",
+    "condition_preference",
+    "condition_rule",
+    "canonical_unit",
+    "rel_tol",
+    "abs_tol",
+    "bare_number",
+    "valid_range",
+    "range_policy",
+    "after_clause",
+    "display_format",
+)
 # What an entry that leaves an attribute out gets: the dataclass's own default, which is also what the keys omit.
 _FIELD_DEFAULTS = {
     item.name: item.default for item in dataclass_fields(FieldSpec) if item.default is not dataclasses.MISSING
@@ -512,6 +529,13 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         raise ConfigError(f"{where}: categories must be a list of non-empty strings")
     if categories and entry.get("kind") != "text":
         raise ConfigError(f"{where}: categories is only meaningful for a text field, not a {entry.get('kind')!r} one")
+    many = choice("cardinality", get_args(Cardinality)) == "many"
+    if many and entry.get("kind") not in _LIST_KINDS:
+        raise ConfigError(
+            f"{where}: cardinality 'many' needs a text or composition field, not a {entry.get('kind')!r} one"
+        )
+    if many and (refused := [key for key in _NOT_WITH_MANY if key in entry]):
+        raise ConfigError(f"{where}: cardinality 'many' cannot be combined with {', '.join(refused)}")
 
     bare_number = choice("bare_number", get_args(BareNumberPolicy))
     if bare_number == "percent_or_fraction" and entry.get("canonical_unit") != "%":
@@ -565,6 +589,8 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         display_format=display_format,  # type: ignore[arg-type]
         range_policy=range_policy,  # type: ignore[arg-type]
         after_clause=after_clause,  # type: ignore[arg-type]
+        cardinality="many" if many else "one",
+        prompt_categories=tuple(categories) if many else (),
     )
 
 

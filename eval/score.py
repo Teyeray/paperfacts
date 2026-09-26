@@ -87,6 +87,9 @@ def value_matches(spec: Spec, got: object, cell: dict) -> bool:
     gold = cell.get("value")
     if gold is None or got is None:
         return False
+    if isinstance(got, list):
+        # A list cell (cardinality "many") holds the gold value when one of its elements does.
+        return any(value_matches(spec, element, cell) for element in got)
     if spec.kind == "numeric":
         try:
             return math.isclose(float(got), float(gold), rel_tol=spec.rel_tol, abs_tol=spec.abs_tol)
@@ -127,6 +130,37 @@ def classify(spec: Spec, got: object, cells: list[dict], sample_ambiguous: bool)
     if any(value_matches(spec, got, c) for c in cells):
         return "soft"
     return "wrong" if definite else "disputed"
+
+
+def classify_elements(spec: Spec, got: object, cells: list[dict], sample_ambiguous: bool) -> list[tuple[str, object]]:
+    """``(outcome, element)`` for a list field (cardinality "many"), whose gold cells are the elements it must hold
+    rather than alternatives: each dataset element is correct when it matches a required cell no earlier element
+    matched, soft when it matches only an ambiguous one, and extra otherwise (disputed where the gold has cells
+    but none required, as for a single value); each required cell no element matches is missing."""
+    definite = [c for c in cells if is_definite(c, sample_ambiguous)]
+    elements = got if isinstance(got, list) else [] if got is None else [got]
+    # One to one: a required cell two elements both match (through one `accept` pattern) is found once.
+    unmatched = list(definite)
+    outcomes: list[tuple[str, object]] = []
+    for element in elements:
+        hit = next((c for c in unmatched if value_matches(spec, element, c)), None)
+        if hit is not None:
+            unmatched.remove(hit)
+            outcomes.append(("correct", element))
+        elif any(value_matches(spec, element, c) for c in cells if c not in definite):
+            outcomes.append(("soft", element))
+        else:
+            outcomes.append(("disputed" if cells and not definite else "extra", element))
+    return outcomes + [("missing", None) for _ in unmatched]
+
+
+def outcomes(spec: Spec, got: object, cells: list[dict], sample_ambiguous: bool) -> list[tuple[str, object]]:
+    """``(outcome, dataset value)`` of one dataset cell: one for a single-valued field, one per element (and per
+    unmatched required element) for a list field."""
+    if spec.cardinality == "many":
+        return classify_elements(spec, got, cells, sample_ambiguous)
+    outcome = classify(spec, got, cells, sample_ambiguous)
+    return [(outcome, got)] if outcome else []
 
 
 # ---------------------------------------------------------------------------------------------- alignment
@@ -214,9 +248,7 @@ def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Ce
         if spec.level != "paper":
             continue
         gcells = paper_gold.get(name, [])
-        got = paper_row.get(name)
-        outcome = classify(spec, got, gcells, False)
-        if outcome:
+        for outcome, got in outcomes(spec, paper_row.get(name), gcells, False):
             detail = trace(quality, PAPER, name)
             cells.append(Cell(doc, PAPER, PAPER, name, outcome, got, render(gcells), detail))
 
@@ -229,10 +261,8 @@ def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Ce
         amb = bool(sample.get("ambiguous"))
         for spec in sample_fields:
             gcells = gold_cells(gold, sample, spec.name)
-            outcome = classify(spec, row.get(spec.name), gcells, amb)
-            if outcome:
+            for outcome, got in outcomes(spec, row.get(spec.name), gcells, amb):
                 detail = trace(quality, rid, spec.name) if rid else "no dataset row aligned to this gold sample"
-                got = row.get(spec.name)
                 cells.append(Cell(doc, sample["id"], rid, spec.name, outcome, got, render(gcells), detail))
     aligned_rows = set(mapping.values())
     for ri, row in enumerate(rows):
@@ -240,9 +270,9 @@ def score_document(specs: dict[str, Spec], gold: dict, dataset: dict) -> list[Ce
             continue
         rid = row.get("sample_id", "")
         for spec in sample_fields:
-            if row.get(spec.name) is not None:
+            for _, got in outcomes(spec, row.get(spec.name), [], False):
                 detail = "row matches no gold sample; " + trace(quality, rid, spec.name)
-                cells.append(Cell(doc, f"(unaligned) {rid}", rid, spec.name, "extra", row.get(spec.name), "", detail))
+                cells.append(Cell(doc, f"(unaligned) {rid}", rid, spec.name, "extra", got, "", detail))
     return cells
 
 

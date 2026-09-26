@@ -475,6 +475,29 @@ async def quiet_console(page: Page, base: str, docs: dict[str, str], _: Path) ->
     expect(not errors, f"console errors: {errors}")
 
 
+@check("a list column is joined by its column, on the page and in the clipboard copy")
+async def list_cell(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    async def as_list(route: Route) -> None:
+        # The shipped profile has no list field, so one sample column is turned into one on the wire.
+        response = await route.fetch()
+        data = await response.json()
+        field = next(field for field in data["fields"] if field["name"] == "thickness")
+        field["cardinality"] = "many"
+        for row in data["sample_rows"]:
+            row["thickness"] = ["LiOH", "NiSO4"]
+        await route.fulfill(response=response, json=data)
+
+    await page.route(f"**/api/documents/{docs['B']}/dataset", as_list)
+    await open_doc(page, base, docs["B"])
+    await page.wait_for_selector('[data-slot="results-rows"] tr')
+    shown = await page.text_content('[data-slot="results-rows"]') or ""
+    expect("LiOH；NiSO4" in shown, f"the list cell reads {shown!r}")
+    copied = await page.evaluate(
+        "import('/tsv.js').then((tsv) => tsv.fieldText(['LiOH', 'NiSO4'], {cardinality: 'many'}))"
+    )
+    expect(copied == "LiOH; NiSO4", f"the clipboard copy of a list reads {copied!r}")
+
+
 @check("both lanes of 事实对照 fit side by side at 1440 px", width=1440)
 async def facts_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])

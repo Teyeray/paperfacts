@@ -299,6 +299,8 @@ EXTRACTION_CELLS = {
     "condition_rule",
     "range_policy",
     "after_clause",
+    "cardinality",
+    "prompt_categories",
 }
 
 

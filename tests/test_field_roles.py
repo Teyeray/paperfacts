@@ -47,6 +47,8 @@ ROLES = {
     "display_format": {D},
     "range_policy": {C, V},
     "after_clause": {C, V},
+    "cardinality": {P, V},
+    "prompt_categories": {P},
 }
 # A value off each attribute's default, set on one field of the demo profile to see which fingerprints move.
 EDITS = {
@@ -72,6 +74,8 @@ EDITS = {
     "display_format": "scientific",
     "range_policy": "reject",
     "after_clause": "condition",
+    "cardinality": "many",
+    "prompt_categories": ("XRD", "XPS"),
 }
 
 

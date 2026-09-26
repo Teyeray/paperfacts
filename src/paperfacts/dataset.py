@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from paperfacts.columns import FieldColumn
 from paperfacts.compare import PAPER_SCOPE, ComparisonReport, FieldComparison, check_profile
-from paperfacts.decide import Decision, decide
+from paperfacts.decide import Decision, decide_cell
 from paperfacts.fields import FieldSpec
 from paperfacts.keys import ComparisonOptions, profile_comparison_fingerprint
 from paperfacts.kinds import CellValue, joined
@@ -269,7 +269,7 @@ def consolidate_document(
             for field in lane.paper.fields
             if field.field == spec.name
         ]
-        paper[spec.name] = decide(
+        paper[spec.name] = decide_cell(
             spec,
             evidence,
             [c for c in report.comparisons if c.scope == PAPER_SCOPE and c.field == spec.name],
@@ -299,7 +299,7 @@ def consolidate_document(
                 if field.field != spec.name and field.grounded
                 for source in field.source_ids
             )
-            decision = decide(
+            decision = decide_cell(
                 spec,
                 evidence,
                 [c for c in scope_comparisons if c.field == spec.name],

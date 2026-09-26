@@ -167,7 +167,7 @@ Rules:
 
 Return the JSON object only."""
 
-# ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" for every kind so far.
+# ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" but for a list field.
 _FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{note}{condition}{plausible}"
 # Told to the model so it checks what it is quoting before it answers; the code drops what still falls outside.
 _PLAUSIBLE = (

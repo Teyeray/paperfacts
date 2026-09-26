@@ -42,8 +42,12 @@ from paperfacts.units import UnitRegistry
 if TYPE_CHECKING:
     from paperfacts.compare import FactStatus
 
-# A list is the cell of a field holding several values at once; no kind produces one yet.
+# A list is the cell of a field holding several values at once (``cardinality: many``, paperfacts.decide.decide_many).
 CellValue = str | float | int | bool | list[str | float | None] | None
+
+
+# What a list field's line adds to its description (TextRules.note).
+LIST_NOTE = "Several values may hold at once: report each as its own entry."
 
 
 def joined(values: Sequence[str]) -> str:
@@ -340,7 +344,11 @@ class TextRules:
         return (canonical_category(spec.categories, value.value_raw) is None,)
 
     def note(self, spec: FieldSpec) -> str:
-        return ""
+        if spec.cardinality != "many":
+            return ""
+        # One entry per value: a quote naming two categories ("XRD and XPS") names none, and is refused in the cell.
+        named = f" Name each with one of: {', '.join(spec.prompt_categories)}." if spec.prompt_categories else ""
+        return f" {LIST_NOTE}{named}"
 
 
 RULES: Mapping[FieldKind, KindRules] = MappingProxyType(
@@ -350,3 +358,16 @@ RULES: Mapping[FieldKind, KindRules] = MappingProxyType(
 
 def rules_for(spec: FieldSpec) -> KindRules:
     return RULES[spec.kind]
+
+
+def element_key(spec: FieldSpec, raw: str) -> str | None:
+    """What identifies one element of a list field (``cardinality: many``), for the comparison's set pairing and
+    the union cell alike; None when a field with categories gets a value naming none of them.
+
+    Stricter than :func:`same_text`, whose ``normalize_key`` deletes Greek letters and folds case: in a union two
+    elements judged one lose one of them, so "α-Al2O3" and "γ-Al2O3", or "Co3O4" and "CO3O4", must stay two. A
+    composition keeps its case; text folds it ("Ethanol" is "ethanol")."""
+    if spec.categories:
+        return canonical_category(spec.categories, raw)
+    text = normalize_text(raw)
+    return text if spec.kind == "composition" else text.casefold()

@@ -22,7 +22,7 @@ from paperfacts.fields import FieldRole, FieldSpec, field_roles
 from paperfacts.keys import ComparisonOptions, ExtractionOptions, comparison_key, extractor_key
 from paperfacts.passages import candidate_blocks, inventory_blocks
 from paperfacts.profile import DomainProfile, PromptSlots
-from paperfacts.profile_loader import load_profile
+from paperfacts.profile_loader import load_profile, parse_profile
 from paperfacts.prompts import (
     extraction_system_prompt,
     field_system_prompt,
@@ -32,7 +32,7 @@ from paperfacts.prompts import (
     matching_system_prompt,
 )
 from support.factories import make_block
-from support.profiles import SHIPPED_PROFILE_PATH, make_profile
+from support.profiles import SHIPPED_PROFILE_PATH, make_profile, profile_data
 
 _REPOSITORY = Path(__file__).resolve().parents[1]
 # A few blocks every field can find something in: a title, prose with numbers and units, a table and its caption.
@@ -57,7 +57,26 @@ def _profiles() -> dict[str, DomainProfile]:
         "tco": load_profile(SHIPPED_PROFILE_PATH),
         "battery_cathode": load_profile(_REPOSITORY / "profiles" / "battery_cathode.json"),
         "demo": make_profile(),
+        "many": _list_profile(),
     }
+
+
+def _list_profile() -> DomainProfile:
+    """The demo profile with list fields (``cardinality: many``): a categorical one, whose categories reach the
+    field line as ``prompt_categories``, and a plain one."""
+    data = profile_data({"fields.2.cardinality": "many"})
+    data["fields"].append(
+        {
+            "name": "characterization_techniques",
+            "group": "precursor",
+            "kind": "text",
+            "cardinality": "many",
+            "categories": ["XRD", "XPS", "TEM"],
+            "description": "Each characterization technique the paper applies.",
+            "keywords": ["characterization"],
+        }
+    )
+    return parse_profile(data, Path("profiles/demo.json"))
 
 
 def _requests(profile: DomainProfile) -> dict[str, tuple[str, ...]]:
@@ -156,7 +175,7 @@ def _variants(profile: DomainProfile) -> Iterator[tuple[str, DomainProfile, bool
         yield label, _edited(profile, label, ui=ui), True
 
 
-@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo"])
+@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo", "many"])
 def test_every_value_that_changes_a_request_changes_its_key(name: str):
     profile = _profiles()[name]
     requests, keys = _requests(profile), _keys(profile)
@@ -172,7 +191,7 @@ def test_every_value_that_changes_a_request_changes_its_key(name: str):
     assert uncovered == []
 
 
-@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo"])
+@pytest.mark.parametrize("name", ["tco", "battery_cathode", "demo", "many"])
 def test_every_prompt_slot_is_hashed_by_value(name: str):
     # Whether or not a system prompt shows it today: a slot at its default in one profile, or read only by a user
     # prompt, must still move the key its prompts are filed under.

@@ -82,6 +82,11 @@ non-empty cells *extra*.
 Numbers match with `math.isclose(dataset, gold, rel_tol, abs_tol)` using the field's tolerances; a field with `categories` (`mode`)
 compares the category each value names, by the pipeline's rule; `component` matches on normalised equality or an `accept` regex.
 
+**List fields** (`cardinality: many`) are scored per element: their gold cells are the elements the list must
+hold, not alternatives. Each dataset element matching a required cell no other element matched is *correct* (*soft* if it matches only an
+ambiguous or figure-only one), any other element is *extra* (*disputed* when the gold has only ambiguous/null
+cells), and each required cell no element matches is *missing*. The gold format is unchanged.
+
 Precision = (correct + soft) / (correct + soft + wrong + extra); recall = correct / (correct + wrong + missing).
 The report gives micro totals, a macro average over papers (a 36-sample series otherwise dominates), per field
 group, per field, per paper, and every non-correct cell with the dataset's `quality_rows` decision, conditions,

@@ -39,8 +39,9 @@ FieldKind = Literal["numeric", "composition", "text"]
 # The kinds whose value is quoted as a number, so an answer or a block without a digit cannot hold one. Here
 # rather than in paperfacts.kinds because cleaning (records.py) and retrieval (passages.py) sit below that module.
 DIGIT_KINDS: frozenset[FieldKind] = frozenset({"numeric"})
-# How many values of a field one sample (or the paper) holds. Only "one" exists yet; a dataset column carries it
-# so that the workbook and the web format a cell by its column.
+# How many values of a field one sample (or the paper) holds: one, or a list of several that hold at once (the
+# precursors of a sample). "many" is for text and composition only; a dataset column carries it so that the workbook
+# and the web format a cell by its column.
 Cardinality = Literal["one", "many"]
 # What a bare number with no unit means. Declared per field so normalisation never special-cases a name.
 BareNumberPolicy = Literal["reject", "assume_canonical", "percent_or_fraction"]
@@ -137,6 +138,13 @@ class FieldSpec:
     # annealing" is not the as-deposited thickness); "condition" suits one that is only ever stated after
     # something (a capacity retention after N cycles), where the clause is what the value was measured under.
     after_clause: AfterClause = field(default="refuse", metadata=_roles(FieldRole.CLEANING, FieldRole.VERDICT))
+    # PROMPT: a list field's line asks for each value as its own entry. VERDICT: its values pair as a set, and its
+    # dataset cell is the union of both lanes' values rather than one value.
+    cardinality: Cardinality = field(default="one", metadata=_roles(FieldRole.PROMPT, FieldRole.VERDICT))
+    # The categories a list field's line names to the model ("Name each with one of: XRD, XPS."). Derived by the
+    # loader, never written in a field entry: ``categories`` when the field is ``many``, () otherwise, so a
+    # single-valued field with categories (whose line names none) keeps its extraction key.
+    prompt_categories: tuple[str, ...] = field(default=(), metadata=_roles(FieldRole.PROMPT))
 
     @property
     def is_sample_level(self) -> bool:
