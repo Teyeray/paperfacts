@@ -1,0 +1,36 @@
+{
+  "doc_id": "cat-a",
+  "paper": {
+    "characterization_techniques": [{"value": "XRD"}, {"value": "XPS"}, {"value": "BET"}],
+    "precursors": [{"value": "Cu(NO3)2·3H2O"}, {"value": "Zn(NO3)2·6H2O"}],
+    "received_date": [{"value": "2021-03-12"}]
+  },
+  "samples": [
+    {
+      "id": "c1", "entity": "catalyst", "match": {"label": "^CZ-1"},
+      "fields": {"calcination_temperature": [{"value": 500}], "bet_surface_area": [{"value": 85}]}
+    },
+    {
+      "id": "c2", "entity": "catalyst", "match": {"label": "^CZ-2"},
+      "fields": {"calcination_temperature": [{"value": 500}], "bet_surface_area": [{"value": 64}]}
+    },
+    {
+      "id": "t1", "entity": "test", "match": {"label": "^T1"},
+      "fields": {
+        "catalyst": [{"value": "c1"}],
+        "pre_reduced": [{"value": true}],
+        "temperature_window": [{"value": [200, 300]}],
+        "reaction_pressure": [{"value": 3}]
+      }
+    },
+    {
+      "id": "t2", "entity": "test", "match": {"label": "^T2"},
+      "fields": {
+        "catalyst": [{"value": "c2"}],
+        "pre_reduced": [{"value": true}],
+        "temperature_window": [{"value": [240, null]}],
+        "reaction_pressure": [{"value": 3}]
+      }
+    }
+  ]
+}

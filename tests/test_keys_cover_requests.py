@@ -77,6 +77,7 @@ def _profiles() -> dict[str, DomainProfile]:
     return {
         "tco": load_profile(SHIPPED_PROFILE_PATH),
         "battery_cathode": load_profile(_REPOSITORY / "profiles" / "battery_cathode.json"),
+        "catalysis": load_profile(_REPOSITORY / "profiles" / "catalysis.json"),
         "demo": make_profile(),
         "many": _list_profile(),
         "kinds": make_profile({"fields": [*profile_data()["fields"], *_KIND_FIELDS]}),
@@ -260,7 +261,7 @@ def _entity_variants(profile: DomainProfile) -> Iterator[tuple[str, DomainProfil
         yield label, with_entity(label, index, dataclasses.replace(entity, label_zh="改名")), True
 
 
-PROFILES = ["tco", "battery_cathode", "demo", "many", "kinds", "entities", "reference"]
+PROFILES = ["tco", "battery_cathode", "catalysis", "demo", "many", "kinds", "entities", "reference"]
 
 
 @pytest.mark.parametrize("name", PROFILES)

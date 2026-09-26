@@ -528,7 +528,7 @@ to count as the same fact.
 {
   "name": "sheet_resistance",
   "group": "film",                          // target = paper-level; process / film = per sample
-  "kind": "numeric",                        // numeric | composition | text
+  "kind": "numeric",                        // numeric | composition | text | boolean | date | interval | reference
   "description": "Sheet resistance of the film (Ω/sq).",
   "label": "方阻",                            // Chinese column header; display only
   "description_zh": "所选样品的薄膜方块电阻。",   // Chinese explanation; display only
@@ -565,6 +565,8 @@ cannot be converted is kept, since there is no number to judge. A range changes 
 survive, so it moves both cache keys; a field without one keeps the keys it had. A numeric field with no
 `canonical_unit` (a count, such as the battery profile's `cycle_number`) may declare one too; it is judged on
 the number as parsed.
+
+#### Ranges, bounds and a unit written in the value
 
 Two more numeric attributes decide how a quoted value is read. `range_policy` (`midpoint`, the default,
 `reject`, `lower` or `upper`) decides what a range quoted as one value ("10-20") becomes in the lanes and in the
@@ -676,6 +678,7 @@ Two profiles ship:
 |---|---|---|
 | `tco` | `production` | Sputtered transparent-conductive-oxide films: 4 paper-level target fields and 19 sample-level fields. Its wording is byte-for-byte the prompts the corpus was measured with |
 | `battery_cathode` | `example` | Lithium-ion battery cathode materials: 13 sample-level fields, no paper-level group, four declared units (`mAh/g`, `C`, `V`, and `K` added to `℃`). Written as the template for a new domain; it has not been measured against a gold set |
+| `catalysis` | `example` | Heterogeneous catalysis, CO2 hydrogenation to methanol: two [entity types](#entity-types), catalysts (6 fields) and the reaction tests run on them (9 fields, one a [reference](#reference-fields) naming the test's catalyst), plus 3 paper-level fields. The worked example of every structural feature: paper-level [lists](#list-fields) with and without categories, a [date, a yes/no and an interval](#yes-or-no-date-and-interval-fields), a range read by its upper end, three declared units (`m2/g`, `MPa`, `mL/(g·h)`). No real catalysis paper has been hand-checked against it; its tests are a synthetic end-to-end run and a synthetic gold set for the scorer (`tests/fixtures/catalysis_gold/`) |
 
 `maturity` is `production` or `example` (the default when it is left out). It is display only: the web header
 shows 示例配置 beside the title of an `example` profile, and `paperfacts profiles` lists it. Promote a profile to
@@ -710,40 +713,51 @@ list of valid ones, and every error names the file and the key.
 
 A profile changes the words, never the shape of the answer. The shape is fixed in code:
 
-- **Up to five kinds of sample.** A profile without `entities` has one list of samples per paper, all of the same
-  kind (a film, a cathode material), each one row. With [entity types](#entity-types) each kind (a catalyst, a
-  reaction test) has its own list, rows and matching, but nothing yet links a sample of one kind to one of
-  another, and only passage mode can ask about them.
-- **Two levels.** A field is paper-level (one record per paper) or sample-level (one value per sample). There
-  is no third level: nothing per layer within a sample, per measurement within a sample, or per figure.
-- **Three kinds of field.** `numeric` (a number converted to one canonical unit), `composition` (a ratio or
-  formula, compared as normalised text) and `text` (optionally a closed set of `categories`). No list, table or curve is a
-  value.
-- **Paper-level fields are single-valued.** A paper-level field holds one value for the whole paper; a quantity
-  that differs between samples must be sample-level.
-- **A range is a midpoint, an end, or nothing.** A value quoted as a range ("10-20") becomes its midpoint, its
-  lower or upper end (`range_policy: lower` / `upper`) or, under `reject`, no value; only an end fills a
-  dataset cell, and a bound (">80 %") fills none.
+- **Up to five kinds of sample, linked by references.** A profile without `entities` has one list of samples per
+  paper, all of the same kind (a film, a cathode material), each one row. With [entity types](#entity-types) each
+  kind (a catalyst, a reaction test) has its own list, rows and matching, and a [reference field](#reference-fields)
+  links a sample of one kind to one sample of another (the catalyst a test ran on). Only passage mode can ask
+  about them.
+- **Two levels.** A field is paper-level (one record per paper) or sample-level (one value per sample of its
+  entity). There is no third level: nothing per layer within a sample, per measurement within a sample, or per
+  figure.
+- **Seven kinds of field.** `numeric` (a number converted to one canonical unit), `composition` (a ratio or
+  formula, compared as normalised text), `text` (optionally a closed set of `categories`), `boolean` (yes or no,
+  stated in words), `date` (read to ISO at the precision written), `interval` (two ends or a one-sided bound, in a
+  unit) and `reference` (a sample of another entity type). No table or curve is a value.
+- **Lists of text only.** A `text` or `composition` field may hold several values at once (`cardinality: many`:
+  each precursor, each characterization technique), at either level; its cell is the union of what either lane
+  grounded. Every other field is single-valued: a paper-level one holds one value for the whole paper, and a
+  quantity that differs between samples must be sample-level.
+- **A range is a midpoint, an end, an interval, or nothing.** A value quoted as a range ("10-20") becomes its
+  midpoint, its lower or upper end (`range_policy: lower` / `upper`) or, under `reject`, no value; only an end
+  fills a dataset cell, and a bound (">80 %") fills none. A field whose value *is* a range is an `interval`.
 - **Charts are property-vs-condition only.** The opt-in figure reading reads a y value per marker off a chart
   whose caption names a `figure_readable` field; spectra, micrographs, maps and schematics are not read.
 - **The prompts are English.** The templates around the slots are English, so slots are written in English;
   only the display copy (`title_zh`, `label`, `ui`, ...) is Chinese.
 
-When a domain does not fit, narrow it until it does rather than stretch a slot: pick the one entity the gold
-data is about and make it the sample, move a per-layer quantity into one field per layer that matters
-(`etl_thickness`, `absorber_thickness`), and leave curves and spectra to the charts or out of scope. Two entity
-kinds are two profiles over the same papers, each with its own server and data root (see
-[A second profile beside the first](#a-second-profile-beside-the-first)). What still does not fit needs a code
-change, not a profile.
+Still not supported: a list of numbers, dates or references (`many` is text and composition only); a
+many-to-many or multi-hop link (a reference names one sample); nesting or order between samples (a layer stack);
+a value stated for a whole series across entity types; figures bound to an entity; more than five entity types;
+entity types in document mode; the home table (corpus view) beyond the primary entity. When a domain does not
+fit, narrow it until it does rather than stretch a slot: pick the entities the gold data is about, move a
+per-layer quantity into one field per layer that matters (`etl_thickness`, `absorber_thickness`), model a relation
+that belongs to no one entity as a third entity with two references, and leave curves and spectra to the charts
+or out of scope. What still does not fit needs a code change, not a profile.
 
 ### Writing a profile for a new domain
 
 1. **Copy the example.** `cp profiles/battery_cathode.json profiles/perovskite.json`, then set `name` to
-   `perovskite`, and write `title_zh` and `description_zh`. Leave `maturity` at `example`.
+   `perovskite`, and write `title_zh` and `description_zh`. Leave `maturity` at `example`. A domain with more than
+   one kind of sample starts from `profiles/catalysis.json` instead.
 2. **Groups.** Declare at least one `sample` group. Add a `paper` group only for facts that belong to the paper as
    a whole and can never differ between its samples (TCO's sputtering target); a value the paper states once for
    a whole sample series needs no paper group, because the model flags it `applies_to_all_samples` and the code
-   writes it onto every sample.
+   writes it onto every sample. When a paper reports two kinds of sample, each with its own values (catalysts and
+   the tests run on them), declare them as [entity types](#entity-types), give each its own sample group, its own
+   `sample_definition` and `sample_list_heading`, and link them with a [reference field](#reference-fields); keep
+   to one entity (no `entities` at all) when there is one kind.
 3. **The three required slots.** `domain_subject` (what the papers are about, one phrase), `sample_definition`
    (what counts as one sample, and what never does) and `field_scope` (which component every field describes,
    and what to leave out). They carry most of the domain; the next section says why each exists. Every other
@@ -751,7 +765,10 @@ change, not a profile.
 4. **Fields.** One entry per column. Write `description` for the model (it is the whole definition the model
    gets), `keywords` for retrieval (the names a paper uses for the quantity, not its unit), `canonical_unit`,
    tolerances, and a `valid_range` for any quantity another component of the paper is likely to be mistaken
-   for. `label` and `description_zh` are what the web page and the workbook print.
+   for. `label` and `description_zh` are what the web page and the workbook print. Pick the kind by what the
+   paper writes: a yes/no statement is `boolean`, a date `date`, a range that is itself the value (a cycling
+   window) `interval`, several values that hold at once `cardinality: many`, and a range quoted for one number
+   `range_policy`.
 5. **Units.** If a `canonical_unit` is not one of the twelve built-in ones, declare it under `units`.
 6. **Check it.** `uv run paperfacts profiles --check profiles/perovskite.json` validates without a model or a
    configuration file: it prints the profile's line (name, maturity, paper/sample field counts, content hash,
@@ -813,7 +830,7 @@ names from the LLM cache.
 |---|---|---|---|
 | `name` | required | prompt, figure | Identifier (`^[a-z][a-z0-9_]{0,39}$`); the model answers with it. Reserved: `document_id`, `filename`, `sample_id`, `sample_label`, `conditions`, `available_fields`, `agree_fields`, `field`, `target`, `paper`, `unattributed`, `samples`, `entity` |
 | `group` | required | prompt | One of the profile's groups; the field's `level` (paper or sample) is the group's, derived, never written |
-| `kind` | required | prompt | `numeric`, `composition` or `text` |
+| `kind` | required | prompt | `numeric`, `composition`, `text`, `boolean`, `date`, `interval` or `reference` ([Yes/no, date and interval fields](#yes-or-no-date-and-interval-fields), [Reference fields](#reference-fields)) |
 | `description` | required | prompt, figure | What the model is told to look for |
 | `keywords` | `[]` | retrieval, figure | The names a paper uses for the quantity; passage-mode retrieval and chart selection match them as whole tokens |
 | `canonical_unit` | none | prompt, figure | The unit every value converts to; must be built-in or declared, with a retrieval pattern |
@@ -875,7 +892,12 @@ A profile may declare several kinds of sample, each an **entity type**: heteroge
   prompt, and compared under scopes `<entity>:<a>|<b>`; the implicit entity keeps `sample:`. The counts add up
   over every entity, and any failed matching leaves the run incomplete.
 - **Rows.** Each entity has its own rows, holding its own fields plus the paper-level decisions and an `entity`
-  column; the paper row is chosen among the primary entity's rows.
+  column (whenever the profile declares entity types, a single one included: the gold set and the page find a
+  row's fields by it); the paper row is chosen among the primary entity's rows. The workbook has one data sheet per
+  entity, named after its `label_zh` (at most 40 characters, no control characters), and the web page one results
+  table per entity.
+- **Linking.** A [reference field](#reference-fields) of one entity names a sample of another. The worked example
+  is `profiles/catalysis.json`: catalysts, and reaction tests that each name their catalyst.
 - **Not supported.** Document mode (refused when a run loads the profile: `paperfacts profiles --check` notes
   it, `prompts` and `fields` still print it); links between entities other than a `reference` field; nesting or order (a layer stack);
   many-to-many or multi-hop relations; a series value across entities; figures bound to an entity; more than
@@ -911,6 +933,72 @@ precursor of a sample. A categorical list is `kind: text` with `categories` and 
   or with a stray one, would read as a complete answer. A non-empty list counts as one available field.
 - **Display.** Joined with "; " in Excel and the clipboard copy, and with "；" on the web page; 字段说明 marks the
   column 多值. The eval scorer scores a list per element (eval/README.md).
+
+### Yes-or-no, date and interval fields
+
+Three kinds read a value that is not one number or one text. `profiles/catalysis.json` has one of each.
+
+```jsonc
+{ "name": "pre_reduced", "group": "reaction", "kind": "boolean",
+  "description": "Whether the catalyst was reduced (activated in H2) before this test." }
+{ "name": "received_date", "group": "study", "kind": "date",
+  "description": "Date the journal received the manuscript, as printed on the paper." }
+{ "name": "temperature_window", "group": "reaction", "kind": "interval", "canonical_unit": "℃",
+  "rel_tol": 0.01, "abs_tol": 2.0, "valid_range": {"min": 0, "max": 600},
+  "description": "The temperature range this test covered, both ends, or the one-sided bound the paper states (°C)." }
+```
+
+- **`boolean`.** The model quotes the words that state it ("pre-reduced in H2", "without reduction") and says
+  whether they affirm or deny it in a `holds` key. The code never reads negation itself. An answer without
+  `holds` is dropped at cleaning, with the reason in the lane's audit (清洗记录). The lanes agree when their
+  `holds` agree. The cell is TRUE/FALSE in Excel and 是/否 on the page. A true pass and a false pass never vote as
+  one value. The `holds` key is added to the answer format only for a profile that has a boolean field, so every
+  other profile is asked exactly what it was asked before.
+- **`date`.** The model quotes the date as written; the code reads it to ISO at the precision written ("2021",
+  "2021-03", "2021-03-12"). Month names and abbreviations and year-first numbers ("2021/03/12") are read. Refused,
+  as an ambiguous value: a two-digit year, an all-numeric date that is not year first ("03/04/2021" is March or
+  April), a range, and a year before 1800 or after 2100. The lanes agree when the ISO dates are equal; when one
+  is a prefix of the other (a month against a day) the precision differs and the pair is ambiguous.
+- **`interval`.** A value that *is* a range: a cycling window, a temperature range a test covered. The model
+  quotes both ends and the unit ("200–300 °C"), or a one-sided bound (">80 %", "at most 5 nm"). Each end is
+  converted to `canonical_unit`, and the cell is `[low, high]` with an open end empty: "80" quoted out of
+  "above 80 °C" is `[80, open]`, exactly as ">80 °C" quoted whole. A bare number, a descending range, and anything
+  but one clean range or bound (a condition, a parenthesis, another unit) are refused. `valid_range` is checked on
+  each finite end. The lanes agree when both ends are within the field's tolerance and an open end meets an open
+  end. The workbook gives an interval two numeric columns, `<name> 下限` and `<name> 上限`; the clipboard copy
+  writes `low–high` and the page `≥ low` / `≤ high` for a bound.
+- **What each kind accepts.** `canonical_unit`, `valid_range`, `rel_tol` and `abs_tol` go with `numeric` and
+  `interval`. `bare_number`, `range_policy`, `after_clause`, `display_format` and `figure_readable` go with
+  `numeric` only, and `categories` with `text` only. `condition_rule` goes with every kind but `boolean` and
+  `reference`. Anything else is refused at load, naming the field.
+
+### Reference fields
+
+A reference names a sample of another [entity type](#entity-types): the catalyst a reaction test ran on. It is the
+one link between entity types.
+
+```jsonc
+{ "name": "catalyst", "group": "reaction", "kind": "reference", "references": "catalyst",
+  "description": "The catalyst this reaction test was run on.", "keywords": ["catalyst", "ran", "over"] }
+```
+
+- **Declaring.** `references` names another declared entity; the field is sample-level of a different entity,
+  single-valued, and has no unit, categories or `condition_rule`.
+- **Asking.** The field line tells the model to copy the id from the referenced entity's list, and the question
+  shows that list ("Catalysts this paper reports:") after the field's own. A lane whose referenced inventory
+  listed nothing is not asked.
+- **Grounding is resolution.** The value is an id, not a quote from an excerpt. It is grounded when it names one
+  of the lane's samples of that entity by `sample_key` ("cat-1" names "Cat 1"). This is redone every time a lane is
+  read, like every other grounding verdict. An id two differently spelled samples of that entity share is refused
+  as ambiguous rather than given to either. Passes vote on the id by `sample_key` too, so "Cat-1" and "cat 1" are
+  one answer.
+- **Comparing.** The two lanes agree when the referenced entity's matching pairs the two samples they name. When
+  either of them is paired with any other sample, they are two samples and it is a `conflict`, since matching is
+  one to one. When neither is paired, or one names no listed sample, it is `ambiguous`.
+- **The cell** is the `sample_id` of the dataset row the referenced sample became, so it names a row of that
+  entity's sheet (字段说明 calls the column `<entity label>样品ID`). An id no listed sample has leaves the cell
+  empty as `ungrounded`.
+- **Gold.** A gold reference cell holds the `id` of the gold sample it names ([eval/README.md](eval/README.md)).
 
 ### Which edit re-keys what
 
@@ -987,9 +1075,10 @@ Every field is one question per lane in passage mode. For one paper, uncached:
 - A question whose answer fails validation costs one repair request, at most.
 - With the figures stage on, each chart panel is one vision request (at most `figures.max_per_document`,
   retried once on failure).
-- Document mode is `2 × passes + M`.
+- Document mode is `2 × passes + M` (a profile without entity types only).
 
-So TCO's 23 fields cost at most 49 calls per paper at one pass, the battery example's 13 at most 29. Most of the
+So TCO's 23 fields cost at most 49 calls per paper at one pass, the battery example's 13 at most 29, and the
+catalysis example's 18 fields over two entity types at most 2 × (2 + 18) + 2 = 42. Most of the
 completion tokens are the inventory's reasoning (see `llm.inventory_reasoning_effort`), so the bill grows more
 slowly than the call count. A re-run is free: every answer is cached by request payload.
 
@@ -1232,6 +1321,11 @@ sheets:
 
 论文数据 and 样品数据 both begin with 文档ID, 文件名, 样品ID, 样品标签, 样品及测量条件, 可用字段数 and
 双路一致字段数 before the twenty field columns.
+
+A profile with several [entity types](#entity-types) replaces 样品数据 with one sheet per entity, named
+`<label_zh>数据` (催化剂数据, 反应测试数据), each holding the paper-level columns and its own fields; 字段说明 and
+数据质量 gain a 实体 column. A list cell is joined with "; ", a yes/no cell is TRUE/FALSE, and an interval fills two
+numeric columns, `<name> 下限` and `<name> 上限`. Control characters in any text are removed on the way in.
 
 数据质量 is where the provenance is: 最终决策 is `agree` or `single_source` for a committed value and the
 refusal name otherwise, 合并证据来源 lists the block ids behind it, **证据来源通道** says which lanes

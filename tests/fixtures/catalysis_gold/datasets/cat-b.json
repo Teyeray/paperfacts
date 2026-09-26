@@ -1,0 +1,13 @@
+{
+  "document_id": "cat-b",
+  "paper_row": {
+    "entity": "catalyst", "sample_id": "Pd/ZrO2",
+    "characterization_techniques": ["XRD"],
+    "received_date": "2020-11"
+  },
+  "sample_rows": [
+    {"entity": "catalyst", "sample_id": "Pd/ZrO2", "metal_loading": 5.0, "support": "TiO2"},
+    {"entity": "test", "sample_id": "R1", "catalyst": "Pd/ZrO2", "pre_reduced": true, "co2_conversion": 8.2}
+  ],
+  "quality_rows": []
+}

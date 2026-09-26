@@ -1,0 +1,313 @@
+{
+  "$comment": "A worked example of entity types: heterogeneous catalysis, CO2 hydrogenation to methanol. A paper prepares catalysts (the primary entity) and runs reaction tests on them (the second entity); each test names its catalyst with a reference field. It also shows a paper-level list (cardinality many, with and without categories), a date, a boolean, an interval, a range read by its upper end (range_policy upper) and three declared units. No real catalysis paper has been hand-checked against it, so it stays maturity example: README step 9 applies before any promotion.",
+  "format": 1,
+  "name": "catalysis",
+  "title_zh": "多相催化：CO2 加氢制甲醇",
+  "maturity": "example",
+  "description_zh": "多相催化 CO2 加氢制甲醇：催化剂的组成、载体、负载量、制备与表征，以及每次反应测试的条件（温度、压力、空速、原料比）与性能（转化率、选择性）；每次测试引用其所用的催化剂。",
+  "entities": [
+    {
+      "name": "catalyst",
+      "label_zh": "催化剂",
+      "prompt": {
+        "sample_definition": "A catalyst is one solid catalyst material this paper prepares itself and tests. Each composition, metal loading, support, preparation method or calcination condition is its own catalyst. A reactor, a feed gas, a commercial reference catalyst the paper only buys, and a reaction test are never catalysts.",
+        "sample_plural": "catalysts",
+        "sample_singular": "catalyst",
+        "sample_unit": "catalyst / preparation condition set",
+        "sample_examples": "(e.g. one per metal loading, per support, per calcination temperature)",
+        "sample_id_example": "5Cu/ZnO-350",
+        "condition_noun": "preparation conditions",
+        "condition_examples": "(composition, metal loading, support, preparation method, calcination temperature...)",
+        "sample_list_heading": "Catalysts",
+        "subset_examples": "\"the catalysts calcined at 350 °C\", \"the ZrO2-supported catalysts\"",
+        "whole_series_examples": "\"all catalysts\", \"every catalyst\"",
+        "partial_collective_example": "\"the promoted catalysts\", when one listed catalyst is unpromoted",
+        "matching_condition_examples": "(composition, metal loading, support, calcination temperature...)",
+        "matching_value_examples": "(BET surface area, metal loading...)",
+        "matching_justification_example": "both are the 10 % Cu catalyst calcined at 350 °C"
+      },
+      "retrieval": {
+        "condition_keywords": ["catalyst", "catalysts", "prepared", "calcined", "impregnated", "co-precipitation", "loading", "support", "supported"]
+      }
+    },
+    {
+      "name": "test",
+      "label_zh": "反应测试",
+      "prompt": {
+        "sample_definition": "A reaction test is one set of reaction conditions (temperature, pressure, space velocity, feed ratio) applied to one catalyst, with the conversion and selectivity it gave. The same catalyst at another temperature or pressure is another test; a catalyst itself, its preparation and its characterization are never tests.",
+        "field_scope": "Every field describes one reaction test: its conditions, the catalyst it ran on and the performance it measured. A value of a catalyst's preparation or characterization is not a value of these fields.",
+        "sample_plural": "reaction tests",
+        "sample_singular": "reaction test",
+        "sample_unit": "reaction test / set of reaction conditions",
+        "sample_examples": "(e.g. one per catalyst and reaction temperature)",
+        "sample_id_example": "5Cu/ZnO-350 at 250 °C, 3 MPa",
+        "condition_noun": "reaction conditions",
+        "condition_examples": "(catalyst, temperature, pressure, GHSV, H2/CO2 ratio...)",
+        "sample_list_heading": "Reaction tests",
+        "subset_examples": "\"the tests at 3 MPa\", \"the tests of the ZrO2-supported catalysts\"",
+        "whole_series_examples": "\"all tests\", \"in every run\"",
+        "partial_collective_example": "\"the high-pressure runs\", when one listed test ran at ambient pressure",
+        "multi_condition_example": "the methanol selectivity at 5 h and after 100 h on stream",
+        "matching_condition_examples": "(catalyst, temperature, pressure, GHSV...)",
+        "matching_value_examples": "(CO2 conversion, methanol selectivity...)",
+        "matching_justification_example": "both are the test of 5Cu/ZnO-350 at 250 °C and 3 MPa"
+      },
+      "retrieval": {
+        "condition_keywords": ["test", "tests", "tested", "reaction", "ran", "run", "runs", "GHSV", "pressure", "conversion", "selectivity"],
+        "condition_unit_pattern": "\\d\\s*(?:°C|℃|MPa\\b|bar\\b|h-1|h\\^-1)"
+      }
+    }
+  ],
+  "groups": [
+    {"name": "study", "level": "paper", "label_zh": "论文"},
+    {"name": "preparation", "level": "sample", "label_zh": "制备与表征", "entity": "catalyst"},
+    {"name": "reaction", "level": "sample", "label_zh": "反应测试", "entity": "test"}
+  ],
+  "prompt": {
+    "domain_subject": "heterogeneous catalysts for the hydrogenation of CO2 to methanol (supported Cu, Pd or In2O3 catalysts, Cu/ZnO/Al2O3, ZnZrOx)",
+    "sample_definition": "A sample is one solid catalyst this paper prepares itself and tests.",
+    "field_scope": "Every field describes the paper, one catalyst it prepares or one reaction test it runs. A value of a commercial reference catalyst, of the reactor or of an unrelated reaction is not a value of these fields: leave it out.",
+    "fact_noun": "catalysis facts",
+    "unit_examples": "\"°C\", \"MPa\", \"mL g-1 h-1\", \"m2 g-1\", \"%\"",
+    "no_samples_key": "no_catalyst_in_scope",
+    "no_samples_clause": "the paper prepares no catalyst of its own",
+    "no_samples_condition": "the paper prepares and tests no catalyst of its own (a review, or a paper that only models the reaction, say)",
+    "samples_present_condition": "such a catalyst is prepared",
+    "multi_condition_example": "the BET surface area of the fresh and of the spent catalyst",
+    "scaled_header_examples": "\"STY × 10^3 (g kg-1 h-1)\" or \"rate (×10^-3 mol g-1 s-1)\"",
+    "plain_header_example": "a column \"GHSV (mL g-1 h-1)\" gives just \"mL g-1 h-1\"",
+    "implausible_origin": "a different catalyst, reaction test or quantity"
+  },
+  "retrieval": {
+    "condition_keywords": ["catalyst", "catalysts", "prepared", "calcined", "test", "reaction"],
+    "condition_unit_pattern": "\\d\\s*(?:°C|℃|K\\b|h\\b|MPa\\b|bar\\b|(?:wt|at|mol)\\.?\\s*%)"
+  },
+  "units": {
+    "m2/g": {
+      "aliases": {"m2/g": 1, "m2 g-1": 1, "m^2/g": 1, "m2·g-1": 1, "m^2 g^-1": 1},
+      "case_sensitive": true
+    },
+    "MPa": {
+      "aliases": {"MPa": 1, "bar": 0.1, "kPa": 0.001, "atm": 0.101325},
+      "case_sensitive": true
+    },
+    "mL/(g·h)": {
+      "aliases": {"mL/(g·h)": 1, "mL g-1 h-1": 1, "mL·g-1·h-1": 1, "mL/(g h)": 1, "mL gcat-1 h-1": 1, "L g-1 h-1": 1000},
+      "case_sensitive": true
+    }
+  },
+  "ui": {
+    "paper_level_label_zh": "论文级",
+    "paper_level_short_zh": "论文级",
+    "entity_label_zh": "催化剂",
+    "no_samples_message_zh": "该论文没有自己制备的催化剂，所以没有样品级数据。"
+  },
+  "fields": [
+    {
+      "name": "characterization_techniques",
+      "label": "表征手段",
+      "group": "study",
+      "kind": "text",
+      "cardinality": "many",
+      "categories": ["XRD", "XPS", "TEM", "SEM", "BET", "H2-TPR", "CO2-TPD", "Raman", "FTIR", "EXAFS"],
+      "description": "Each characterization technique the paper applies to its catalysts.",
+      "description_zh": "论文对催化剂使用的表征手段，每种一项。",
+      "keywords": ["characterized", "characterization", "XRD", "XPS", "TEM", "SEM", "BET", "TPR", "TPD", "Raman", "FTIR", "EXAFS"]
+    },
+    {
+      "name": "precursors",
+      "label": "前驱体",
+      "group": "study",
+      "kind": "text",
+      "cardinality": "many",
+      "description": "Each metal salt or other precursor used to prepare the catalysts, as named.",
+      "description_zh": "制备催化剂所用的金属盐等前驱体，每种一项。",
+      "keywords": ["precursor", "precursors", "nitrate", "acetate", "chloride"]
+    },
+    {
+      "name": "received_date",
+      "label": "收稿日期",
+      "group": "study",
+      "kind": "date",
+      "description": "Date the journal received the manuscript, as printed on the paper.",
+      "description_zh": "期刊收稿日期。",
+      "keywords": ["Received"]
+    },
+    {
+      "name": "composition",
+      "label": "催化剂组成",
+      "group": "preparation",
+      "kind": "composition",
+      "description": "Composition of the catalyst as the paper writes it, e.g. 'Cu/ZnO', '5Pd/In2O3', 'Cu/ZnO/Al2O3 (60:30:10)'.",
+      "description_zh": "催化剂的组成。",
+      "keywords": ["composition", "catalyst", "catalysts", "ICP", "nominal"]
+    },
+    {
+      "name": "support",
+      "label": "载体",
+      "group": "preparation",
+      "kind": "text",
+      "categories": ["Al2O3", "SiO2", "TiO2", "ZrO2", "CeO2", "ZnO", "MgO", "carbon"],
+      "description": "Support material of the catalyst.",
+      "description_zh": "催化剂载体。",
+      "keywords": ["support", "supported", "carrier"]
+    },
+    {
+      "name": "metal_loading",
+      "label": "金属负载量",
+      "group": "preparation",
+      "kind": "numeric",
+      "description": "Loading of the active metal on the catalyst, as a mass percentage (%).",
+      "description_zh": "活性金属负载量（质量分数，%）。",
+      "keywords": ["loading", "loaded", "wt%", "content"],
+      "canonical_unit": "%",
+      "rel_tol": 0.02,
+      "abs_tol": 0.1,
+      "bare_number": "percent_or_fraction",
+      "valid_range": {"min": 0, "max": 100}
+    },
+    {
+      "name": "preparation_method",
+      "label": "制备方法",
+      "group": "preparation",
+      "kind": "text",
+      "categories": ["impregnation", "co-precipitation", "deposition-precipitation", "sol-gel", "hydrothermal", "flame spray pyrolysis"],
+      "description": "Route by which the catalyst was prepared.",
+      "description_zh": "催化剂的制备路线。",
+      "keywords": ["prepared", "impregnation", "impregnated", "co-precipitation", "precipitation", "sol-gel", "hydrothermal"]
+    },
+    {
+      "name": "calcination_temperature",
+      "label": "焙烧温度",
+      "group": "preparation",
+      "kind": "numeric",
+      "description": "Temperature the catalyst was calcined at (°C); a range is read by the temperature it reached.",
+      "description_zh": "催化剂焙烧温度（°C）；原文为区间时取上限。",
+      "keywords": ["calcined", "calcination", "calcined at"],
+      "canonical_unit": "℃",
+      "rel_tol": 0.02,
+      "abs_tol": 5.0,
+      "range_policy": "upper",
+      "valid_range": {"min": 100, "max": 1200}
+    },
+    {
+      "name": "bet_surface_area",
+      "label": "BET 比表面积",
+      "group": "preparation",
+      "kind": "numeric",
+      "description": "BET specific surface area of the fresh catalyst (m2/g).",
+      "description_zh": "新鲜催化剂的 BET 比表面积（m2/g）。",
+      "keywords": ["BET", "surface area", "specific surface area", "SBET"],
+      "canonical_unit": "m2/g",
+      "rel_tol": 0.03,
+      "abs_tol": 1.0,
+      "valid_range": {"min": 0.1, "max": 3000}
+    },
+    {
+      "name": "catalyst",
+      "label": "所用催化剂",
+      "group": "reaction",
+      "kind": "reference",
+      "references": "catalyst",
+      "description": "The catalyst this reaction test was run on.",
+      "description_zh": "该次反应测试所用的催化剂。",
+      "keywords": ["catalyst", "catalysts", "ran", "over", "using"]
+    },
+    {
+      "name": "pre_reduced",
+      "label": "预还原",
+      "group": "reaction",
+      "kind": "boolean",
+      "description": "Whether the catalyst was reduced (activated in H2) before this test.",
+      "description_zh": "测试前催化剂是否经过预还原。",
+      "keywords": ["reduced", "pre-reduced", "reduction", "activated"]
+    },
+    {
+      "name": "reaction_temperature",
+      "label": "反应温度",
+      "group": "reaction",
+      "kind": "numeric",
+      "description": "Temperature this reaction test ran at (°C).",
+      "description_zh": "反应温度（°C）。",
+      "keywords": ["temperature", "at", "ran"],
+      "canonical_unit": "℃",
+      "rel_tol": 0.01,
+      "abs_tol": 2.0,
+      "valid_range": {"min": 0, "max": 600}
+    },
+    {
+      "name": "temperature_window",
+      "label": "温度范围",
+      "group": "reaction",
+      "kind": "interval",
+      "description": "The temperature range this test covered, both ends, or the one-sided bound the paper states (°C).",
+      "description_zh": "测试覆盖的温度范围（°C），或原文的单侧界限。",
+      "keywords": ["window", "range", "between", "above", "below"],
+      "canonical_unit": "℃",
+      "rel_tol": 0.01,
+      "abs_tol": 2.0,
+      "valid_range": {"min": 0, "max": 600}
+    },
+    {
+      "name": "reaction_pressure",
+      "label": "反应压力",
+      "group": "reaction",
+      "kind": "numeric",
+      "description": "Total pressure this reaction test ran at (MPa).",
+      "description_zh": "反应总压（MPa）。",
+      "keywords": ["pressure", "MPa", "bar"],
+      "canonical_unit": "MPa",
+      "rel_tol": 0.02,
+      "valid_range": {"min": 0, "max": 30}
+    },
+    {
+      "name": "ghsv",
+      "label": "空速 GHSV",
+      "group": "reaction",
+      "kind": "numeric",
+      "description": "Gas hourly space velocity of this test, per gram of catalyst (mL/(g·h)).",
+      "description_zh": "质量空速（mL/(g·h)）。",
+      "keywords": ["GHSV", "WHSV", "space velocity"],
+      "canonical_unit": "mL/(g·h)",
+      "rel_tol": 0.02,
+      "valid_range": {"min": 1, "max": 1000000}
+    },
+    {
+      "name": "h2_co2_ratio",
+      "label": "H2/CO2 比",
+      "group": "reaction",
+      "kind": "composition",
+      "description": "H2 to CO2 ratio of the feed, as written, e.g. '3:1'.",
+      "description_zh": "原料气中 H2 与 CO2 的比例。",
+      "keywords": ["H2/CO2", "H2:CO2", "feed", "ratio"]
+    },
+    {
+      "name": "co2_conversion",
+      "label": "CO2 转化率",
+      "group": "reaction",
+      "kind": "numeric",
+      "description": "CO2 conversion this test reached (%).",
+      "description_zh": "CO2 转化率（%）。",
+      "keywords": ["conversion", "CO2 conversion", "XCO2"],
+      "canonical_unit": "%",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "bare_number": "percent_or_fraction",
+      "valid_range": {"min": 0, "max": 100}
+    },
+    {
+      "name": "methanol_selectivity",
+      "label": "甲醇选择性",
+      "group": "reaction",
+      "kind": "numeric",
+      "description": "Methanol selectivity this test reached (%).",
+      "description_zh": "甲醇选择性（%）。",
+      "keywords": ["selectivity", "methanol selectivity", "SMeOH"],
+      "canonical_unit": "%",
+      "rel_tol": 0.02,
+      "abs_tol": 0.2,
+      "bare_number": "percent_or_fraction",
+      "valid_range": {"min": 0, "max": 100}
+    }
+  ]
+}

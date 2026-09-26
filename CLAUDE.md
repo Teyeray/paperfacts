@@ -41,8 +41,8 @@ this file is the part that is easy to get wrong.
   a field line) is one row per kind in `kinds.py`; normalisation, comparison, the dataset cell and the prompts
   ask `kinds.rules_for(spec)` and never branch on `spec.kind` (profile validation and the CLI listing still do). `records.py` and `passages.py` sit below it and read `fields.DIGIT_KINDS` instead. A dataset column
   (`columns.FieldColumn`) carries `kind` and `cardinality` so the workbook (`format_cell`), `table.js` and `tsv.js`
-  format a cell by its column, never by the value's shape; today only `cardinality` changes anything (a `many`
-  list joined with "; ", "；" on the page), and the kinds added later format by `kind`.
+  format a cell by its column, never by the value's shape: a `many` list joined with "; " ("；" on the page), a
+  boolean TRUE/FALSE (是/否), an interval as two workbook columns `<name> 下限` / `<name> 上限`.
 - No module converts or retrieves with a unit table of its own: every conversion goes through the
   `UnitRegistry` of the profile it runs under (`profile.units`), including in tests and fixture generators.
 
@@ -112,6 +112,23 @@ this file is the part that is easy to get wrong.
   placed by the model, once per sample id of that subset, and only when the excerpts or the sample list say
   exactly which samples form it; otherwise it stays unplaced (passage mode) or is left out (document mode,
   which has nowhere to keep an unplaced sample-level value). Code never infers a subset.
+- Entity types: up to five (`profile.entities`, the first is primary; a profile without `entities` has one implicit
+  entity, `"sample"`). Each has its own inventory, sample list, field system prompt, matching
+  (`ComparisonReport.matchings[entity]`, scopes `<entity>:<a>|<b>`) and dataset rows; paper-level fields are asked
+  with the primary entity's prompt. Entities meet only through a `reference` field. Passage mode only: refused by
+  `workflow.check_mode` where a profile is loaded to run, only asserted in `ExtractionOptions.from_settings`. Rows
+  and sample-level quality rows carry `entity` whenever `profile.declared_entities` is non-empty (one included),
+  because `FieldSpec.entity` and the gold name it; never key that on `len(profile.entities) > 1`.
+- A reference is grounded by resolution, not text: `grounding.ground_lane(..., profile=)` resolves it by
+  `sample_key` among the lane's samples of the referenced entity, and `workflow.read_lane` re-grounds on every
+  read, so no stored verdict survives. An id two differently spelled samples share resolves to nothing
+  (ambiguous), never to the first. `kinds.KindContext` (a lane's samples, each entity's matched pairs, the
+  dataset's row ids) is a required argument of the kind rows' `read`/`compare`/`cell`, `normalize_field`,
+  `compare_values` and `decide`/`decide_cell`, because a forgotten one is silently wrong; a caller with no reference
+  in play passes `NO_CONTEXT`. Voting (`deduplicate`, `merge_passes`) keys a reference's quote by `sample_key` via
+  the required `reference_fields`.
+- A number, date or interval quote longer than `fields.MAX_NUMBER_QUOTE` characters is dropped at cleaning and
+  refused by `read_number` before parsing (the number reader is quadratic in a digit run).
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
 - Five guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
@@ -162,6 +179,9 @@ this file is the part that is easy to get wrong.
   Editing any of them re-keys. A module that holds a default the keys omit must be hashed. Besides the rendered
   system prompts, `extractor_key` hashes every prompt slot not at its default (except the `matching_*` ones, which
   `comparison_key` hashes), because a slot may reach only a user prompt.
+- The workbook removes control characters from every string before openpyxl appends it (openpyxl raises on
+  them), and the loader refuses a control character or more than 40 characters in any `label_zh`, which names a
+  sheet.
 - Presentation and orchestration stay out of hashed modules: the Excel layout is `workbook.py`, not
   `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
   `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading

@@ -37,6 +37,10 @@ FORBIDDEN = (
     re.compile("靶材"),
     re.compile("薄膜"),
     re.compile("溅射"),
+    # The catalysis example's words (profiles/catalysis.json).
+    re.compile(r"catalys", re.IGNORECASE),
+    re.compile(r"methanol", re.IGNORECASE),
+    re.compile("催化"),
 )
 # Exact phrases allowed per file (keyed by the path under the package) with the most times each may occur, so a
 # new occurrence of an allowed phrase fails just like a new word. Each is a legacy name read from stored files,
