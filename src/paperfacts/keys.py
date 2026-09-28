@@ -36,10 +36,19 @@ from paperfacts.config import (
     DEFAULT_LLM_REASONING_EFFORT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
+    DEFAULT_VLM_CONTEXT_BLOCKS,
+    DEFAULT_VLM_CROP_DPI,
+    DEFAULT_VLM_CROP_MAX_PIXELS,
+    DEFAULT_VLM_CROP_PADDING,
+    DEFAULT_VLM_FILL_BLANKS,
+    DEFAULT_VLM_MAX_TOKENS,
+    DEFAULT_VLM_POLICY,
+    DEFAULT_VLM_TEMPERATURE,
     ExtractionMode,
     InventoryReasoningEffort,
     ReasoningEffort,
     Settings,
+    ValidationPolicy,
 )
 from paperfacts.fields import FieldRole, FieldSpec
 from paperfacts.profile import DomainProfile, FigureSlots, PromptSlots
@@ -451,4 +460,105 @@ def figure_key_for(settings: Settings, profile: DomainProfile) -> str:
         dpi=settings.figures_dpi,
         max_pixels=settings.figures_max_pixels,
         max_per_document=settings.figures_max_per_document,
+    )
+
+
+@cache
+def validation_profile_fingerprint(profile: DomainProfile) -> str:
+    """The part of the profile visual validation depends on.
+
+    Which values are put in front of the model is decided by field and by scope, so the PROMPT and VERDICT
+    attributes are both in: the first is what the region's question names, the second is what makes a value a
+    sample's rather than the paper's. The fill step is an extraction over a transcription, so it reads the same
+    field table the extractor does; its slots are the extraction slots, not the matching ones.
+
+    Absent from ``figure_profile_fingerprint``'s shape on purpose: that key is about which charts are read,
+    this one about which cited regions are re-read.
+    """
+    material: dict[str, object] = {
+        "fields": [_field_material(spec, FieldRole.PROMPT, FieldRole.VERDICT) for spec in profile.fields],
+        "slots": _slot_material(profile, matching=False),
+    }
+    if profile.units.material():
+        material["units"] = profile.units.material()
+    return content_fingerprint(_dumps(material))
+
+
+@cache
+def validation_code_fingerprint() -> str:
+    """The code between the model's reading and the verdict.
+
+    ``validate.py`` selects the values, cuts the region and adjudicates; ``grounding.py`` and ``normalize.py``
+    are the matcher it adjudicates with, so a more lenient fold there is a different verdict; ``prompts.py``
+    carries the user half of the question (only the system halves are hashed by value below). ``pdf.py`` and
+    ``crops.py`` are in because how the region is rendered -- the padding of a thin box, the downscale -- is
+    part of what the model saw.
+    """
+    return source_fingerprint("validate.py", "grounding.py", "normalize.py", "prompts.py", "pdf.py", "crops.py")
+
+
+def validation_key(
+    profile: DomainProfile,
+    model: str,
+    *,
+    temperature: float = DEFAULT_VLM_TEMPERATURE,
+    max_tokens: int = DEFAULT_VLM_MAX_TOKENS,
+    crop_dpi: int = DEFAULT_VLM_CROP_DPI,
+    crop_padding: float = DEFAULT_VLM_CROP_PADDING,
+    crop_max_pixels: int = DEFAULT_VLM_CROP_MAX_PIXELS,
+    policy: ValidationPolicy = DEFAULT_VLM_POLICY,
+    context_blocks: int = DEFAULT_VLM_CONTEXT_BLOCKS,
+    fill_blanks: bool = DEFAULT_VLM_FILL_BLANKS,
+) -> str:
+    """What a stored validation depends on. Same baseline rule as the other keys: a setting at its built-in
+    value stays out of the material, so tightening one knob renames only the files it affects.
+
+    Its own key, never folded into ``extractor_key`` or ``comparison_key``: a prompt tweak here re-asks the
+    vision model and nothing else. The fill prompt is hashed by value like the validation prompt, because it
+    decides what the extractor is asked over a transcription, and a filled value is stored in this report and
+    nowhere else.
+    """
+    # Imported here, not at module scope: ``validate`` imports ``prompts``, which would make a cycle through
+    # this module's own import of it.
+    from paperfacts.validate import fill_system_prompt, validation_system_prompt
+
+    material: dict[str, object] = {
+        "model": model,
+        "validation_system": validation_system_prompt(),
+        "fill_system": _per_entity(profile, fill_system_prompt),
+        "fields": validation_profile_fingerprint(profile),
+        "code": validation_code_fingerprint(),
+    }
+    if temperature != DEFAULT_VLM_TEMPERATURE:
+        material["temperature"] = temperature
+    if max_tokens != DEFAULT_VLM_MAX_TOKENS:
+        material["max_tokens"] = max_tokens
+    if crop_dpi != DEFAULT_VLM_CROP_DPI:
+        material["crop_dpi"] = crop_dpi
+    if crop_padding != DEFAULT_VLM_CROP_PADDING:
+        material["crop_padding"] = crop_padding
+    if crop_max_pixels != DEFAULT_VLM_CROP_MAX_PIXELS:
+        material["crop_max_pixels"] = crop_max_pixels
+    if policy != DEFAULT_VLM_POLICY:
+        material["policy"] = policy  # which values were checked is part of what the report says
+    if context_blocks != DEFAULT_VLM_CONTEXT_BLOCKS:
+        material["context_blocks"] = context_blocks  # a wider window is a different picture
+    if fill_blanks != DEFAULT_VLM_FILL_BLANKS:
+        material["fill_blanks"] = fill_blanks  # a report with fills says more than one without
+    return content_fingerprint(_dumps(material))
+
+
+def validation_key_for(settings: Settings, profile: DomainProfile) -> str:
+    """The key a validation run with these settings writes, so the reader and the writer cannot disagree."""
+    return validation_key(
+        profile,
+        settings.vlm_model,
+        temperature=settings.vlm_temperature,
+        max_tokens=settings.vlm_max_tokens,
+        crop_dpi=settings.vlm_crop_dpi,
+        crop_padding=settings.vlm_crop_padding,
+        crop_max_pixels=settings.vlm_crop_max_pixels,
+        policy=settings.vlm_policy,
+        context_blocks=settings.vlm_context_blocks,
+        fill_blanks=settings.vlm_fill_blanks,
     )

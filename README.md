@@ -468,6 +468,32 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 | `max_pixels` | Largest crop area sent; bigger crops are shrunk here, not by the endpoint. Default 2000000 |
 | `timeout_s` | Per request. Default 300; one failed request is retried once |
 
+### `vlm`
+
+Visual validation: a vision model transcribes the region a value was cited from, and the code decides whether
+the value occurs in that transcription. The model is never told the value and never asked whether it is right;
+the verdict is grounding's own matcher run against the transcription, so the test that judges a parser's text
+judges the model's text too.
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Run the `validate` stage. Shipped `true`; the built-in baseline is `false`, so a checkout that never configured a VLM keeps every filename it has |
+| `base_url` | The vision endpoint. Defaults to the `llm` one: the same workspace serves both, with one key |
+| `model` | The vision model. Default `qwen3-vl-32b-instruct`, open-weight so a hosted pilot and a self-hosted server can run the same weights |
+| `timeout_s` | Per request. Default 300 |
+| `temperature` | Default 0.0: a transcription is not a place for sampling |
+| `max_tokens` | Default 4096 — a transcription of one block or one table, far less than an extraction answer |
+| `crop_dpi` | DPI the region is rendered at. Default 200, matching the parser page renders, so the boxes line up with the overlays |
+| `crop_padding` | Page fraction added around the cited blocks. Default 0.01: enough for a descender or a table rule the parser's box clipped, not enough to pull in a neighbouring paragraph. At least 0, below 1 |
+| `crop_max_pixels` | Largest crop area sent; bigger crops are shrunk here, not by the endpoint. Default 2000000 |
+| `policy` | Which values are checked: `disputed` (what the two lanes could not settle, plus anything grounding could not locate), `tables` (the disputed set plus every value cited from a table, agreed or not), `all` (every value in both lanes). Default `tables` |
+| `context_blocks` | Blocks before and after the cited one (same page, reading order) included in the crop. Default 1: a table's caption sits before it and its footnote after. 0 means the cited blocks alone |
+| `fill_blanks` | For fields a sample lacks, the transcription of its tables is handed to the **extraction** model, and a value it quotes is kept only when it grounds in that transcription. Default `true` |
+| `concurrency` | Vision requests in flight at once. Default 4. Scheduling only, so absent from every cache key |
+
+Its own cache key, `validation_key`: it is never folded into `extractor_key` or `comparison_key`, so a prompt
+tweak here re-asks the vision model and renames nothing else.
+
 ### `parsers`, `server`, `web`, `overlay`, `comparison`
 
 | Key | Meaning |
@@ -512,7 +538,11 @@ points at its own services without editing the shared file:
 `PAPERFACTS_WEB_PROFILES` (comma-separated names; `-` means only the default, since an empty string already
 means unset), `PAPERFACTS_WEB_PASSWORD`, `PAPERFACTS_FIGURES_ENABLED` (`true`/`false`), `PAPERFACTS_FIGURES_MODEL`,
 `PAPERFACTS_FIGURES_MAX_PER_DOCUMENT`, `PAPERFACTS_FIGURES_DPI`, `PAPERFACTS_FIGURES_MAX_PIXELS`,
-`PAPERFACTS_FIGURES_TIMEOUT_S`.
+`PAPERFACTS_FIGURES_TIMEOUT_S`, `PAPERFACTS_VLM_ENABLED` (`true`/`false`), `PAPERFACTS_VLM_BASE_URL`,
+`PAPERFACTS_VLM_MODEL`, `PAPERFACTS_VLM_TIMEOUT_S`, `PAPERFACTS_VLM_TEMPERATURE`, `PAPERFACTS_VLM_MAX_TOKENS`,
+`PAPERFACTS_VLM_CROP_DPI`, `PAPERFACTS_VLM_CROP_PADDING`, `PAPERFACTS_VLM_CROP_MAX_PIXELS`,
+`PAPERFACTS_VLM_POLICY` (`disputed`/`tables`/`all`), `PAPERFACTS_VLM_CONTEXT_BLOCKS`,
+`PAPERFACTS_VLM_FILL_BLANKS` (`true`/`false`), `PAPERFACTS_VLM_CONCURRENCY`.
 
 `PAPERFACTS_CONFIG` points at a different configuration file altogether. An empty string counts as unset,
 and a value that will not parse as a number names the variable in the error.

@@ -61,5 +61,20 @@
     "dpi": 200,
     "max_pixels": 2000000,
     "timeout_s": 300.0
+  },
+  "vlm": {
+    "enabled": true,
+    "base_url": "https://ws-1q3kj1umgcqeng4f.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen3-vl-32b-instruct",
+    "timeout_s": 300.0,
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "crop_dpi": 200,
+    "crop_padding": 0.01,
+    "crop_max_pixels": 2000000,
+    "policy": "tables",
+    "context_blocks": 1,
+    "fill_blanks": true,
+    "concurrency": 4
   }
 }
