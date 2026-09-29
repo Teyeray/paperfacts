@@ -6,6 +6,7 @@ Flat modules, in pipeline order:
 - ``storage``     every on-disk path, atomic writes, the document identity file
 - ``threads``     the pipeline's thread pool, which carries the caller's context into every task
 - ``pdf``         the only pypdfium2 caller: page geometry and rendering
+- ``crops``       page regions rendered for a vision model, kept on disk so a box is rendered once
 - ``parsers``     hand a PDF to MinerU / PaddleOCR-VL, as a subprocess or over HTTP
 - ``adapters``    native parser output -> blocks -> Markdown with provenance markers
 - ``overlay``     block boxes drawn on page images, to check provenance by eye

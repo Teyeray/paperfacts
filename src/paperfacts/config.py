@@ -149,6 +149,52 @@ DEFAULT_FIGURES_DPI = DEFAULT_RENDER_DPI
 DEFAULT_FIGURES_MAX_PIXELS = 2_000_000
 # One chart took up to 134 s in the measurement, and one request to a sibling model hung for 271 s.
 DEFAULT_FIGURES_TIMEOUT_S = 300.0
+# Visual validation (:mod:`paperfacts.validate`): a vision model transcribes the region a value was cited
+# from, and the code decides whether the value occurs in that transcription. Off by default, so a checkout
+# that never configured a VLM keeps every filename it has -- a disabled stage writes nothing and stamps
+# nothing.
+DEFAULT_VLM_ENABLED = False
+# The same workspace serves a vision model through the same compatible-mode address, so one key and one
+# endpoint cover both models until a self-hosted server takes over.
+DEFAULT_VLM_BASE_URL = DEFAULT_LLM_BASE_URL
+# An open-weight vision model, so a hosted pilot and a self-hosted route can run the *same* weights and
+# their readings stay comparable. Chosen for independence from both parsers rather than leaderboard rank:
+# one lane's parser is a VLM of its own family, and the OCR specialists share a layout model with the other.
+DEFAULT_VLM_MODEL = "qwen3-vl-32b-instruct"
+DEFAULT_VLM_TIMEOUT_S = 300.0
+DEFAULT_VLM_TEMPERATURE = 0.0
+# A transcription of one block or one table; far less than an extraction answer.
+DEFAULT_VLM_MAX_TOKENS = 4096
+# The region is rendered at the same DPI one parser renders pages at, so the model reads pixels of that
+# density and its boxes line up with the overlays.
+DEFAULT_VLM_CROP_DPI = DEFAULT_RENDER_DPI
+# Page fraction added around the cited blocks: enough to catch a descender or a table rule the parser's box
+# clipped, not enough to pull in a neighbouring paragraph.
+DEFAULT_VLM_CROP_PADDING = 0.01
+# Above this the crop is shrunk before it is sent. Hosted endpoints resize large images anyway; doing it
+# here keeps the decision, and its cost to small digits, visible and testable.
+DEFAULT_VLM_CROP_MAX_PIXELS = 2_000_000
+# Which values are shown to the model. "disputed": everything the two lanes could not settle between them --
+# conflicts, ambiguities, one-sided values, and any value grounding could not locate. "tables": the disputed
+# set plus every value cited from a table block, agreed or not -- a table is where a parser's layout model
+# fails silently (a shifted column reads as a clean number) and where the extractor sees only what the parser
+# gave it, so a value from a table is checked against the pixels even when both lanes agree; prose earns a
+# check only when disputed. "all": every value in both lanes, which is what measuring the "both lanes agree
+# and both are wrong" rate needs.
+type ValidationPolicy = Literal["disputed", "tables", "all"]
+VALIDATION_POLICIES: tuple[str, ...] = get_args(ValidationPolicy.__value__)
+DEFAULT_VLM_POLICY: ValidationPolicy = "tables"
+# Blocks before and after the cited block (same page, reading order) included in the crop -- the sliding
+# window. A table's caption sits in the block before it and its footnote in the block after; a value the
+# parser split across a block boundary lives in both. One on each side is what those cases need; a wider
+# window mostly adds prose the model has to read past.
+DEFAULT_VLM_CONTEXT_BLOCKS = 1
+# Fill blanks from tables: for the fields a lane's sample lacks, the model's transcription of the tables that
+# sample was cited from is handed to the extraction model, and a value it quotes is kept only when it grounds
+# in that transcription. Off, the stage only validates.
+DEFAULT_VLM_FILL_BLANKS = True
+# Vision requests in flight at once. Scheduling only, like llm.concurrency: absent from every key.
+DEFAULT_VLM_CONCURRENCY = 4
 # Keys config.json held until the domain moved into a profile (profiles/<name>.json).
 MOVED_TO_PROFILE = ("fields", "condition_keywords")
 _TRUE_WORDS = {"1", "true", "yes", "on"}
@@ -335,6 +381,20 @@ class Settings:
     figures_dpi: int = DEFAULT_FIGURES_DPI
     figures_max_pixels: int = DEFAULT_FIGURES_MAX_PIXELS
     figures_timeout_s: float = DEFAULT_FIGURES_TIMEOUT_S
+    # Visual validation. Its endpoint and key are the LLM's, as the figures stage's are.
+    vlm_enabled: bool = DEFAULT_VLM_ENABLED
+    vlm_base_url: str = DEFAULT_VLM_BASE_URL
+    vlm_model: str = DEFAULT_VLM_MODEL
+    vlm_timeout_s: float = DEFAULT_VLM_TIMEOUT_S
+    vlm_temperature: float = DEFAULT_VLM_TEMPERATURE
+    vlm_max_tokens: int = DEFAULT_VLM_MAX_TOKENS
+    vlm_crop_dpi: int = DEFAULT_VLM_CROP_DPI
+    vlm_crop_padding: float = DEFAULT_VLM_CROP_PADDING
+    vlm_crop_max_pixels: int = DEFAULT_VLM_CROP_MAX_PIXELS
+    vlm_policy: ValidationPolicy = DEFAULT_VLM_POLICY
+    vlm_context_blocks: int = DEFAULT_VLM_CONTEXT_BLOCKS
+    vlm_fill_blanks: bool = DEFAULT_VLM_FILL_BLANKS
+    vlm_concurrency: int = DEFAULT_VLM_CONCURRENCY
     ambiguous_match_confidence: float = DEFAULT_AMBIGUOUS_MATCH_CONFIDENCE
 
     @classmethod
@@ -439,6 +499,37 @@ class Settings:
             figures_timeout_s=_positive_seconds(
                 number("FIGURES_TIMEOUT_S", file.get("figures.timeout_s", float), float), "figures.timeout_s", file.path
             ),
+            vlm_enabled=_parse_bool("VLM_ENABLED", get("VLM_ENABLED"), file.get("vlm.enabled", bool)),
+            vlm_base_url=get("VLM_BASE_URL") or file.get("vlm.base_url", str),
+            vlm_model=get("VLM_MODEL") or file.get("vlm.model", str),
+            vlm_timeout_s=_positive_seconds(
+                number("VLM_TIMEOUT_S", file.get("vlm.timeout_s", float), float), "vlm.timeout_s", file.path
+            ),
+            vlm_temperature=number("VLM_TEMPERATURE", file.get("vlm.temperature", float), float),
+            vlm_max_tokens=_positive(
+                number("VLM_MAX_TOKENS", file.get("vlm.max_tokens", int), int), "vlm.max_tokens", file.path
+            ),
+            vlm_crop_dpi=_positive(
+                number("VLM_CROP_DPI", file.get("vlm.crop_dpi", int), int), "vlm.crop_dpi", file.path
+            ),
+            vlm_crop_padding=_fraction(
+                number("VLM_CROP_PADDING", file.get("vlm.crop_padding", float), float), "vlm.crop_padding", file.path
+            ),
+            vlm_crop_max_pixels=_positive(
+                number("VLM_CROP_MAX_PIXELS", file.get("vlm.crop_max_pixels", int), int),
+                "vlm.crop_max_pixels",
+                file.path,
+            ),
+            vlm_policy=_parse_policy(get("VLM_POLICY") or file.get("vlm.policy", str), file.path),
+            vlm_context_blocks=_non_negative(
+                number("VLM_CONTEXT_BLOCKS", file.get("vlm.context_blocks", int), int),
+                "vlm.context_blocks",
+                file.path,
+            ),
+            vlm_fill_blanks=_parse_bool("VLM_FILL_BLANKS", get("VLM_FILL_BLANKS"), file.get("vlm.fill_blanks", bool)),
+            vlm_concurrency=_positive(
+                number("VLM_CONCURRENCY", file.get("vlm.concurrency", int), int), "vlm.concurrency", file.path
+            ),
             # File-only: a verdict threshold is not something to flip per invocation.
             ambiguous_match_confidence=file.get("comparison.ambiguous_match_confidence", float),
         )
@@ -542,6 +633,37 @@ def _parse_mode(raw: str, source: Path) -> ExtractionMode:
             f"extraction mode is {raw!r}, expected one of {modes} (set in {source} or {ENV_PREFIX}EXTRACTION_MODE)"
         )
     return cast(ExtractionMode, raw)
+
+
+def _parse_policy(raw: str, source: Path) -> ValidationPolicy:
+    """An unknown policy names the ones that exist. Falling back to the default here would quietly check a
+    different set of values than the one asked for, and the stored report would not say so."""
+    if raw not in VALIDATION_POLICIES:
+        policies = ", ".join(VALIDATION_POLICIES)
+        raise ConfigError(
+            f"vlm.policy is {raw!r}, expected one of {policies} (set in {source} or {ENV_PREFIX}VLM_POLICY)"
+        )
+    return cast(ValidationPolicy, raw)
+
+
+def _fraction(value: float, dotted: str, source: Path) -> float:
+    """A page fraction. Negative padding would shrink the crop inside the box the parser found, which is the
+    one thing padding exists to prevent."""
+    if not 0.0 <= value < 1.0:
+        raise ConfigError(
+            f"{dotted} must be at least 0 and below 1, got {value} "
+            f"(set in {source} or the matching {ENV_PREFIX} variable)"
+        )
+    return value
+
+
+def _non_negative(value: int, dotted: str, source: Path) -> int:
+    """A count that may be zero: no context blocks is a meaningful choice (the cited blocks alone)."""
+    if value < 0:
+        raise ConfigError(
+            f"{dotted} must be at least 0, got {value} (set in {source} or the matching {ENV_PREFIX} variable)"
+        )
+    return value
 
 
 def _parse_reasoning_effort(raw: str | None, source: Path) -> ReasoningEffort | None:
