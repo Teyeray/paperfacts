@@ -31,6 +31,7 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 
 from paperfacts.fields import FieldSpec
+from paperfacts.records import FieldValue
 from paperfacts.kinds import rules_for
 from paperfacts.profile import MARKER, DomainProfile, EntitySpec, GroupSpec, PromptSlots
 from paperfacts.records import NO_CONTEXT, KindContext
@@ -344,3 +345,42 @@ def matching_user_prompt(lane_a_name: str, lane_a: str, lane_b_name: str, lane_b
         f"List A (parser: {lane_a_name}):\n{lane_a}\n\nList B (parser: {lane_b_name}):\n{lane_b}\n\n"
         "Return the JSON object now."
     )
+
+
+def supervisor_prompt(field: FieldSpec, value: FieldValue, passage: str) -> tuple[str, str]:
+    """Supervisor verification prompt: system and user halves.
+
+    Domain-free template; domain words go through PromptSlots if needed later.
+    Returns (system_prompt, user_prompt).
+    """
+    system = """You verify extracted values against cited passages from a scientific paper.
+
+Output ONLY a JSON object:
+{
+  "score": <0.0-1.0>,
+  "flag": "<correct|plausible|unit_mismatch|value_not_in_passage>",
+  "critique": "<detailed reasoning if score < 0.6, else empty string>"
+}
+
+Rules:
+1. "correct": value and unit appear in the passage exactly as extracted
+2. "plausible": value is present but unit differs, or minor OCR variation
+3. "unit_mismatch": value is correct but unit is wrong or missing
+4. "value_not_in_passage": the cited text does not contain this value
+5. Score 1.0 for correct, 0.7-0.9 for plausible, 0.3-0.6 for unit issues, 0.0-0.2 when value is absent
+6. Critique is required when score < 0.6; explain what is wrong and what the passage actually says
+
+Return the JSON object only."""
+
+    user = f"""Field: {field.name}
+Description: {field.description}
+
+Extracted value: {value.value_raw}
+Extracted unit: {value.unit_raw or "(none)"}
+
+Cited passage:
+{passage}
+
+Return the JSON object now."""
+
+    return system, user

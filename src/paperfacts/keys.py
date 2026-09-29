@@ -202,6 +202,10 @@ def extraction_code_fingerprint() -> str:
         "grounding.py",
         "continuation.py",
         "kinds.py",
+        "supervisor.py",
+        "validation.py",
+        "supervisor.py",
+        "validation.py",
     )
 
 

@@ -72,3 +72,12 @@ class ProfileCheckError(PaperFactsError):
         # True when asking again may work (the check ran out of time, or its process could not start); False when
         # the process crashed or gave no answer, which the same text would do again.
         self.retryable = retryable
+
+
+class SupervisorError(PaperFactsError):
+    """A supervisor call failed. ``stage`` names where: score / retry / timeout / http / response."""
+
+    def __init__(self, stage: str, detail: str) -> None:
+        self.stage = stage
+        self.detail = detail
+        super().__init__(f"[supervisor] {stage} failed: {detail}")

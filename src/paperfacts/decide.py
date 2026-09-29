@@ -73,6 +73,7 @@ class _Candidate:
 
 
 def decide(
+    # Supervisor integration: values may carry supervisor_score and low_confidence from validation.py
     spec: FieldSpec,
     evidence: Sequence[tuple[Backend, FieldValue]],
     comparisons: Sequence[FieldComparison],
@@ -164,7 +165,7 @@ def _commit(
     details.append(f"采用 {chosen.backend}；抽取重复一致率 {chosen.value.agreement:g}；合并重复证据")
     return Decision(
         chosen.scalar,
-        "agree" if agreed else "single_source",
+        "agree" if agreed else "soft_agree" if len(final) > 1 else "single_source",
         conditions,
         sources,
         joined(details),

@@ -470,6 +470,22 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 
 ### `vlm`
 
+### `supervisor`
+
+The supervisor is a separate model that scores extracted values to detect hallucinations. It runs lazily — only on disagreements and borderline agreements — targeting ~40% of extractions where verification matters most.
+
+- `supervisor.enabled` (bool, default `false`): enable the supervisor stage
+- `supervisor.provider` (string, default `"openai_compat"`): `"openai_compat"` for a local/external endpoint, `"anthropic"` to use the main LLM client
+- `supervisor.base_url` (string, default `"http://localhost:8000/v1"`): OpenAI-compatible endpoint URL (vLLM, mlx-vlm-server, etc.)
+- `supervisor.model` (string, default `"qwen2.5-7b-instruct"`): model name the endpoint serves
+- `supervisor.api_key_env` (string, default `"SUPERVISOR_API_KEY"`): environment variable holding the API key
+- `supervisor.min_confidence` (float, default `0.6`): score threshold below which a value is flagged for retry
+- `supervisor.max_retries` (int, default `2`): maximum retry attempts for low-confidence extractions
+- `supervisor.vote_threshold` (float, default `0.6`): minimum score for weighted voting across passes
+- `supervisor.timeout_s` (float, default `30.0`): timeout in seconds for supervisor requests
+
+Environment overrides: `PAPERFACTS_SUPERVISOR_ENABLED`, `PAPERFACTS_SUPERVISOR_PROVIDER`, `PAPERFACTS_SUPERVISOR_BASE_URL`, `PAPERFACTS_SUPERVISOR_MODEL`, `PAPERFACTS_SUPERVISOR_API_KEY_ENV`, `PAPERFACTS_SUPERVISOR_MIN_CONFIDENCE`, `PAPERFACTS_SUPERVISOR_MAX_RETRIES`, `PAPERFACTS_SUPERVISOR_VOTE_THRESHOLD`, `PAPERFACTS_SUPERVISOR_TIMEOUT_S`.
+
 Visual validation: a vision model transcribes the region a value was cited from, and the code decides whether
 the value occurs in that transcription. The model is never told the value and never asked whether it is right;
 the verdict is grounding's own matcher run against the transcription, so the test that judges a parser's text

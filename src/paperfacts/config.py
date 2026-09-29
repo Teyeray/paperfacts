@@ -396,6 +396,16 @@ class Settings:
     vlm_fill_blanks: bool = DEFAULT_VLM_FILL_BLANKS
     vlm_concurrency: int = DEFAULT_VLM_CONCURRENCY
     ambiguous_match_confidence: float = DEFAULT_AMBIGUOUS_MATCH_CONFIDENCE
+    # Supervisor verification
+    supervisor_enabled: bool = False
+    supervisor_provider: str = "openai_compat"
+    supervisor_base_url: str = "http://localhost:8000/v1"
+    supervisor_model: str = "qwen2.5-7b-instruct"
+    supervisor_api_key_env: str = "SUPERVISOR_API_KEY"
+    supervisor_min_confidence: float = 0.6
+    supervisor_max_retries: int = 2
+    supervisor_vote_threshold: float = 0.6
+    supervisor_timeout_s: float = 30.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -531,6 +541,29 @@ class Settings:
                 number("VLM_CONCURRENCY", file.get("vlm.concurrency", int), int), "vlm.concurrency", file.path
             ),
             # File-only: a verdict threshold is not something to flip per invocation.
+            supervisor_enabled=_parse_bool(
+                "SUPERVISOR_ENABLED", get("SUPERVISOR_ENABLED"), file.get("supervisor.enabled", bool)
+            ),
+            supervisor_provider=get("SUPERVISOR_PROVIDER") or file.get("supervisor.provider", str),
+            supervisor_base_url=get("SUPERVISOR_BASE_URL") or file.get("supervisor.base_url", str),
+            supervisor_model=get("SUPERVISOR_MODEL") or file.get("supervisor.model", str),
+            supervisor_api_key_env=get("SUPERVISOR_API_KEY_ENV") or file.get("supervisor.api_key_env", str),
+            supervisor_min_confidence=number(
+                "SUPERVISOR_MIN_CONFIDENCE", file.get("supervisor.min_confidence", float), float
+            ),
+            supervisor_max_retries=_positive(
+                number("SUPERVISOR_MAX_RETRIES", file.get("supervisor.max_retries", int), int),
+                "supervisor.max_retries",
+                file.path,
+            ),
+            supervisor_vote_threshold=number(
+                "SUPERVISOR_VOTE_THRESHOLD", file.get("supervisor.vote_threshold", float), float
+            ),
+            supervisor_timeout_s=_positive_seconds(
+                number("SUPERVISOR_TIMEOUT_S", file.get("supervisor.timeout_s", float), float),
+                "supervisor.timeout_s",
+                file.path,
+            ),
             ambiguous_match_confidence=file.get("comparison.ambiguous_match_confidence", float),
         )
         _check_ranges(settings, file.path)

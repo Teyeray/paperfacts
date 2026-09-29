@@ -178,7 +178,9 @@ def merge_passes(results: Sequence[ExtractedRecords], *, reference_fields: Colle
                 slot = (*vote, ranks[vote])
                 slot_of[identity] = slot
                 entry_counts[vote] = max(entry_counts[vote], ranks[vote])
-                slots.setdefault(slot, _Tally(exemplar=value)).votes += 1
+                slots.setdefault(slot, _Tally(exemplar=value)).votes += (
+                    value.supervisor_score if value.supervisor_score is not None else 1.0
+                )
                 cited[slot] = value.source_ids
             else:
                 cited[slot] = (*cited[slot], *value.source_ids)
