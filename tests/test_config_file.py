@@ -33,6 +33,7 @@ from paperfacts.config import (
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_S,
     DEFAULT_TEMPERATURE,
+    DEFAULT_VLM_ENABLED,
     ENV_CONFIG_PATH,
     ENV_PREFIX,
     INHERIT,
@@ -454,14 +455,20 @@ def test_the_shipped_configuration_agrees_with_the_dataclass_defaults():
     baseline = Settings()
     configured = Settings.from_env({})
     assert configured.llm_reasoning_effort is DEFAULT_LLM_REASONING_EFFORT
+    # The second deliberate exception, and the reason it is one: the shipped file turns visual validation on,
+    # the built-in baseline leaves it off. A checkout that never configured a VLM keeps every filename it has,
+    # because the keys leave a setting at its baseline out of their material -- so the baseline must stay off
+    # even though the shipped value is on. Adding a third exception needs the same kind of test.
+    assert configured.vlm_enabled is True
+    assert baseline.vlm_enabled is DEFAULT_VLM_ENABLED is False
 
     fed_by_the_file = [
         name
         for name in (field.name for field in dataclasses.fields(Settings))
         # repo_root follows the checkout and the two key fields are environment-only, by design.
         # llm_reasoning_effort is the deliberate exception above: the file turns reasoning off, the
-        # built-in baseline leaves the parameter out.
-        if name not in {"repo_root", "llm_api_key", "llm_api_key_file", "llm_reasoning_effort"}
+        # built-in baseline leaves the parameter out. vlm_enabled is the other, pinned just above.
+        if name not in {"repo_root", "llm_api_key", "llm_api_key_file", "llm_reasoning_effort", "vlm_enabled"}
     ]
     assert [getattr(configured, name) for name in fed_by_the_file] == [
         getattr(baseline, name) for name in fed_by_the_file
@@ -627,6 +634,140 @@ def test_a_figures_timeout_of_zero_names_the_key(tmp_path: Path):
     path = write_config(tmp_path / "config.json", {"figures.timeout_s": 0})
 
     with pytest.raises(ConfigError, match=r"figures\.timeout_s must be positive"):
+        Settings.from_env(env_for(path))
+
+
+# ---- vlm: the visual validation stage ---------------------------------------------------------
+
+
+def test_visual_validation_ships_on_with_the_open_weight_model():
+    # Shipped on, unlike the figures stage: it is the deliberate exception pinned in
+    # test_the_shipped_configuration_agrees_with_the_dataclass_defaults, where the reason is written down.
+    settings = Settings.from_env({})
+
+    assert settings.vlm_enabled is True
+    assert settings.vlm_model == "qwen3-vl-32b-instruct"
+    assert settings.vlm_policy == "tables"
+    assert settings.vlm_context_blocks == 1
+    assert settings.vlm_fill_blanks is True
+
+
+def test_the_validation_settings_come_from_the_file(tmp_path: Path):
+    path = write_config(
+        tmp_path / "config.json",
+        {
+            "vlm.enabled": False,
+            "vlm.model": "other-vl",
+            "vlm.policy": "all",
+            "vlm.context_blocks": 3,
+            "vlm.crop_dpi": 150,
+            "vlm.crop_padding": 0.05,
+            "vlm.crop_max_pixels": 1000,
+            "vlm.fill_blanks": False,
+            "vlm.timeout_s": 60,
+            "vlm.temperature": 0.3,
+            "vlm.max_tokens": 2048,
+            "vlm.concurrency": 2,
+        },
+    )
+
+    settings = Settings.from_env(env_for(path))
+
+    assert settings.vlm_enabled is False
+    assert settings.vlm_model == "other-vl"
+    assert settings.vlm_policy == "all"
+    assert settings.vlm_context_blocks == 3
+    assert (settings.vlm_crop_dpi, settings.vlm_crop_padding, settings.vlm_crop_max_pixels) == (150, 0.05, 1000)
+    assert settings.vlm_fill_blanks is False
+    assert (settings.vlm_timeout_s, settings.vlm_temperature, settings.vlm_max_tokens) == (60.0, 0.3, 2048)
+    assert settings.vlm_concurrency == 2
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("true", True), ("1", True), ("ON", True), ("false", False), ("0", False)]
+)
+def test_the_environment_switches_visual_validation(tmp_path: Path, raw: str, expected: bool):
+    path = write_config(tmp_path / "config.json", {"vlm.enabled": not expected})
+
+    assert Settings.from_env(env_for(path, PAPERFACTS_VLM_ENABLED=raw)).vlm_enabled is expected
+
+
+def test_the_environment_overrides_the_validation_settings(tmp_path: Path):
+    path = write_config(tmp_path / "config.json")
+
+    settings = Settings.from_env(
+        env_for(
+            path,
+            PAPERFACTS_VLM_MODEL="env-vl",
+            PAPERFACTS_VLM_POLICY="disputed",
+            PAPERFACTS_VLM_CONTEXT_BLOCKS="0",
+            PAPERFACTS_VLM_CROP_DPI="120",
+            PAPERFACTS_VLM_CROP_PADDING="0.02",
+            PAPERFACTS_VLM_FILL_BLANKS="false",
+        )
+    )
+
+    assert (settings.vlm_model, settings.vlm_policy) == ("env-vl", "disputed")
+    assert (settings.vlm_context_blocks, settings.vlm_crop_dpi, settings.vlm_crop_padding) == (0, 120, 0.02)
+    assert settings.vlm_fill_blanks is False
+
+
+def test_an_unknown_policy_names_the_ones_that_exist(tmp_path: Path):
+    # Falling back to the default would quietly check a different set of values, and the report would not say so.
+    path = write_config(tmp_path / "config.json", {"vlm.policy": "tabels"})
+
+    with pytest.raises(ConfigError, match=r"vlm\.policy is 'tabels', expected one of disputed, tables, all"):
+        Settings.from_env(env_for(path))
+
+
+def test_an_unknown_policy_from_the_environment_names_the_variable(tmp_path: Path):
+    path = write_config(tmp_path / "config.json")
+
+    with pytest.raises(ConfigError, match="PAPERFACTS_VLM_POLICY"):
+        Settings.from_env(env_for(path, PAPERFACTS_VLM_POLICY="everything"))
+
+
+def test_a_negative_context_window_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"vlm.context_blocks": -1})
+
+    with pytest.raises(ConfigError, match=r"vlm\.context_blocks must be at least 0"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_context_window_of_zero_is_allowed(tmp_path: Path):
+    # The cited blocks alone is a meaningful choice, unlike zero passes or zero retries.
+    path = write_config(tmp_path / "config.json", {"vlm.context_blocks": 0})
+
+    assert Settings.from_env(env_for(path)).vlm_context_blocks == 0
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.0, 1.5])
+def test_a_crop_padding_outside_0_to_1_names_the_key(tmp_path: Path, value: float):
+    # Negative padding would shrink the crop inside the box the parser found, which is what padding prevents.
+    path = write_config(tmp_path / "config.json", {"vlm.crop_padding": value})
+
+    with pytest.raises(ConfigError, match=r"vlm\.crop_padding must be at least 0 and below 1"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_validation_crop_dpi_below_one_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"vlm.crop_dpi": 0})
+
+    with pytest.raises(ConfigError, match=r"vlm\.crop_dpi must be at least 1"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_validation_timeout_of_zero_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"vlm.timeout_s": 0})
+
+    with pytest.raises(ConfigError, match=r"vlm\.timeout_s must be positive"):
+        Settings.from_env(env_for(path))
+
+
+def test_a_string_where_the_validation_switch_belongs_names_the_key(tmp_path: Path):
+    path = write_config(tmp_path / "config.json", {"vlm.enabled": "yes"})
+
+    with pytest.raises(ConfigError, match=r"vlm\.enabled must be bool"):
         Settings.from_env(env_for(path))
 
 

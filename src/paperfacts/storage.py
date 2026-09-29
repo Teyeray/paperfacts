@@ -16,6 +16,7 @@ one shows every intermediate state of one paper:
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated per-sample table, for the web UI
     ├── figures/<profile>/<figure_key>.json        values a vision model read off charts (opt-in stage)
+    ├── crops/page_000.<bbox>.<dpi>dpi.png             page regions rendered for a vision model
     ├── overlays/<backend>/page_000.png                bbox overlays
     └── pages/<dpi>dpi/page_000.png                    page renders for the web viewer
 
@@ -109,6 +110,14 @@ class DataLayout:
 
     def legacy_figures_path(self, document_id: str, figure_key: str) -> Path:
         return self.legacy_figures_dir(document_id) / f"{figure_key}.json"
+
+    def crops_dir(self, document_id: str) -> Path:
+        return self.doc_dir(document_id) / "crops"
+
+    def crop_path(self, document_id: str, page: int, bbox_key: str, dpi: int) -> Path:
+        # Not per profile, unlike figures_path: a crop is pixels cut out of a page, and which fields a profile
+        # wants out of it changes nothing about the bytes. Two profiles asking for the same box share one file.
+        return self.crops_dir(document_id) / f"page_{page:03d}.{bbox_key}.{dpi}dpi.png"
 
     def overlay_dir(self, document_id: str, backend: Backend) -> Path:
         return self.doc_dir(document_id) / "overlays" / backend

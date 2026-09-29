@@ -65,6 +65,7 @@ ignore = [
 "tests/**" = ["ANN"]
 "src/paperfacts/prompts.py" = ["E501"]  # prompt text wraps by sentence, not by column
 "src/paperfacts/figures.py" = ["E501"]  # so does the chart-reading prompt
+"src/paperfacts/validate.py" = ["E501"]  # and the transcription and fill prompts
 
 [tool.coverage.run]
 source = ["paperfacts"]
