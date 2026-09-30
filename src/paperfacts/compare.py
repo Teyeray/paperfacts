@@ -54,6 +54,39 @@ PAPER_SCOPE = "paper"
 _LEGACY_PAPER_SCOPE = "target"
 
 
+# What the supervisor said about one value (:mod:`paperfacts.supervisor`), thresholded where it was scored so
+# the verdict rules in :mod:`paperfacts.decide` stay pure: ``trusted`` at or above ``vote_threshold``, ``doubted``
+# below ``min_confidence``, ``uncertain`` between, ``error`` when no answer came back (kept apart so an unscored
+# value never reads as a doubted one).
+SupervisorVerdict = Literal["trusted", "uncertain", "doubted", "error"]
+SupervisorFlag = Literal["correct", "plausible", "unit_mismatch", "value_not_in_passage", "error"]
+# Why a comparison was put in front of the supervisor: the lanes disagreed, or they agreed on a value near the
+# edge of the field's plausible range.
+SupervisionReason = Literal["conflict", "borderline"]
+
+
+class SupervisorScore(BaseModel):
+    """One value scored against the passage it cites."""
+
+    model_config = ConfigDict(frozen=True)
+
+    score: float = Field(ge=0.0, le=1.0)
+    flag: SupervisorFlag
+    critique: str = ""
+    verdict: SupervisorVerdict
+
+
+class Supervision(BaseModel):
+    """The supervisor's reading of one comparison: each side scored, or None for a side it could not check
+    (no value, or a value citing no block)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reason: SupervisionReason
+    a: SupervisorScore | None = None
+    b: SupervisorScore | None = None
+
+
 class FieldComparison(BaseModel):
     """The comparison outcome for one fact across both lanes, keeping both sides' candidate values and provenance."""
 
@@ -75,6 +108,9 @@ class FieldComparison(BaseModel):
     a: FieldValue | None = None
     b: FieldValue | None = None
     detail: str = ""
+    # Left out of the file when the supervisor did not look at this comparison, so reports of an installation
+    # without the stage keep their bytes.
+    supervision: Supervision | None = Field(default=None, exclude_if=lambda supervision: supervision is None)
 
     @field_validator("scope", mode="before")
     @classmethod

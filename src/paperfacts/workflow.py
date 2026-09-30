@@ -48,6 +48,10 @@ from paperfacts.profile_loader import PROFILES_DIRNAME, load_profile, loaded_fil
 from paperfacts.readings import FiguresView, figure_artifact, read_document_figures, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout, ensure_identity, write_text_atomic
+from paperfacts.supervisor import MAX_TOKENS as SUPERVISOR_MAX_TOKENS
+from paperfacts.supervisor import RETRY_ATTEMPTS as SUPERVISOR_RETRY_ATTEMPTS
+from paperfacts.supervisor import TEMPERATURE as SUPERVISOR_TEMPERATURE
+from paperfacts.supervisor import supervise_report, supervision_summary
 from paperfacts.threads import ContextThreadPoolExecutor
 from paperfacts.workbook import write_dataset
 
@@ -412,6 +416,9 @@ def compare_document(
             return cached
         logger.info("stored comparison of doc=%s compared other parses; comparing again", document.document_id[:16])
 
+    if comparison.supervisor is not None:
+        # Fail before matching is paid for: a judge with no key would otherwise fail every paper at its end.
+        settings.require_supervisor_api_key()
     # Each entity type's samples are paired on their own: a catalyst is never the same sample as a reaction test.
     profile = comparison.profile
     matchings = {
@@ -419,6 +426,8 @@ def compare_document(
         for entity in profile.entities
     }
     report = compare_lanes(lane_a, lane_b, matchings, comparison)
+    if comparison.supervisor is not None:
+        report = supervise_document(document, settings, comparison, report, refresh=force)
     reason = incomplete_reason(lanes, report)
     if reason:
         # An earlier run's report under these keys goes too: it came from other answers, and kept it would be
@@ -429,6 +438,56 @@ def compare_document(
         report.write(path)
     logger.info("compared doc=%s counts=%s", document.document_id[:16], report.counts.model_dump())
     return report
+
+
+def supervise_document(
+    document: DocumentInput,
+    settings: Settings,
+    comparison: ComparisonOptions,
+    report: ComparisonReport,
+    *,
+    refresh: bool = False,
+) -> ComparisonReport:
+    """The supervisor's pass over a fresh report: each disputed or borderline value scored against the blocks
+    its own lane cites. Part of the compare stage, so the scored report is stored under the comparison key,
+    which carries the supervisor's settings (:func:`paperfacts.keys.comparison_key`)."""
+    assert comparison.supervisor is not None
+    blocks = {
+        backend: {block.source_id: block.content for block in informative_blocks(artifact.blocks)}
+        for backend in BACKENDS
+        for artifact in (load_artifact(document, backend, settings),)
+    }
+    with build_supervisor_client(settings) as client:
+        return supervise_report(
+            report,
+            comparison.supervisor,
+            client,
+            blocks,
+            comparison.profile,
+            refresh=refresh,
+            concurrency=settings.llm_concurrency,
+        )
+
+
+def build_supervisor_client(settings: Settings) -> OpenAICompatibleClient:
+    """The supervisor's own client: its endpoint, key and model, one retry, and no reasoning effort.
+
+    Separate from the extraction client for the same reason the vision client is: the judge must never answer
+    an extraction question, and its short timeout must never apply to one.
+    """
+    return OpenAICompatibleClient(
+        settings.supervisor_base_url,
+        settings.require_supervisor_api_key(),
+        settings.supervisor_model,
+        timeout_s=settings.supervisor_timeout_s,
+        cache_dir=DataLayout(settings.data_root).llm_cache_dir(),
+        temperature=SUPERVISOR_TEMPERATURE,
+        max_tokens=SUPERVISOR_MAX_TOKENS,
+        reasoning_effort=None,
+        retry_attempts=SUPERVISOR_RETRY_ATTEMPTS,
+        retry_backoff_s=settings.llm_retry_backoff_s,
+        offline=settings.llm_offline,
+    )
 
 
 def compared_these(report: ComparisonReport, lane_a: LaneExtraction, lane_b: LaneExtraction) -> bool:
@@ -781,6 +840,8 @@ def _extract_and_compare(
     detail = (
         f"agree {counts.agree} · conflict {counts.conflict} · ambiguous {counts.ambiguous} · missing {counts.missing}"
     )
+    if any(c.supervision is not None for c in report.comparisons):
+        detail += f" · {supervision_summary(report)}"
     reason = incomplete_reason(lanes, report)
     if reason:
         # Not a failure of the paper: the report was not stored and the next run asks again.

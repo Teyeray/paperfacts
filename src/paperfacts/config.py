@@ -195,6 +195,16 @@ DEFAULT_VLM_CONTEXT_BLOCKS = 1
 DEFAULT_VLM_FILL_BLANKS = True
 # Vision requests in flight at once. Scheduling only, like llm.concurrency: absent from every key.
 DEFAULT_VLM_CONCURRENCY = 4
+# The supervisor stage (paperfacts.supervisor): off by default, and at the LLM's endpoint and key unless the
+# file names another (a null base_url follows llm.base_url), so a hosted pilot needs no second account. The
+# model is a small instruct model: it reads one passage and returns one score, which a 7B-class model does
+# well and quickly.
+DEFAULT_SUPERVISOR_ENABLED = False
+DEFAULT_SUPERVISOR_BASE_URL = DEFAULT_LLM_BASE_URL
+DEFAULT_SUPERVISOR_MODEL = "qwen2.5-7b-instruct"
+DEFAULT_SUPERVISOR_MIN_CONFIDENCE = 0.6
+DEFAULT_SUPERVISOR_VOTE_THRESHOLD = 0.6
+DEFAULT_SUPERVISOR_TIMEOUT_S = 30.0
 # Keys config.json held until the domain moved into a profile (profiles/<name>.json).
 MOVED_TO_PROFILE = ("fields", "condition_keywords")
 _TRUE_WORDS = {"1", "true", "yes", "on"}
@@ -395,6 +405,17 @@ class Settings:
     vlm_context_blocks: int = DEFAULT_VLM_CONTEXT_BLOCKS
     vlm_fill_blanks: bool = DEFAULT_VLM_FILL_BLANKS
     vlm_concurrency: int = DEFAULT_VLM_CONCURRENCY
+    # The supervisor stage. ``supervisor_api_key_env`` names an environment variable holding its key; None
+    # means the LLM's key, as the figures and vlm stages use. ``supervisor_api_key`` is that variable's value,
+    # read once with the rest of the environment.
+    supervisor_enabled: bool = DEFAULT_SUPERVISOR_ENABLED
+    supervisor_base_url: str = DEFAULT_SUPERVISOR_BASE_URL
+    supervisor_model: str = DEFAULT_SUPERVISOR_MODEL
+    supervisor_api_key_env: str | None = None
+    supervisor_api_key: str | None = None
+    supervisor_min_confidence: float = DEFAULT_SUPERVISOR_MIN_CONFIDENCE
+    supervisor_vote_threshold: float = DEFAULT_SUPERVISOR_VOTE_THRESHOLD
+    supervisor_timeout_s: float = DEFAULT_SUPERVISOR_TIMEOUT_S
     ambiguous_match_confidence: float = DEFAULT_AMBIGUOUS_MATCH_CONFIDENCE
 
     @classmethod
@@ -418,6 +439,8 @@ class Settings:
         file = configuration(env)
         repo_root = Path(get("REPO_ROOT") or DEFAULT_REPO_ROOT)
         key_file = get("LLM_API_KEY_FILE")
+        supervisor_key_env = get("SUPERVISOR_API_KEY_ENV") or file.text_or_none("supervisor.api_key_env")
+        llm_base_url = (get("LLM_BASE_URL") or file.get("llm.base_url", str)).rstrip("/")
         settings = cls(
             data_root=Path(get("DATA_ROOT") or file.get("data_root", str)),
             repo_root=repo_root,
@@ -431,7 +454,7 @@ class Settings:
             paddle_vl_backend=get("PADDLE_VL_BACKEND") or file.text_or_none("parsers.paddle_vl_backend"),
             paddle_vl_server_url=get("PADDLE_VL_SERVER_URL") or file.text_or_none("parsers.paddle_vl_server_url"),
             paddle_vl_model_name=get("PADDLE_VL_MODEL_NAME") or file.text_or_none("parsers.paddle_vl_model_name"),
-            llm_base_url=(get("LLM_BASE_URL") or file.get("llm.base_url", str)).rstrip("/"),
+            llm_base_url=llm_base_url,
             llm_model=get("LLM_MODEL") or file.get("llm.model", str),
             llm_api_key=get("LLM_API_KEY") or (env.get("DEEPSEEK_API_KEY") or "").strip() or None,
             llm_api_key_file=Path(key_file) if key_file else repo_root / DEFAULT_API_KEY_FILENAME,
@@ -530,11 +553,45 @@ class Settings:
             vlm_concurrency=_positive(
                 number("VLM_CONCURRENCY", file.get("vlm.concurrency", int), int), "vlm.concurrency", file.path
             ),
+            supervisor_enabled=_parse_bool(
+                "SUPERVISOR_ENABLED", get("SUPERVISOR_ENABLED"), file.get("supervisor.enabled", bool)
+            ),
+            # Null in the file means the LLM's endpoint, whatever it was set to, so the LLM's key (the default
+            # when no key variable is named) is never sent to another provider by a stale URL.
+            supervisor_base_url=(
+                get("SUPERVISOR_BASE_URL") or file.text_or_none("supervisor.base_url") or llm_base_url
+            ).rstrip("/"),
+            supervisor_model=get("SUPERVISOR_MODEL") or file.get("supervisor.model", str),
+            supervisor_api_key_env=supervisor_key_env,
+            supervisor_api_key=((env.get(supervisor_key_env) or "").strip() or None) if supervisor_key_env else None,
+            supervisor_min_confidence=number(
+                "SUPERVISOR_MIN_CONFIDENCE", file.get("supervisor.min_confidence", float), float
+            ),
+            supervisor_vote_threshold=number(
+                "SUPERVISOR_VOTE_THRESHOLD", file.get("supervisor.vote_threshold", float), float
+            ),
+            supervisor_timeout_s=_positive_seconds(
+                number("SUPERVISOR_TIMEOUT_S", file.get("supervisor.timeout_s", float), float),
+                "supervisor.timeout_s",
+                file.path,
+            ),
             # File-only: a verdict threshold is not something to flip per invocation.
             ambiguous_match_confidence=file.get("comparison.ambiguous_match_confidence", float),
         )
         _check_ranges(settings, file.path)
         return settings
+
+    def require_supervisor_api_key(self) -> str:
+        """The supervisor's key: the variable ``supervisor.api_key_env`` names, or the LLM's key when none is
+        named. A named variable that is unset is an error here, not a silent fall-back to the wrong account."""
+        if self.supervisor_api_key_env is None:
+            return self.require_llm_api_key()
+        if self.supervisor_api_key:
+            return self.supervisor_api_key
+        raise ConfigError(
+            f"no supervisor API key: supervisor.api_key_env names {self.supervisor_api_key_env}, which is not set "
+            f"(set it, or set supervisor.api_key_env to null to use the LLM's key)"
+        )
 
     def require_llm_api_key(self) -> str:
         """Resolve the key at the moment it is needed: environment first, then the key file."""
@@ -599,6 +656,11 @@ def _check_ranges(settings: Settings, source: Path) -> None:
         (
             0 <= settings.ambiguous_match_confidence <= 1,
             f"comparison.ambiguous_match_confidence must be between 0 and 1, got {settings.ambiguous_match_confidence}",
+        ),
+        (
+            0 <= settings.supervisor_min_confidence <= settings.supervisor_vote_threshold <= 1,
+            "supervisor.min_confidence and supervisor.vote_threshold must satisfy 0 <= min_confidence <= "
+            f"vote_threshold <= 1, got {settings.supervisor_min_confidence} and {settings.supervisor_vote_threshold}",
         ),
     ]
     for ok, message in rules:

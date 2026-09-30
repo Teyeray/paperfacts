@@ -220,7 +220,18 @@ def incomplete_reason(lanes: Mapping[Backend, LaneExtraction], report: Compariso
     if failed:
         return "sample matching failed" + (f" ({', '.join(failed)})" if len(report.matchings) > 1 else "")
     unanswered = [f"{backend}:{q.field}" for backend, lane in lanes.items() for q in lane.failed_questions]
-    return f"no valid answer to {', '.join(unanswered)}" if unanswered else ""
+    if unanswered:
+        return f"no valid answer to {', '.join(unanswered)}"
+    # A supervisor request that failed is the same kind of thing: the judge's outage, not the paper's verdict.
+    unscored = sorted({c.field for c in report.comparisons if _supervisor_failed(c)})
+    return f"supervisor gave no score for {', '.join(unscored)}" if unscored else ""
+
+
+def _supervisor_failed(comparison: FieldComparison) -> bool:
+    supervision = comparison.supervision
+    if supervision is None:
+        return False
+    return any(score is not None and score.verdict == "error" for score in (supervision.a, supervision.b))
 
 
 def consolidate_document(

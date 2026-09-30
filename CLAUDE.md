@@ -179,6 +179,12 @@ this file is the part that is easy to get wrong.
   - retrieval (passage mode): `passages`, `continuation`, `units`, `text`, `fields`;
   - normalization (comparison): `normalize`, `readers`, `units`, `text`, `kinds`;
   - comparison code: `compare`, `matching`, `dataset`, `decide`, `kinds`, `fields`, `profile`;
+  - supervisor code: `supervisor` and `prompts` (its prompt, selection rule, thresholding and the repair
+    question), folded into `comparison_key` together with the supervisor model and thresholds only when
+    `supervisor.enabled` is on, so turning the stage on or off renames only the reports it changes; `decide.py`,
+    which consumes the verdicts, is comparison code. A report holding a failed score (verdict `error`) is not
+    stored (`dataset.incomplete_reason`), and an export carries the stored scores onto the rebuilt report
+    (`supervisor.carry_supervision`), since an export runs no model;
   - figure code: `figures`, `normalize`, `readers`, `passages`, `units`, `text`, `fields`, `profile`.
   Editing any of them re-keys. A module that holds a default the keys omit must be hashed. Besides the rendered
   system prompts, `extractor_key` hashes every prompt slot not at its default (except the `matching_*` ones, which

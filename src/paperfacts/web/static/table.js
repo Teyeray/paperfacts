@@ -15,20 +15,23 @@ import { LANE_LABEL, entityGroups, entityLabel, entityOf, inEntity, noSamplesRea
 import { copyButton, copyTable, fieldText, intervalText } from "./tsv.js";
 import { revealViewer } from "./viewer.js";
 
-// A cell is worth showing only when the pipeline committed to a value. `agree` and `single_source` are the
-// two decisions that produce one; every other decision deliberately leaves the cell empty.
-const CELL_CLASS = { agree: "ok", single_source: "warn" };
+// A cell is worth showing only when the pipeline committed to a value. `agree`, `single_source` and
+// `supervised` (one lane's value, the other's ruled out by the supervisor) are the decisions that produce one;
+// every other decision deliberately leaves the cell empty.
+const CELL_CLASS = { agree: "ok", single_source: "warn", supervised: "warn" };
 // A decided cell says how it was decided: 双路 when both lanes agreed, otherwise the name of the lane
-// the value actually came from -- "单路" alone left the reader guessing which one.
+// the value actually came from -- "单路" alone left the reader guessing which one. A supervised cell says so
+// beside the lane, so it is never read as a plain single-source one.
 const LANE_CLASS = { mineru: "lane-a", paddleocr_vl: "lane-b" };
 function cellBadge(decision) {
   const status = decision?.decision ?? "";
   if (status === "agree") return { text: "双路", cls: "" };
-  if (status !== "single_source") return { text: "", cls: "" };
+  if (status !== "single_source" && status !== "supervised") return { text: "", cls: "" };
+  const suffix = status === "supervised" ? "·监督" : "";
   const lanes = String(decision?.lanes ?? "").split(";").map((l) => l.trim()).filter(Boolean);
-  if (!lanes.length) return { text: "单路", cls: "" };
+  if (!lanes.length) return { text: `单路${suffix}`, cls: "" };
   return {
-    text: lanes.map((l) => LANE_LABEL[l] ?? l).join("+"),
+    text: lanes.map((l) => LANE_LABEL[l] ?? l).join("+") + suffix,
     cls: lanes.length === 1 ? (LANE_CLASS[lanes[0]] ?? "") : "",
   };
 }
