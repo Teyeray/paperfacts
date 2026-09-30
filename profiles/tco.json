@@ -615,7 +615,12 @@
       ],
       "condition_rule": "the wavelength or spectral range",
       "missing_condition_note_zh": "原文提取结果未注明透光率波长或波段",
-      "figure_readable": true
+      "figure_readable": true,
+      "figure_spectrum_axis": "wavelength (nm)",
+      "figure_spectrum_points": [
+        "550",
+        "400-800/50"
+      ]
     },
     {
       "name": "thickness",
