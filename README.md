@@ -801,8 +801,9 @@ A profile changes the words, never the shape of the answer. The shape is fixed i
   fills a dataset cell, and a bound (">80 %") fills none. A field whose value *is* a range is an `interval`.
 - **A censored value is a bound, not a number.** "IC50 > 10 µM" fills no `numeric` cell, since it is a bound;
   declare a quantity that papers often report censored as an `interval` field, whose cell holds `[10, open]`.
-- **Charts are property-vs-condition only.** The opt-in figure reading reads a y value per marker off a chart
-  whose caption names a `figure_readable` field; spectra, micrographs, maps and schematics are not read.
+- **Charts are property-vs-condition, or a declared spectrum.** The opt-in figure reading reads a y value per
+  marker off a chart whose caption names a `figure_readable` field, and a spectrum only of a field that declares
+  `figure_spectrum_axis`, at its `figure_spectrum_points`; micrographs, maps, schematics and other spectra are not read.
 - **The prompts are English.** The templates around the slots are English, so slots are written in English;
   only the display copy (`title_zh`, `label`, `ui`, ...) is Chinese.
 
@@ -924,6 +925,8 @@ names from the LLM cache.
 | `after_clause` | `refuse` | cleaning, verdict | `refuse` or `condition`: what "92.5% after 100 cycles" becomes. Numeric only |
 | `named_values` | `{}` | prompt, cleaning | `{"phrase": number}`: words a paper writes instead of the number (`{"room temperature": 25, "RT": 25}`), each with its value in `canonical_unit`. The field line names the phrases and asks for the words verbatim; a quote that is a phrase (whole, or after a leading "at", or before a parenthesis without a digit: "room temperature (RT)") reads as its number, and the dataset cell notes the words. A quote with a digit is always read as a number ("RT (27 °C)" is 27). Under a bound ("above RT") it is no scalar. Numeric only, not with `many`; at most 50, no digit in a phrase, distinct after folding, finite, inside `valid_range` |
 | `figure_readable` | `false` | figure | Whether a chart's y axis may be read for this field; numeric with a unit only |
+| `figure_spectrum_axis` | none | figure | The x quantity a spectrum of this field runs over, e.g. `"wavelength (nm)"`. With it, a chart of the field may also be read as a spectrum (see [Reading figures](#reading-figures)). Needs `figure_readable` and `figure_spectrum_points`; numeric only, not with `many` |
+| `figure_spectrum_points` | `[]` | figure | Where a spectrum is read, in that axis's unit: a single x (`"550"`) or a range with its sampling step (`"400-800/50"`, x = 400, 450, … 800). A range's value is the code's mean of the curve read at every step, and only when every step was read. At most 100 steps per range. Needs `figure_spectrum_axis` |
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
 | `cardinality` | `one` | prompt, verdict | `one` or `many`: a list of values that hold at once (the precursors of a sample, the techniques a paper applies). Text or composition only, at either level; refused together with `figure_readable`, `condition_preference`, `condition_rule` and every numeric attribute. See [List fields](#list-fields) |
 | `prompt_categories` | derived | prompt | Never written: a `many` field's `categories`, named in its field line; empty for every other field, so a single-valued field's `categories` stay verdict only |
@@ -1261,7 +1264,14 @@ re-reads only them, since each costs minutes of a different model.
   field the profile marks `figure_readable` (in the TCO profile: sheet resistance, resistivity,
   transmittance, thickness) by one of the field's retrieval keywords, and then every panel is asked about separately, up to `figures.max_per_document` panels per
   paper. The boxes are MinerU's, or PaddleOCR-VL's when there is no MinerU parse. A panel that turns out to
-  be a spectrum or an XRD pattern is refused by the model and yields nothing.
+  be an XRD pattern, or a spectrum of a field that declares no `figure_spectrum_axis`, is refused by the model
+  and yields nothing.
+- **Spectra.** When a field asked about declares `figure_spectrum_axis` (TCO: transmittance against
+  wavelength (nm)), the question also accepts a spectrum and asks for y on each legend curve at the fixed x
+  values the code expands from `figure_spectrum_points` (TCO: 550, and 400-800 every 50 nm). Each single point
+  becomes a reading at that x; each range becomes one reading, the code's mean of the curve at every step,
+  kept only when every step was read (a partly read range would average another window). Spectrum readings
+  are approximate, labelled like markers (±10 %, ±20 % on a log axis or with four or more curves), and marked 光谱曲线读数（目测） in their detail.
 - **What a reading is.** The model reports each marker's y in the axis's own unit, multiplier included
   ("25" on an axis titled "[10^2 Ω/sq]"), and the code converts it to the field's canonical unit. Every
   reading is **approximate**, labelled ±10 % on a linear axis and ±20 % on a log axis or a chart with four
@@ -1285,7 +1295,8 @@ re-reads only them, since each costs minutes of a different model.
   plan): each flat file moves into the directory of the profile it records, `tco` when it records none, and is
   stamped with it; a file whose destination already exists is left for you to look at. `figure_key` hashes the vision model and its
   sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the profile's `figures` slots, the
-  `figure_readable` fields' names, descriptions, keywords, units and bare-number policies, the declared units,
+  `figure_readable` fields' names, descriptions, keywords, units, bare-number policies and spectrum axes and
+  points, the declared units,
   and the source of `figures.py`, `normalize.py`, `readers.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and
   `profile.py`. Stored readings are
   shown and exported even when the stage is switched off for a later run. With nothing under the current

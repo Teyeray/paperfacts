@@ -70,7 +70,9 @@ def figure_rows(
     """One display row per reading, keyed like the 图中读数 sheet's columns in :mod:`paperfacts.workbook`."""
 
     def detail(reading: FigureReading) -> str | None:
-        notes = [reading.note] if reading.note else []
+        # A curve reading is said to be one, without a column of its own: the sheet's columns stay as they are.
+        notes = ["光谱曲线读数（目测）"] if reading.kind != "marker" else []
+        notes += [reading.note] if reading.note else []
         if stale:
             notes.append("旧版本读数（设置已变，尚未重读）")
         if reading.source_id in orphaned:

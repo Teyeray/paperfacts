@@ -52,6 +52,8 @@ ROLES = {
     "entity": {P, C, V},
     "references": {P, C, V},
     "named_values": {P, C},
+    "figure_spectrum_axis": {F},
+    "figure_spectrum_points": {F},
 }
 # A value off each attribute's default, set on one field of the demo profile to see which fingerprints move.
 EDITS = {
@@ -82,6 +84,8 @@ EDITS = {
     "entity": "catalyst",
     "references": "catalyst",
     "named_values": (("room temperature", 25.0),),
+    "figure_spectrum_axis": "wavelength (nm)",
+    "figure_spectrum_points": ("550", "400-800/50"),
 }
 
 
