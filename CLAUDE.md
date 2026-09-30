@@ -175,7 +175,7 @@ this file is the part that is easy to get wrong.
   zero misses) plus `scripts/diff_derived.py`.
 - Hashed module sources, by fingerprint (`keys.py` is the truth; the docs follow it):
   - extraction code: `extract`, `fields`, `profile`, `units`, `text`, `voting`, `records`, `adapters`,
-    `prompts`, `normalize`, `readers`, `grounding`, `continuation`, `kinds`;
+    `prompts`, `normalize`, `readers`, `grounding`, `continuation`, `kinds`, `supervisor`, `validation`;
   - retrieval (passage mode): `passages`, `continuation`, `units`, `text`, `fields`;
   - normalization (comparison): `normalize`, `readers`, `units`, `text`, `kinds`;
   - comparison code: `compare`, `matching`, `dataset`, `decide`, `kinds`, `fields`, `profile`;

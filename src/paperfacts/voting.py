@@ -214,7 +214,7 @@ def merge_passes(results: Sequence[ExtractedRecords], *, reference_fields: Colle
     for (scope, _vote, _rank), tally in slots.items():
         value, votes = tally.exemplar, tally.votes
         if votes < majority:
-            dropped.append(f"{value.field}: only {votes}/{passes} passes produced {value.value_raw!r}")
+            dropped.append(f"{value.field}: only {int(votes)}/{passes} passes produced {value.value_raw!r}")
             continue
         kept.setdefault(scope, []).append(value.model_copy(update={"agreement": votes / passes}))
 

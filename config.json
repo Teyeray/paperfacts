@@ -63,7 +63,7 @@
     "timeout_s": 300.0
   },
   "supervisor": {
-    "enabled": true,
+    "enabled": false,
     "provider": "openai_compat",
     "base_url": "http://localhost:8000/v1",
     "model": "qwen2.5-7b-instruct",

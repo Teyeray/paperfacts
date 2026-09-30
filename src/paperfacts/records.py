@@ -251,8 +251,7 @@ class FieldValue(BaseModel):
     low_confidence: bool = Field(
         default=False,
         description=(
-            "lanes agreed but supervisor score fell below threshold; "
-            "kept with this flag after retry exhaustion"
+            "lanes agreed but supervisor score fell below threshold; kept with this flag after retry exhaustion"
         ),
     )
     bound: str | None = Field(
