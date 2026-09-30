@@ -163,6 +163,13 @@ class FieldSpec:
     references: str | None = field(
         default=None, metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.VERDICT)
     )
+    # Phrases a paper writes instead of the number ("room temperature", "RT"), each with its value in the canonical
+    # unit; numeric fields only. The model quotes the phrase and the code reads it as that number, so the model never
+    # converts. PROMPT: the field line names the phrases. CLEANING: a digit-less quote survives only when it is one.
+    # It decides the cell too, which it does through the comparison's schema fingerprint.
+    named_values: tuple[tuple[str, float], ...] = field(
+        default=(), metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING)
+    )
 
     @property
     def is_sample_level(self) -> bool:

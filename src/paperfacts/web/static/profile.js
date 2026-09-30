@@ -33,6 +33,7 @@ const ATTRIBUTE_LABEL = {
   condition_preference: "条件优先",
   bare_number: "无单位数字",
   after_clause: "后置从句",
+  named_values: "文字表述的数值",
   prompt_categories: "提示中的类别",
   figure_readable: "可从图中读数",
   display_format: "显示格式",
@@ -62,6 +63,7 @@ function valueText(name, value) {
     if (low == null && high == null) return "";
     return `${low ?? "−∞"} – ${high ?? "∞"}`;
   }
+  if (name === "named_values" && Array.isArray(value)) return value.map(([phrase, number]) => `${phrase} = ${number}`).join("、");
   if (typeof value === "boolean") return value ? "是" : "否";
   if (Array.isArray(value)) {
     return value.map((item) => (typeof item === "object" ? JSON.stringify(item) : String(item))).join("、");

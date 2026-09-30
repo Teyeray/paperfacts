@@ -29,6 +29,7 @@ from paperfacts.records import (
     KindContext,
     LaneExtraction,
     PaperRecord,
+    named_value,
     spell_number_word,
 )
 from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
@@ -765,6 +766,9 @@ class Reading:
     # Why the quote is read as no value before any of the above, or None: a quote longer than MAX_NUMBER_QUOTE,
     # measured as cleaning measures it, on value_raw.
     refusal: str | None = None
+    # The declared phrase the quote is (FieldSpec.named_values) and its canonical value, or None. A bound still
+    # applies: "above RT" is not a scalar.
+    named: tuple[str, float] | None = None
 
 
 def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Reading:
@@ -773,6 +777,7 @@ def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Readi
         # Cleaning drops such an answer; this refuses one in a lane file written before that, without reading it.
         text = field.value_raw
         return Reading(text, None, "", field.bound, text, (), "", None, refusal=too_long(len(text)))
+    named = named_value(spec, field.value_raw)
     # A number word is decided here, not in parse_number: only the unit tells "four-inch" from "ten-fold".
     spelled = spell_number_word(field.value_raw, field.unit_raw)
     text, clause = spelled, ""
@@ -793,6 +798,7 @@ def read_value(field: FieldValue, spec: FieldSpec, units: UnitRegistry) -> Readi
         context_notes=tuple(context_notes),
         condition=condition,
         compound=compound_value(spec, bare, units),
+        named=named,
     )
 
 

@@ -207,6 +207,8 @@ def _variants(profile: DomainProfile) -> Iterator[tuple[str, DomainProfile, bool
                 if spec.references is None:
                     continue
                 value = next(e.name for e in profile.declared_entities if e.name != spec.references)
+            elif attribute.name == "named_values":
+                value = (*spec.named_values, ("edited", 1.0))
             else:
                 value = _other(getattr(spec, attribute.name), _FIELD_TYPES[attribute.name])
             fields = list(profile.fields)

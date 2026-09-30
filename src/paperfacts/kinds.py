@@ -182,6 +182,10 @@ def _own_unit_note(written: str, unit_raw: str | None) -> str:
     return f"原文数值自带单位 {written!r}，按其换算" + (f"（unit_raw 为 {unit_raw!r}）" if unit_raw else "")
 
 
+def _unit_suffix(spec: FieldSpec) -> str:
+    return f" {spec.canonical_unit}" if spec.canonical_unit else ""
+
+
 class NumericRules:
     """A number in the field's canonical unit, compared within the field's tolerances."""
 
@@ -198,6 +202,13 @@ class NumericRules:
         if reading.bound:
             lead_notes.append(f"bound {reading.bound!r} stands before the quote in its cited block")
         lead_note = "; ".join(lead_notes) or None
+        if reading.named is not None:
+            phrase, number = reading.named
+            if reading.bound:
+                note = f"{lead_note}; named value {phrase!r} under a bound is not a scalar"
+                return field.model_copy(update={"value": None, "unit": None, "normalization_note": note})
+            note = f"named value {phrase!r} read as {number:g}{_unit_suffix(spec)}"
+            return field.model_copy(update={"value": number, "unit": spec.canonical_unit, "normalization_note": note})
         bare, condition = reading.bare, reading.condition
         if condition and _names_unit_of(spec, condition, units) and not _names_unit_of(spec, bare, units):
             # "400 °C for 2 h" on annealing_time: the time is in the tail, and the number kept is a temperature.
@@ -264,6 +275,9 @@ class NumericRules:
             return None, reading.refusal
         if reading.bound:
             return None, f"原文在所引数值前写有界限 {reading.bound!r}，不是唯一精确标量"
+        if reading.named is not None:
+            number = reading.named[1]
+            return number, f"原文为文字表述 {value.value_raw!r}，按字段配置读作 {number:g}{_unit_suffix(spec)}"
         text = delatex(normalize_text(reading.text)).strip()
         approx = _APPROX.match(text)
         if approx:

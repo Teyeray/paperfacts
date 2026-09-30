@@ -331,3 +331,38 @@ def test_a_target_whose_every_field_is_dropped_keeps_its_citations(tco_profile):
     kept = drop_implausible(records, tco_profile)
 
     assert kept.paper == PaperRecord(source_ids=("mineru_p0_b1",), fields=())
+
+
+# ---- Named values -------------------------------------------------------------------------------------------
+
+ROOM_TEMPERATURE = dataclasses.replace(
+    FIELD_BY_NAME["substrate_temperature"], named_values=(("room temperature", 25.0), ("RT", 25.0))
+)
+
+
+def test_a_named_value_reads_as_its_declared_number_with_a_note():
+    normalized = normalize_field(make_field("substrate_temperature", "RT"), ROOM_TEMPERATURE, TCO_UNITS, NO_CONTEXT)
+
+    assert (normalized.value, normalized.unit) == (25.0, "℃")
+    assert normalized.normalization_note == "named value 'RT' read as 25 ℃"
+
+
+def test_a_stated_number_beside_the_phrase_goes_to_the_number_reader():
+    # The phrase is never applied when a digit is written beside it; the number reader decides alone (and reads
+    # this shape as ambiguous, as it does "x (27 °C)" on any field).
+    field = make_field("substrate_temperature", "RT (27 °C)")
+
+    normalized = normalize_field(field, ROOM_TEMPERATURE, TCO_UNITS, NO_CONTEXT)
+
+    assert normalized == normalize_field(field, FIELD_BY_NAME["substrate_temperature"], TCO_UNITS, NO_CONTEXT)
+    assert "named value" not in (normalized.normalization_note or "")
+
+
+def test_a_named_value_under_a_bound_is_no_value():
+    # "above RT": grounding found the bound before the quoted phrase; a bound is not a scalar.
+    field = make_field("substrate_temperature", "RT").model_copy(update={"bound": "above"})
+
+    normalized = normalize_field(field, ROOM_TEMPERATURE, TCO_UNITS, NO_CONTEXT)
+
+    assert normalized.value is None and normalized.unit is None
+    assert "named value 'RT' under a bound is not a scalar" in normalized.normalization_note
