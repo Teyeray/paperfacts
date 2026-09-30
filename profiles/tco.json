@@ -79,7 +79,23 @@
     ],
     "condition_unit_pattern": "\\d\\s*(?:sccm|W\\b|°C|℃|K\\b|Pa\\b|mtorr|torr|mbar|kv\\b|ma\\b|rpm|min\\b|h\\b|s\\b|(?:vol|at)\\.?\\s*%)"
   },
-  "units": {},
+  "units": {
+    "Ω/sq": {
+      "extends_builtin": true,
+      "aliases": {
+        "Ω cm^-2": 1,
+        "Ω cm-2": 1,
+        "Ω·cm^-2": 1,
+        "Ω·cm-2": 1,
+        "Ω/cm^2": 1,
+        "Ω/cm2": 1,
+        "ohm cm^-2": 1,
+        "ohm cm-2": 1,
+        "ohm/cm^2": 1,
+        "ohm/cm2": 1
+      }
+    }
+  },
   "ignored_unit_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"],
   "ui": {
     "paper_level_label_zh": "靶材（论文级）",
@@ -446,7 +462,12 @@
       "rel_tol": 0.02,
       "abs_tol": 2.0,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "named_values": {
+        "room temperature": 25,
+        "RT": 25,
+        "ambient temperature": 25
+      }
     },
     {
       "name": "annealing_temperature",

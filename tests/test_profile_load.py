@@ -26,7 +26,6 @@ from paperfacts.prompts import (
     inventory_system_prompt,
     matching_system_prompt,
 )
-from paperfacts.units import UnitRegistry
 from support.profiles import make_profile
 
 # The attributes that restate a special case the code made by field name; everything else must equal the
@@ -118,11 +117,12 @@ def test_every_tco_slot_reaches_the_prompts(tco_profile):
         assert getattr(tco_profile.figures, slot.name) in chart, slot.name
 
 
-def test_the_tco_profile_declares_no_units_of_its_own_only_the_gas_suffixes(tco_profile):
-    assert tco_profile.units.declared == ()
+def test_the_tco_profile_only_extends_ohms_per_square_and_names_the_gas_suffixes(tco_profile):
+    # One extension: the "Ω cm^-2" misprint family read as Ω/sq (derrar2022); no unit of its own.
+    assert [(unit.canonical, unit.extends_builtin) for unit in tco_profile.units.declared] == [("Ω/sq", True)]
     # Exactly the gas names the code set aside for every domain before a profile declared them.
-    assert tco_profile.units == UnitRegistry(ignored_suffixes=("Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"))
-    assert tco_profile.units.material() == [{"ignored_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"]}]
+    assert tco_profile.units.ignored_suffixes == ("Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air")
+    assert tco_profile.units.material()[-1] == {"ignored_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"]}
 
 
 # ---- Selection -------------------------------------------------------------------------

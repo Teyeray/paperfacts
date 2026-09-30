@@ -298,7 +298,15 @@ def test_every_alias_converts_by_its_factor_and_is_found_after_a_number(spelling
 
 
 def test_the_built_in_registry_keeps_the_built_in_pattern_objects():
-    assert all(TCO_UNITS.retrieval(unit) is pattern for unit, pattern in BUILTIN_RETRIEVAL.items())
+    assert all(UnitRegistry().retrieval(unit) is pattern for unit, pattern in BUILTIN_RETRIEVAL.items())
+
+
+def test_the_tco_registry_widens_only_the_unit_it_extends():
+    # The TCO profile adds the "Ω cm^-2" misprint family to Ω/sq; every other built-in keeps its pattern object.
+    widened = TCO_UNITS.retrieval("Ω/sq")
+    assert widened is not BUILTIN_RETRIEVAL["Ω/sq"]
+    assert widened is not None and widened.search(searchable(block("a sheet resistance of 544.92 Ω cm^-2")))
+    assert all(TCO_UNITS.retrieval(unit) is pattern for unit, pattern in BUILTIN_RETRIEVAL.items() if unit != "Ω/sq")
 
 
 def test_a_derived_pattern_needs_a_digit_and_a_word_boundary():
