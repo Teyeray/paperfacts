@@ -738,7 +738,8 @@ def _spectrum_readings(
     axes, only_axis = _axes(answer)
     readings: list[FigureReading] = []
     unplaced = 0
-    for curve in _items(answer, "curves", _Curve):
+    curves = _items(answer, "curves", _Curve)
+    for curve in curves:
         read = _items({"readings": curve.readings}, "readings", _CurveReading)
         named = _fold(curve.y_axis)
         axis = axes.get(named) if named else only_axis
@@ -793,7 +794,9 @@ def _spectrum_readings(
                     y=value,
                     unit=unit if value is not None else None,
                     scale="log" if (axis.scale or "").lower().startswith("log") else "linear",
-                    precision=LINEAR_PRECISION,
+                    # The marker rule: a log axis or a crowded panel doubles the error, whether it plots markers
+                    # or curves.
+                    precision=precision_for(axis.scale or "linear", len(curves)),
                     confidence=confidence,
                     note="; ".join(notes),
                 )

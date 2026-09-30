@@ -993,3 +993,15 @@ def test_the_spectrum_question_asks_for_the_curve_s_own_property():
 
     assert "Read only the curves that plot a listed property itself." in spectral
     assert '"label": "legend text", "field": "<listed property name>"' in spectral
+
+
+def test_a_spectrum_reading_s_precision_follows_the_axis_scale_and_the_curve_count():
+    log_axis = spectrum_answer({"A": {550: 85.0}})
+    log_axis["y_axes"][0]["scale"] = "log"
+    crowded = spectrum_answer({label: {550: 85.0} for label in "ABCD"})
+    three = spectrum_answer({label: {550: 85.0} for label in "ABC"})
+
+    [on_log] = run_spectral(log_axis).readings
+    assert (on_log.scale, on_log.precision) == ("log", figures.LOG_PRECISION)
+    assert {reading.precision for reading in run_spectral(crowded).readings} == {figures.LOG_PRECISION}
+    assert {reading.precision for reading in run_spectral(three).readings} == {figures.LINEAR_PRECISION}

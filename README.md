@@ -1271,7 +1271,7 @@ re-reads only them, since each costs minutes of a different model.
   values the code expands from `figure_spectrum_points` (TCO: 550, and 400-800 every 50 nm). Each single point
   becomes a reading at that x; each range becomes one reading, the code's mean of the curve at every step,
   kept only when every step was read (a partly read range would average another window). Spectrum readings
-  are approximate (±10 %) and marked 光谱曲线读数（目测） in their detail.
+  are approximate, labelled like markers (±10 %, ±20 % on a log axis or with four or more curves), and marked 光谱曲线读数（目测） in their detail.
 - **What a reading is.** The model reports each marker's y in the axis's own unit, multiplier included
   ("25" on an axis titled "[10^2 Ω/sq]"), and the code converts it to the field's canonical unit. Every
   reading is **approximate**, labelled ±10 % on a linear axis and ±20 % on a log axis or a chart with four
