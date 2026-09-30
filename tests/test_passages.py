@@ -243,6 +243,29 @@ def test_both_lanes_latex_subscript_spellings_fold_to_the_abbreviation(written, 
     assert passages.keyword_hits([keyword], passages.searchable(text(0, written))) == 1
 
 
+@pytest.mark.parametrize(
+    ("mineru", "paddleocr", "token"),
+    [
+        (r"<td> $R _ { \mathrm { s q } }$ </td>", r"<td>$ R_{sq} $ ( $ \Omega/sq $)", "rsq"),
+        (r"<td> $R _ { \mathsf { S } } \ ( \Omega \mathsf { c m }", r"<td>$ R_{S} $ ( $ \Omega $ cm", "rs"),
+        (r"shunt resistance $( R _ { \mathsf { S H } } )$ , d)", r"shunt resistance ( $ R_{SH} $), d)", "rsh"),
+        (r"<td> $\mathrm { T _ { a v g } } ^ { * }$  (%)</td>", "<td>$ T_{avg} $\\n(%)</td>", "tavg"),
+    ],
+)
+def test_a_subscript_mineru_wraps_in_a_formatting_command_folds_like_the_plain_one(mineru, paddleocr, token):
+    # MinerU wraps a subscript's letters in \mathrm or \mathsf where PaddleOCR writes them bare; both lanes have
+    # to meet the same keyword, or the fold would widen the gap between them instead of closing it.
+    pattern = re.compile(rf"\b{token}\b")
+    assert pattern.search(passages.searchable(text(0, mineru)))
+    assert pattern.search(passages.searchable(text(1, paddleocr)))
+
+
+def test_a_wrapped_subscript_stays_bounded():
+    # Only one wrapped group of at most eight letters is joined; a longer run is left for delatex to split.
+    assert "rs mesh" not in passages.searchable(text(0, r"$R _ { s , \mathrm { m e s h } }$"))
+    assert "abcdefghi" not in passages.searchable(text(1, r"$R _ { \mathrm { a b c d e f g h i } }$"))
+
+
 def test_a_bare_subscript_never_swallows_the_following_words():
     searched = passages.searchable(text(0, "the R_s of the film_1 thickness"))
 

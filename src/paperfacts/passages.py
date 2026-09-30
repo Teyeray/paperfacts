@@ -41,7 +41,7 @@ from paperfacts.continuation import continuation_partners
 from paperfacts.fields import DIGIT_KINDS, FieldSpec
 from paperfacts.models import SourceBlock
 from paperfacts.profile import RetrievalSpec
-from paperfacts.text import delatex, is_word_edge, normalize_text
+from paperfacts.text import LATEX_WRAPPERS, delatex, is_word_edge, normalize_text
 from paperfacts.units import BUILTIN_RETRIEVAL, UnitRegistry
 
 logger = logging.getLogger(__name__)
@@ -94,9 +94,14 @@ _GREEK = {
 _GREEK_COMMAND = re.compile(r"\\(?:var)?(" + "|".join(_GREEK) + r")(?![A-Za-z])")
 # A subscript is part of the symbol it hangs from: MinerU writes "R _ { s }", PaddleOCR "R_{s}", prose "R_s", and
 # all three are the abbreviation "Rs". Folded on the raw content, where braces still bound the subscript (delatex
-# drops them), and with the leading spaces MinerU always writes. The bare form takes one token only, so "R_s of
-# the film" becomes "Rs of the film", never one word.
-_BRACED_SUBSCRIPT = re.compile(r"\s*_\s*\{\s*((?:[A-Za-z0-9]\s*){1,8})\}")
+# drops them), and with the leading spaces MinerU always writes. MinerU often wraps the letters in a formatting
+# command ("R _ { \mathsf { S } }", "R _ { \mathrm { s q } }"); the wrapper and its braces are dropped, so the
+# result is what PaddleOCR's "R_{S}" gives. The bare form takes one token only, so "R_s of the film" becomes "Rs of
+# the film", never one word.
+_SUBSCRIPT_LETTERS = r"((?:[A-Za-z0-9]\s*){1,8})"
+_BRACED_SUBSCRIPT = re.compile(
+    rf"\s*_\s*\{{\s*(?:{_SUBSCRIPT_LETTERS}|(?:{LATEX_WRAPPERS.pattern})\s*\{{\s*{_SUBSCRIPT_LETTERS}\}}\s*)\}}"
+)
 _BARE_SUBSCRIPT = re.compile(r"_([A-Za-z0-9]{1,8})\b")
 # A word broken at a line end ("resis- tance", "trans- mittance") is one word. Both halves must be three letters
 # or more and the second not a conjunction, so a suspended hyphen ("Al- and Ga-doped", "oxygen- and argon-") and
@@ -124,7 +129,8 @@ def _pattern(keyword: str) -> re.Pattern[str]:
 
 
 def _fold_subscripts(text: str) -> str:
-    return _BARE_SUBSCRIPT.sub(r"\1", _BRACED_SUBSCRIPT.sub(lambda m: m.group(1).replace(" ", ""), text))
+    joined = _BRACED_SUBSCRIPT.sub(lambda m: (m.group(1) or m.group(2)).replace(" ", ""), text)
+    return _BARE_SUBSCRIPT.sub(r"\1", joined)
 
 
 def searchable(block: SourceBlock) -> str:
