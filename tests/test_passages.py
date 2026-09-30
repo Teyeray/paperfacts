@@ -9,6 +9,7 @@ a budget -- because each of them exists to stop a specific failure that was seen
 from __future__ import annotations
 
 import logging
+import re
 from functools import partial
 
 import pytest
@@ -17,6 +18,7 @@ from paperfacts import passages
 from paperfacts.continuation import continuation_pairs
 from paperfacts.models import SourceBlock
 from paperfacts.passages import fit_budget
+from paperfacts.text import is_word_edge, normalize_text
 from support.factories import make_block
 from support.profiles import shipped_profile
 
@@ -28,6 +30,7 @@ candidate_blocks = partial(passages.candidate_blocks, units=TCO.units)
 inventory_blocks = partial(passages.inventory_blocks, retrieval=TCO.retrieval)
 
 COMPONENT = FIELD_BY_NAME["component"]
+RESISTIVITY = FIELD_BY_NAME["resistivity"]
 SHEET_RESISTANCE = FIELD_BY_NAME["sheet_resistance"]
 THICKNESS = FIELD_BY_NAME["thickness"]
 TRANSMITTANCE = FIELD_BY_NAME["transmittance"]
@@ -185,6 +188,97 @@ def test_a_keyword_matches_a_spelling_that_lost_one_of_a_doubled_letter():
     block = text(0, "The average transmitance of the film was 88.6%.")
 
     assert ids(candidate_blocks(TRANSMITTANCE, [block])) == [block.source_id]
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "<td>T %</td>",  # both lanes of one paper
+        "<td>Substrate</td><td>T (%)</td>",  # PaddleOCR
+        "only the transmittance values T(%), but also",
+    ],
+)
+def test_a_percent_keyword_tolerates_a_space_or_bracket_before_the_sign(header):
+    assert passages.keyword_hits(["T%"], passages.searchable(text(0, header))) == 1
+
+
+def test_a_percent_keyword_still_needs_its_letter():
+    assert passages.keyword_hits(["T%", "%T", "wt%", "at%"], passages.searchable(text(0, "yield was 85 %"))) == 0
+    # "at%" is a whole token: "that %" is not it.
+    assert passages.keyword_hits(["at%"], passages.searchable(text(0, "so that % of films"))) == 0
+
+
+def _pattern_before_the_folds(keyword: str) -> str:
+    folded = passages._DOUBLED_LETTER.sub(r"\1", normalize_text(keyword).lower())
+    prefix = r"\b" if is_word_edge(folded[:1]) else ""
+    suffix = r"\b" if is_word_edge(folded[-1:]) else ""
+    return prefix + re.escape(folded) + suffix
+
+
+def test_a_hyphenated_keyword_pattern_is_unchanged():
+    # Only a "%" beside a letter and a subscript change what a keyword compiles to; every other keyword of the
+    # shipped profile, the hyphenated and slashed ones included, keeps its pattern.
+    keywords = {keyword for spec in TCO.fields for keyword in spec.keywords} | set(TCO.retrieval.condition_keywords)
+    plain = sorted(keyword for keyword in keywords if "%" not in keyword and "_" not in keyword)
+
+    assert {"UV-vis", "off-axis distance", "O2/(Ar+O2)"} <= set(plain)
+    assert [passages._pattern(keyword).pattern for keyword in plain] == [
+        _pattern_before_the_folds(keyword) for keyword in plain
+    ]
+    assert passages._pattern("R_s").pattern == passages._pattern("Rs").pattern
+
+
+@pytest.mark.parametrize(
+    ("written", "keyword"),
+    [
+        (r"<td> $R _ { s } ( \Omega \mathrm { c m } ^ { 2 } )$ </td>", "Rs"),  # MinerU
+        (r"<td>$ R_{s} $ (Ω cm $ ^{2} $)</td>", "Rs"),  # PaddleOCR, same table
+        (r"<td> $\mathrm { T _ { a v g } } ^ { * }$  (%)</td>", "Tavg"),  # MinerU
+        ("<td>$ T_{avg} $\\n(%)</td>", "Tavg"),  # PaddleOCR, same table
+        (r"the sheet resistance ( $ R_s $) and the optical transmission", "Rs"),
+        ("the R_s of the film was 12 ohm", "R_s"),
+    ],
+)
+def test_both_lanes_latex_subscript_spellings_fold_to_the_abbreviation(written, keyword):
+    assert passages.keyword_hits([keyword], passages.searchable(text(0, written))) == 1
+
+
+def test_a_bare_subscript_never_swallows_the_following_words():
+    searched = passages.searchable(text(0, "the R_s of the film_1 thickness"))
+
+    assert "rs of the film1 thickness" in searched
+    assert passages.keyword_hits(["thickness", "Rs"], searched) == 2
+
+
+def test_a_latex_greek_command_is_read_as_its_letter():
+    # PaddleOCR's table header; delatex used to erase "$ \rho $" whole, and with it the resistivity column.
+    header = text(0, r"<td>d nm</td><td>$ \rho $ ohm-cm</td><td>n / $ cm^{{3}} $</td>")
+    assert passages.keyword_hits(RESISTIVITY.keywords, passages.searchable(header)) == 1
+    assert "λ < 400" in passages.searchable(text(1, r"absorption in the UV ( $ \lambda < 400 $ nm)"))
+    # The Greek letter is read before the subscript fold, which would otherwise glue "\rhos" into one command.
+    assert "ρs" in passages.searchable(text(2, r"$ \rho_{s} $"))
+    assert "ρnp" in passages.searchable(text(3, r"effective density ( $ \rho_{NP} $)"))
+    # A longer command that starts like a letter's name is not that letter.
+    assert "ρ" not in passages.searchable(text(4, r"$ \rhox $"))
+
+
+@pytest.mark.parametrize(
+    ("written", "keyword"),
+    [
+        ("<td>Sheet resis- tance (Ω/sq)</td>", "sheet resistance"),  # MinerU
+        ("the average trans- mittance of the film was 88 %", "transmittance"),
+    ],
+)
+def test_a_word_broken_by_a_line_end_hyphen_is_rejoined(written, keyword):
+    assert passages.keyword_hits([keyword], passages.searchable(text(0, written))) == 1
+
+
+@pytest.mark.parametrize(
+    "written",
+    ["Al- and Ga-doped ZnO", "oxygen- and argon-rich", "UV- Vis spectra", "high- and low-valence doping"],
+)
+def test_a_suspended_hyphen_and_a_two_letter_prefix_are_not_joined(written):
+    assert passages.searchable(text(0, written)) == written.lower()
 
 
 def test_a_unit_written_in_latex_is_recognised():
