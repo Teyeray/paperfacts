@@ -36,6 +36,8 @@ const ATTRIBUTE_LABEL = {
   named_values: "文字表述的数值",
   prompt_categories: "提示中的类别",
   figure_readable: "可从图中读数",
+  figure_spectrum_axis: "光谱横轴",
+  figure_spectrum_points: "光谱读数位置",
   display_format: "显示格式",
   missing_condition_note_zh: "缺条件说明",
   description: "给模型的说明",

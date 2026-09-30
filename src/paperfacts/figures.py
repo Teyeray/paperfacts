@@ -17,6 +17,9 @@ Boundaries, all from the measurement in ``.omc/research/figure-reading-accuracy.
   MinerU gives a panel of a multi-panel figure the caption "(a) (c)", the neighbours' labels) names a film
   property by one of its retrieval keywords. The model's own refusal handles the charts that are not
   property-vs-condition after all (spectra, XRD patterns); it refused both negatives in the measurement.
+- **A spectrum only where the profile declares one.** A field with a ``figure_spectrum_axis`` adds a third answer
+  to the question: a curve read at the fixed x values the profile declares, never at x values the model picks. A
+  declared range becomes the code's mean of every sampled x, and none at all when one of them was not read.
 - **The model quotes, the code converts.** y comes back in the axis's own unit, multiplier included
   ("10^2 ohm/sq"), and :func:`paperfacts.normalize.convert_to_canonical` does the arithmetic.
 
@@ -39,7 +42,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperfacts.errors import Cancelled, LlmOfflineMiss
-from paperfacts.fields import FieldSpec
+from paperfacts.fields import FieldSpec, spectrum_xs
 from paperfacts.llm import VisionClient
 from paperfacts.models import Backend, NormalizedBBox, ParsedArtifact, SourceBlock
 from paperfacts.normalize import convert_to_canonical
@@ -88,10 +91,9 @@ The image may be one panel of a multi-panel figure. The figure caption is:
 Only these {property_noun} are of interest (name: meaning, usual unit):
 {fields}
 
-Step 1 - decide whether this chart is a "property-vs-condition" chart: {chart_definition}, with one discrete marker per sample.
-Spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are NOT property-vs-condition charts. If it is not one, or none of its y axes plots one of the properties listed above, output {{"chart_type": "not_property_vs_condition", "reason": "..."}} and nothing else.
+{step_1}
 
-Step 2 - otherwise read the chart carefully:
+Step 2 - {step_2_opening} read the chart carefully:
 - Read every plotted data MARKER (squares, circles, triangles, stars...). Do NOT read points from fitted curves, splines or guide-to-the-eye lines; a line vertex without a marker is not a data point. Legend symbols are not data.
 - For each y axis, determine the scale from the tick labels: linear or logarithmic (ticks like 10^1, 10^2, 10^3 evenly spaced => log; interpolate logarithmically between them). Note axis breaks.
 - For each y axis, set "field" to the name of the listed property it plots, or null if it plots none of them. Report points only for series on an axis whose field is not null.
@@ -104,13 +106,43 @@ Step 2 - otherwise read the chart carefully:
 - Include error-bar half-width if error bars are visible, else null.
 - Per point, give a confidence in [0,1] for the y reading.
 
-Output ONLY this JSON (strict JSON: no comments, no trailing text):
+{marker_output} (strict JSON: no comments, no trailing text):
 {{"chart_type": "property_vs_condition",
  "x_axis": {{"quantity": "...", "unit": "...", "scale": "linear|log|categorical"}},
  "y_axes": [{{"id": "left", "field": "<listed property name or null>", "quantity": "...", "unit": "... (with multiplier)", "scale": "linear|log", "broken": false}}],
  "series": [{{"label": "legend text or quantity name", "y_axis": "left|right|right2", "marker": "..."}}],
  "points": [{{"series": "<label>", "x": <number or string>, "x_on_tick": true, "y": <number>, "y_error": <number or null>, "confidence": <0..1>}}]}}
+{spectrum_step}"""
+
+# Step 1 when no listed field declares a spectrum axis: spectra are refused like any other non-marker chart. With the
+# openings below, this is the question exactly as it was measured, byte for byte.
+MARKER_STEP_1 = """\
+Step 1 - decide whether this chart is a "property-vs-condition" chart: {chart_definition}, with one discrete marker per sample.
+Spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are NOT property-vs-condition charts. If it is not one, or none of its y axes plots one of the properties listed above, output {{"chart_type": "not_property_vs_condition", "reason": "..."}} and nothing else."""
+MARKER_OPENINGS = {"step_2_opening": "otherwise", "marker_output": "Output ONLY this JSON", "spectrum_step": ""}
+
+# Step 1 when a listed field declares a spectrum axis: three ways, and the spectrum is read at fixed x in Step 2b.
+SPECTRUM_STEP_1 = """\
+Step 1 - decide whether this chart is a "property-vs-condition" chart: {chart_definition}, with one discrete marker per sample; or a spectrum: a continuous curve of {spectrum_curves}, one curve per legend entry. Photographs, micrographs or schematics drawn inside the chart area are insets: ignore them.
+Other spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are neither. If it is neither, or none of its y axes plots one of the properties listed above, output {{"chart_type": "not_property_vs_condition", "reason": "..."}} and nothing else."""
+# The model reports y at the x values the code chose, and only there: a range's mean is the code's arithmetic.
+SPECTRUM_STEP = """
+Step 2b - if it is a spectrum, read no markers. For each legend curve, read y where the curve crosses each of these x values, and at no other x:
+{spectrum_xs}
+Read only the curves that plot a listed property itself. A curve of another quantity drawn against the same axis (its legend or label names that other quantity) is not one of them: leave it out. Set "field" on each curve to the listed property it plots.
+Leave out an x the curve does not reach. Set "field" on each y axis, decide which axis each curve belongs to, and report y in the units printed on that axis, exactly as in Step 2. Per reading, give a confidence in [0,1] for the y reading.
+For a spectrum, output ONLY this JSON instead (strict JSON: no comments, no trailing text):
+{{"chart_type": "spectrum",
+ "x_axis": {{"quantity": "...", "unit": "...", "scale": "linear|log"}},
+ "y_axes": [{{"id": "left", "field": "<listed property name or null>", "quantity": "...", "unit": "... (with multiplier)", "scale": "linear|log", "broken": false}}],
+ "curves": [{{"label": "legend text", "field": "<listed property name>", "y_axis": "left|right|right2", "readings": [{{"x": <number>, "y": <number>, "confidence": <0..1>}}]}}]}}
 """
+SPECTRUM_OPENINGS = {
+    "step_2_opening": "for a property-vs-condition chart,",
+    "marker_output": "For a property-vs-condition chart, output ONLY this JSON",
+}
+# What every spectrum reading says about itself.
+SPECTRUM_NOTE = "curve read by eye at fixed x; range values are the code's mean of those readings"
 
 
 # ---- Stored result -----------------------------------------------------------------------------------
@@ -118,10 +150,17 @@ Output ONLY this JSON (strict JSON: no comments, no trailing text):
 PanelStatus = Literal["read", "not_chart", "unreadable", "error"]
 
 
+ReadingKind = Literal["marker", "spectrum_point", "spectrum_mean"]
+
+
 class FigureReading(BaseModel):
-    """One marker read off one chart panel, with the figure block it came from as its citation."""
+    """One marker, or one value of a spectrum curve, read off one chart panel, with the figure block it came from
+    as its citation."""
 
     model_config = ConfigDict(frozen=True)
+
+    # "marker" is also every reading stored before spectra were read.
+    kind: ReadingKind = "marker"
 
     source_id: str
     page: int = Field(ge=0, description="0-based page")
@@ -361,11 +400,34 @@ def select_panels(blocks: Sequence[SourceBlock], profile: DomainProfile, *, limi
     return tuple(chosen)
 
 
+def _sampled_xs(spec: FieldSpec) -> tuple[float, ...]:
+    """Every x a spectrum of ``spec`` is read at, in order: the single points and each range's steps."""
+    return tuple(sorted({x for point in spec.figure_spectrum_points for x in spectrum_xs(point)}))
+
+
 def user_prompt(caption: str, fields: Sequence[FieldSpec], slots: FigureSlots) -> str:
     """The question for one panel. ``str.format`` inserts the caption, the field list and the profile's chart
-    slots verbatim, never scanning them again, so braces in any of them reach the model as written."""
+    slots verbatim, never scanning them again, so braces in any of them reach the model as written: each step is
+    rendered first and inserted as finished text.
+
+    The spectrum question is asked only when a listed field declares a spectrum axis; otherwise the question is
+    the marker-only one, unchanged."""
     listed = "\n".join(f"- {spec.name}: {spec.description} ({spec.canonical_unit})" for spec in fields)
-    return USER_PROMPT.format(caption=caption, fields=listed, **asdict(slots))
+    slot_values = asdict(slots)
+    spectral = [spec for spec in fields if spec.figure_spectrum_axis is not None]
+    if not spectral:
+        step_1 = MARKER_STEP_1.format(chart_definition=slots.chart_definition)
+        return USER_PROMPT.format(caption=caption, fields=listed, step_1=step_1, **MARKER_OPENINGS, **slot_values)
+    curves = " or ".join(f"{spec.name} against {spec.figure_spectrum_axis}" for spec in spectral)
+    step_1 = SPECTRUM_STEP_1.format(chart_definition=slots.chart_definition, spectrum_curves=curves)
+    xs = "\n".join(
+        f"- {spec.name} (x = {spec.figure_spectrum_axis}): {', '.join(f'{x:g}' for x in _sampled_xs(spec))}"
+        for spec in spectral
+    )
+    spectrum_step = SPECTRUM_STEP.format(spectrum_xs=xs)
+    return USER_PROMPT.format(
+        caption=caption, fields=listed, step_1=step_1, spectrum_step=spectrum_step, **SPECTRUM_OPENINGS, **slot_values
+    )
 
 
 # ---- Parsing the answer ---------------------------------------------------------------------------------
@@ -439,8 +501,13 @@ def parse_answer(text: str) -> dict[str, Any]:
             start = cleaned.find("{", start + 1)
     if not answers:
         raise ValueError(f"no chart answer in the reply: {text[:200]!r}")
-    with_points = [answer for answer in answers if isinstance(answer.get("points"), list) and answer["points"]]
+    with_points = [answer for answer in answers if _has_data(answer)]
     return (with_points or answers)[-1]
+
+
+def _has_data(answer: dict[str, Any]) -> bool:
+    """Whether an answer carries readings: a marker chart's points or a spectrum's curves."""
+    return any(isinstance(answer.get(key), list) and answer[key] for key in ("points", "curves"))
 
 
 def _no_constant(name: str) -> float:
@@ -474,6 +541,25 @@ class _Series(BaseModel):
     y_axis: str | None = None
 
 
+class _Curve(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    label: str | None = None
+    # The property the curve itself plots: an axis in "%" can carry curves of several quantities at once.
+    field: str | None = None
+    y_axis: str | None = None
+    # Validated entry by entry (``_items``), so one malformed reading costs only itself.
+    readings: list[Any] = Field(default_factory=list)
+
+
+class _CurveReading(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    x: float | str | None = None
+    y: float = Field(allow_inf_nan=False)
+    confidence: float | None = None
+
+
 class _Point(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
@@ -493,8 +579,12 @@ def is_refusal(answer: dict[str, Any]) -> bool:
     """
     if answer.get("chart") is False:
         return True
-    kind = re.sub(r"[^a-z]", "", str(answer.get("chart_type") or "").lower())
-    return kind.startswith("not") or (kind != "propertyvscondition" and not answer.get("points"))
+    kind = _chart_kind(answer)
+    return kind.startswith("not") or (kind not in {"propertyvscondition", "spectrum"} and not _has_data(answer))
+
+
+def _chart_kind(answer: dict[str, Any]) -> str:
+    return re.sub(r"[^a-z]", "", str(answer.get("chart_type") or "").lower())
 
 
 def _items[M: BaseModel](answer: dict[str, Any], key: str, model: type[M]) -> list[M]:
@@ -530,6 +620,22 @@ def _fold(text: str | None) -> str:
     return (text or "").strip().casefold()
 
 
+def _axes(answer: dict[str, Any]) -> tuple[dict[str, _Axis], _Axis | None]:
+    """The answer's y axes by folded id (by position when it has none), and its only axis when it has one."""
+    described = _items(answer, "y_axes", _Axis)
+    axes = {_fold(axis.id) or f"#{index}": axis for index, axis in enumerate(described)}
+    if len(described) == 1 and not _fold(described[0].id):
+        axes["left"] = described[0]
+    return axes, described[0] if len(described) == 1 else None
+
+
+def _x_axis(answer: dict[str, Any]) -> _XAxis:
+    try:
+        return _XAxis.model_validate(answer.get("x_axis") or {})
+    except ValidationError:
+        return _XAxis()
+
+
 def readings_from_answer(
     answer: dict[str, Any], request: PanelRequest, units: UnitRegistry
 ) -> tuple[tuple[FigureReading, ...], int]:
@@ -545,19 +651,14 @@ def readings_from_answer(
     to the answer's single axis. The one allowance: a lone id-less axis answers to "left", the prompt's
     default, since there is nothing else it could mean.
     """
+    if _chart_kind(answer) == "spectrum" or (answer.get("curves") and not answer.get("points")):
+        return _spectrum_readings(answer, request, units)
     specs = {spec.name.lower(): spec for spec in request.fields}
-    described = _items(answer, "y_axes", _Axis)
-    axes = {_fold(axis.id) or f"#{index}": axis for index, axis in enumerate(described)}
-    if len(described) == 1 and not _fold(described[0].id):
-        axes["left"] = described[0]
+    axes, only_axis = _axes(answer)
     series = {_fold(entry.label): entry for entry in _items(answer, "series", _Series)}
     points = _items(answer, "points", _Point)
-    try:
-        x_axis = _XAxis.model_validate(answer.get("x_axis") or {})
-    except ValidationError:
-        x_axis = _XAxis()
+    x_axis = _x_axis(answer)
     series_count = max(len(series), len({point.series for point in points}))
-    only_axis = described[0] if len(described) == 1 else None
 
     readings: list[FigureReading] = []
     unplaced = 0
@@ -605,6 +706,101 @@ def readings_from_answer(
                 note="; ".join(notes) or None,
             )
         )
+    return tuple(readings), unplaced
+
+
+def _as_x(value: float | str | None) -> float | None:
+    """A curve reading's x as a number: the model may write 550 or "550"."""
+    if isinstance(value, float):
+        return value
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return None
+
+
+def _declared_axis(axis: str) -> tuple[str, str | None]:
+    """ "wavelength (nm)" -> ("wavelength", "nm"): the quantity and unit a spectrum point's x is declared in."""
+    match = re.fullmatch(r"(?P<quantity>.*?)\s*[(\[](?P<unit>[^()\[\]]+)[)\]]\s*", axis)
+    if match is None or not match["quantity"]:
+        return axis.strip(), None
+    return match["quantity"], match["unit"].strip()
+
+
+def _spectrum_readings(
+    answer: dict[str, Any], request: PanelRequest, units: UnitRegistry
+) -> tuple[tuple[FigureReading, ...], int]:
+    """A spectrum answer as readings: per curve and declared point, the y at a single x, or the code's mean over a
+    range's sampled x values. A mean is kept only when every sampled x of the range was read, since the mean of a
+    partly covered range is the mean of another window. Axes and curves are placed as markers are
+    (:func:`readings_from_answer`); the second value counts the curve readings placed on no described axis."""
+    specs = {spec.name.lower(): spec for spec in request.fields if spec.figure_spectrum_axis is not None}
+    axes, only_axis = _axes(answer)
+    readings: list[FigureReading] = []
+    unplaced = 0
+    curves = _items(answer, "curves", _Curve)
+    for curve in curves:
+        read = _items({"readings": curve.readings}, "readings", _CurveReading)
+        named = _fold(curve.y_axis)
+        axis = axes.get(named) if named else only_axis
+        if axis is None:
+            unplaced += len(read)
+            continue
+        # The curve's own "field" decides when the answer gives one, even as null: a shared axis names one
+        # property, while each curve on it may plot another. Only an answer without it falls back to the axis.
+        field = curve.field if "field" in curve.model_fields_set else axis.field
+        spec = specs.get((field or "").strip().lower())
+        if spec is None or spec.figure_spectrum_axis is None:
+            continue  # a property nobody asked a spectrum of
+        sampled = _sampled_xs(spec)
+        at: dict[float, _CurveReading] = {}
+        for entry in read:
+            x = _as_x(entry.x)
+            target = next((t for t in sampled if x is not None and abs(x - t) <= 1e-6 * max(1.0, abs(t))), None)
+            if target is not None:
+                at.setdefault(target, entry)
+        quantity, x_unit = _declared_axis(spec.figure_spectrum_axis)
+        unit_raw = _axis_unit(axis.unit)
+        for point in spec.figure_spectrum_points:
+            xs = spectrum_xs(point)
+            if not all(x in at for x in xs):
+                continue
+            taken = [at[x] for x in xs]
+            y_raw = sum(entry.y for entry in taken) / len(taken)
+            confidences = [entry.confidence for entry in taken if entry.confidence is not None]
+            confidence = min(confidences) if confidences else None
+            value, unit, note = convert_to_canonical(spec, y_raw, unit_raw, units)
+            notes = [SPECTRUM_NOTE, *([note] if note else [])]
+            if confidence is not None and confidence < LOW_CONFIDENCE:
+                notes.append(f"model confidence {confidence:g}")
+            if axis.broken:
+                notes.append("broken axis")
+            readings.append(
+                FigureReading(
+                    kind="spectrum_point" if len(xs) == 1 else "spectrum_mean",
+                    source_id=request.block.source_id,
+                    page=request.block.page,
+                    bbox=request.block.bbox,
+                    figure=request.group.label,
+                    caption=request.group.caption,
+                    panel=request.panel,
+                    field=spec.name,
+                    series=curve.label,
+                    x_quantity=quantity,
+                    x_value=point.split("/")[0],
+                    x_unit=x_unit,
+                    y_raw=y_raw,
+                    y_unit_raw=unit_raw,
+                    y=value,
+                    unit=unit if value is not None else None,
+                    scale="log" if (axis.scale or "").lower().startswith("log") else "linear",
+                    # The marker rule: a log axis or a crowded panel doubles the error, whether it plots markers
+                    # or curves.
+                    precision=precision_for(axis.scale or "linear", len(curves)),
+                    confidence=confidence,
+                    note="; ".join(notes),
+                )
+            )
     return tuple(readings), unplaced
 
 

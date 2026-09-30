@@ -11,6 +11,7 @@ Run from the repository root only when a prompt change is intended:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -36,6 +37,10 @@ ANSWERS = response_models(PROFILE.prompt.paper_key, PROFILE.prompt.no_samples_ke
 # Fixed inputs: the prompts' own text is what is pinned, so the inputs only have to be stable.
 SAMPLE_LIST = "- id: S1 | label: ITO at 100 W | conditions: power=100 W\n- id: S2 | label: - | conditions: -"
 MARKDOWN = "<!-- source: mineru_p0_b0 -->\nThe film was 120 nm thick.\n\n<!-- source: mineru_p0_b1 -->\nTable 1"
+# The profile's chart fields with their spectrum declarations removed.
+MARKER_FIELDS = tuple(
+    dataclasses.replace(spec, figure_spectrum_axis=None, figure_spectrum_points=()) for spec in PROFILE.figure_fields
+)
 CAPTION = "Fig. 2 (a) Sheet resistance and (b) transmittance of films sputtered at 50-200 W."
 
 # A rejected answer goes back to the model inside the repair prompt as ``str(ValidationError)``, so pydantic's
@@ -95,6 +100,8 @@ def snapshot() -> dict[str, str]:
         "field_table": prompts.render_field_table(PROFILE.fields, PROFILE.prompt.implausible_origin),
         "figures_system": figures.SYSTEM_PROMPT,
         "figures_user": figures.user_prompt(CAPTION, PROFILE.figure_fields, PROFILE.figures),
+        # The same panel with no field declaring a spectrum: the marker-only question, as it was before spectra.
+        "figures_user:markers": figures.user_prompt(CAPTION, MARKER_FIELDS, PROFILE.figures),
     }
     for spec in PROFILE.fields:
         rendered[f"field_user:{spec.name}"] = prompts.field_user_prompt(

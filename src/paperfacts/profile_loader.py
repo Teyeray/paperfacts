@@ -41,6 +41,7 @@ from paperfacts.fields import (
     FieldSpec,
     RangePolicy,
     field_roles,
+    spectrum_xs,
 )
 from paperfacts.profile import (
     COMPUTED_MARKERS,
@@ -660,6 +661,9 @@ _KIND_ATTRIBUTES: Mapping[str, tuple[FieldKind, ...]] = {
     "after_clause": ("numeric",),
     # A phrase read as one number in the canonical unit; an interval has two ends to state.
     "named_values": ("numeric",),
+    # A curve's y is read as one number at a time, like a marker.
+    "figure_spectrum_axis": ("numeric",),
+    "figure_spectrum_points": ("numeric",),
 }
 # The kinds a list field may have, and the attributes it must leave at their default: a list of numbers would need
 # its own tolerance, condition and chart semantics, which do not exist yet.
@@ -677,6 +681,8 @@ _NOT_WITH_MANY = (
     "after_clause",
     "display_format",
     "named_values",
+    "figure_spectrum_axis",
+    "figure_spectrum_points",
 )
 # At most this many phrases per field: each is compared with every quote of the field.
 MAX_NAMED_VALUES = 50
@@ -758,6 +764,8 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         "after_clause": choice("after_clause", get_args(AfterClause)),
         "cardinality": choice("cardinality", get_args(Cardinality)),
         "named_values": _named_values(entry, where),
+        "figure_spectrum_axis": text_or_none("figure_spectrum_axis"),
+        "figure_spectrum_points": _spectrum_points(entry, where),
     }
     changed = {key for key, value in stated.items() if value != _FIELD_DEFAULTS[key]}
 
@@ -789,6 +797,15 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         raise ConfigError(f"{where}: missing_condition_note_zh must be a non-empty string when present")
     if figure_readable and stated["canonical_unit"] is None:
         raise ConfigError(f"{where}: figure_readable needs a numeric field with a canonical_unit")
+    spectrum = [key for key in ("figure_spectrum_axis", "figure_spectrum_points") if key in changed]
+    if spectrum and not figure_readable:
+        raise ConfigError(f"{where}: {', '.join(spectrum)} needs figure_readable: true")
+    if len(spectrum) == 1:
+        # An axis with nowhere to read it asks for curves and keeps nothing; points without an axis are never asked.
+        raise ConfigError(f"{where}: figure_spectrum_axis and figure_spectrum_points go together")
+    axis = stated["figure_spectrum_axis"]
+    if axis is not None and not axis.strip():
+        raise ConfigError(f"{where}: figure_spectrum_axis must be a non-empty string when present")
     references = text_or_none("references")
     if (kind == "reference") != (references is not None):
         # Which entity a reference names is the field's whole meaning; any other kind names none.
@@ -837,6 +854,23 @@ def _named_values(entry: Mapping[str, Any], where: str) -> tuple[tuple[str, floa
         folded[key] = phrase
         parsed.append((phrase.strip(), float(value)))
     return tuple(parsed)
+
+
+def _spectrum_points(entry: Mapping[str, Any], where: str) -> tuple[str, ...]:
+    """``["550", "400-800/50"]``: where a spectrum of the field is read. A range must name its sampling step."""
+    if "figure_spectrum_points" not in entry:
+        return _FIELD_DEFAULTS["figure_spectrum_points"]
+    declared = entry["figure_spectrum_points"]
+    if not isinstance(declared, list) or not declared or not all(isinstance(point, str) for point in declared):
+        raise ConfigError(f"{where}: figure_spectrum_points must be a non-empty list of strings, got {declared!r}")
+    for point in declared:
+        try:
+            spectrum_xs(point)
+        except ValueError as exc:
+            raise ConfigError(f"{where}: figure_spectrum_points: {exc}") from None
+    if len(set(declared)) != len(declared):
+        raise ConfigError(f"{where}: figure_spectrum_points lists a point twice")
+    return tuple(declared)
 
 
 def _in_range(bounds: tuple[float | None, float | None], value: float) -> bool:
