@@ -8,12 +8,14 @@ is left out -- not how a dataset is built (``test_dataset.py``).
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from paperfacts.columns import field_columns
 from paperfacts.config import Settings
@@ -25,6 +27,7 @@ from paperfacts.web.app import create_app
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import JobManager
 from paperfacts.workflow import stage_names
+from support.extraction import make_lane
 from support.factories import make_blank_pdf
 from support.profiles import SHIPPED_PROFILE_PATH, shipped_profile
 from support.web import (
@@ -342,3 +345,17 @@ def test_the_corpus_workbook_is_rebuilt_from_the_datasets(client: TestClient, li
     assert response.content.startswith(b"PK")  # a real xlsx (a zip), built on demand rather than read from disk
     assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
     assert 'filename="tco-corpus.xlsx"' in response.headers["content-disposition"]
+
+
+def test_the_corpus_workbook_names_a_reviews_article_type(client: TestClient, library: Library, parsed_only: str):
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only))
+    lane = make_lane(document_id=DOC_SHA, extractor_key=library.extractor_key)
+    lane.model_copy(update={"article_type": "review"}).write(
+        library.layout.extraction_path(DOC_SHA, "mineru", library.extractor_key)
+    )
+
+    response = client.get("/api/dataset.xlsx")
+
+    sheet = load_workbook(io.BytesIO(response.content))["论文数据"]
+    columns = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.cell(2, columns["文献类型"]).value == "综述"

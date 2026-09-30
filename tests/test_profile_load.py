@@ -21,12 +21,12 @@ from paperfacts.fields import FieldSpec
 from paperfacts.profile import FigureSlots, PromptSlots
 from paperfacts.profile_loader import load_profile, profile_path
 from paperfacts.prompts import (
+    article_note,
     extraction_system_prompt,
     field_system_prompt,
     inventory_system_prompt,
     matching_system_prompt,
 )
-from paperfacts.units import UnitRegistry
 from support.profiles import make_profile
 
 # The attributes that restate a special case the code made by field name; everything else must equal the
@@ -40,6 +40,15 @@ AFTER_B0 = {
     "entity": None,
     "references": None,
     "named_values": [],
+}
+# Post-B0 attributes a field deliberately moved off its B0 behaviour, with the value it now has; every other field
+# keeps the AFTER_B0 value. substrate_temperature: "at room temperature (RT)" (coatings-13-01719) reads as 25 ℃.
+EDITED_AFTER_B0 = {
+    ("substrate_temperature", "named_values"): [
+        ["room temperature", 25.0],
+        ["RT", 25.0],
+        ["ambient temperature", 25.0],
+    ],
 }
 B0 = json.loads(
     (Path(__file__).parent / "fixtures" / "b0_field_table" / "field_table.json").read_text(encoding="utf-8")
@@ -57,7 +66,9 @@ def test_the_tco_fields_are_the_b0_field_table_attribute_by_attribute(tco_profil
     assert {attribute.name for attribute in dataclasses.fields(FieldSpec)} == set(B0_FIELDS[0]) | set(AFTER_B0)
     for loaded, recorded in zip(tco_profile.fields, B0_FIELDS, strict=True):
         for attribute, value in as_json(loaded).items():
-            if attribute in AFTER_B0:
+            if (loaded.name, attribute) in EDITED_AFTER_B0:
+                assert value == EDITED_AFTER_B0[loaded.name, attribute], (loaded.name, attribute)
+            elif attribute in AFTER_B0:
                 assert value == AFTER_B0[attribute], (loaded.name, attribute)
             elif attribute not in NAME_BASED:
                 assert value == recorded[attribute], (loaded.name, attribute)
@@ -108,6 +119,8 @@ def test_every_tco_slot_reaches_the_prompts(tco_profile):
             inventory_system_prompt(tco_profile),
             field_system_prompt(tco_profile),
             matching_system_prompt(tco_profile),
+            # Only a review's inventory question carries this note.
+            article_note(tco_profile, "review"),
         )
     )
     for slot in dataclasses.fields(PromptSlots):
@@ -118,11 +131,12 @@ def test_every_tco_slot_reaches_the_prompts(tco_profile):
         assert getattr(tco_profile.figures, slot.name) in chart, slot.name
 
 
-def test_the_tco_profile_declares_no_units_of_its_own_only_the_gas_suffixes(tco_profile):
-    assert tco_profile.units.declared == ()
+def test_the_tco_profile_only_extends_ohms_per_square_and_names_the_gas_suffixes(tco_profile):
+    # One extension: the "Ω cm^-2" misprint family read as Ω/sq (derrar2022); no unit of its own.
+    assert [(unit.canonical, unit.extends_builtin) for unit in tco_profile.units.declared] == [("Ω/sq", True)]
     # Exactly the gas names the code set aside for every domain before a profile declared them.
-    assert tco_profile.units == UnitRegistry(ignored_suffixes=("Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"))
-    assert tco_profile.units.material() == [{"ignored_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"]}]
+    assert tco_profile.units.ignored_suffixes == ("Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air")
+    assert tco_profile.units.material()[-1] == {"ignored_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"]}
 
 
 # ---- Selection -------------------------------------------------------------------------

@@ -24,6 +24,7 @@ from paperfacts.profile import DomainProfile
 from paperfacts.readings import shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout
+from paperfacts.stored import article_type
 from paperfacts.supervisor import carry_supervision
 from paperfacts.threads import ContextThreadPoolExecutor
 from paperfacts.workbook import write_dataset
@@ -141,6 +142,7 @@ def run_batch(
     # Keyed by input position, and read back sorted, so completion order never reaches the output.
     datasets: dict[int, DocumentDataset] = {}
     figure_rows: dict[int, tuple[Mapping[str, object], ...]] = {}
+    article_types: dict[str, str | None] = {}
     failures: dict[int, dict[str, str]] = {}
 
     def report(stage: str, status: StageStatus, detail: str) -> None:
@@ -157,7 +159,11 @@ def run_batch(
         return mark
 
     def settle(
-        index: int, prefix: str, outcome: DocumentDataset | dict[str, str], rows: Sequence[Mapping[str, object]] = ()
+        index: int,
+        prefix: str,
+        outcome: DocumentDataset | dict[str, str],
+        rows: Sequence[Mapping[str, object]] = (),
+        kind: str | None = None,
     ) -> None:
         if isinstance(outcome, DocumentDataset):
             # Its rows are written, with the unanswered cells refused, but the paper is not finished.
@@ -167,6 +173,7 @@ def run_batch(
         with results_lock:
             if isinstance(outcome, DocumentDataset):
                 datasets[index], figure_rows[index] = outcome, tuple(rows)
+                article_types[outcome.document_id] = kind
             else:
                 failures[index] = outcome
             # Export failures are fatal: claiming progress without a writable output would be misleading.
@@ -177,6 +184,7 @@ def run_batch(
                 profile,
                 failures=[failures[i] for i in sorted(failures)],
                 figure_rows=[row for i in sorted(figure_rows) for row in figure_rows[i]],
+                article_types=article_types,
             )
 
     def failure(document_id: str, path: Path, exc: Exception) -> dict[str, str]:
@@ -210,6 +218,7 @@ def run_batch(
             if export_only:
                 dataset = export_document(document, settings, profile)
                 figures = shown_figures(document.document_id, document.display_filename, settings, profile)
+                kind = article_type(DataLayout(settings.data_root), document.document_id, dataset.extractor_key)
             else:
                 result = run_document(
                     document,
@@ -220,12 +229,13 @@ def run_batch(
                     on_stage=report_stage(prefix),
                 )
                 dataset, figures = result.dataset, result.figures
+                kind = result.lanes[BACKEND_A].article_type
         except Cancelled:
             report(prefix, "skipped", "stopped with the batch; its finished stages are cached")
         except (PaperFactsError, OSError, ValueError) as exc:
             settle(index, prefix, failure(document.document_id, document.pdf_path, exc))
         else:
-            settle(index, prefix, dataset, figures.rows if figures is not None else ())
+            settle(index, prefix, dataset, figures.rows if figures is not None else (), kind)
 
     if jobs == 1 or len(queue) <= 1:
         # On the calling thread, exactly as the serial loop always ran: Ctrl-C interrupts the paper at once.

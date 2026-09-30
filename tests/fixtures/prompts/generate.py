@@ -83,6 +83,11 @@ def snapshot() -> dict[str, str]:
         "extraction_user": prompts.extraction_user_prompt(MARKDOWN),
         "inventory_system": prompts.inventory_system_prompt(PROFILE),
         "inventory_user": prompts.inventory_user_prompt(MARKDOWN),
+        # A paper whose front matter marks it as a review (extract.detect_article_type): the note both lanes carry.
+        "inventory_user:review": prompts.inventory_user_prompt(MARKDOWN, prompts.article_note(PROFILE, "review")),
+        "extraction_user:review": prompts.extraction_user_prompt(
+            MARKDOWN, prompts.document_article_note(PROFILE, "review")
+        ),
         "field_system": prompts.field_system_prompt(PROFILE),
         "matching_system": prompts.matching_system_prompt(PROFILE),
         "matching_user": prompts.matching_user_prompt("mineru", "- S1", "paddleocr_vl", "- S1"),

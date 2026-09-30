@@ -115,6 +115,7 @@ ENTITY_SLOTS = (
     "partial_collective_example",
     "multi_condition_example",
     "sample_list_heading",
+    "article_type_hint",
 )
 _ENTITY_KEYS = ("name", "label_zh", "prompt", "retrieval")
 # Names an entity may not take: the paper-level and unplaced scopes of a comparison and a vote.

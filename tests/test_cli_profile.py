@@ -126,6 +126,8 @@ def test_every_command_runs_under_the_profile_flag(
     monkeypatch.setattr("paperfacts.cli.run_batch", _stop(seen))
     monkeypatch.setattr("paperfacts.cli.extract_document", _stop(seen))
     monkeypatch.setattr("paperfacts.cli.compare_document", _stop(seen))
+    # Nothing is parsed here, so no parse says what the paper is.
+    monkeypatch.setattr("paperfacts.cli.document_article_type", lambda document, settings: None)
     monkeypatch.setattr(
         "paperfacts.cli.build_llm_client", lambda settings: contextlib.nullcontext(SimpleNamespace(model="fake-model"))
     )

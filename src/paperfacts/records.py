@@ -431,6 +431,13 @@ class LaneExtraction(BaseModel):
     )
     usage: dict[str, int] = Field(default_factory=dict)
     raw_response: str = Field(default="", description="the model's raw JSON, kept as evidence")
+    # Left out of the file when None, so a lane of an ordinary paper is written as it was before this existed.
+    article_type: str | None = Field(
+        default=None,
+        exclude_if=lambda article_type: article_type is None,
+        description="what the document's front matter marks it as (extract.detect_article_type over both lanes' "
+        "parses), the same in both lanes; None for an ordinary paper and in files written before it was recorded",
+    )
     artifact_sha256: str | None = Field(
         default=None,
         description="ParsedArtifact.content_hash of the parse this lane was extracted from; None in files "

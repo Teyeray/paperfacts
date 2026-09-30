@@ -1,0 +1,123 @@
+{
+ "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+ "backend": "mineru",
+ "backend_version": "3.4.5",
+ "pages": [
+  {
+   "index": 0,
+   "width_pt": 595.2760009765625,
+   "height_pt": 793.7009887695312
+  }
+ ],
+ "blocks": [
+  {
+   "source_id": "mineru_p0_b0",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "mineru",
+   "page": 0,
+   "order": 0,
+   "bbox": {
+    "x1": 0.067,
+    "y1": 0.184,
+    "x2": 0.179,
+    "y2": 0.2
+   },
+   "type": "text",
+   "content": "Critical review",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p0_b1",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "mineru",
+   "page": 0,
+   "order": 1,
+   "bbox": {
+    "x1": 0.065,
+    "y1": 0.206,
+    "x2": 0.707,
+    "y2": 0.229
+   },
+   "type": "title",
+   "content": "TCO/metal/TCO structures for energy and flexible electronics",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p0_b2",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "mineru",
+   "page": 0,
+   "order": 2,
+   "bbox": {
+    "x1": 0.065,
+    "y1": 0.238,
+    "x2": 0.257,
+    "y2": 0.255
+   },
+   "type": "text",
+   "content": "C. Guillén ⁎, J. Herrero",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p0_b3",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "mineru",
+   "page": 0,
+   "order": 3,
+   "bbox": {
+    "x1": 0.065,
+    "y1": 0.262,
+    "x2": 0.46,
+    "y2": 0.274
+   },
+   "type": "text",
+   "content": "Departamento de Energía (CIEMAT), Avda. Complutense 22, Madrid 28040, Spain",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p0_b4",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "mineru",
+   "page": 0,
+   "order": 4,
+   "bbox": {
+    "x1": 0.065,
+    "y1": 0.302,
+    "x2": 0.233,
+    "y2": 0.316
+   },
+   "type": "text",
+   "content": "a r t i c l e i n f o",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p0_b5",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "mineru",
+   "page": 0,
+   "order": 5,
+   "bbox": {
+    "x1": 0.065,
+    "y1": 0.327,
+    "x2": 0.221,
+    "y2": 0.34
+   },
+   "type": "text",
+   "content": "Available online 30 June 201",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  }
+ ],
+ "raw_output_dir": "data/docs/88115225f9bed72f/raw/mineru"
+}
