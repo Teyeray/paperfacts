@@ -30,10 +30,8 @@ from typing import Any
 from paperfacts import extract, passages
 from paperfacts.config import Settings
 from paperfacts.keys import ExtractionOptions
-from paperfacts.models import ParsedArtifact
+from paperfacts.models import BACKENDS, ParsedArtifact
 from paperfacts.profile_loader import load_profile, profile_path
-
-BACKENDS = ("mineru", "paddleocr_vl")
 
 
 def _sample_blocks(docdir: Path, backend: str, lane_key: str | None) -> tuple[frozenset[str], str | None]:

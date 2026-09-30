@@ -41,7 +41,7 @@ from paperfacts.continuation import continuation_partners
 from paperfacts.fields import DIGIT_KINDS, FieldSpec
 from paperfacts.models import SourceBlock
 from paperfacts.profile import RetrievalSpec
-from paperfacts.text import delatex, is_word_edge, normalize_text
+from paperfacts.text import LATEX_WRAPPERS, delatex, is_word_edge, normalize_text
 from paperfacts.units import BUILTIN_RETRIEVAL, UnitRegistry
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,50 @@ _PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
 _DOUBLED_LETTER = re.compile(r"([a-z])\1+")
 # A LaTeX command left over after delatex (\text, \mathrm) splits a unit: "\Omega\cdot\text{cm}".
 _LATEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
+# A Greek letter written as a LaTeX command ("$ \rho $", "\lambda") would be erased as a command above, and with it
+# the symbol the paper names its quantity by. Read first, on the raw content, so "\rho_{s}" becomes "ρ_{s}" before
+# the subscript fold could glue it into "\rhos". An explicit table: Unicode names lambda LAMDA. \mu and \omega are
+# delatex's, which maps them as unit symbols.
+_GREEK = {
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "delta": "δ",
+    "epsilon": "ε",
+    "eta": "η",
+    "theta": "θ",
+    "kappa": "κ",
+    "lambda": "λ",
+    "nu": "ν",
+    "pi": "π",
+    "rho": "ρ",
+    "sigma": "σ",
+    "tau": "τ",
+    "phi": "φ",
+    "chi": "χ",
+    "psi": "ψ",
+}
+_GREEK_COMMAND = re.compile(r"\\(?:var)?(" + "|".join(_GREEK) + r")(?![A-Za-z])")
+# A subscript is part of the symbol it hangs from: MinerU writes "R _ { s }", PaddleOCR "R_{s}", prose "R_s", and
+# all three are the abbreviation "Rs". Folded on the raw content, where braces still bound the subscript (delatex
+# drops them), and with the leading spaces MinerU always writes. MinerU often wraps the letters in a formatting
+# command ("R _ { \mathsf { S } }", "R _ { \mathrm { s q } }"); the wrapper and its braces are dropped, so the
+# result is what PaddleOCR's "R_{S}" gives. The bare form takes one token only, so "R_s of the film" becomes "Rs of
+# the film", never one word.
+_SUBSCRIPT_LETTERS = r"((?:[A-Za-z0-9]\s*){1,8})"
+_BRACED_SUBSCRIPT = re.compile(
+    rf"\s*_\s*\{{\s*(?:{_SUBSCRIPT_LETTERS}|(?:{LATEX_WRAPPERS.pattern})\s*\{{\s*{_SUBSCRIPT_LETTERS}\}}\s*)\}}"
+)
+_BARE_SUBSCRIPT = re.compile(r"_([A-Za-z0-9]{1,8})\b")
+# A hyphen at a line end is either a word broken there ("resis- tance", "trans- mittance") or a compound's own
+# hyphen ("post- annealing temperature", "indium- tin oxide"), and the text does not say which. Keywords are
+# matched against both readings (keyword_hits), so neither "resistance" nor "annealing temperature" is lost. Both
+# halves must be three letters or more and the second not a conjunction, so a suspended hyphen ("Al- and
+# Ga-doped", "oxygen- and argon-") and a short prefix ("UV- Vis") are left as written.
+_HYPHEN_BREAK = re.compile(r"(?<=[a-z]{3})-\s(?!(?:and|or|to)\b)(?=[a-z]{3})")
+# A "%" beside a letter in a keyword ("T%", "%T", "wt%") also meets the space or bracket a table header puts
+# between them ("T %", "T (%)").
+_PERCENT_BESIDE_LETTER = re.compile(r"(?P<after>(?<=[^\W\d_])%)|%(?=[^\W\d_])")
 
 
 def _pattern(keyword: str) -> re.Pattern[str]:
@@ -76,23 +120,44 @@ def _pattern(keyword: str) -> re.Pattern[str]:
     Japanese character (:func:`paperfacts.text.is_word_edge`), whose text has no spaces for ``\\b`` to find."""
     cached = _PATTERN_CACHE.get(keyword)
     if cached is None:
-        folded = _DOUBLED_LETTER.sub(r"\1", normalize_text(keyword).lower())
+        folded = _DOUBLED_LETTER.sub(r"\1", normalize_text(_fold_subscripts(keyword)).lower())
         prefix = r"\b" if is_word_edge(folded[:1]) else ""
         suffix = r"\b" if is_word_edge(folded[-1:]) else ""
-        cached = _PATTERN_CACHE[keyword] = re.compile(prefix + re.escape(folded) + suffix)
+        body = _PERCENT_BESIDE_LETTER.sub(
+            lambda m: r"[\s(\[]*%" if m.group("after") else r"%[\s(\[]*", re.escape(folded)
+        )
+        cached = _PATTERN_CACHE[keyword] = re.compile(prefix + body + suffix)
     return cached
 
 
+def _fold_subscripts(text: str) -> str:
+    joined = _BRACED_SUBSCRIPT.sub(lambda m: (m.group(1) or m.group(2)).replace(" ", ""), text)
+    return _BARE_SUBSCRIPT.sub(r"\1", joined)
+
+
 def searchable(block: SourceBlock) -> str:
-    """The block as units are searched for: folded, LaTeX undone (``delatex`` restores "°" and "%"), lower
-    case."""
-    return _LATEX_COMMAND.sub(" ", delatex(normalize_text(block.content))).lower()
+    """The block as units and keywords are searched for: Greek commands read as their letter and subscripts
+    joined to their symbol (on the raw content, while braces still bound a subscript), then folded, LaTeX undone
+    (``delatex`` restores "°" and "%"), lower case.
+
+    A hyphen at a line end is left as written: units are searched on this text, and a unit follows a digit, so
+    neither reading of a break between two words can change what they find. :func:`keyword_hits` reads it both
+    ways."""
+    text = _fold_subscripts(_GREEK_COMMAND.sub(lambda m: _GREEK[m.group(1)], block.content))
+    return _LATEX_COMMAND.sub(" ", delatex(normalize_text(text)).lower())
+
+
+def _hyphen_readings(text: str) -> set[str]:
+    """``text`` with every line-end hyphen read as a compound's hyphen, and with it read as a broken word."""
+    return {_HYPHEN_BREAK.sub("-", text), _HYPHEN_BREAK.sub("", text)}
 
 
 def keyword_hits(keywords: Sequence[str], text: str) -> int:
-    """How many of ``keywords`` occur in ``text`` (a :func:`searchable` string) as whole tokens."""
-    squeezed = _DOUBLED_LETTER.sub(r"\1", text)
-    return sum(1 for keyword in keywords if _pattern(keyword).search(squeezed))
+    """How many of ``keywords`` occur in ``text`` (a :func:`searchable` string) as whole tokens, in either
+    reading of a line-end hyphen."""
+    # Read the hyphen before squeezing doubled letters, which would take "off- axis" below the three-letter guard.
+    readings = {_DOUBLED_LETTER.sub(r"\1", reading) for reading in _hyphen_readings(text)}
+    return sum(1 for keyword in keywords if any(_pattern(keyword).search(reading) for reading in readings))
 
 
 def inventory_blocks(blocks: Sequence[SourceBlock], retrieval: RetrievalSpec) -> list[SourceBlock]:

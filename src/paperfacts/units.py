@@ -290,7 +290,8 @@ def _compiled(pattern: str) -> re.Pattern[str]:
 def derive_retrieval(spellings: Iterable[str]) -> str:
     """A retrieval pattern for spellings as an author wrote them.
 
-    Each spelling must follow a digit, is folded the way :func:`paperfacts.passages.searchable` folds text, has
+    Each spelling must follow a digit, is NFKC-folded and lower-cased like :func:`paperfacts.passages.searchable`
+    text (whose subscript, Greek and line-break folds belong to keyword retrieval and are not repeated here), has
     its runs of spaces made optional (papers write "mAh g-1" and "mAhg-1" alike), and is closed by a word
     boundary when it ends in a letter or digit of a spaced script (:func:`paperfacts.text.is_word_edge`), so
     "V" does not match the start of "Vis"."""
