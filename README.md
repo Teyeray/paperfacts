@@ -202,13 +202,14 @@ against production's `data/`.
 
 **The rail on the left** is the document library, with the drop zone above it. Drag a PDF in, or press
 「选择文件」, and processing starts on upload; 「忽略缓存，全部重跑」 next to the drop zone forces every
-stage to run again. Each library entry shows the paper's name and four badges: 一致 (both lanes agreed),
+stage to run again, and 「上传后识图」 (off by default) also reads the paper's charts with the vision model --
+slower and billed per chart; see [Reading figures](#reading-figures). Each library entry shows the paper's name and four badges: 一致 (both lanes agreed),
 冲突 (the lanes read different values), 不确定 (the pipeline could not decide) and 缺失 (only one lane
 found it), plus one dot per pipeline stage with a done/total count. Several PDFs can be dropped or picked
 at once; each is uploaded as its own request. On a narrow screen the list folds into 「文档列表」.
 「处理全部未完成」 queues every document that can run and is not already finished (exported) under the
 current keys, one job each, in library order; a document already queued or running simply gets its
-existing job back, so pressing it twice costs nothing. Documents with neither a PDF nor a cached parse
+existing job back, so pressing it twice costs nothing. It never reads charts. Documents with neither a PDF nor a cached parse
 are skipped with a reason. Up to `web.max_parallel_documents` (default 3) documents run at once, started in
 the order they were queued; a document is never worked on twice at the same time, so 「强制重跑」 on a
 paper that is already running waits for that run to end.
@@ -220,12 +221,18 @@ gives the table above, any other one row per sample of that type across the pape
 
 **A document page** reads top to bottom.
 
-1. The header carries the display name, the document id, 「强制重跑」 and 「重新处理」.
-2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `figures` (读图, skipped unless
-   switched on), `extract:mineru`, `extract:paddleocr_vl`, `compare`, `export`.
+1. The header carries the display name, the document id, 「强制重跑」, 「识图」 and 「重新处理」. 「识图」 queues the
+   paper with its charts read (parse and extraction come from the caches, so in practice it only reads the charts);
+   once readings under the current settings are stored it reads 「重新识图」, asks first, and re-asks every chart.
+   Both are disabled while the paper's job is active, and 「识图」 without a PDF (the charts are cropped from it).
+2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `figures` (识图: done once readings are
+   stored, skipped with "charts not requested" until someone asks, pending only while `figures.enabled` is on),
+   `extract:mineru`, `extract:paddleocr_vl`, `compare`, `export`.
 3. KPI tiles: the 一致 / 冲突 / 不确定 / 缺失 counts.
 4. 结果表（按样品） — the deliverable.
-5. 图中读数, only when the paper's charts were read; see [Reading figures](#reading-figures).
+5. 图中读数: the chart readings, or a note saying why there are none -- 尚未识图 and how to start it, 正在识图
+   while a chart job runs, 已识图 when the charts gave nothing, or that the last read failed; see
+   [Reading figures](#reading-figures).
 6. 事实对照 and the page viewer beside it.
 7. 样品记录, collapsed.
 
@@ -462,7 +469,7 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 
 | Key | Meaning |
 |---|---|
-| `enabled` | Run the `figures` stage. Default `false`: it costs about a minute of the vision model per chart |
+| `enabled` | Run the `figures` stage in every run. Default `false`: it costs about a minute of the vision model per chart, so the web reads a paper's charts only when asked (「识图」, 「上传后识图」) |
 | `model` | The vision model. Default `qwen3.7-plus`, the only one measured accurate enough; it uses the `llm` endpoint and key |
 | `max_per_document` | At most this many chart panels are read per paper. Default 12 |
 | `dpi` | DPI the chart is cropped from the page at. Default 200 |
@@ -1252,9 +1259,16 @@ different profiles, or consolidating a report under another, is refused rather t
 Many papers give a sample's sheet resistance or resistivity only as a marker on a chart, "Rs vs O2 flow",
 where neither text lane can see it. The `figures` stage, off by default, crops such charts out of the page
 and asks a vision model (`qwen3.7-plus`) to read them. It starts after parsing, runs beside the two
-extraction lanes and is joined before export; switch it on with `figures.enabled`,
-`PAPERFACTS_FIGURES_ENABLED=true` or `--figures`. `--force` does not re-read charts and `--force-figures`
-re-reads only them, since each costs minutes of a different model.
+extraction lanes and is joined before export. It runs only when asked: per paper on the web (「识图」 on the
+document page, 「上传后识图」 at upload; `POST /api/documents/{id}/run?figures=true`, `?force_figures=true` to
+re-ask every chart, or the upload's `figures=true` form field), per run with `--figures`, or in every run with
+`figures.enabled` / `PAPERFACTS_FIGURES_ENABLED=true`. 「处理全部未完成」 (`run-all`) and `deploy.sh --rerun` never ask.
+`--force` does not re-read charts and `--force-figures` re-reads only them, since each costs minutes of a
+different model.
+
+A web job asking for charts is never answered with an active job of the same paper and profile that will not read
+them: the job manager reuses an active job only when it does everything asked (`force`, `figures`,
+`force_figures`), and otherwise queues a new one behind it, whose parse and extraction then hit the caches.
 
 - **Which charts.** Figure and caption blocks that sit together on a page are split among the captions
   that start "Fig." / "Figure" / "FIGURE" by geometry: each panel goes to the nearest such caption on the
