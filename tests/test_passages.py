@@ -297,11 +297,33 @@ def test_a_word_broken_by_a_line_end_hyphen_is_rejoined(written, keyword):
 
 
 @pytest.mark.parametrize(
-    "written",
-    ["Al- and Ga-doped ZnO", "oxygen- and argon-rich", "UV- Vis spectra", "high- and low-valence doping"],
+    ("written", "keywords"),
+    [
+        ("post- annealing temperature of 400 °C", ["annealing temperature", "post-annealing temperature"]),
+        ("post- deposition annealing at 300 °C", ["deposition", "post-deposition annealing"]),
+        ("the off- axis distance was 10 cm", ["off-axis distance"]),
+        ("indium- tin oxide films of 120 nm", ["tin oxide"]),
+    ],
 )
-def test_a_suspended_hyphen_and_a_two_letter_prefix_are_not_joined(written):
-    assert passages.searchable(text(0, written)) == written.lower()
+def test_a_compound_broken_at_its_own_hyphen_still_meets_its_keywords(written, keywords):
+    # Joining every line-end hyphen would read "postannealing temperature" and lose "annealing temperature".
+    assert passages.keyword_hits(keywords, passages.searchable(text(0, written))) == len(keywords)
+
+
+@pytest.mark.parametrize(
+    ("written", "glued"),
+    [
+        ("Al- and Ga-doped ZnO", "aland"),
+        ("oxygen- and argon-rich", "oxygenand"),
+        ("UV- Vis spectra", "uvvis"),
+        ("high- and low-valence doping", "highand"),
+    ],
+)
+def test_a_suspended_hyphen_and_a_two_letter_prefix_are_not_joined(written, glued):
+    readings = passages._hyphen_readings(passages.searchable(text(0, written)))
+
+    assert readings == {written.lower()}
+    assert not any(glued in reading for reading in readings)
 
 
 def test_a_unit_written_in_latex_is_recognised():

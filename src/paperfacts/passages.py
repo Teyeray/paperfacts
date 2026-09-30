@@ -103,9 +103,11 @@ _BRACED_SUBSCRIPT = re.compile(
     rf"\s*_\s*\{{\s*(?:{_SUBSCRIPT_LETTERS}|(?:{LATEX_WRAPPERS.pattern})\s*\{{\s*{_SUBSCRIPT_LETTERS}\}}\s*)\}}"
 )
 _BARE_SUBSCRIPT = re.compile(r"_([A-Za-z0-9]{1,8})\b")
-# A word broken at a line end ("resis- tance", "trans- mittance") is one word. Both halves must be three letters
-# or more and the second not a conjunction, so a suspended hyphen ("Al- and Ga-doped", "oxygen- and argon-") and
-# a short prefix ("UV- Vis") stay apart.
+# A hyphen at a line end is either a word broken there ("resis- tance", "trans- mittance") or a compound's own
+# hyphen ("post- annealing temperature", "indium- tin oxide"), and the text does not say which. Keywords are
+# matched against both readings (keyword_hits), so neither "resistance" nor "annealing temperature" is lost. Both
+# halves must be three letters or more and the second not a conjunction, so a suspended hyphen ("Al- and
+# Ga-doped", "oxygen- and argon-") and a short prefix ("UV- Vis") are left as written.
 _HYPHEN_BREAK = re.compile(r"(?<=[a-z]{3})-\s(?!(?:and|or|to)\b)(?=[a-z]{3})")
 # A "%" beside a letter in a keyword ("T%", "%T", "wt%") also meets the space or bracket a table header puts
 # between them ("T %", "T (%)").
@@ -136,16 +138,26 @@ def _fold_subscripts(text: str) -> str:
 def searchable(block: SourceBlock) -> str:
     """The block as units and keywords are searched for: Greek commands read as their letter and subscripts
     joined to their symbol (on the raw content, while braces still bound a subscript), then folded, LaTeX undone
-    (``delatex`` restores "°" and "%"), lower case, and a word broken at a line end rejoined."""
+    (``delatex`` restores "°" and "%"), lower case.
+
+    A hyphen at a line end is left as written: units are searched on this text, and a unit follows a digit, so
+    neither reading of a break between two words can change what they find. :func:`keyword_hits` reads it both
+    ways."""
     text = _fold_subscripts(_GREEK_COMMAND.sub(lambda m: _GREEK[m.group(1)], block.content))
-    text = _HYPHEN_BREAK.sub("", delatex(normalize_text(text)).lower())
-    return _LATEX_COMMAND.sub(" ", text)
+    return _LATEX_COMMAND.sub(" ", delatex(normalize_text(text)).lower())
+
+
+def _hyphen_readings(text: str) -> set[str]:
+    """``text`` with every line-end hyphen read as a compound's hyphen, and with it read as a broken word."""
+    return {_HYPHEN_BREAK.sub("-", text), _HYPHEN_BREAK.sub("", text)}
 
 
 def keyword_hits(keywords: Sequence[str], text: str) -> int:
-    """How many of ``keywords`` occur in ``text`` (a :func:`searchable` string) as whole tokens."""
-    squeezed = _DOUBLED_LETTER.sub(r"\1", text)
-    return sum(1 for keyword in keywords if _pattern(keyword).search(squeezed))
+    """How many of ``keywords`` occur in ``text`` (a :func:`searchable` string) as whole tokens, in either
+    reading of a line-end hyphen."""
+    # Read the hyphen before squeezing doubled letters, which would take "off- axis" below the three-letter guard.
+    readings = {_DOUBLED_LETTER.sub(r"\1", reading) for reading in _hyphen_readings(text)}
+    return sum(1 for keyword in keywords if any(_pattern(keyword).search(reading) for reading in readings))
 
 
 def inventory_blocks(blocks: Sequence[SourceBlock], retrieval: RetrievalSpec) -> list[SourceBlock]:
