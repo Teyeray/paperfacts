@@ -1,11 +1,16 @@
-"""The TCO profile's key material is pinned to its B1 values (round 2 spec §7, gate b).
+"""The TCO profile's key material is pinned (round 2 spec §7, gate b).
 
 Round 2 adds field attributes, kinds, entities and prompt slots, each omitted from the key material at its
-default. TCO uses none of them, so its profile material must not move by a byte: a moved fingerprint means a new
+default, so a code change must not move the profile material by a byte: a moved fingerprint means a new
 attribute reached the material at its default, which would re-key production for nothing (and, for the
 extraction fingerprint, rename every stored lane). Only the *code* fingerprints may move, so none is pinned, and
 ``retrieval_fingerprint`` -- which hashes the retrieval modules' source beside the profile -- is pinned with that
 code part held constant.
+
+``B1`` is what the profile material was when ``tests/fixtures/b1_formats`` was written, and stays so: those files
+record it. ``CURRENT`` is the live profile's, and moves only with a deliberate edit of ``profiles/tco.json``: the
+"Ω cm^-2" aliases of Ω/sq and ``substrate_temperature.named_values`` (units reach all three fingerprints and the
+retrieval part, named values the extraction and comparison ones).
 """
 
 from __future__ import annotations
@@ -26,36 +31,43 @@ B1 = {
     profile_comparison_fingerprint: "5ec489a6749b",
     figure_profile_fingerprint: "623d87026f22",
 }
-# retrieval_fingerprint(tco) with every source fingerprint replaced by CODE_STANDIN: the profile's part only.
-B1_RETRIEVAL_PROFILE_PART = "71fd3107c43c"
+CURRENT = {
+    profile_extraction_fingerprint: "f35cbb952650",
+    profile_comparison_fingerprint: "727a3bdbd4ee",
+    figure_profile_fingerprint: "12566194d395",
+}
+# retrieval_fingerprint(tco) with every source fingerprint replaced by CODE_STANDIN: the profile's part only. B1's
+# was "71fd3107c43c"; the Ω/sq aliases widen the unit's retrieval pattern.
+CURRENT_RETRIEVAL_PROFILE_PART = "cbd2a932b484"
 CODE_STANDIN = "code"
 # The file itself: the pins are only meaningful over this exact profile.
-TCO_JSON_SHA256 = "2ef95bccbea7100ecc3d8bcdd9f9a7801852974682a8cbaf3571744a241d49c4"
+TCO_JSON_SHA256 = "f4debe05cab44ed90f418dfb0d1b9caa314c99cfd7f91c0d12bd7ef3c8cc5a72"
 # DomainProfile.content_hash covers every non-display attribute *at default too*, so unlike the fingerprints it
 # moves whenever FieldSpec, GroupSpec or PromptSlots gains an attribute (spec §7). It names no stored file (it
 # serves __hash__, /api/health and the CLI listing), so a step that adds an attribute updates this pin, and says
 # so in its commit; the fingerprints above must not move with it. Moved in S5a by FieldSpec.entity and
 # PromptSlots.sample_list_heading, both at their defaults in TCO; in S6 by FieldSpec.references, None in TCO; by
-# FieldSpec.named_values, () in TCO.
-TCO_CONTENT_HASH = "1ef689199d34b1447ccd8a3a37900526b676c4a8dcc8a15d31f2c9cab6f8d0e6"
+# FieldSpec.named_values, () in TCO; then by TCO's own edit: the Ω/sq aliases, substrate_temperature's named values
+# and the article_type_hint slot.
+TCO_CONTENT_HASH = "27f0b60c22f4d7e79df28c6fb04cfeaaee145448c22da4c6ec826ef7980eae0b"
 
 
 def test_the_pinned_profile_file_is_unchanged():
     assert hashlib.sha256(SHIPPED_PROFILE_PATH.read_bytes()).hexdigest() == TCO_JSON_SHA256
 
 
-@pytest.mark.parametrize("fingerprint", list(B1), ids=lambda fingerprint: fingerprint.__name__)
-def test_a_tco_profile_fingerprint_keeps_its_b1_value(tco_profile: DomainProfile, fingerprint):
-    assert fingerprint(tco_profile) == B1[fingerprint]
+@pytest.mark.parametrize("fingerprint", list(CURRENT), ids=lambda fingerprint: fingerprint.__name__)
+def test_a_tco_profile_fingerprint_keeps_its_pinned_value(tco_profile: DomainProfile, fingerprint):
+    assert fingerprint(tco_profile) == CURRENT[fingerprint]
 
 
-def test_the_profile_part_of_the_tco_retrieval_fingerprint_keeps_its_b1_value(
+def test_the_profile_part_of_the_tco_retrieval_fingerprint_keeps_its_pinned_value(
     tco_profile: DomainProfile, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(keys, "source_fingerprint", lambda *modules: CODE_STANDIN)
 
     # Uncached: the cached value was computed over the real source.
-    assert keys.retrieval_fingerprint.__wrapped__(tco_profile) == B1_RETRIEVAL_PROFILE_PART
+    assert keys.retrieval_fingerprint.__wrapped__(tco_profile) == CURRENT_RETRIEVAL_PROFILE_PART
 
 
 def test_the_b1_fixtures_were_written_under_the_pinned_fingerprints():
@@ -68,5 +80,5 @@ def test_the_b1_fixtures_were_written_under_the_pinned_fingerprints():
     assert recorded("report.json") == recorded("dataset.json") == B1[profile_comparison_fingerprint]
 
 
-def test_the_tco_content_hash_keeps_its_b1_value(tco_profile: DomainProfile):
+def test_the_tco_content_hash_keeps_its_pinned_value(tco_profile: DomainProfile):
     assert tco_profile.content_hash == TCO_CONTENT_HASH

@@ -41,6 +41,15 @@ AFTER_B0 = {
     "references": None,
     "named_values": [],
 }
+# Post-B0 attributes a field deliberately moved off its B0 behaviour, with the value it now has; every other field
+# keeps the AFTER_B0 value. substrate_temperature: "at room temperature (RT)" (coatings-13-01719) reads as 25 ℃.
+EDITED_AFTER_B0 = {
+    ("substrate_temperature", "named_values"): [
+        ["room temperature", 25.0],
+        ["RT", 25.0],
+        ["ambient temperature", 25.0],
+    ],
+}
 B0 = json.loads(
     (Path(__file__).parent / "fixtures" / "b0_field_table" / "field_table.json").read_text(encoding="utf-8")
 )
@@ -57,7 +66,9 @@ def test_the_tco_fields_are_the_b0_field_table_attribute_by_attribute(tco_profil
     assert {attribute.name for attribute in dataclasses.fields(FieldSpec)} == set(B0_FIELDS[0]) | set(AFTER_B0)
     for loaded, recorded in zip(tco_profile.fields, B0_FIELDS, strict=True):
         for attribute, value in as_json(loaded).items():
-            if attribute in AFTER_B0:
+            if (loaded.name, attribute) in EDITED_AFTER_B0:
+                assert value == EDITED_AFTER_B0[loaded.name, attribute], (loaded.name, attribute)
+            elif attribute in AFTER_B0:
                 assert value == AFTER_B0[attribute], (loaded.name, attribute)
             elif attribute not in NAME_BASED:
                 assert value == recorded[attribute], (loaded.name, attribute)
