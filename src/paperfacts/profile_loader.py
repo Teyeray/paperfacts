@@ -657,6 +657,8 @@ _KIND_ATTRIBUTES: Mapping[str, tuple[FieldKind, ...]] = {
     "display_format": ("numeric",),
     "range_policy": ("numeric",),
     "after_clause": ("numeric",),
+    # A phrase read as one number in the canonical unit; an interval has two ends to state.
+    "named_values": ("numeric",),
 }
 # The kinds a list field may have, and the attributes it must leave at their default: a list of numbers would need
 # its own tolerance, condition and chart semantics, which do not exist yet.
@@ -673,7 +675,10 @@ _NOT_WITH_MANY = (
     "range_policy",
     "after_clause",
     "display_format",
+    "named_values",
 )
+# At most this many phrases per field: each is compared with every quote of the field.
+MAX_NAMED_VALUES = 50
 
 
 def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, FieldLevel]) -> FieldSpec:
@@ -751,6 +756,7 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         "range_policy": choice("range_policy", get_args(RangePolicy)),
         "after_clause": choice("after_clause", get_args(AfterClause)),
         "cardinality": choice("cardinality", get_args(Cardinality)),
+        "named_values": _named_values(entry, where),
     }
     changed = {key for key, value in stated.items() if value != _FIELD_DEFAULTS[key]}
 
@@ -769,6 +775,10 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         raise ConfigError(
             f"{where}: bare_number 'percent_or_fraction' needs canonical_unit '%', got {stated['canonical_unit']!r}"
         )
+    outside = [phrase for phrase, value in stated["named_values"] if not _in_range(stated["valid_range"], value)]
+    if outside:
+        # A declared number the cleaning would drop as implausible is a contradiction in the profile itself.
+        raise ConfigError(f"{where}: named_values {', '.join(map(repr, outside))} fall outside valid_range")
     condition_rule = stated["condition_rule"]
     if condition_rule is not None and (not condition_rule.strip() or entry.get("condition_hint") is None):
         # The rule tells the model to fill a condition that the field line must first say the field has.
@@ -798,6 +808,39 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         references=references,
         **stated,
     )
+
+
+def _named_values(entry: Mapping[str, Any], where: str) -> tuple[tuple[str, float], ...]:
+    """``{"phrase": number}``: the words a paper writes instead of the number, each with its canonical value."""
+    if "named_values" not in entry:
+        return _FIELD_DEFAULTS["named_values"]
+    declared = entry["named_values"]
+    if not isinstance(declared, Mapping) or not declared:
+        raise ConfigError(f"{where}: named_values must be a non-empty object of phrase: number, got {declared!r}")
+    if len(declared) > MAX_NAMED_VALUES:
+        raise ConfigError(f"{where}: named_values holds {len(declared)} phrases; at most {MAX_NAMED_VALUES}")
+    parsed: list[tuple[str, float]] = []
+    folded: dict[str, str] = {}
+    for phrase, value in declared.items():
+        # The phrase is folded through text.normalize_text, as a unit spelling is, and held to the same length cap.
+        if not phrase.strip() or len(phrase) > MAX_SPELLING_LENGTH:
+            raise ConfigError(f"{where}: named_values phrase {phrase!r} must be 1 to {MAX_SPELLING_LENGTH} characters")
+        if any(character.isdigit() for character in phrase):
+            # A quote with a digit is read by the number reader, so such a phrase could never apply.
+            raise ConfigError(f"{where}: named_values phrase {phrase!r} holds a digit; a stated number is read as one")
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ConfigError(f"{where}: named_values[{phrase!r}] must be a finite number, got {value!r}")
+        key = normalize_text(phrase).casefold()
+        if key in folded:
+            raise ConfigError(f"{where}: named_values phrases {folded[key]!r} and {phrase!r} are the same phrase")
+        folded[key] = phrase
+        parsed.append((phrase.strip(), float(value)))
+    return tuple(parsed)
+
+
+def _in_range(bounds: tuple[float | None, float | None], value: float) -> bool:
+    low, high = bounds
+    return (low is None or value >= low) and (high is None or value <= high)
 
 
 def _valid_range(entry: Mapping[str, Any], where: str) -> tuple[float | None, float | None]:

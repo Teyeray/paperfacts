@@ -35,8 +35,9 @@ TCO_JSON_SHA256 = "2ef95bccbea7100ecc3d8bcdd9f9a7801852974682a8cbaf3571744a241d4
 # moves whenever FieldSpec, GroupSpec or PromptSlots gains an attribute (spec §7). It names no stored file (it
 # serves __hash__, /api/health and the CLI listing), so a step that adds an attribute updates this pin, and says
 # so in its commit; the fingerprints above must not move with it. Moved in S5a by FieldSpec.entity and
-# PromptSlots.sample_list_heading, both at their defaults in TCO; in S6 by FieldSpec.references, None in TCO.
-TCO_CONTENT_HASH = "50db6e0e1580a85152b7b8a118cb92bb6e2064cacfdd0cc738fb1f60ce8d0916"
+# PromptSlots.sample_list_heading, both at their defaults in TCO; in S6 by FieldSpec.references, None in TCO; by
+# FieldSpec.named_values, () in TCO.
+TCO_CONTENT_HASH = "1ef689199d34b1447ccd8a3a37900526b676c4a8dcc8a15d31f2c9cab6f8d0e6"
 
 
 def test_the_pinned_profile_file_is_unchanged():

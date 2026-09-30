@@ -135,7 +135,8 @@ this file is the part that is easy to get wrong.
   the stored `value_raw`. `read_number` keeps a backstop that leaves room for the bound `read_value` prefixes.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
-- Five guardrails on the response: schema and type cleaning, scope enforcement (a paper-level field may
+- Five guardrails on the response: schema and type cleaning (a numeric quote needs a digit, a number word or a
+  declared `named_values` phrase, which the code reads as its declared number), scope enforcement (a paper-level field may
   not be attached to a sample), and citation validation — all in `records.py` — the plausible range
   (`valid_range`, judged on the converted value by `normalize.drop_implausible`), plus grounding
   (`grounding.py`), where the quoted text must occur in the block it cites. The first four drop the value

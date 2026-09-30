@@ -920,6 +920,7 @@ names from the LLM cache.
 | `condition_preference` | `[]` | verdict | Which measurement fills the dataset cell when a sample has several |
 | `range_policy` | `midpoint` | cleaning, verdict | `midpoint`, `reject`, `lower` or `upper`: what a range quoted as one value becomes; an end (`lower` / `upper`) also fills the dataset cell. Numeric only |
 | `after_clause` | `refuse` | cleaning, verdict | `refuse` or `condition`: what "92.5% after 100 cycles" becomes. Numeric only |
+| `named_values` | `{}` | prompt, cleaning | `{"phrase": number}`: words a paper writes instead of the number (`{"room temperature": 25, "RT": 25}`), each with its value in `canonical_unit`. The field line names the phrases and asks for the words verbatim; a quote that is a phrase (whole, or after a leading "at", or before a parenthesis without a digit: "room temperature (RT)") reads as its number, and the dataset cell notes the words. A quote with a digit is always read as a number ("RT (27 °C)" is 27). Under a bound ("above RT") it is no scalar. Numeric only, not with `many`; at most 50, no digit in a phrase, distinct after folding, finite, inside `valid_range` |
 | `figure_readable` | `false` | figure | Whether a chart's y axis may be read for this field; numeric with a unit only |
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
 | `cardinality` | `one` | prompt, verdict | `one` or `many`: a list of values that hold at once (the precursors of a sample, the techniques a paper applies). Text or composition only, at either level; refused together with `figure_readable`, `condition_preference`, `condition_rule` and every numeric attribute. See [List fields](#list-fields) |
@@ -1044,7 +1045,7 @@ Three kinds read a value that is not one number or one text. `profiles/catalysis
   end. The workbook gives an interval two numeric columns, `<name> 下限` and `<name> 上限`; the clipboard copy
   writes `low–high` and the page `≥ low` / `≤ high` for a bound.
 - **What each kind accepts.** `canonical_unit`, `valid_range`, `rel_tol` and `abs_tol` go with `numeric` and
-  `interval`. `bare_number`, `range_policy`, `after_clause`, `display_format` and `figure_readable` go with
+  `interval`. `bare_number`, `range_policy`, `after_clause`, `named_values`, `display_format` and `figure_readable` go with
   `numeric` only, and `categories` with `text` only. `condition_rule` goes with every kind but `boolean` and
   `reference`. Anything else is refused at load, naming the field.
 
@@ -1087,7 +1088,7 @@ re-keying the comparison recomputes it from the stored extractions, for free.
 |---|---|---|---|
 | Display: `label`, `description_zh`, `display_format`, a group's `label_zh`, `title_zh`, `description_zh`, `maturity`, `ui`, `$comment`, the file name | — | — | — |
 | Verdict: `rel_tol`, `abs_tol`, `categories` (of a `many` field: also extraction, as its `prompt_categories`), `condition_preference`, `missing_condition_note_zh` | — | yes | — |
-| Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, `cardinality`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number` |
+| Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, `named_values`, `cardinality`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number` |
 | `keywords` | passage mode | — | for a `figure_readable` field |
 | `retrieval` | passage mode | — | — |
 | `units`, `ignored_unit_suffixes` | yes | yes | yes |

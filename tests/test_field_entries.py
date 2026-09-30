@@ -303,6 +303,7 @@ EXTRACTION_CELLS = {
     "prompt_categories",
     "entity",
     "references",
+    "named_values",
 }
 
 

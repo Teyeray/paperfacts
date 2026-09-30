@@ -85,6 +85,28 @@ def test_the_demo_profile_is_valid():
         pytest.param({"fields.1.range_policy": "first"}, "range_policy", id="range-policy-unknown"),
         pytest.param({"fields.1.missing_condition_note_zh": " "}, "missing_condition_note_zh", id="blank-note"),
         pytest.param({"fields.1.canonical_unit": "mAh/g"}, "no converter", id="unit-without-converter"),
+        pytest.param({"fields.2.named_values": {"none": 0}}, "named_values is only meaningful", id="named-on-text"),
+        pytest.param(
+            {"fields.1.named_values": {"thin": 5}, "fields.1.cardinality": "many"},
+            "cardinality 'many'",
+            id="named-with-many",
+        ),
+        pytest.param({"fields.1.named_values": {"2D": 1}}, "holds a digit", id="named-digit"),
+        pytest.param({"fields.1.named_values": {"Thin": 5, "thin ": 6}}, "the same phrase", id="named-duplicate"),
+        pytest.param({"fields.1.named_values": {"thin": float("nan")}}, "finite number", id="named-nan"),
+        pytest.param({"fields.1.named_values": {"thin": True}}, "finite number", id="named-boolean"),
+        pytest.param({"fields.1.named_values": {}}, "non-empty object", id="named-empty"),
+        pytest.param({"fields.1.named_values": ["thin"]}, "non-empty object", id="named-not-an-object"),
+        pytest.param(
+            {"fields.1.named_values": {f"w{chr(97 + i // 26)}{chr(97 + i % 26)}": 1 for i in range(51)}},
+            "at most 50",
+            id="named-too-many",
+        ),
+        pytest.param(
+            {"fields.1.named_values": {"thick": 900}, "fields.1.valid_range": {"max": 500}},
+            "outside valid_range",
+            id="named-out-of-range",
+        ),
         # Slots
         pytest.param({"prompt.domain_subject": DELETE}, "domain_subject", id="required-slot-missing"),
         pytest.param({"prompt.fact_nouns": "facts"}, "fact_nouns", id="unknown-slot"),
@@ -174,3 +196,9 @@ def test_a_profile_that_is_not_an_object_is_refused():
 )
 def test_a_pattern_that_nests_no_repetition_is_accepted(pattern):
     assert make_profile({"retrieval.condition_unit_pattern": pattern}).retrieval.condition_unit_pattern == pattern
+
+
+def test_named_values_are_read_in_order_as_canonical_numbers():
+    profile = make_profile({"fields.1.named_values": {"monolayer": 1, "bulk-like": 1000.5}})
+
+    assert profile.fields[1].named_values == (("monolayer", 1.0), ("bulk-like", 1000.5))
