@@ -168,6 +168,10 @@ h1 .article-tag { margin: 0 0 0 10px; font-size: 12px; }
 .primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: var(--radius); padding: 8px 14px; font-weight: 600; }
 .primary:hover { filter: brightness(1.08); }
 .primary:disabled { opacity: .5; cursor: default; }
+/* A second action beside the primary one: the same shape, outlined, so the paid chart read never looks like the default. */
+.secondary { background: var(--paper); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 7px 13px; font-weight: 600; }
+.secondary:hover { border-color: var(--ink-3); }
+.secondary:disabled { opacity: .5; cursor: default; }
 
 .stages { list-style: none; display: flex; gap: 6px; flex-wrap: wrap; margin: 18px 0 0; padding: 0; }
 .stage { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: var(--radius-pill); border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); background: var(--paper); }
@@ -264,6 +268,7 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 /* ---------- results table: the consolidated per-sample deliverable, above the workbench ---------- */
 .results { margin: 0 0 var(--gap-section); }
 .figures { margin: 0 0 var(--gap-section); }
+.figures-empty { margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
 .figures-table tr { cursor: pointer; }
 .figures-table td small { display: block; font-size: 10.5px; color: var(--ink-3); }
 .figures-table td.val { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
