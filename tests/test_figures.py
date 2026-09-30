@@ -967,3 +967,29 @@ def test_a_spectrum_is_for_a_numeric_single_valued_field_only():
         make_profile(CHARTED | text_field)
     with pytest.raises(ConfigError, match="cannot be combined with figure_spectrum_axis, figure_spectrum_points"):
         make_profile(CHARTED | text_field | {"fields.2.cardinality": "many"})
+
+
+def test_a_curve_of_another_quantity_on_the_shared_axis_is_not_read():
+    # One "%" axis tied to transmittance, carrying a transmittance and a reflectance curve: the curve's own field
+    # decides, and the one the model marks as none of the listed properties is left out.
+    answer = spectrum_answer({"T": {550: 85.0}, "R": {550: 10.0}, "old": {550: 84.0}})
+    answer["curves"][0]["field"] = "transmittance"
+    answer["curves"][1]["field"] = None
+
+    readings = run_spectral(answer).readings
+
+    assert [(reading.series, reading.y) for reading in readings] == [("T", 85.0), ("old", 84.0)]
+
+
+def test_a_curve_naming_a_field_with_no_spectrum_is_not_read_even_on_a_spectrum_axis():
+    answer = spectrum_answer({"R": {550: 10.0}})
+    answer["curves"][0]["field"] = "sheet_resistance"
+
+    assert run_spectral(answer).readings == ()
+
+
+def test_the_spectrum_question_asks_for_the_curve_s_own_property():
+    spectral = figures.user_prompt("caption", SPECTRAL.figure_fields, SPECTRAL.figures)
+
+    assert "Read only the curves that plot a listed property itself." in spectral
+    assert '"label": "legend text", "field": "<listed property name>"' in spectral

@@ -129,12 +129,13 @@ Other spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and 
 SPECTRUM_STEP = """
 Step 2b - if it is a spectrum, read no markers. For each legend curve, read y where the curve crosses each of these x values, and at no other x:
 {spectrum_xs}
+Read only the curves that plot a listed property itself. A curve of another quantity drawn against the same axis (its legend or label names that other quantity) is not one of them: leave it out. Set "field" on each curve to the listed property it plots.
 Leave out an x the curve does not reach. Set "field" on each y axis, decide which axis each curve belongs to, and report y in the units printed on that axis, exactly as in Step 2. Per reading, give a confidence in [0,1] for the y reading.
 For a spectrum, output ONLY this JSON instead (strict JSON: no comments, no trailing text):
 {{"chart_type": "spectrum",
  "x_axis": {{"quantity": "...", "unit": "...", "scale": "linear|log"}},
  "y_axes": [{{"id": "left", "field": "<listed property name or null>", "quantity": "...", "unit": "... (with multiplier)", "scale": "linear|log", "broken": false}}],
- "curves": [{{"label": "legend text", "y_axis": "left|right|right2", "readings": [{{"x": <number>, "y": <number>, "confidence": <0..1>}}]}}]}}
+ "curves": [{{"label": "legend text", "field": "<listed property name>", "y_axis": "left|right|right2", "readings": [{{"x": <number>, "y": <number>, "confidence": <0..1>}}]}}]}}
 """
 SPECTRUM_OPENINGS = {
     "step_2_opening": "for a property-vs-condition chart,",
@@ -544,6 +545,8 @@ class _Curve(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     label: str | None = None
+    # The property the curve itself plots: an axis in "%" can carry curves of several quantities at once.
+    field: str | None = None
     y_axis: str | None = None
     # Validated entry by entry (``_items``), so one malformed reading costs only itself.
     readings: list[Any] = Field(default_factory=list)
@@ -742,7 +745,10 @@ def _spectrum_readings(
         if axis is None:
             unplaced += len(read)
             continue
-        spec = specs.get((axis.field or "").strip().lower())
+        # The curve's own "field" decides when the answer gives one, even as null: a shared axis names one
+        # property, while each curve on it may plot another. Only an answer without it falls back to the axis.
+        field = curve.field if "field" in curve.model_fields_set else axis.field
+        spec = specs.get((field or "").strip().lower())
         if spec is None or spec.figure_spectrum_axis is None:
             continue  # a property nobody asked a spectrum of
         sampled = _sampled_xs(spec)
