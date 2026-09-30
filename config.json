@@ -55,7 +55,7 @@
     "dpi": 150
   },
   "figures": {
-    "enabled": false,
+    "enabled": true,
     "model": "qwen3.7-plus",
     "max_per_document": 12,
     "dpi": 200,
