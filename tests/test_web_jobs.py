@@ -122,6 +122,81 @@ def test_a_plain_resubmission_reuses_an_active_forced_run():
     assert runner.call_count == 1
 
 
+def test_asking_for_the_charts_never_reuses_an_active_job_that_will_not_read_them():
+    """The 识图 button pressed while a plain run is active: returning that run would read no chart."""
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = manager_for(runner)
+    try:
+        plain = manager.submit("doc-1", profile="demo")
+        charts = manager.submit("doc-1", profile="demo", figures=True)
+        assert charts.job_id != plain.job_id
+        assert charts.figures is True and charts.force is False
+        # A second press joins the chart job instead of queueing a third.
+        assert manager.submit("doc-1", profile="demo", figures=True).job_id == charts.job_id
+    finally:
+        gate.set()
+    wait_until(lambda: runner.call_count == 2, what="both jobs to finish")
+    assert runner.figures == [(False, False), (True, False)]
+
+
+def test_a_plain_request_reuses_an_active_job_that_reads_the_charts():
+    # The bulk run over a paper whose charts are being read: that job already does everything it asks.
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = manager_for(runner)
+    try:
+        charts = manager.submit("doc-1", profile="demo", figures=True)
+        assert manager.submit("doc-1", profile="demo").job_id == charts.job_id
+    finally:
+        gate.set()
+    wait_for_status(manager, charts.job_id, "done")
+    assert runner.call_count == 1
+
+
+def test_a_re_read_is_a_new_job_behind_a_plain_read_and_implies_reading():
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = manager_for(runner)
+    try:
+        read = manager.submit("doc-1", profile="demo", figures=True)
+        reread = manager.submit("doc-1", profile="demo", force_figures=True)
+        assert reread.job_id != read.job_id
+        assert (reread.figures, reread.force_figures) == (True, True)
+        assert manager.submit("doc-1", profile="demo", figures=True).job_id == read.job_id
+    finally:
+        gate.set()
+    wait_until(lambda: runner.call_count == 2, what="both jobs to finish")
+    assert runner.figures == [(True, False), (True, True)]
+
+
+def test_a_forced_run_does_not_stand_in_for_a_chart_read_nor_the_reverse():
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = manager_for(runner)
+    try:
+        forced = manager.submit("doc-1", profile="demo", force=True)
+        charts = manager.submit("doc-1", profile="demo", figures=True)
+        assert charts.job_id != forced.job_id
+        assert manager.submit("doc-1", profile="demo", force=True).job_id == forced.job_id
+    finally:
+        gate.set()
+    wait_until(lambda: runner.call_count == 2, what="both jobs to finish")
+    assert runner.forces == [True, False]
+    assert runner.figures == [(False, False), (True, False)]
+
+
+def test_the_brief_carries_the_chart_flags():
+    runner = RecordingRunner()
+    manager = manager_for(runner)
+    job = manager.submit("doc-1", profile="demo", force_figures=True)
+    wait_for_status(manager, job.job_id, "done")
+
+    [brief] = manager.briefs()
+
+    assert (brief.figures, brief.force_figures) == (True, True)
+
+
 def test_a_finished_document_can_be_submitted_again():
     runner = RecordingRunner()
     manager = manager_for(runner)

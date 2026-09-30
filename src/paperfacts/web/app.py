@@ -12,11 +12,16 @@ the default profile when absent, so a URL from before there were several keeps i
     GET  /api/documents                            document list (stage reached, counts)
     GET  /api/dataset                              corpus results table (paper_row + every sample row per document)
     GET  /api/dataset.xlsx                         the whole library as one Excel workbook
-    POST /api/documents  (multipart file, ?force)  upload a PDF and queue it -> {document, job}
+    POST /api/documents  (multipart file, figures, ?force)
+                                                   upload a PDF and queue it -> {document, job}; the
+                                                    form field figures=true also reads its charts
     POST /api/documents/run-all?force=             queue every unfinished document (or all, with
-                                                    force) -> {submitted, skipped}
-    POST /api/documents/{id}/run?force=            reprocess an existing document (reuses the
-                                                    job if the document is active under that profile)
+                                                    force) -> {submitted, skipped}; never reads charts
+    POST /api/documents/{id}/run?force=&figures=&force_figures=
+                                                   reprocess an existing document (reuses the job if
+                                                    the document is active under that profile and that
+                                                    job does everything asked); figures reads the
+                                                    charts, force_figures re-asks every one
     GET  /api/documents/{id}                       single document summary
     GET  /api/documents/{id}/report                ComparisonReport
     GET  /api/documents/{id}/extraction/{backend}  normalized LaneExtraction
@@ -41,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import dataclasses
 import logging
 import secrets
 import threading
@@ -193,7 +199,8 @@ _PROFILE_SCOPE_KEY = "paperfacts.profile"
 
 def pipeline_runner(settings: Settings, registry: ProfileRegistry) -> JobRunner:
     """Job body: hand the document to workflow.run_document under the job's profile; the stage callback is just
-    mark.
+    mark. A job that asks for its charts runs with the figures stage on, whatever ``figures.enabled`` says: the
+    switch decides only what a job that does not ask gets.
 
     That profile's file is checked first: after an edit on disk the server would still run the old profile and
     store its results under keys the edited file no longer names, so its jobs are refused until a restart. The
@@ -218,7 +225,15 @@ def pipeline_runner(settings: Settings, registry: ProfileRegistry) -> JobRunner:
             raise ConfigError(f"领域配置 {profile.source.name} 在磁盘上已改动，请重启服务器 (profile changed on disk)")
         if served.library is None:
             raise ConfigError(served.not_runnable or f"profile {profile.name} cannot run under these settings")
-        run_document(served.library.document(job.document_id), settings, profile, force=job.force, on_stage=mark)
+        run_settings = dataclasses.replace(settings, figures_enabled=True) if job.figures else settings
+        run_document(
+            served.library.document(job.document_id),
+            run_settings,
+            profile,
+            force=job.force,
+            force_figures=job.force_figures,
+            on_stage=mark,
+        )
 
     return run
 
@@ -326,9 +341,13 @@ def create_app(
         if not exists:
             raise HTTPException(status_code=404, detail=f"No document {document_id}")
 
-    def submit(document_id: str, library: Library, *, force: bool) -> Job:
+    def submit(
+        document_id: str, library: Library, *, force: bool, figures: bool = False, force_figures: bool = False
+    ) -> Job:
         try:
-            return manager.submit(document_id, profile=library.profile.name, force=force)
+            return manager.submit(
+                document_id, profile=library.profile.name, force=force, figures=figures, force_figures=force_figures
+            )
         except RuntimeError as exc:  # the manager has shut down: the server is on its way out
             raise HTTPException(status_code=503, detail="The server is shutting down; try again shortly") from exc
 
@@ -456,7 +475,10 @@ def create_app(
                         "schema": {
                             "type": "object",
                             "required": ["file"],
-                            "properties": {"file": {"type": "string", "format": "binary"}},
+                            "properties": {
+                                "file": {"type": "string", "format": "binary"},
+                                "figures": {"type": "boolean", "default": False},
+                            },
                         }
                     }
                 },
@@ -473,13 +495,16 @@ def create_app(
         without any limit. A declared length over the limit is refused unread; the bytes that actually
         arrive are counted too, so a chunked body (which declares nothing) or one that lies is refused the
         moment it passes the limit.
+
+        The one other form field, ``figures``, asks for the charts to be read too (the page's "read the charts
+        after upload" box); absent, the job reads them only when ``figures.enabled`` is on.
         """
         limit = settings.max_upload_bytes + UPLOAD_OVERHEAD_BYTES
         declared = request.headers.get("content-length")
         if declared is not None and (not declared.isdigit() or int(declared) > limit):
             raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
         async with _capped(request, limit, _too_large(settings.max_upload_bytes)).form(
-            max_files=1, max_fields=0
+            max_files=1, max_fields=1
         ) as form:
             file = form.get("file")
             if not isinstance(file, UploadFile):
@@ -488,13 +513,14 @@ def create_app(
                 raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
             data = await _read_limited(file, settings.max_upload_bytes)
             filename = file.filename or "upload.pdf"
+            figures = _form_flag(form.get("figures"), "figures")
         if not data.startswith(b"%PDF"):
             raise HTTPException(status_code=400, detail="Only PDF files are accepted (missing %PDF header)")
         # writing to disk is sync IO; offload to the threadpool so a multi-hundred-MB write can't stall the event loop
         # Registration is profile-free: the PDF and its identity are the document's, whatever it is run under.
         document = await run_in_threadpool(library.register_upload, filename, data)
         key = document_key(document.document_id)
-        job = submit(key, library, force=force)
+        job = submit(key, library, force=force, figures=figures)
         return UploadAccepted(document=with_profiles_done(library.summary(key)), job=job)
 
     # Registration order matters: FastAPI matches in order, so this literal route must stay above the
@@ -506,7 +532,7 @@ def create_app(
         Same submission path as ``run_existing``, once per document in library order: a document
         already queued or running simply gets its existing job back, so pressing the button twice
         costs nothing. Finished means exported under the current keys (:func:`stored.is_finished`) of the
-        profile asked about.
+        profile asked about. It never asks for the charts: reading them is paid per chart and asked per paper.
         """
         submitted: list[Job] = []
         skipped: list[SkippedDocument] = []
@@ -536,14 +562,22 @@ def create_app(
         return RunAllAccepted(submitted=submitted, skipped=skipped)
 
     @app.post("/api/documents/{document_id}/run", status_code=202)
-    def run_existing(document_id: str, library: ProfileLibrary, force: Annotated[bool, Query()] = False) -> Job:
+    def run_existing(
+        document_id: str,
+        library: ProfileLibrary,
+        force: Annotated[bool, Query()] = False,
+        figures: Annotated[bool, Query()] = False,
+        force_figures: Annotated[bool, Query()] = False,
+    ) -> Job:
+        """``figures`` reads the charts in this job (the page's 识图 button), ``force_figures`` re-asks every one
+        (重新识图); both default to false, so a request from before they existed means what it meant."""
         require_document(document_id)
         if not library.runnable(document_id):
             # A stored parse for both lanes is enough: extraction, comparison and export never open the PDF.
             raise HTTPException(
                 status_code=409, detail="No PDF and no cached parse for this document; re-upload it to process it"
             )
-        return submit(document_id, library, force=force)
+        return submit(document_id, library, force=force, figures=figures, force_figures=force_figures)
 
     @app.get("/api/documents/{document_id}")
     def get_document(document_id: str, library: ProfileLibrary) -> DocumentSummary:
@@ -726,6 +760,18 @@ async def _read_limited(file: UploadFile, limit: int) -> bytes:
             raise HTTPException(status_code=413, detail=_too_large(limit))
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _form_flag(value: object, name: str) -> bool:
+    """A boolean form field: absent is false, and anything but the spellings a checkbox or a script sends is a
+    422 rather than a guess."""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in {"true", "1", "on", "yes"}:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {"false", "0", "off", "no", ""}:
+        return False
+    raise HTTPException(status_code=422, detail=f"The form field {name!r} must be true or false")
 
 
 def _too_large(limit: int) -> str:

@@ -300,6 +300,57 @@ def test_the_force_flag_reaches_the_job(client: TestClient, pdf_bytes: bytes, ru
     assert runner.forces == [True]
 
 
+def test_an_upload_reads_no_charts_unless_asked(client: TestClient, pdf_bytes: bytes, runner: RecordingRunner):
+    body = upload(client, pdf_bytes)
+
+    wait_until(lambda: runner.call_count == 1, what="the job to run")
+    assert runner.figures == [(False, False)]
+    assert body["job"]["figures"] is False
+
+
+@pytest.mark.parametrize("value", ["true", "on", "1"])
+def test_the_upload_checkbox_asks_the_job_to_read_the_charts(
+    client: TestClient, pdf_bytes: bytes, runner: RecordingRunner, value: str
+):
+    response = client.post(
+        "/api/documents", files={"file": ("paper.pdf", pdf_bytes, "application/pdf")}, data={"figures": value}
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["job"]["figures"] is True
+    wait_until(lambda: runner.call_count == 1, what="the job to run")
+    assert runner.figures == [(True, False)]
+
+
+def test_an_unchecked_upload_checkbox_reads_no_charts(client: TestClient, pdf_bytes: bytes, runner: RecordingRunner):
+    response = client.post(
+        "/api/documents", files={"file": ("paper.pdf", pdf_bytes, "application/pdf")}, data={"figures": "false"}
+    )
+
+    assert response.status_code == 202, response.text
+    wait_until(lambda: runner.call_count == 1, what="the job to run")
+    assert runner.figures == [(False, False)]
+
+
+def test_an_upload_figures_field_that_is_not_a_boolean_is_refused(client: TestClient, pdf_bytes: bytes):
+    response = client.post(
+        "/api/documents", files={"file": ("paper.pdf", pdf_bytes, "application/pdf")}, data={"figures": "maybe"}
+    )
+
+    assert response.status_code == 422
+    assert "figures" in response.json()["detail"]
+
+
+def test_an_upload_with_a_second_unknown_form_field_is_refused(client: TestClient, pdf_bytes: bytes):
+    response = client.post(
+        "/api/documents",
+        files={"file": ("paper.pdf", pdf_bytes, "application/pdf")},
+        data={"figures": "true", "other": "x"},
+    )
+
+    assert response.status_code == 400
+
+
 def test_uploading_the_same_pdf_twice_reuses_the_document(client: TestClient, jobs: JobManager, pdf_bytes: bytes):
     first = upload(client, pdf_bytes, name="paper.pdf")
     wait_for_status(jobs, first["job"]["job_id"], "done")
@@ -372,6 +423,42 @@ def test_rerunning_a_document_queues_a_new_job(client: TestClient, uploaded: str
     assert response.json()["document_id"] == uploaded
     wait_until(lambda: runner.call_count == 2, what="one job each for upload and rerun")
     assert runner.forces == [False, True]
+
+
+def test_a_rerun_reads_no_charts_unless_asked(
+    client: TestClient, jobs: JobManager, uploaded: str, runner: RecordingRunner
+):
+    wait_until(lambda: runner.call_count == 1, what="the upload job to run")
+    wait_for_status(jobs, jobs.for_document(uploaded)[-1].job_id, "done")
+
+    job = client.post(f"/api/documents/{uploaded}/run").json()
+
+    wait_for_status(jobs, job["job_id"], "done")
+    assert job["figures"] is False and job["force_figures"] is False
+    assert runner.figures == [(False, False), (False, False)]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("?figures=true", (True, False)),
+        ("?force_figures=true", (True, True)),
+        ("?figures=true&force_figures=true", (True, True)),
+    ],
+)
+def test_the_read_the_charts_button_asks_the_job_to_read_them(
+    client: TestClient, jobs: JobManager, uploaded: str, runner: RecordingRunner, query: str, expected: tuple
+):
+    wait_until(lambda: runner.call_count == 1, what="the upload job to run")
+    wait_for_status(jobs, jobs.for_document(uploaded)[-1].job_id, "done")
+
+    response = client.post(f"/api/documents/{uploaded}/run{query}")
+
+    assert response.status_code == 202
+    assert (response.json()["figures"], response.json()["force_figures"]) == expected
+    wait_for_status(jobs, response.json()["job_id"], "done")
+    assert runner.figures == [(False, False), expected]
+    assert runner.forces == [False, False]  # the charts alone: parse and extraction come from the caches
 
 
 # ---- single document summary and artifacts -----------------------------------------------------
@@ -632,6 +719,19 @@ def test_forcing_a_run_of_everything_queues_the_finished_document_too(
     assert all(job["force"] for job in body["submitted"])
 
 
+def test_running_everything_never_reads_charts(
+    client: TestClient, jobs: JobManager, runner: RecordingRunner, two_idle_documents: list[str]
+):
+    # A figures parameter is not part of the bulk run: charts are paid per chart and asked per paper.
+    body = client.post("/api/documents/run-all?force=true&figures=true&force_figures=true").json()
+
+    assert len(body["submitted"]) == 2
+    assert not any(job["figures"] or job["force_figures"] for job in body["submitted"])
+    for job in body["submitted"]:
+        wait_for_status(jobs, job["job_id"], "done")
+    assert runner.figures[-2:] == [(False, False), (False, False)]
+
+
 def test_a_document_without_a_pdf_is_skipped_with_a_reason(client: TestClient, parsed_only: str):
     """The same situation ``run`` answers with a 409: a bulk run cannot fail over one such document,
     so it reports it instead."""
@@ -763,8 +863,15 @@ def test_the_pipeline_runner_hands_the_job_to_run_document(
     the job's force flag, and the mark callback straight through to workflow, unchanged."""
     received: dict = {}
 
-    def fake_run_document(document, settings_seen, profile, *, force, on_stage):
-        received.update(document=document, settings=settings_seen, profile=profile, force=force, on_stage=on_stage)
+    def fake_run_document(document, settings_seen, profile, *, force, force_figures, on_stage):
+        received.update(
+            document=document,
+            settings=settings_seen,
+            profile=profile,
+            force=force,
+            force_figures=force_figures,
+            on_stage=on_stage,
+        )
 
     monkeypatch.setattr("paperfacts.web.app.run_document", fake_run_document)
     job = Job(job_id="job-1", document_id=registered, profile="tco", force=True, created_at="2026-01-01T00:00:00+00:00")
@@ -779,8 +886,35 @@ def test_the_pipeline_runner_hands_the_job_to_run_document(
         "settings": settings,
         "profile": library.profile,
         "force": True,
+        "force_figures": False,
         "on_stage": mark,
     }
+
+
+@pytest.mark.parametrize("force_figures", [False, True])
+def test_a_job_that_asks_for_its_charts_runs_with_the_figures_stage_on(
+    monkeypatch, settings: Settings, library: Library, registered, force_figures: bool
+):
+    """figures.enabled is off here, as in production: the job's own flag switches the stage on for that run only."""
+    received: dict = {}
+    monkeypatch.setattr(
+        "paperfacts.web.app.run_document",
+        lambda document, run_settings, profile, **kwargs: received.update(settings=run_settings, **kwargs),
+    )
+    job = Job(
+        job_id="job-1",
+        document_id=registered,
+        profile="tco",
+        figures=True,
+        force_figures=force_figures,
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    _runner(settings, library.profile)(job, lambda stage, status, detail="": None)
+
+    assert settings.figures_enabled is False
+    assert received["settings"] == dataclasses.replace(settings, figures_enabled=True)
+    assert received["force_figures"] is force_figures and received["force"] is False
 
 
 def test_the_pipeline_fails_loudly_when_the_pdf_is_gone(monkeypatch, settings: Settings, library: Library):

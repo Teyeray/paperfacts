@@ -176,16 +176,18 @@ async function uploadAll(files) {
   const profile = state.profileName;
   const zone = document.getElementById("dropzone");
   const force = document.getElementById("upload-force").checked;
+  const figures = document.getElementById("upload-figures").checked;
   let last = null;
   zone.classList.add("busy");
   try {
     for (const file of files) {
       const form = new FormData();
       form.append("file", file, file.name);
+      if (figures) form.append("figures", "true");
       try {
         const result = await profileApi(profile, `/api/documents?force=${force}`, { method: "POST", body: form });
         last = result.document.document_id;
-        toast(`已上传 ${file.name}，开始处理`);
+        toast(`已上传 ${file.name}，开始处理${figures ? "（含识图）" : ""}`);
       } catch (error) {
         toast(`上传失败（${file.name}）：${error.message}`, true);
       }

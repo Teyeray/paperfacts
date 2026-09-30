@@ -52,6 +52,10 @@ class Job(BaseModel):
     # The name of the served profile the job runs under.
     profile: str
     force: bool = False
+    # Read the charts (the opt-in figures stage) in this job, whatever figures.enabled says; ``force_figures``
+    # re-asks every chart, and implies ``figures``.
+    figures: bool = False
+    force_figures: bool = False
     status: JobStatus = "queued"
     stages: tuple[Stage, ...] = ()
     log: tuple[str, ...] = ()
@@ -70,6 +74,8 @@ class JobBrief(BaseModel):
     document_id: str
     profile: str
     force: bool
+    figures: bool
+    force_figures: bool
     status: JobStatus
     error: str | None
     created_at: str
@@ -81,8 +87,8 @@ class JobBrief(BaseModel):
         return cls.model_validate(job.model_dump(exclude={"stages", "log"}))
 
 
-# Job body: receives a job snapshot (only document_id / profile / force are used) and a mark(stage, status,
-# detail) callback
+# Job body: receives a job snapshot (only document_id / profile / force / figures / force_figures are used) and a
+# mark(stage, status, detail) callback
 JobRunner = Callable[[Job, Callable[[str, StageStatus, str], None]], None]
 
 
@@ -108,12 +114,27 @@ class JobManager:
         self._lock = threading.Lock()
         self._changed = threading.Condition(self._lock)
 
-    def submit(self, document_id: str, *, profile: str, force: bool = False) -> Job:
+    def submit(
+        self,
+        document_id: str,
+        *,
+        profile: str,
+        force: bool = False,
+        figures: bool = False,
+        force_figures: bool = False,
+    ) -> Job:
         """Idempotent: if the same document is already queued or running under the same profile, reuse that job
         (double-clicking "reprocess" shouldn't pay for the LLM call twice); a new job only starts when upgrading
         from "use cache" to "force rerun", or for another profile, and then only after the running one has
         finished: the document's parse and identity are shared by every profile, so one document never has two
-        jobs running whatever their profiles."""
+        jobs running whatever their profiles.
+
+        Chart reading is an upgrade in the same way, flag by flag: an active job is reused only when it does at
+        least everything asked (``force``, ``figures``, ``force_figures``), so a request to read the charts never
+        gets back a job that will not read them. Anything more queues a new job behind it, whose parse and
+        extraction then come from the caches the first one wrote. A plain request (the bulk run) reuses any
+        active job, one that reads charts included."""
+        figures = figures or force_figures
         with self._changed:
             if self._closed:
                 # Refused before anything is recorded: a job nobody will ever run would show "queued" forever.
@@ -124,6 +145,8 @@ class JobManager:
                     and job.profile == profile
                     and job.status in ACTIVE
                     and job.force >= force
+                    and job.figures >= figures
+                    and job.force_figures >= force_figures
                 ):
                     return job
             job = Job(
@@ -131,6 +154,8 @@ class JobManager:
                 document_id=document_id,
                 profile=profile,
                 force=force,
+                figures=figures,
+                force_figures=force_figures,
                 created_at=_now(),
                 stages=tuple(Stage(name=name) for name in self._stage_names),
             )

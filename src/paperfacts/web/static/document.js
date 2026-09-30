@@ -14,7 +14,7 @@ import { PageViewer } from "./viewer.js";
 import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts.js";
 import { renderLanes } from "./samples.js";
 import { renderResults } from "./table.js";
-import { renderFigures } from "./figures.js";
+import { figuresRead, renderFigures } from "./figures.js";
 import { loadCorpus, renderCorpus } from "./corpus.js";
 import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from "./job.js";
 import { loadLibrary, renderLibrary } from "./library.js";
@@ -250,7 +250,10 @@ function renderDocument() {
   // Held, not looked up at click time: once the template is appended its fragment is empty, and a slot()
   // lookup in it finds nothing -- the button used to throw on every click.
   const force = s("force");
-  runButton.addEventListener("click", () => rerun(runButton, force.checked));
+  runButton.addEventListener("click", () => rerun(runButton, { force: force.checked }));
+  const figuresButton = node.querySelector('[data-action="figures"]');
+  syncFiguresButton(figuresButton);
+  figuresButton.addEventListener("click", () => readCharts(figuresButton));
 
   renderOtherProfiles(s("other-profiles"));
   renderOtherJob(s("other-job"));
@@ -309,6 +312,32 @@ function renderJobPanels() {
   renderJobLog(slot("joblog"), slot("log"), slot("job-status"));
   const runButton = document.querySelector('#document-view [data-action="run"]');
   if (runButton) runButton.disabled = !state.summary?.runnable || isActive(currentJob());
+  const figuresButton = document.querySelector('#document-view [data-action="figures"]');
+  if (figuresButton) syncFiguresButton(figuresButton);
+  // The empty section's note follows the job ("reading now"); a table of readings is left alone, so a focused
+  // row keeps its focus through the poll.
+  const figures = slot("figures");
+  if (figures && !state.figures?.rows?.length) renderFigures(figures);
+}
+
+// "识图" reads the charts; once current readings are stored it becomes "重新识图", which re-asks every chart (the
+// stored readings would otherwise come straight back). Charts are cropped from the PDF, so without one it is off.
+function syncFiguresButton(button) {
+  const { summary } = state;
+  const reread = figuresRead();
+  button.textContent = reread ? "重新识图" : "识图";
+  button.disabled = !summary?.pdf_available || isActive(currentJob());
+  button.title = !summary?.pdf_available
+    ? "没有 PDF：识图要从 PDF 上截取图片，请重新上传"
+    : reread
+      ? "让视觉模型重新读取本文所有的图：按图计费，已有读数会被替换"
+      : "用视觉模型读取图中数值：较慢（每张图约一分钟），按图计费；解析和抽取沿用已有结果";
+}
+
+function readCharts(button) {
+  const reread = figuresRead();
+  if (reread && !window.confirm("重新识图会让视觉模型把本文所有的图再读一遍（按图计费），已有读数会被替换。确定？")) return;
+  rerun(button, { figures: true, forceFigures: reread });
 }
 
 // Only a loop still owned by the open document gets here (job.js). Finishing re-reads the whole view through
@@ -330,15 +359,15 @@ const pollCallbacks = {
 // that job's finish handler reloads the view (a new generation) while this request is out, and the new job must
 // still be followed. The reload in flight keeps it too (openDocument). A switch to another document or profile
 // meanwhile drops it: that view has its own jobs.
-async function rerun(button, force) {
+async function rerun(button, { force = false, figures = false, forceFigures = false }) {
   button.disabled = true; // lock the button while queued; the backend's resubmission for the same document is idempotent too
   const id = state.current;
   const profile = state.currentProfile;
   try {
-    const job = await submitRun(id, profile, force);
+    const job = await submitRun(id, profile, force, { figures, forceFigures });
     if (!viewShows(id, profile)) return;
     state.job = job;
-    toast(force ? "已排队：全部重跑" : "已排队：按缓存增量处理");
+    toast(forceFigures ? "已排队：重新识图" : figures ? "已排队：识图" : force ? "已排队：全部重跑" : "已排队：按缓存增量处理");
     renderJobPanels();
     startPolling(job.job_id, pollCallbacks);
   } catch (error) {

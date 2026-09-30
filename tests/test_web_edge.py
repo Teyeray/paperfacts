@@ -21,7 +21,7 @@ from paperfacts.profile import DomainProfile
 from paperfacts.web.app import create_app
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import JobManager
-from paperfacts.workflow import stage_names
+from paperfacts.workflow import FIGURES_NOT_REQUESTED, stage_names
 from support.factories import make_blank_pdf
 from support.profiles import SHIPPED_PROFILE_PATH
 from support.web import DOC_KEY, RecordingRunner, seed_artifact, seed_report, wait_for_status
@@ -318,6 +318,40 @@ def test_the_summary_lists_every_stage_in_pipeline_order(client: TestClient, lib
     assert status["compare"] == "done" and status["export"] == "pending"
     # figures is opt-in and off here: never read is a skip, not work left to do
     assert status["figures"] == "skipped"
+
+
+def test_charts_never_requested_are_skipped_and_say_so(client: TestClient, library: Library):
+    """Not "pending": a stage that waits for nothing read as a stuck run."""
+    seed_artifact(library, "mineru")
+
+    stages = {stage["name"]: stage for stage in client.get(f"/api/documents/{DOC_KEY}").json()["stages"]}
+
+    assert stages["figures"]["status"] == "skipped"
+    assert stages["figures"]["detail"] == FIGURES_NOT_REQUESTED
+
+
+def test_charts_read_on_request_show_done_with_the_switch_off(client: TestClient, library: Library):
+    seed_artifact(library, "mineru")
+    path = library.layout.figures_path(DOC_KEY, library.figure_key, library.profile.name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", encoding="utf-8")
+
+    stages = {stage["name"]: stage for stage in client.get(f"/api/documents/{DOC_KEY}").json()["stages"]}
+
+    assert library.settings.figures_enabled is False
+    assert stages["figures"]["status"] == "done" and stages["figures"]["detail"] == ""
+
+
+def test_charts_being_read_are_drawn_from_the_job_that_asked(client: TestClient, jobs: JobManager, library: Library):
+    """The summary reads files only; a job that asked for the charts carries a figures stage of its own, which the
+    page draws while the job is its current one."""
+    seed_artifact(library, "mineru")
+    job = jobs.submit(DOC_KEY, profile=library.profile.name, figures=True)
+
+    body = client.get(f"/api/jobs/{job.job_id}").json()
+
+    assert body["figures"] is True
+    assert "figures" in [stage["name"] for stage in body["stages"]]
 
 
 def test_figures_switched_on_but_not_read_is_pending(settings: Settings, library: Library):

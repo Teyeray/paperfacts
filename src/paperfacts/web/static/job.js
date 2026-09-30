@@ -43,8 +43,13 @@ export function renderJobLog(details, pre, statusSpan) {
   if (isActive(job)) details.open = true;
 }
 
-export const submitRun = (documentId, profile, force) =>
-  profileApi(profile, `/api/documents/${documentId}/run?force=${force}`, { method: "POST" });
+// `figures` also reads the paper's charts; `forceFigures` re-asks every one (and implies `figures`).
+export const submitRun = (documentId, profile, force, { figures = false, forceFigures = false } = {}) =>
+  profileApi(
+    profile,
+    `/api/documents/${documentId}/run?force=${force}&figures=${figures}&force_figures=${forceFigures}`,
+    { method: "POST" },
+  );
 
 // Poll until the job ends: onUpdate(job) on every tick, onFinish(job) at the end, onLost() when the job can
 // no longer be read (the server restarted and forgot it, or the network stayed down). A loop belongs to the
