@@ -27,6 +27,12 @@ Conditions and source ids of a committed cell are derived from the final candida
 
 A list field (``cardinality: many``) is decided by :func:`decide_many` instead: the same refusals, then the
 union of both lanes' elements rather than one value.
+
+The supervisor (:mod:`paperfacts.supervisor`), when the stage is on, leaves a verdict on the comparisons it
+scored. Here it does two things and no more: a ``conflict`` where it trusted one side and doubted the other is
+settled for the trusted side (the doubted value leaves the evidence, and the cell it yields is ``supervised``,
+never ``agree``); an agreed value it doubted is committed as before, with the critique in the detail. A conflict
+it could not settle refuses the cell as any conflict does, with the scores in the audit trail.
 """
 
 from __future__ import annotations
@@ -35,7 +41,12 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
-from paperfacts.compare import FieldComparison, condition_numbers, conditions_measure_differently
+from paperfacts.compare import (
+    FieldComparison,
+    SupervisorScore,
+    condition_numbers,
+    conditions_measure_differently,
+)
 from paperfacts.fields import FieldSpec
 from paperfacts.kinds import CellValue, element_key, joined, rules_for
 from paperfacts.models import BACKENDS, Backend
@@ -73,7 +84,6 @@ class _Candidate:
 
 
 def decide(
-    # Supervisor integration: values may carry supervisor_score and low_confidence from validation.py
     spec: FieldSpec,
     evidence: Sequence[tuple[Backend, FieldValue]],
     comparisons: Sequence[FieldComparison],
@@ -93,12 +103,18 @@ def decide(
     :func:`_one_condition`. ``ctx`` holds the dataset's row ids, which a reference field's cell names.
     """
 
-    def reject(status: str, reason: str) -> Decision:
-        return _rejection(evidence, status, reason)
-
     if (refused := _opening_refusal(evidence, blocked=blocked, unanswered=unanswered)) is not None:
         return refused
     trusted = _trusted(evidence)
+    untrusted = len(trusted) != len(evidence)
+    judged = _supervised(comparisons, evidence, trusted)
+
+    def reject(status: str, reason: str) -> Decision:
+        # A settlement that happened stays on record whatever refuses the cell after it.
+        return _rejection(evidence, status, joined([reason, *judged.notes]))
+
+    # The doubted side of a settled conflict is no longer evidence; the trusted side stands on its own.
+    trusted = [(backend, value) for backend, value in trusted if _identity(value) not in judged.losers]
     rules = rules_for(spec)
     candidates = [
         _Candidate(backend, value, *rules.cell(value, spec, units, replace(ctx, backend=backend)))
@@ -108,15 +124,16 @@ def decide(
     # let it take its own condition out of the running, so the scalar's condition would win although no rule
     # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
     narrowed = _narrow(spec, candidates, row_sources) if candidates else None
-    troubled = [c for c in comparisons if c.status in {"conflict", "ambiguous"}]
+    troubled = [c for c in comparisons if c.status in {"conflict", "ambiguous"} and c not in judged.settled]
     if narrowed is not None and len(narrowed[0]) < len(candidates):
         # Fail closed: a comparison is ignored only when every side it has is a candidate narrowing set aside.
         # One whose values match no candidate (a stale report, say) still refuses the cell.
         aside = {_identity(c.value) for c in candidates} - {_identity(c.value) for c in narrowed[0]}
         troubled = [c for c in troubled if not _only_about(c, aside)]
-    if (refused := _review_refusal(evidence, troubled, comparisons, trusted)) is not None:
+    if (refused := _review_refusal(evidence, troubled, comparisons, trusted, judged.notes)) is not None:
         return refused
-    details = [_UNTRUSTED_NOTE] if len(trusted) != len(evidence) else []
+    details = [_UNTRUSTED_NOTE] if untrusted else []
+    details.extend(judged.notes)
     several = _several_conditions(candidates)
     if narrowed is None:
         return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
@@ -148,11 +165,21 @@ def decide(
     agreed = len({c.backend for c in final}) == 2 and all(rules.within(chosen.scalar, c.scalar, spec) for c in final)
     if not agreed and any(not rules.same(chosen.scalar, c.scalar, spec) for c in final):
         return reject("multiple_values", "多个候选值未经双路一致确认，无法唯一确定")
-    return _commit(spec, chosen, final, agreed=agreed, details=details)
+    details.extend(_doubt_notes(final, judged.scores))
+    # ``supervised`` only when the cell really rests on a settled winner: narrowing may have set that value
+    # aside for another of its lane's, which then stands on its own as any single-source value does.
+    supervised = any(_identity(c.value) in judged.winners for c in final)
+    return _commit(spec, chosen, final, agreed=agreed, supervised=supervised, details=details)
 
 
 def _commit(
-    spec: FieldSpec, chosen: _Candidate, final: Sequence[_Candidate], *, agreed: bool, details: list[str]
+    spec: FieldSpec,
+    chosen: _Candidate,
+    final: Sequence[_Candidate],
+    *,
+    agreed: bool,
+    supervised: bool = False,
+    details: list[str],
 ) -> Decision:
     """Nothing refused the evidence: record the value, the conditions and blocks it rests on, and how."""
     conditions = joined([c.value.condition or "" for c in final])
@@ -165,7 +192,9 @@ def _commit(
     details.append(f"采用 {chosen.backend}；抽取重复一致率 {chosen.value.agreement:g}；合并重复证据")
     return Decision(
         chosen.scalar,
-        "agree" if agreed or len(final) > 1 else "single_source",
+        # ``supervised``: one lane's word, the other's ruled out by the supervisor; a reader must not take it
+        # for an agreement, and the web table badges it with the lane it came from.
+        "agree" if agreed else "supervised" if supervised else "single_source",
         conditions,
         sources,
         joined(details),
@@ -227,19 +256,119 @@ def _review_refusal(
     troubled: Sequence[FieldComparison],
     comparisons: Sequence[FieldComparison],
     trusted: Sequence[tuple[Backend, FieldValue]],
+    notes: Sequence[str] = (),
 ) -> Decision | None:
-    """The refusals that follow, in order: a troubled comparison, none at all, or no trusted evidence."""
+    """The refusals that follow, in order: a troubled comparison, none at all, or no trusted evidence. ``notes``
+    are the supervisor's, kept in every refusal so a settlement never disappears from the record."""
     if troubled:
         status = "conflict" if any(c.status == "conflict" for c in troubled) else "ambiguous"
-        return _rejection(evidence, status, "双路比较存在冲突或歧义，需人工复核")
+        unsettled = [note for c in troubled if (note := _scores_note(c))]
+        return _rejection(evidence, status, joined(["双路比较存在冲突或歧义，需人工复核", *unsettled, *notes]))
     if not comparisons:
-        return _rejection(evidence, "unreviewed", "比较报告没有覆盖该字段")
+        return _rejection(evidence, "unreviewed", joined(["比较报告没有覆盖该字段", *notes]))
     if not trusted:
-        return _rejection(evidence, "ungrounded", "没有同时通过原文定位且包含有效引用的证据")
+        return _rejection(evidence, "ungrounded", joined(["没有同时通过原文定位且包含有效引用的证据", *notes]))
     return None
 
 
 _UNTRUSTED_NOTE = "已排除未定位到原文或缺少有效引用的候选"
+
+
+# ---- The supervisor's verdicts ----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Judged:
+    """What the supervisor's verdicts do to one cell's evidence."""
+
+    # The conflicts settled: out of the troubled list.
+    settled: tuple[FieldComparison, ...]
+    # The values a settlement ruled out (by _identity): out of the evidence.
+    losers: frozenset[tuple[object, ...]]
+    # The values a settlement chose: a cell resting on one is ``supervised``.
+    winners: frozenset[tuple[object, ...]]
+    # Every score, by the value it judged, for the doubt notes of a committed value.
+    scores: dict[tuple[object, ...], SupervisorScore]
+    notes: tuple[str, ...]
+
+
+_NOTHING_JUDGED = _Judged((), frozenset(), frozenset(), {}, ())
+
+
+def _supervised(
+    comparisons: Sequence[FieldComparison],
+    evidence: Sequence[tuple[Backend, FieldValue]],
+    trusted: Sequence[tuple[Backend, FieldValue]],
+) -> _Judged:
+    """The supervisor's verdicts applied to this cell.
+
+    A conflict is settled only when one side is ``trusted`` and the other ``doubted``, and the trusted side is
+    itself trusted evidence (located in the text, carrying a citation): two doubted sides, an uncertain one, an
+    unscored one (``error``, or a side the judge could not be shown) or a winner grounding rejected leave it a
+    conflict, for a person to settle.
+    """
+    if all(c.supervision is None for c in comparisons):
+        return _NOTHING_JUDGED
+    lane_of = {_identity(value): backend for backend, value in evidence}
+    trusted_ids = {_identity(value) for _, value in trusted}
+    settled: list[FieldComparison] = []
+    losers: set[tuple[object, ...]] = set()
+    winners: set[tuple[object, ...]] = set()
+    scores: dict[tuple[object, ...], SupervisorScore] = {}
+    notes: list[str] = []
+    for c in comparisons:
+        if c.supervision is None:
+            continue
+        for value, score in ((c.a, c.supervision.a), (c.b, c.supervision.b)):
+            if value is not None and score is not None:
+                scores[_identity(value)] = score
+        if c.status != "conflict" or c.a is None or c.b is None:
+            continue
+        score_a, score_b = c.supervision.a, c.supervision.b
+        if score_a is None or score_b is None or {score_a.verdict, score_b.verdict} != {"trusted", "doubted"}:
+            continue
+        winner, loser = (c.a, c.b) if score_a.verdict == "trusted" else (c.b, c.a)
+        if _identity(winner) not in trusted_ids:
+            continue
+        settled.append(c)
+        losers.add(_identity(loser))
+        winners.add(_identity(winner))
+        won, lost = scores[_identity(winner)], scores[_identity(loser)]
+        notes.append(
+            f"双路冲突由监督模型裁定：采用 {_lane(lane_of, winner)} {_quote(winner)}（评分 {won.score:.2f}），"
+            f"排除 {_lane(lane_of, loser)} {_quote(loser)}（评分 {lost.score:.2f}：{_critique(lost)}）"
+        )
+    return _Judged(tuple(settled), frozenset(losers), frozenset(winners), scores, tuple(notes))
+
+
+def _lane(lane_of: dict[tuple[object, ...], Backend], value: FieldValue) -> str:
+    return lane_of.get(_identity(value), "?")
+
+
+def _doubt_notes(final: Sequence[_Candidate], scores: dict[tuple[object, ...], SupervisorScore]) -> list[str]:
+    """For a committed candidate the supervisor doubted (a borderline agreement): the doubt, kept with the value."""
+    return [
+        f"监督模型对 {c.backend} 的该值存疑（评分 {score.score:.2f}）：{_critique(score)}"
+        for c in final
+        if (score := scores.get(_identity(c.value))) is not None and score.verdict == "doubted"
+    ]
+
+
+def _scores_note(c: FieldComparison) -> str:
+    """How the supervisor scored an unsettled troubled comparison, or "" when it did not look at it."""
+    if c.supervision is None:
+        return ""
+    sides = []
+    for value, score in ((c.a, c.supervision.a), (c.b, c.supervision.b)):
+        if value is None:
+            continue
+        judged = "未评分" if score is None else f"{score.score:.2f}（{_critique(score)}）"
+        sides.append(f"{_quote(value)}：{judged}")
+    return "监督模型未能裁定：" + "；".join(sides)
+
+
+def _critique(score: SupervisorScore) -> str:
+    return score.critique or score.flag
 
 
 def _trusted(evidence: Sequence[tuple[Backend, FieldValue]]) -> list[tuple[Backend, FieldValue]]:

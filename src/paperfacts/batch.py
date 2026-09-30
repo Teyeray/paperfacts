@@ -24,6 +24,7 @@ from paperfacts.profile import DomainProfile
 from paperfacts.readings import shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout
+from paperfacts.supervisor import carry_supervision
 from paperfacts.threads import ContextThreadPoolExecutor
 from paperfacts.workbook import write_dataset
 from paperfacts.workflow import (
@@ -82,7 +83,9 @@ def export_document(document: DocumentInput, settings: Settings, profile: Domain
     # Grounding is rechecked on read, so comparison must use those same refreshed values. Stored too: the web
     # serves the report beside the table, and the two must be the same verdicts. Every entity's stored matching
     # is reused: re-comparing with one would leave every other entity's samples unmatched, as false "missing".
-    report = compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matchings, options)
+    # No model runs here, so the supervisor's stored scores are carried onto the rebuilt comparisons: without
+    # them every settled cell would go back to a conflict, and the report be stored under the supervised key.
+    report = carry_supervision(compare_lanes(lanes[BACKEND_A], lanes[BACKEND_B], report.matchings, options), report)
     reason = incomplete_reason(lanes, report)
     if reason:
         raise FileNotFoundError(f"{document.display_filename}: {reason}; run it again")

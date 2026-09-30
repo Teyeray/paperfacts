@@ -202,10 +202,6 @@ def extraction_code_fingerprint() -> str:
         "grounding.py",
         "continuation.py",
         "kinds.py",
-        "supervisor.py",
-        "validation.py",
-        "supervisor.py",
-        "validation.py",
     )
 
 
@@ -355,6 +351,16 @@ def extractor_key_for(settings: Settings, profile: DomainProfile, model: str | N
 
 
 @dataclass(frozen=True)
+class SupervisorOptions:
+    """What decides a supervisor score and the verdict it is thresholded into (:mod:`paperfacts.supervisor`)."""
+
+    model: str
+    # Below this a score is ``doubted``; at or above ``vote_threshold`` it is ``trusted``.
+    min_confidence: float
+    vote_threshold: float
+
+
+@dataclass(frozen=True)
 class ComparisonOptions:
     """Every setting that decides a stored comparison and the table consolidated from it, in one value.
 
@@ -365,15 +371,35 @@ class ComparisonOptions:
 
     profile: DomainProfile
     ambiguous_match_confidence: float
+    # None when the supervisor stage is off, which is also the built-in baseline: the key then carries no
+    # trace of it, so turning the stage on or off renames only the reports it changes.
+    supervisor: SupervisorOptions | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings, profile: DomainProfile) -> ComparisonOptions:
-        return cls(profile=profile, ambiguous_match_confidence=settings.ambiguous_match_confidence)
+        supervisor = None
+        if settings.supervisor_enabled:
+            supervisor = SupervisorOptions(
+                model=settings.supervisor_model,
+                min_confidence=settings.supervisor_min_confidence,
+                vote_threshold=settings.supervisor_vote_threshold,
+            )
+        return cls(
+            profile=profile, ambiguous_match_confidence=settings.ambiguous_match_confidence, supervisor=supervisor
+        )
+
+
+@cache
+def supervisor_code_fingerprint() -> str:
+    """The supervisor's selection rule, prompts and thresholding, and ``prompts.py`` for the repair question a
+    malformed score is sent back with. Hashed into ``comparison_key`` only when the stage is on; ``decide.py``,
+    which consumes the verdicts, is in ``comparison_code_fingerprint`` always."""
+    return source_fingerprint("supervisor.py", "prompts.py")
 
 
 def comparison_key(options: ComparisonOptions) -> str:
     profile = options.profile
-    material = {
+    material: dict[str, object] = {
         "schema": profile_comparison_fingerprint(profile),
         "ambiguous_confidence": options.ambiguous_match_confidence,
         "normalization": normalization_fingerprint(),
@@ -381,6 +407,17 @@ def comparison_key(options: ComparisonOptions) -> str:
         "matching_system": _per_entity(profile, matching_system_prompt),
         "matching_slots": _slot_material(profile, matching=True),
     }
+    if options.supervisor is not None:
+        # Imported here, not at module scope: ``supervisor`` imports ``compare``, which imports this module.
+        from paperfacts.supervisor import supervisor_system_prompt
+
+        material["supervisor"] = {
+            "model": options.supervisor.model,
+            "min_confidence": options.supervisor.min_confidence,
+            "vote_threshold": options.supervisor.vote_threshold,
+            "system": supervisor_system_prompt(),
+            "code": supervisor_code_fingerprint(),
+        }
     return content_fingerprint(_dumps(material))
 
 

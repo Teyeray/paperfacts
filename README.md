@@ -470,22 +470,6 @@ Reading property-vs-condition charts with a vision model; see [Reading figures](
 
 ### `vlm`
 
-### `supervisor`
-
-The supervisor is a separate model that scores extracted values to detect hallucinations. It runs lazily — only on disagreements and borderline agreements — targeting ~40% of extractions where verification matters most.
-
-- `supervisor.enabled` (bool, default `false`): enable the supervisor stage
-- `supervisor.provider` (string, default `"openai_compat"`): `"openai_compat"` for a local/external endpoint, `"anthropic"` to use the main LLM client
-- `supervisor.base_url` (string, default `"http://localhost:8000/v1"`): OpenAI-compatible endpoint URL (vLLM, mlx-vlm-server, etc.)
-- `supervisor.model` (string, default `"qwen2.5-7b-instruct"`): model name the endpoint serves
-- `supervisor.api_key_env` (string, default `"SUPERVISOR_API_KEY"`): environment variable holding the API key
-- `supervisor.min_confidence` (float, default `0.6`): score threshold below which a value is flagged for retry
-- `supervisor.max_retries` (int, default `2`): maximum retry attempts for low-confidence extractions
-- `supervisor.vote_threshold` (float, default `0.6`): minimum score for weighted voting across passes
-- `supervisor.timeout_s` (float, default `30.0`): timeout in seconds for supervisor requests
-
-Environment overrides: `PAPERFACTS_SUPERVISOR_ENABLED`, `PAPERFACTS_SUPERVISOR_PROVIDER`, `PAPERFACTS_SUPERVISOR_BASE_URL`, `PAPERFACTS_SUPERVISOR_MODEL`, `PAPERFACTS_SUPERVISOR_API_KEY_ENV`, `PAPERFACTS_SUPERVISOR_MIN_CONFIDENCE`, `PAPERFACTS_SUPERVISOR_MAX_RETRIES`, `PAPERFACTS_SUPERVISOR_VOTE_THRESHOLD`, `PAPERFACTS_SUPERVISOR_TIMEOUT_S`.
-
 Visual validation: a vision model transcribes the region a value was cited from, and the code decides whether
 the value occurs in that transcription. The model is never told the value and never asked whether it is right;
 the verdict is grounding's own matcher run against the transcription, so the test that judges a parser's text
@@ -509,6 +493,33 @@ judges the model's text too.
 
 Its own cache key, `validation_key`: it is never folded into `extractor_key` or `comparison_key`, so a prompt
 tweak here re-asks the vision model and renames nothing else.
+
+### `supervisor`
+
+A second, usually small, model that scores a value against the passage it cites. It runs inside the `compare`
+stage and is lazy: it looks only at fields where the two lanes **conflict**, and at fields where they agree on a
+value within 10 % of an edge of the field's `valid_range` (where a mistaken quantity most often lands). Unlike
+visual validation it *is* told the value and asked whether the passage supports it, and its score is only ever
+used to break a tie the code could not: a conflict where it trusted one lane and doubted the other is settled
+for the trusted lane, and the cell is `supervised` (one lane's word, vouched for; never `agree`). An agreed
+value it doubted is still committed, with the critique in the row's detail. A conflict it could not settle,
+and every request that failed, leaves the cell refused as before with the scores in the audit trail.
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Run the supervisor. Default `false` |
+| `base_url` | Its OpenAI-compatible endpoint (a vLLM or mlx server, or a hosted one), or `null` for the `llm` one |
+| `model` | Default `qwen2.5-7b-instruct`: one passage in, one score out, which a 7B-class instruct model does well |
+| `api_key_env` | The environment variable holding the endpoint's key, or `null` for the LLM's key. A named variable that is unset is an error, never a fall-back |
+| `min_confidence` | Below this score a value is `doubted`. Default 0.6 |
+| `vote_threshold` | At or above this score a value is `trusted`; between the two it is `uncertain` and settles nothing. Default 0.6. Must be at least `min_confidence` |
+| `timeout_s` | Per request. Default 30; one failed request is retried once. Requests run `llm.concurrency` at a time |
+
+A request that still fails leaves that value unscored, and a report holding one is not stored: the next run
+asks again, and only that request reaches the endpoint. A side the judge cannot be shown whole (a value citing
+no block, or a passage over 12 000 characters) is not scored at all, so a passage cut short can never doubt a
+value. The model, both thresholds and the supervisor's prompt are hashed into `comparison_key` only while the
+stage is on, so turning it on or off renames the reports it changes and nothing else.
 
 ### `parsers`, `server`, `web`, `overlay`, `comparison`
 
@@ -546,6 +557,9 @@ points at its own services without editing the shared file:
 `PAPERFACTS_HTTP_TIMEOUT_S`, `PAPERFACTS_LLM_BASE_URL`, `PAPERFACTS_LLM_MODEL`,
 `PAPERFACTS_LLM_TIMEOUT_S`, `PAPERFACTS_LLM_CONTEXT_TOKENS`, `PAPERFACTS_LLM_TEMPERATURE`,
 `PAPERFACTS_LLM_MAX_TOKENS`, `PAPERFACTS_LLM_REASONING_EFFORT`,
+`PAPERFACTS_SUPERVISOR_ENABLED`, `PAPERFACTS_SUPERVISOR_BASE_URL`, `PAPERFACTS_SUPERVISOR_MODEL`,
+`PAPERFACTS_SUPERVISOR_API_KEY_ENV`, `PAPERFACTS_SUPERVISOR_MIN_CONFIDENCE`, `PAPERFACTS_SUPERVISOR_VOTE_THRESHOLD`,
+`PAPERFACTS_SUPERVISOR_TIMEOUT_S`,
 `PAPERFACTS_LLM_INVENTORY_REASONING_EFFORT`, `PAPERFACTS_LLM_CONCURRENCY`, `PAPERFACTS_LLM_MAX_IN_FLIGHT`,
 `PAPERFACTS_LLM_RETRY_ATTEMPTS`, `PAPERFACTS_LLM_RETRY_BACKOFF_S`, `PAPERFACTS_LLM_OFFLINE`, `PAPERFACTS_EXTRACTION_MODE`,
 `PAPERFACTS_EXTRACTION_PASSES`, `PAPERFACTS_CANDIDATE_LIMIT`, `PAPERFACTS_SERVER_HOST`,

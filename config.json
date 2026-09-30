@@ -64,12 +64,10 @@
   },
   "supervisor": {
     "enabled": false,
-    "provider": "openai_compat",
-    "base_url": "http://localhost:8000/v1",
+    "base_url": null,
     "model": "qwen2.5-7b-instruct",
-    "api_key_env": "SUPERVISOR_API_KEY",
+    "api_key_env": null,
     "min_confidence": 0.6,
-    "max_retries": 2,
     "vote_threshold": 0.6,
     "timeout_s": 30.0
   },

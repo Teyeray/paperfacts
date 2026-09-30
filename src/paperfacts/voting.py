@@ -178,9 +178,7 @@ def merge_passes(results: Sequence[ExtractedRecords], *, reference_fields: Colle
                 slot = (*vote, ranks[vote])
                 slot_of[identity] = slot
                 entry_counts[vote] = max(entry_counts[vote], ranks[vote])
-                slots.setdefault(slot, _Tally(exemplar=value)).votes += (
-                    value.supervisor_score if value.supervisor_score is not None else 1.0
-                )
+                slots.setdefault(slot, _Tally(exemplar=value)).votes += 1
                 cited[slot] = value.source_ids
             else:
                 cited[slot] = (*cited[slot], *value.source_ids)
@@ -214,7 +212,7 @@ def merge_passes(results: Sequence[ExtractedRecords], *, reference_fields: Colle
     for (scope, _vote, _rank), tally in slots.items():
         value, votes = tally.exemplar, tally.votes
         if votes < majority:
-            dropped.append(f"{value.field}: only {int(votes)}/{passes} passes produced {value.value_raw!r}")
+            dropped.append(f"{value.field}: only {votes}/{passes} passes produced {value.value_raw!r}")
             continue
         kept.setdefault(scope, []).append(value.model_copy(update={"agreement": votes / passes}))
 

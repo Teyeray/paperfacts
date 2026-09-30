@@ -244,16 +244,6 @@ class FieldValue(BaseModel):
     agreement: float = Field(
         default=1.0, ge=0.0, le=1.0, description="fraction of extraction passes that produced this value"
     )
-    supervisor_score: float | None = Field(
-        default=None,
-        description="supervisor confidence score for this value; None when supervisor did not run or field not checked",
-    )
-    low_confidence: bool = Field(
-        default=False,
-        description=(
-            "lanes agreed but supervisor score fell below threshold; kept with this flag after retry exhaustion"
-        ),
-    )
     bound: str | None = Field(
         default=None,
         description="a bound ('above', '<') the cited block writes right before value_raw; set by grounding",
