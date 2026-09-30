@@ -33,6 +33,8 @@
       <div class="upload-hint">上传即开始：两路解析 → LLM 抽取 → 对齐比较</div>
       <div class="upload-hint upload-profile hidden" id="upload-profile"></div>
       <label class="upload-force"><input type="checkbox" id="upload-force"> 忽略缓存，全部重跑</label>
+      <label class="upload-force upload-figures"><input type="checkbox" id="upload-figures" aria-describedby="upload-figures-hint"> 上传后识图</label>
+      <div class="upload-hint" id="upload-figures-hint">识图用视觉模型读取图中数值：较慢，按图计费；也可以之后在文档页点「识图」。</div>
     </section>
     <div class="rail-head">
       <h2>文档库</h2>
@@ -88,6 +90,7 @@
     </div>
     <div class="doc-actions">
       <label class="force-label"><input type="checkbox" data-slot="force"> 强制重跑</label>
+      <button class="secondary" data-action="figures" type="button">识图</button>
       <button class="primary" data-action="run" type="button">重新处理</button>
     </div>
   </header>
@@ -113,15 +116,18 @@
     </div>
     <div data-slot="results-entities"></div>
   </section>
-  <section class="figures hidden" data-slot="figures" aria-label="图中读数">
+  <section class="figures" data-slot="figures" aria-label="图中读数">
     <div class="results-head"><h2>图中读数</h2></div>
+    <p class="figures-empty" data-slot="figures-empty" role="status"></p>
     <p class="figures-warning hidden" data-slot="figures-warning" role="note"></p>
+    <div data-slot="figures-body">
     <p class="results-note muted">视觉模型从“性质—条件”图上读出的近似值：线性轴 ±10%，对数轴或 4 条以上系列 ±20%。只作参考，不进结果表，也不参与两路比较；横轴读数会被取整到刻度，不用来判断是哪个<span data-ui="entity_label_zh"></span>。点击一行（或聚焦后按回车），在页面上定位这张图。</p>
     <div class="table-wrap">
       <table class="facts-table figures-table">
         <thead><tr><th>图</th><th>字段</th><th>系列</th><th>横轴（参考）</th><th>读数</th><th>图中原始读数</th><th>说明</th></tr></thead>
         <tbody data-slot="figure-rows"></tbody>
       </table>
+    </div>
     </div>
   </section>
   <div class="workbench">

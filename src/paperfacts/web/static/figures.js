@@ -5,12 +5,36 @@
 
 import { releaseFact } from "./facts.js";
 import { escapeHtml, fmt, onActivate, toast } from "./html.js";
-import { LANES, slot, state } from "./state.js";
+import { LANES, currentJob, isActive, slot, state } from "./state.js";
 import { revealViewer } from "./viewer.js";
+
+// The figures stage as the server reports it: the live job's when there is one, else the files on disk.
+export function figuresStage() {
+  const stages = currentJob()?.stages ?? state.summary?.stages ?? [];
+  return stages.find((stage) => stage.name === "figures") ?? null;
+}
+
+// Whether the stored readings are current (read under today's settings): the button then offers a re-read.
+export const figuresRead = () => state.summary?.stages?.find((stage) => stage.name === "figures")?.status === "done";
+
+// With no readings the section still shows, and says why: charts are read only on request, so an empty section
+// must read as "not asked yet", not as a broken page.
+function emptyMessage() {
+  const job = currentJob();
+  if (isActive(job) && job.figures) return "正在识图：视觉模型逐张读图（每张约一分钟），完成后读数会显示在这里。";
+  const stage = figuresStage();
+  if (stage?.status === "failed") return `上次识图没有完成${stage.detail ? `（${stage.detail}）` : ""}，可以再次识图。`;
+  if (figuresRead()) return "已识图：没有从图上读到可用的数值（本文可能没有可读的“性质—条件”图）。";
+  if (!state.summary?.pdf_available) return "尚未识图。识图要从 PDF 上截取图片，这篇文档没有 PDF：请重新上传后再识图。";
+  return "尚未识图。点上方「识图」用视觉模型读取图中数值（较慢，按图计费；解析和抽取沿用已有结果），或在上传时勾选「上传后识图」。";
+}
 
 export function renderFigures(root) {
   const rows = state.figures?.rows ?? [];
-  root.classList.toggle("hidden", !rows.length);
+  const empty = slot("figures-empty", root);
+  empty.textContent = rows.length ? "" : emptyMessage();
+  empty.classList.toggle("hidden", Boolean(rows.length));
+  slot("figures-body", root).classList.toggle("hidden", !rows.length);
   const warn = slot("figures-warning", root);
   const notes = [];
   if (state.figures?.stale) notes.push("这些读数是在旧设置下读出的（模型、提示或字段表已变），重新读图前仅供参考。");

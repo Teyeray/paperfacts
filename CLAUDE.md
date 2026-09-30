@@ -219,6 +219,12 @@ this file is the part that is easy to get wrong.
   and their own web section; `dataset.py` and `decide.py` must not import `figures.py`. A failure in it marks only its own
   stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
   tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
+- Charts are read only on request: a run reads them when `figures.enabled` is on (built-in default off), with
+  `--figures`, or when its web job asks (`Job.figures`, from 「识图」 / `POST .../run?figures=true` or the upload's
+  `figures` form field; `force_figures` is 「重新识图」 and implies `figures`). `pipeline_runner` switches the stage
+  on for that job only (`dataclasses.replace(settings, figures_enabled=True)`), which moves no key. `run-all` and
+  `deploy.sh --rerun` never ask. Charts never requested are `skipped` ("charts not requested",
+  `workflow.FIGURES_NOT_REQUESTED`), never `pending` unless `figures.enabled` is on.
 - Where readings are stored and which are shown (`shown_figures`, `read_document_figures`, `FiguresView`,
   `figure_rows`) is `readings.py`, not `figures.py`: `figures.py`'s source is hashed into `figure_key`, and
   moving storage or display code there would rename every stored reading.
@@ -286,7 +292,9 @@ this file is the part that is easy to get wrong.
 - Background jobs run on `web.max_parallel_documents` workers, never two on the same document; a worker
   takes the oldest queued job whose document is free. A `Job` is a frozen value in a lock-guarded dict,
   replaced whole on every transition, so a poller never sees a half-applied state. Submitting the same
-  document twice under one profile while it is active returns the same job. A job's log is attributed by a context variable:
+  document twice under one profile while it is active returns the same job, but only when that job does everything
+  asked (`force`, `figures`, `force_figures`, each at least as much): otherwise a new job queues behind it, so a
+  chart request never gets back a run that will not read charts. A job's log is attributed by a context variable:
   every pool in the pipeline is `threads.ContextThreadPoolExecutor`, which runs each task in a copy of the
   caller's context; a plain `ThreadPoolExecutor` would drop its records from the log.
 - One server per data root. The per-document and per-parser locks are process-local, so two servers over one

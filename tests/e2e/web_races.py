@@ -41,11 +41,12 @@ from paperfacts.compare import ComparisonCounts, ComparisonReport, FieldComparis
 from paperfacts.config import Settings
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import BACKENDS, PageGeometry, ParsedArtifact
+from paperfacts.readings import StoredReadings
 from paperfacts.storage import document_key
 from paperfacts.web.app import create_app
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import Job, JobManager
-from paperfacts.workflow import stage_names
+from paperfacts.workflow import FIGURES_NOT_REQUESTED, stage_names
 from support.extraction import make_field, make_lane, make_sample
 from support.factories import make_blank_pdf, make_block
 from support.profiles import make_one_entity_profile, make_reference_profile, shipped_profile
@@ -69,6 +70,9 @@ FIELDS = [
 
 def stub_runner(job: Job, mark: Callable[[str, str, str], None]) -> None:
     for stage in stage_names():
+        if stage == "figures" and not job.figures:  # as run_document marks charts nobody asked for
+            mark(stage, "skipped", FIGURES_NOT_REQUESTED)
+            continue
         mark(stage, "running", "")
         time.sleep(STAGE_SECONDS)
         mark(stage, "done", "stub")
@@ -333,6 +337,14 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     }
     for index in range(3, 28):  # a long library, as on the real server
         seed_document(library, root, index, f"filler paper {index}.pdf", samples=1, comparisons=1)
+    # A paper whose charts were read under the current settings (and gave nothing): its button offers a re-read.
+    docs["R"] = seed_document(library, root, 29, "R 已识图的论文.pdf", samples=1, comparisons=1)
+    StoredReadings(
+        document_id=library.identity(docs["R"]).sha256,
+        figure_key=library.figure_key,
+        model="stub",
+        profile=profile.name,
+    ).write(library.layout.figures_path(docs["R"], library.figure_key, profile.name))
     app = create_app(settings, profile=profile, jobs=JobManager(stub_runner, stage_names(), workers=2))
     # A second server under a profile with two entity types, one seeded paper: the page groups by entity there. Its
     # address travels in `docs` beside that paper's id, so every check keeps the one signature.
@@ -580,6 +592,65 @@ async def rerun_during_reload(page: Page, base: str, docs: dict[str, str], _: Pa
     await page.evaluate("import('/router.js').then((router) => router.reloadView())")
     await page.wait_for_selector("#document-view .stage.running", timeout=5000)
     await page.wait_for_selector("text=处理完成", timeout=len(stage_names()) * STAGE_SECONDS * 1000 + 10000)
+
+
+@check("识图 reads the charts of a paper that never had them read, and the section says what is going on")
+async def read_charts(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["B"])
+    button = page.locator('#document-view [data-action="figures"]')
+    empty = page.locator('#document-view [data-slot="figures-empty"]')
+    expect((await button.text_content()) == "识图", f"the button reads {await button.text_content()!r}")
+    expect(await button.is_enabled(), "识图 is disabled on an idle paper with a PDF")
+    expect("尚未识图" in (await empty.text_content() or ""), f"the empty section says {await empty.text_content()!r}")
+    expect(await page.is_hidden('#document-view [data-slot="figures-body"]'), "an empty readings table is shown")
+    stage = page.locator("#document-view .stage.skipped", has_text="识图")
+    expect(await stage.count() == 1, "the never-requested figures stage is not shown as skipped")
+    async with page.expect_request(lambda request: f"/api/documents/{docs['B']}/run?" in request.url) as sent:
+        await button.click()
+    url = (await sent.value).url
+    expect("figures=true" in url and "force_figures=false" in url and "force=false" in url, f"asked {url}")
+    await page.wait_for_selector("#document-view .stage.running", timeout=5000)
+    expect(await button.is_disabled(), "识图 stays enabled while its job runs")
+    expect("正在识图" in (await empty.text_content() or ""), f"while reading it says {await empty.text_content()!r}")
+    await page.wait_for_selector("text=处理完成", timeout=len(stage_names()) * STAGE_SECONDS * 1000 + 10000)
+    await page.wait_for_function(
+        "!document.querySelector('#document-view [data-action=\"figures\"]').disabled", timeout=5000
+    )
+
+
+@check("重新识图 on a paper whose charts were read asks first, then re-asks every chart")
+async def reread_charts(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["R"])
+    button = page.locator('#document-view [data-action="figures"]')
+    expect((await button.text_content()) == "重新识图", f"the button reads {await button.text_content()!r}")
+    empty = await page.text_content('#document-view [data-slot="figures-empty"]') or ""
+    expect("已识图" in empty, f"a read paper with no readings says {empty!r}")
+    asked: list[str] = []
+    page.on("request", lambda request: asked.append(request.url) if "/run?" in request.url else None)
+    page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.dismiss()))
+    await button.click()
+    await page.wait_for_timeout(300)
+    expect(not asked, f"a dismissed confirmation still queued {asked}")
+    page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
+    async with page.expect_request(lambda request: "/run?" in request.url) as sent:
+        await button.click()
+    expect("force_figures=true" in (await sent.value).url, f"asked {(await sent.value).url}")
+    await page.wait_for_selector("text=处理完成", timeout=len(stage_names()) * STAGE_SECONDS * 1000 + 10000)
+
+
+@check("上传后识图 queues the upload's job with chart reading, and only when it is ticked")
+async def upload_with_charts(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
+    await page.goto(f"{base}/")
+    await page.wait_for_selector("#doc-list .doc-item")
+    box = page.locator("#upload-figures")
+    expect(not await box.is_checked(), "上传后识图 starts ticked")
+    for tick in (False, True):
+        await box.set_checked(tick)
+        async with page.expect_response(lambda response: "/api/documents?" in response.url) as answered:
+            await page.set_input_files("#file-input", str(pdf))
+        job = (await (await answered.value).json())["job"]
+        expect(job["figures"] is tick, f"ticked={tick} queued a job with figures={job['figures']}")
+        await page.wait_for_selector("text=处理完成", timeout=len(stage_names()) * STAGE_SECONDS * 1000 + 10000)
 
 
 @check("a link to no document says so in Chinese")

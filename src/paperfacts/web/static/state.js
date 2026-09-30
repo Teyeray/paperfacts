@@ -14,7 +14,7 @@ export const STATUS_ORDER = ["agree", "conflict", "ambiguous", "missing"];
 export const STAGE_LABEL = {
   "parse:mineru": "解析 MinerU",
   "parse:paddleocr_vl": "解析 PaddleOCR-VL",
-  figures: "读图",
+  figures: "识图",
   "extract:mineru": "抽取 MinerU",
   "extract:paddleocr_vl": "抽取 PaddleOCR-VL",
   compare: "对齐比较",
