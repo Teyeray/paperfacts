@@ -7,16 +7,19 @@ a lambda returning fixed bytes, so every test is about this module's own decisio
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
 from paperfacts import figures
 from paperfacts.config import Settings
-from paperfacts.errors import LlmError, LlmOfflineMiss
+from paperfacts.errors import ConfigError, LlmError, LlmOfflineMiss
+from paperfacts.fields import spectrum_xs
 from paperfacts.figures import (
     USER_PROMPT,
     FigureReadings,
     figure_groups,
+    is_refusal,
     parse_answer,
     precision_for,
     read_figures,
@@ -25,8 +28,9 @@ from paperfacts.figures import (
 from paperfacts.keys import figure_key, figure_key_for
 from paperfacts.models import NormalizedBBox, PageGeometry, ParsedArtifact
 from paperfacts.profile import FigureSlots
+from paperfacts.readings import figure_rows
 from support.factories import DOC_ID, make_block
-from support.profiles import make_profile, shipped_profile
+from support.profiles import DELETE, make_profile, shipped_profile
 from support.vision import NOT_A_CHART, FakeVisionClient, chart_answer
 
 BOX = NormalizedBBox(x1=0.1, y1=0.1, x2=0.5, y2=0.4)
@@ -453,8 +457,17 @@ def charted_key(changes: dict[str, object] | None = None) -> str:
         {"fields.1.description": "Thickness of the dried coating."},
         {"fields.1.canonical_unit": "cm"},
         {"fields.0.figure_readable": True},
+        {"fields.1.figure_spectrum_axis": "wavelength (nm)", "fields.1.figure_spectrum_points": ["550"]},
     ],
-    ids=["chart_definition", "subject", "keywords", "description", "canonical_unit", "another_field_readable"],
+    ids=[
+        "chart_definition",
+        "subject",
+        "keywords",
+        "description",
+        "canonical_unit",
+        "another_field_readable",
+        "spectrum",
+    ],
 )
 def test_the_figure_key_moves_with_a_chart_slot_or_a_chart_field(changes):
     assert charted_key(changes) != charted_key()
@@ -725,3 +738,232 @@ def test_comment_stripping_starts_at_the_first_brace_and_handles_nested_trailing
 
     assert figures._strip_comments(reply) == '{"a": [1, 2], "b": {"c": "x,}"}}'
     assert parse_answer(reply.replace('"a"', '"chart": true, "a"')) == {"chart": True, "a": [1, 2], "b": {"c": "x,}"}}
+
+
+# ---- Spectra ------------------------------------------------------------------------------------------------
+
+
+def _with_spectrum(profile, axis: str | None, points: tuple[str, ...]):
+    """``profile`` with transmittance's spectrum declared as given (None: read as markers only)."""
+    fields = tuple(
+        dataclasses.replace(spec, figure_spectrum_axis=axis, figure_spectrum_points=points)
+        if spec.name == "transmittance"
+        else spec
+        for spec in profile.fields
+    )
+    return dataclasses.replace(profile, fields=fields)
+
+
+SPECTRAL = _with_spectrum(TCO, "wavelength (nm)", ("550", "400-800/50"))
+MARKERS_ONLY = _with_spectrum(TCO, None, ())
+SPECTRUM_FIGURE = (fig(0, 0), cap(0, 1, "Fig. 4 Optical transmittance of the films"))
+RANGE_XS = (400, 450, 500, 550, 600, 650, 700, 750, 800)
+
+
+def spectrum_answer(curves: dict[str, dict[float, float]], *, field: str = "transmittance", unit: str = "%") -> dict:
+    return {
+        "chart_type": "spectrum",
+        "x_axis": {"quantity": "Wavelength", "unit": "nm", "scale": "linear"},
+        "y_axes": [{"id": "left", "field": field, "quantity": "T", "unit": unit, "scale": "linear", "broken": False}],
+        "curves": [
+            {
+                "label": label,
+                "y_axis": "left",
+                "readings": [{"x": x, "y": y, "confidence": 0.9} for x, y in ys.items()],
+            }
+            for label, ys in curves.items()
+        ],
+    }
+
+
+def run_spectral(answer, profile=SPECTRAL) -> FigureReadings:
+    art = artifact(*SPECTRUM_FIGURE)
+    return read_figures(
+        art, lambda page, bbox: b"png", FakeVisionClient(answer), profile, figure_key="k" * 12, max_per_document=12
+    )
+
+
+def _field(profile, name: str):
+    return next(spec for spec in profile.fields if spec.name == name)
+
+
+def test_the_spectrum_question_is_asked_only_when_a_listed_field_declares_a_spectrum_axis():
+    marker = figures.user_prompt("caption", [_field(SPECTRAL, "sheet_resistance")], SPECTRAL.figures)
+    spectral = figures.user_prompt("caption", SPECTRAL.figure_fields, SPECTRAL.figures)
+    undeclared = figures.user_prompt("caption", MARKERS_ONLY.figure_fields, MARKERS_ONLY.figures)
+
+    for rendered in (marker, undeclared):
+        assert "Step 2b" not in rendered and '"curves"' not in rendered
+        assert "Spectra, XRD/XPS/Raman patterns" in rendered
+        assert "Step 2 - otherwise read the chart carefully:" in rendered
+        assert rendered.endswith('"confidence": <0..1>}]}\n')
+    assert (
+        "or a spectrum: a continuous curve of transmittance against wavelength (nm), one curve per legend" in spectral
+    )
+    assert "insets: ignore them." in spectral
+    assert "Other spectra, XRD/XPS/Raman patterns" in spectral
+    assert "- transmittance (x = wavelength (nm)): 400, 450, 500, 550, 600, 650, 700, 750, 800\n" in spectral
+    assert '{"chart_type": "spectrum",' in spectral
+    assert "For a property-vs-condition chart, output ONLY this JSON (strict JSON" in spectral
+
+
+def test_a_spectrum_answer_gives_a_point_reading_and_the_code_s_mean_per_curve():
+    curves = {"ITO-RT": {x: 80.0 + x / 100 for x in RANGE_XS}, "ITO-300": {x: 90.0 for x in RANGE_XS}}
+
+    result = run_spectral(spectrum_answer(curves))
+
+    assert result.panels[0].status == "read" and result.panels[0].readings == 4
+    by = {(reading.series, reading.kind): reading for reading in result.readings}
+    point = by["ITO-RT", "spectrum_point"]
+    assert (point.x_value, point.x_quantity, point.x_unit) == ("550", "wavelength", "nm")
+    assert point.y == pytest.approx(85.5) and point.unit == "%"
+    mean = by["ITO-RT", "spectrum_mean"]
+    assert mean.x_value == "400-800"
+    assert mean.y == pytest.approx(sum(80.0 + x / 100 for x in RANGE_XS) / len(RANGE_XS))
+    for reading in result.readings:
+        assert reading.approximate and reading.precision == figures.LINEAR_PRECISION
+        assert reading.field == "transmittance"
+        assert reading.note.startswith(figures.SPECTRUM_NOTE)
+    assert by["ITO-300", "spectrum_mean"].y == pytest.approx(90.0)
+
+
+def test_a_partly_read_range_has_no_mean():
+    # 750 and 800 missing: averaging the rest would be the mean of 400-700, not of 400-800.
+    partial = {x: 85.0 for x in RANGE_XS if x < 750}
+
+    readings = run_spectral(spectrum_answer({"A": partial})).readings
+
+    assert [(reading.kind, reading.x_value) for reading in readings] == [("spectrum_point", "550")]
+
+
+def test_a_curve_reading_is_matched_to_its_x_whatever_its_spelling_and_others_are_ignored():
+    curve = {str(x): 85.0 for x in RANGE_XS} | {"525": 10.0}
+
+    readings = run_spectral(spectrum_answer({"A": curve})).readings
+
+    assert [reading.y for reading in readings] == [85.0, 85.0]
+
+
+def test_a_spectrum_answer_is_not_a_refusal():
+    answer = spectrum_answer({"A": {550: 85.0}})
+
+    assert not is_refusal(answer)
+    assert not is_refusal({"chart_type": "spectrum"})
+    assert not is_refusal({"chart_type": "something", "curves": answer["curves"]})
+    assert is_refusal({"chart_type": "something"})
+
+
+def test_of_several_answers_the_last_with_curves_wins():
+    first = spectrum_answer({"A": {550: 85.0}})
+    reply = json.dumps(first) + json.dumps({"chart_type": "spectrum", "curves": []})
+
+    assert parse_answer(reply) == first
+
+
+def test_a_spectrum_of_a_field_that_declares_no_axis_is_not_read():
+    answer = spectrum_answer({"A": {x: 85.0 for x in RANGE_XS}}, field="sheet_resistance", unit="Ω/sq")
+    both = (fig(0, 0), cap(0, 1, "Fig. 4 Sheet resistance and transmittance of the films"))
+
+    result = read_figures(
+        artifact(*both),
+        lambda page, bbox: b"png",
+        FakeVisionClient(answer),
+        SPECTRAL,
+        figure_key="k" * 12,
+        max_per_document=12,
+    )
+
+    assert result.readings == ()
+
+
+def test_the_spectrum_readings_convert_with_the_axis_unit():
+    # A fraction axis: 0.855 reads as 85.5 %, by the field's own bare-number policy and the declared units.
+    readings = run_spectral(spectrum_answer({"A": {550: 0.855}}, unit="")).readings
+
+    assert readings[0].y == pytest.approx(85.5)
+
+
+def test_a_marker_chart_reads_as_before_under_a_profile_with_spectra():
+    answer = chart_answer(field="transmittance", unit="%", points=((100, 85.0),))
+
+    [reading] = run_spectral(answer).readings
+
+    assert reading.kind == "marker"
+    assert reading.y == pytest.approx(85.0)
+    assert reading.x_value == 100 and reading.x_unit == "sccm"
+    assert reading.note is None
+
+
+def test_a_reading_stored_before_spectra_is_a_marker():
+    stored = run(artifact(*SELECTED), FakeVisionClient(chart_answer())).readings[0].model_dump(mode="json")
+    del stored["kind"]
+
+    assert figures.FigureReading.model_validate(stored).kind == "marker"
+
+
+def test_a_spectrum_reading_s_row_says_it_is_one():
+    readings = run_spectral(spectrum_answer({"A": {x: 85.0 for x in RANGE_XS}}))
+    marker = run(artifact(*SELECTED), FakeVisionClient(chart_answer()))
+
+    rows = figure_rows(readings, filename="a.pdf")
+    assert all(row["detail"].startswith("光谱曲线读数（目测）; curve read by eye") for row in rows)
+    assert rows[1]["x"] == "wavelength = 400-800 nm"
+    assert all(not (row["detail"] or "").startswith("光谱") for row in figure_rows(marker, filename="a.pdf"))
+
+
+@pytest.mark.parametrize(
+    ("point", "expected"),
+    [
+        ("550", (550.0,)),
+        ("400-500/50", (400.0, 450.0, 500.0)),
+        ("0.1-0.3/0.1", (0.1, 0.2, 0.3)),
+    ],
+)
+def test_a_spectrum_point_expands_by_its_declared_step(point, expected):
+    assert spectrum_xs(point) == expected
+
+
+@pytest.mark.parametrize("point", ["400-800", "400-800/0", "800-400/50", "400-800/30", "nm", "0-1000/1", ""])
+def test_a_spectrum_point_without_a_usable_step_is_refused(point):
+    with pytest.raises(ValueError):
+        spectrum_xs(point)
+
+
+SPECTRUM = {
+    "fields.1.figure_spectrum_axis": "wavelength (nm)",
+    "fields.1.figure_spectrum_points": ["550", "400-800/50"],
+}
+
+
+def test_a_profile_declares_a_spectrum_on_a_figure_readable_field():
+    spec = make_profile(CHARTED | SPECTRUM).fields[1]
+
+    assert spec.figure_spectrum_axis == "wavelength (nm)"
+    assert spec.figure_spectrum_points == ("550", "400-800/50")
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"fields.1.figure_spectrum_points": ["400-800"]}, "neither a number like '550' nor a range with a step"),
+        ({"fields.1.figure_spectrum_points": ["400-800/30"]}, "does not land on 800"),
+        ({"fields.1.figure_spectrum_points": []}, "non-empty list"),
+        ({"fields.1.figure_spectrum_points": ["550", "550"]}, "twice"),
+        ({"fields.1.figure_spectrum_axis": " "}, "non-empty string"),
+        ({"fields.1.figure_spectrum_points": DELETE}, "go together"),
+        ({"fields.1.figure_readable": False, "figures": None}, "needs figure_readable"),
+    ],
+    ids=["no-step", "step-misses-end", "empty", "duplicate", "blank-axis", "axis-alone", "not-readable"],
+)
+def test_a_spectrum_declaration_is_checked(changes, message):
+    declared = {key: value for key, value in (SPECTRUM | changes).items() if value is not DELETE}
+    with pytest.raises(ConfigError, match=message):
+        make_profile(CHARTED | declared)
+
+
+def test_a_spectrum_is_for_a_numeric_single_valued_field_only():
+    text_field = {"fields.2.figure_spectrum_axis": "wavelength (nm)", "fields.2.figure_spectrum_points": ["550"]}
+    with pytest.raises(ConfigError, match="figure_spectrum_axis is only meaningful for a numeric field"):
+        make_profile(CHARTED | text_field)
+    with pytest.raises(ConfigError, match="cannot be combined with figure_spectrum_axis, figure_spectrum_points"):
+        make_profile(CHARTED | text_field | {"fields.2.cardinality": "many"})

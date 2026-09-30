@@ -27,6 +27,7 @@ adding an attribute is a decision about which keys it belongs to.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
@@ -63,6 +64,31 @@ RANGE_ENDS: tuple[RangePolicy, ...] = ("lower", "upper")
 # What a value quoted with an "after ..." clause ("92.5% after 100 cycles") becomes: refused as the value of
 # another state of the sample, or read with the clause moved into its measurement condition.
 AfterClause = Literal["refuse", "condition"]
+# A spectrum point as a profile declares it: one x ("550") or a range with its sampling step ("400-800/50").
+SPECTRUM_POINT = re.compile(r"(?P<low>\d+(?:\.\d+)?)(?:-(?P<high>\d+(?:\.\d+)?)/(?P<step>\d+(?:\.\d+)?))?")
+# The most x values one range may be sampled at: each is a reading the vision model is asked for, per curve.
+MAX_SPECTRUM_SAMPLES = 100
+
+
+def spectrum_xs(point: str) -> tuple[float, ...]:
+    """The x values a declared spectrum point is read at: the one x, or every step of a range, both ends included.
+    Raises ValueError for anything else, including a range whose step does not land on its upper end."""
+    match = SPECTRUM_POINT.fullmatch(point)
+    if match is None:
+        raise ValueError(f"{point!r} is neither a number like '550' nor a range with a step like '400-800/50'")
+    low = float(match["low"])
+    if match["high"] is None:
+        return (low,)
+    high, step = float(match["high"]), float(match["step"])
+    if step <= 0 or high <= low:
+        raise ValueError(f"{point!r} needs a lower end below its upper end and a step above 0")
+    count = (high - low) / step
+    if abs(count - round(count)) > 1e-9:
+        raise ValueError(f"{point!r}: a step of {step:g} does not land on {high:g}")
+    if round(count) + 1 > MAX_SPECTRUM_SAMPLES:
+        raise ValueError(f"{point!r} samples {round(count) + 1} x values; at most {MAX_SPECTRUM_SAMPLES}")
+    # Rounded so that 0.1 steps give 0.3, not 0.30000000000000004, which would miss the model's "0.3".
+    return tuple(round(low + index * step, 9) for index in range(round(count) + 1))
 
 
 class FieldRole(StrEnum):
@@ -170,6 +196,12 @@ class FieldSpec:
     named_values: tuple[tuple[str, float], ...] = field(
         default=(), metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING)
     )
+    # The x quantity a spectrum of this field runs over ("wavelength (nm)"), for a figure_readable field a paper
+    # also plots as a continuous curve. None: a chart of it is read only as markers, and spectra are refused.
+    figure_spectrum_axis: str | None = field(default=None, metadata=_roles(FieldRole.FIGURE))
+    # Where a spectrum is read, in that axis's unit: a single x ("550") or a range with its sampling step
+    # ("400-800/50"). The step is declared, never assumed, because another axis (eV, cm^-1) needs another one.
+    figure_spectrum_points: tuple[str, ...] = field(default=(), metadata=_roles(FieldRole.FIGURE))
 
     @property
     def is_sample_level(self) -> bool:

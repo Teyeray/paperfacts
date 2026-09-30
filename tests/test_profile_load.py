@@ -40,6 +40,8 @@ AFTER_B0 = {
     "entity": None,
     "references": None,
     "named_values": [],
+    "figure_spectrum_axis": None,
+    "figure_spectrum_points": [],
 }
 # Post-B0 attributes a field deliberately moved off its B0 behaviour, with the value it now has; every other field
 # keeps the AFTER_B0 value. substrate_temperature: "at room temperature (RT)" (coatings-13-01719) reads as 25 ℃.
