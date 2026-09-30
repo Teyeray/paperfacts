@@ -95,6 +95,17 @@ def test_a_prompt_slot_edit_re_extracts_in_both_modes():
     assert moved_keys({"prompt.matching_justification_example": "both were dried at 80 °C"}) == {"comparison"}
 
 
+def test_the_article_type_hint_is_hashed_by_value_and_its_default_is_left_out():
+    # It reaches only a user prompt (a review's inventory question), which no system-prompt hash sees.
+    from paperfacts.profile import PromptSlots
+
+    assert moved_keys({"prompt.article_type_hint": "Only the films this paper deposits are samples."}) == {
+        "document",
+        "passage",
+    }
+    assert moved_keys({"prompt.article_type_hint": PromptSlots.article_type_hint}) == set()
+
+
 def test_the_profile_file_name_is_not_hashed():
     # Copying a profile under another name (a second instance, a renamed file) keeps every stored result.
     renamed = make_profile({"name": "other"}, source=Path("elsewhere/other.json"))

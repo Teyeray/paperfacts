@@ -9,8 +9,9 @@ cache key.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -23,17 +24,23 @@ from paperfacts.dataset import DocumentDataset, Row
 from paperfacts.kinds import CellValue, interval_text
 from paperfacts.profile import IMPLICIT_ENTITY, DomainProfile, EntitySpec
 from paperfacts.storage import write_atomic
+from paperfacts.ui_copy import article_type_zh
 
 
-def data_columns(profile: DomainProfile, entity: EntitySpec | None = None) -> tuple[tuple[str, str], ...]:
+def data_columns(
+    profile: DomainProfile, entity: EntitySpec | None = None, *, article_type: bool = False
+) -> tuple[tuple[str, str], ...]:
     """``(key, header)`` of a paper or sample row, in order: who the row is, then one column per field -- the
     paper-level fields and ``entity``'s own (the primary entity's by default, which in a profile without entity
     types is every field). Here rather than in :mod:`paperfacts.dataset`: a header is display text, and that
-    module is hashed."""
+    module is hashed. ``article_type`` adds 文献类型 to the paper sheet (``entity`` None) only: it describes the
+    paper, and a sample sheet would repeat it on every row."""
+    paper_sheet = entity is None
     entity = entity or profile.primary
     return (
         ("document_id", "文档ID"),
         ("filename", "文件名"),
+        *((("article_type", "文献类型"),) if article_type and paper_sheet else ()),
         ("sample_id", "样品ID"),
         ("sample_label", "样品标签"),
         ("conditions", "样品及测量条件"),
@@ -234,11 +241,15 @@ def write_dataset(
     *,
     failures: Sequence[dict[str, str]] = (),
     figure_rows: Sequence[Row] = (),
+    article_types: Mapping[str, str | None] = MappingProxyType({}),
 ) -> None:
     """Replace a workbook atomically; repeated PDF hashes produce exactly one paper row.
 
     ``figure_rows`` (from :func:`paperfacts.readings.figure_rows`) only fill the 图中读数 sheet: chart readings
     are approximate and never compared, so they never reach a sample or paper row.
+
+    ``article_types`` (document id -> what its lanes were told, :func:`paperfacts.extract.detect_article_type`)
+    fills a 文献类型 column on the paper sheet, which is there only when some document has a type.
     """
     unique = sorted(
         {document.document_id: document for document in documents}.values(), key=lambda document: document.document_id
@@ -248,8 +259,14 @@ def write_dataset(
     several = len(profile.entities) > 1
     by_name = {column.name: column for column in field_columns(profile)}
     scientific = frozenset(spec.name for spec in profile.fields if spec.display_format == "scientific")
-    papers = _formatted([doc.paper_row for doc in unique], by_name)
-    _worksheet(workbook, "论文数据", data_columns(profile), papers, "Papers", scientific=scientific)
+    typed = {document_id: kind for document_id, kind in article_types.items() if kind is not None}
+    paper_rows = [
+        {**doc.paper_row, **({"article_type": article_type_zh(typed.get(doc.document_id))} if typed else {})}
+        for doc in unique
+    ]
+    papers = _formatted(paper_rows, by_name)
+    paper_columns = data_columns(profile, article_type=bool(typed))
+    _worksheet(workbook, "论文数据", paper_columns, papers, "Papers", scientific=scientific)
     for entity, title in _entity_sheets(profile):
         rows = [
             row

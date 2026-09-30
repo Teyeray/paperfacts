@@ -40,7 +40,8 @@ from paperfacts.storage import (
     stored_pdf,
     write_bytes_atomic,
 )
-from paperfacts.stored import is_finished, stored_comparison, stored_dataset, stored_stages
+from paperfacts.stored import article_type, is_finished, stored_comparison, stored_dataset, stored_stages
+from paperfacts.ui_copy import article_type_zh
 from paperfacts.workflow import Stage, read_lane
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,10 @@ class DocumentSummary(BaseModel):
     )
     counts: ComparisonCounts | None = None
     uploaded_at: str | None = None
+    article_type: str | None = Field(
+        default=None, description="what the stored lanes were told the paper is (extract.detect_article_type)"
+    )
+    article_type_zh: str | None = Field(default=None, description="its label on the page (ui_copy.ARTICLE_TYPE_ZH)")
     # Set by the route, which knows every served profile; the library knows only its own.
     profiles_done: tuple[str, ...] = Field(
         default=(), description="the served profiles this document is finished under, the one asked about included"
@@ -165,6 +170,7 @@ class Library:
         status = {stage.name: stage.status for stage in stages}
         counts = self._counts(document_id)
         pdf = stored_pdf(self.layout, document_id, identity)
+        kind = article_type(self.layout, document_id, self.extractor_key)
         return DocumentSummary(
             document_id=document_id,
             name=identity.name if identity else document_id,
@@ -176,6 +182,8 @@ class Library:
             stages=stages,
             counts=counts,
             uploaded_at=identity.created_at if identity and identity.uploaded else None,
+            article_type=kind,
+            article_type_zh=article_type_zh(kind),
         )
 
     def _counts(self, document_id: str) -> ComparisonCounts | None:

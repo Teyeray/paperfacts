@@ -255,6 +255,26 @@ def test_extracted_is_per_backend(library: Library):
     assert summary.extracted == {"mineru": True, "paddleocr_vl": False}
 
 
+def test_the_summary_carries_the_article_type_its_lanes_were_told_and_its_label(library: Library):
+    lane = seed_extraction(library, "mineru")
+    lane.model_copy(update={"article_type": "review"}).write(
+        library.layout.extraction_path(lane.document_id, "mineru", library.extractor_key)
+    )
+
+    summary = library.summary(DOC_KEY)
+
+    assert (summary.article_type, summary.article_type_zh) == ("review", "综述")
+
+
+def test_an_ordinary_paper_has_no_article_type(library: Library):
+    seed_extraction(library, "mineru")
+
+    summary = library.summary(DOC_KEY)
+
+    assert (summary.article_type, summary.article_type_zh) == (None, None)
+    assert library.summary("f" * 16).article_type is None
+
+
 def test_an_extraction_from_another_model_does_not_count_as_extracted(library: Library, tco_profile):
     """The extraction artifact's path carries an ``extractor_key`` (a fingerprint of the model +
     prompt + field schema).

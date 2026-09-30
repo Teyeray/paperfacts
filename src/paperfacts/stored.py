@@ -106,6 +106,23 @@ def _dataset_hashes(path: Path) -> dict[Backend, str]:
     return dict(DatasetPayload.model_validate_json(path.read_text(encoding="utf-8")).artifact_sha256)
 
 
+def article_type(layout: DataLayout, document_id: str, extractor_key: str) -> str | None:
+    """What the stored lanes under ``extractor_key`` were told the document is (both are told the same), or None
+    when neither lane is stored, readable or typed."""
+    for backend in BACKENDS:
+        try:
+            kind = _by_stamp(layout.extraction_path(document_id, backend, extractor_key), _article_type)
+        except (OSError, ValueError):  # pydantic's ValidationError is a ValueError
+            continue
+        if kind is not None:
+            return kind
+    return None
+
+
+def _article_type(path: Path) -> str | None:
+    return LaneExtraction.read(path).article_type
+
+
 def _unanswered_fields(path: Path) -> tuple[str, ...]:
     return tuple(question.field for question in LaneExtraction.read(path).failed_questions)
 

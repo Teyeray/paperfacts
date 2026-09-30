@@ -21,6 +21,7 @@ from paperfacts.fields import FieldSpec
 from paperfacts.profile import FigureSlots, PromptSlots
 from paperfacts.profile_loader import load_profile, profile_path
 from paperfacts.prompts import (
+    article_note,
     extraction_system_prompt,
     field_system_prompt,
     inventory_system_prompt,
@@ -107,6 +108,8 @@ def test_every_tco_slot_reaches_the_prompts(tco_profile):
             inventory_system_prompt(tco_profile),
             field_system_prompt(tco_profile),
             matching_system_prompt(tco_profile),
+            # Only a review's inventory question carries this note.
+            article_note(tco_profile, "review"),
         )
     )
     for slot in dataclasses.fields(PromptSlots):

@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -30,7 +31,7 @@ from paperfacts.dataset import (
     write_dataset_json,
 )
 from paperfacts.errors import Cancelled, ConfigError, LlmOfflineMiss, ParserError
-from paperfacts.extract import extract_lane, informative_blocks
+from paperfacts.extract import detect_article_type, extract_lane, informative_blocks
 from paperfacts.figures import MAX_TOKENS as FIGURE_MAX_TOKENS
 from paperfacts.figures import RETRY_ATTEMPTS as FIGURE_RETRY_ATTEMPTS
 from paperfacts.figures import TEMPERATURE as FIGURE_TEMPERATURE
@@ -267,6 +268,13 @@ def load_artifact(document: DocumentInput, backend: Backend, settings: Settings)
     return ParsedArtifact.read(path)
 
 
+def document_article_type(document: DocumentInput, settings: Settings) -> str | None:
+    """What the paper's front matter marks it as, decided once from both lanes' parses: a review badge one parser
+    dropped is still the paper's. Both lanes are told the same thing, so both parses must exist."""
+    detected = (detect_article_type(load_artifact(document, backend, settings).blocks) for backend in BACKENDS)
+    return next((kind for kind in detected if kind is not None), None)
+
+
 # ---- Extraction and comparison --------------------------------------------------------------------------------
 
 
@@ -338,6 +346,7 @@ def extract_document(
     options: ExtractionOptions,
     client: LlmClient,
     *,
+    article_type: str | None,
     force: bool = False,
 ) -> LaneExtraction:
     """Extract one lane. What is stored is the model's own wording; what is returned is normalised.
@@ -346,6 +355,10 @@ def extract_document(
     lanes builds it once for the document, so the two lanes cannot be asked differently. Changing the prompt,
     the model or the schema changes ``extractor_key`` and re-runs the extraction. ``force`` bypasses both this
     cache and the LLM cache, and really re-asks.
+
+    ``article_type`` is :func:`document_article_type`, required so that no caller can forget it and ask one lane
+    without the note the other carries. A stored lane told another type is a miss, as one of another parse is:
+    re-parsing one lane can change what the document is detected as.
     """
     if options.model != client.model:
         # The file would be named after one model while another answered.
@@ -355,6 +368,15 @@ def extract_document(
     artifact = load_artifact(document, backend, settings)
     if not force:
         cached = read_lane(layout, document.document_id, backend, key, options.profile, artifact=artifact)
+        if cached is not None and cached.article_type != article_type:
+            logger.info(
+                "stored %s extraction of doc=%s was told article type %s, the document is now %s; re-deriving",
+                backend,
+                document.document_id[:16],
+                cached.article_type,
+                article_type,
+            )
+            cached = None
         if cached is not None and cached.failed_questions:
             # Only those questions reach the model again: their invalid answers were never cached.
             logger.info(
@@ -367,9 +389,9 @@ def extract_document(
             logger.info("extraction cache_hit backend=%s doc=%s", backend, document.document_id[:16])
             return cached
 
-    lane = extract_lane(artifact, client, options, concurrency=settings.llm_concurrency, refresh=force).model_copy(
-        update={"artifact_sha256": artifact.content_hash()}
-    )
+    lane = extract_lane(
+        artifact, client, options, concurrency=settings.llm_concurrency, refresh=force, article_type=article_type
+    ).model_copy(update={"artifact_sha256": artifact.content_hash()})
     lane.write(layout.extraction_path(document.document_id, backend, key))
     return normalize_lane(lane, options.profile)
 
@@ -399,7 +421,11 @@ def compare_document(
     layout = DataLayout(settings.data_root)
     if lanes is None:
         options = ExtractionOptions.from_settings(settings, comparison.profile, client.model)
-        lanes = {backend: extract_document(document, backend, settings, options, client) for backend in BACKENDS}
+        article_type = document_article_type(document, settings)
+        lanes = {
+            backend: extract_document(document, backend, settings, options, client, article_type=article_type)
+            for backend in BACKENDS
+        }
     lane_a, lane_b = lanes[BACKEND_A], lanes[BACKEND_B]
     if lane_a.extractor_key != lane_b.extractor_key:
         # One report of lanes asked two different ways would be a comparison of the asking, not of the parses.
@@ -725,7 +751,13 @@ def run_document(
     dataset = consolidate_document(document, lanes, report, comparison)
     layout = DataLayout(settings.data_root)
     excel_path = layout.dataset_path(document.document_id, profile.name)
-    write_dataset([dataset], excel_path, profile, figure_rows=figures.rows if figures is not None else ())
+    write_dataset(
+        [dataset],
+        excel_path,
+        profile,
+        figure_rows=figures.rows if figures is not None else (),
+        article_types={document.document_id: lanes[BACKEND_A].article_type},
+    )
     dataset_json_path: Path | None = None
     if dataset.incomplete:
         # The stored dataset is what marks a paper finished (stored.is_finished), so it is kept back for the
@@ -815,6 +847,8 @@ def _extract_and_compare(
     with build_llm_client(settings) as client:
         # One value for both lanes: whatever decides what a lane is asked cannot differ between them.
         options = ExtractionOptions.from_settings(settings, comparison.profile, client.model)
+        # Decided once from both parses, for the same reason: both lanes are told the same thing about the paper.
+        article_type = document_article_type(document, settings)
         # The two lanes are independent and both spend their time waiting on the model, so they overlap.
         # Nothing here touches pdf.py: extraction reads the stored artifact JSON and never opens the PDF,
         # so PDFium's process-wide lock is not involved. Both lanes are handed the same `settings` and the
@@ -827,7 +861,16 @@ def _extract_and_compare(
             on_stage(f"extract:{backend}", "running", "")
         with ContextThreadPoolExecutor(max_workers=len(BACKENDS), thread_name_prefix="paperfacts-lane") as pool:
             futures: dict[Backend, Future[LaneExtraction]] = {
-                backend: pool.submit(extract_document, document, backend, settings, options, client, force=force)
+                backend: pool.submit(
+                    extract_document,
+                    document,
+                    backend,
+                    settings,
+                    options,
+                    client,
+                    article_type=article_type,
+                    force=force,
+                )
                 for backend in BACKENDS
             }
             extracted = _every_lane(futures, "extract", on_stage=on_stage, describe=_lane_detail)
@@ -861,11 +904,18 @@ def _lane_detail(lane: LaneExtraction) -> str:
     )
 
 
-def corpus_workbook(datasets: Sequence[DocumentDataset], settings: Settings, profile: DomainProfile) -> bytes:
-    """One workbook for several stored documents, each document's chart readings beside its data."""
+def corpus_workbook(
+    datasets: Sequence[DocumentDataset],
+    settings: Settings,
+    profile: DomainProfile,
+    *,
+    article_types: Mapping[str, str | None] = MappingProxyType({}),
+) -> bytes:
+    """One workbook for several stored documents, each document's chart readings beside its data.
+    ``article_types`` (document id -> what its lanes were told) is the caller's: it reads the stored lanes."""
     figure_views = (shown_figures(d.document_id, d.filename, settings, profile) for d in datasets)
     rows = [row for view in figure_views if view for row in view.rows]
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / f"{profile.name}.xlsx"
-        write_dataset(datasets, path, profile, figure_rows=rows)
+        write_dataset(datasets, path, profile, figure_rows=rows, article_types=article_types)
         return path.read_bytes()

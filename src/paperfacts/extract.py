@@ -45,6 +45,8 @@ from paperfacts.normalize import drop_implausible
 from paperfacts.passages import candidate_blocks, fit_budget, inventory_blocks
 from paperfacts.profile import DomainProfile, EntitySpec
 from paperfacts.prompts import (
+    article_note,
+    document_article_note,
     extraction_system_prompt,
     extraction_user_prompt,
     field_system_prompt,
@@ -71,6 +73,7 @@ from paperfacts.records import (
     response_to_records,
     sample_key,
 )
+from paperfacts.text import normalize_text
 from paperfacts.threads import ContextThreadPoolExecutor
 from paperfacts.voting import deduplicate, merge_passes
 
@@ -100,6 +103,16 @@ _HEADING_TYPES = frozenset({"title", "text"})
 _CAPTION_LIKE = re.compile(r"[\W_]*(?:table|fig(?:ure)?s?)\.?\s*S?\d", re.IGNORECASE)
 # The heading an accepted manuscript puts over that list ("Figure captions", "Tables").
 _CAPTION_SECTION = re.compile(r"(?:figure|table)\s+captions?|tables?|figures?", re.IGNORECASE)
+# What marks a paper as a review on its first page. High precision only, because a research paper told it is a review
+# loses its samples: a short block that is only the article-type badge ("Critical review", "Mini-review", "Review
+# article"), or a sentence that says so of itself ("This review summarizes"). "Overview", "perspective", "roadmap"
+# titles and a bare "we review" also appear on research papers, so they are not evidence.
+_REVIEW_BADGE = re.compile(
+    r"(?:(?:critical|mini|short|topical|tutorial|comprehensive|systematic)[\s-]*)?reviews?(?:\s+(?:article|paper))?"
+)
+_REVIEW_BADGE_MAX_CHARS = 40
+_REVIEW_SELF_REFERENCE = re.compile(r"\b(?:this|the\s+present)\s+(?:critical\s+|mini[- ]?)?review\b")
+_ARTICLE_TYPE_BLOCKS = frozenset({"text", "title"})
 # Measured on a real 10-page paper: 71.9K characters billed as 21.4K tokens, rounded down so the guard
 # errs towards over-estimating.
 CHARS_PER_TOKEN = 3.0
@@ -227,6 +240,23 @@ def _bibliography_audit(blocks: tuple[SourceBlock, ...]) -> tuple[str, ...]:
 # ---- Extraction ---------------------------------------------------------------------------------------------
 
 
+def detect_article_type(blocks: Sequence[SourceBlock]) -> str | None:
+    """``"review"`` when the first page's text or title blocks mark the paper as one, else None.
+
+    Pure and deterministic, run on each lane's parse; the workflow decides the document's type from both lanes
+    (``workflow.document_article_type``) so the two lanes are told the same thing.
+    """
+    for block in blocks:
+        if block.page != 0 or block.type not in _ARTICLE_TYPE_BLOCKS:
+            continue
+        text = normalize_text(block.content).casefold().strip()
+        if len(text) <= _REVIEW_BADGE_MAX_CHARS and _REVIEW_BADGE.fullmatch(text):
+            return "review"
+        if _REVIEW_SELF_REFERENCE.search(text):
+            return "review"
+    return None
+
+
 def _add_usage(total: dict[str, int], part: Mapping[str, int]) -> None:
     """Accumulate one call's token counts into the lane's total."""
     for key, value in part.items():
@@ -240,6 +270,7 @@ def extract_lane(
     *,
     concurrency: int = DEFAULT_LLM_CONCURRENCY,
     refresh: bool = False,
+    article_type: str | None = None,
 ) -> LaneExtraction:
     """Extract one parser lane, whole-document or question by question.
 
@@ -257,6 +288,9 @@ def extract_lane(
     request exactly as the client builds it, ``None`` sends that question with no such parameter at all, a
     value sends that effort. Both lanes get the same value, so the disagreement signal stays a comparison of
     two identically-asked lanes.
+
+    ``article_type`` is the document's (``workflow.document_article_type``), never this lane's own detection: the
+    question that decides the samples carries a note about it, and both lanes must carry the same one.
     """
     if options.passes < 1:
         raise ValueError(f"passes must be at least 1, got {options.passes}")
@@ -291,7 +325,9 @@ def extract_lane(
         ()
         if document is not None
         else tuple(
-            _take_inventory(blocks, client, options, entity, backend=artifact.backend, refresh=refresh)
+            _take_inventory(
+                blocks, client, options, entity, backend=artifact.backend, refresh=refresh, article_type=article_type
+            )
             for entity in profile.entities
         )
     )
@@ -305,7 +341,7 @@ def extract_lane(
         cache_salt = "" if index == 0 else f"pass-{index}"
         if document is not None:
             records, pass_usage, text = _extract_whole_document(
-                document, client, options, refresh=refresh, cache_salt=cache_salt
+                document, client, options, refresh=refresh, cache_salt=cache_salt, article_type=article_type
             )
         else:
             records, pass_usage, text, pass_failed = _extract_passages(
@@ -337,7 +373,12 @@ def extract_lane(
         paper=records.paper,
         samples=records.samples,
         invalid_source_ids=records.invalid_source_ids,
-        dropped=(*_bibliography_audit(artifact.blocks), *_inventory_audit(inventories), *records.dropped),
+        dropped=(
+            *_bibliography_audit(artifact.blocks),
+            *_article_audit(article_type, mode),
+            *_inventory_audit(inventories),
+            *records.dropped,
+        ),
         unattributed=records.unattributed,
         # Carried as data, not left to the audit text in `dropped`, so the web page can say why the lane is
         # empty without matching prose. The same condition that skips the sample-level questions below; with
@@ -348,6 +389,7 @@ def extract_lane(
         failed_questions=tuple(failed[spec.name] for spec in profile.fields if spec.name in failed),
         usage=usage,
         raw_response=raw_response,
+        article_type=article_type,
     )
     lane = ground_lane(
         lane, {block.source_id: block.content for block in blocks}, adjacency=block_adjacency(blocks), profile=profile
@@ -363,11 +405,12 @@ def _extract_whole_document(
     *,
     refresh: bool,
     cache_salt: str,
+    article_type: str | None = None,
 ) -> tuple[ExtractedRecords, dict[str, int], str]:
     """Document mode: one question carrying the whole filtered paper."""
     profile = options.profile
     system = extraction_system_prompt(profile)
-    user = extraction_user_prompt(document.markdown)
+    user = extraction_user_prompt(document.markdown, document_article_note(profile, article_type))
     _check_context_budget(system, user, options)
     response, text, usage = complete_validated(
         client,
@@ -425,6 +468,7 @@ def _take_inventory(
     *,
     backend: Backend,
     refresh: bool,
+    article_type: str | None = None,
 ) -> SampleInventory:
     """Ask which samples of ``entity`` exist -- once per lane.
 
@@ -434,7 +478,7 @@ def _take_inventory(
     profile = options.profile
     selection = fit_budget(inventory_blocks(blocks, entity.retrieval), budget_chars=_budget_chars(options))
     system = inventory_system_prompt(profile, entity)
-    user = inventory_user_prompt(render_markdown(selection))
+    user = inventory_user_prompt(render_markdown(selection), article_note(profile, article_type, entity))
     _check_context_budget(system, user, options)
     response, raw_text, usage = complete_validated(
         client,
@@ -460,6 +504,14 @@ def _take_inventory(
         source_ids=frozenset(block.source_id for block in selection),
         entity=entity,
     )
+
+
+def _article_audit(article_type: str | None, mode: str) -> tuple[str, ...]:
+    """What the lane was told about the paper's type, so the audit says why its samples may be none."""
+    if article_type is None:
+        return ()
+    question = "extraction" if mode == "document" else "inventory"
+    return (f"article type: {article_type}; the {question} question was told",)
 
 
 def _inventory_audit(inventories: Sequence[SampleInventory]) -> tuple[str, ...]:

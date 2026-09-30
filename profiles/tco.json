@@ -50,7 +50,8 @@
     "matching_justification_example": "both are the 100 sccm O2 sample",
     "scaled_header_examples": "\"ρ × 10^4 (Ω cm)\" or \"ρ (×10^-4 Ω·cm)\"",
     "plain_header_example": "a column \"Thickness (nm)\" gives just \"nm\"",
-    "implausible_origin": "a different layer, process step or quantity"
+    "implausible_origin": "a different layer, process step or quantity",
+    "article_type_hint": "Only TCO / transparent-electrode films the authors deposited themselves for this work are samples; films from the reviewed literature (other groups' results, compiled tables and figures of prior work) are not, however many values are quoted for them."
   },
   "figures": {
     "subject": "thin films (e.g. sputtered transparent conductive oxides)",

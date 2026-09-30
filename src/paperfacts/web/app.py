@@ -72,6 +72,7 @@ from paperfacts.profile_view import profile_definition, profile_view, prompt_sec
 from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
+from paperfacts.stored import article_type
 from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
 from paperfacts.web.jobs import Job, JobBrief, JobManager, JobRunner
 from paperfacts.web.registry import ProfileRegistry, ServedProfile, profile_file_changed
@@ -430,7 +431,15 @@ def create_app(
         if not datasets:
             raise HTTPException(status_code=404, detail="No consolidated dataset yet")
         return Response(
-            content=corpus_workbook(datasets, settings, library.profile),
+            content=corpus_workbook(
+                datasets,
+                settings,
+                library.profile,
+                # The corpus is read under the library's keys, so its lanes are the ones under its extractor key.
+                article_types={
+                    d.document_id: article_type(library.layout, d.document_id, library.extractor_key) for d in datasets
+                },
+            ),
             media_type=EXCEL_MEDIA_TYPE,
             # The registry refused a name outside IDENTIFIER, so it needs no quoting in the header.
             headers={"content-disposition": f'attachment; filename="{library.profile.name}-corpus.xlsx"'},
