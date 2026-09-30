@@ -24,7 +24,15 @@ from paperfacts.units import UnitRegistry
 
 # The markers a template fills in from computed values rather than from a slot, and the one pattern every
 # marker matches: prompts.py renders with it, and a slot may not contain a marker it would fill.
-COMPUTED_MARKERS = ("sample_groups", "paper_groups", "condition_rules", "subset_scope", "fields", "holds_key")
+COMPUTED_MARKERS = (
+    "sample_groups",
+    "paper_groups",
+    "condition_rules",
+    "subset_scope",
+    "fields",
+    "holds_key",
+    "article_type",
+)
 MARKER = re.compile(r"\{([a-z_]+)\}")
 Maturity = Literal["production", "example"]
 # The one entity type of a profile that declares none: its samples. Its name prefixes their comparison scopes
@@ -80,6 +88,12 @@ class PromptSlots:
     implausible_origin: str = "a different sample, state or quantity"
     # What a field question calls the sample list it shows ("Samples this paper reports:").
     sample_list_heading: str = "Samples"
+    # Told to the inventory question (and to document mode's one question) only when the paper's front matter marks
+    # it as a review: which samples are the paper's own. Both lanes get it, since it is decided once per document.
+    article_type_hint: str = (
+        "Only samples the authors prepared and measured themselves for this work are samples; results the paper"
+        " reviews, cites or compiles from other publications are not."
+    )
 
 
 @dataclass(frozen=True)

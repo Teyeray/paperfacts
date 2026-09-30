@@ -13,9 +13,13 @@ import pytest
 from paperfacts import figures
 from paperfacts.profile import COMPUTED_MARKERS, MARKER, FigureSlots, GroupSpec, PromptSlots
 from paperfacts.prompts import (
+    article_note,
+    document_article_note,
     extraction_system_prompt,
+    extraction_user_prompt,
     field_system_prompt,
     inventory_system_prompt,
+    inventory_user_prompt,
     matching_system_prompt,
     quoted_names,
     render,
@@ -213,3 +217,40 @@ def test_a_field_with_named_values_names_its_phrases_but_never_their_numbers():
 
 def test_a_field_without_named_values_renders_its_line_as_before():
     assert "stated in words" not in extraction_system_prompt(make_profile())
+
+
+# ---- The article-type note -------------------------------------------------------------------------
+
+
+def test_the_article_note_names_the_type_the_hint_and_the_no_samples_key():
+    profile = make_profile({"prompt.no_samples_key": "no_coating", "prompt.article_type_hint": "Only our coatings."})
+
+    note = article_note(profile, "review")
+
+    assert note == (
+        "Note on this paper: its front matter marks it as a review. Only our coatings. If that leaves no sample,"
+        ' set "no_coating" to true and "samples" empty.'
+    )
+    assert inventory_user_prompt("MD", note) == f"{note}\n\n{inventory_user_prompt('MD')}"
+
+
+def test_document_mode_has_its_own_note_without_the_no_samples_key():
+    profile = make_profile({"prompt.no_samples_key": "no_coating"})
+
+    note = document_article_note(profile, "review")
+
+    assert note.endswith(' If that leaves no sample, return "samples" empty.')
+    assert PromptSlots.article_type_hint in note and "no_coating" not in note
+    assert extraction_user_prompt("MD", note) == f"{note}\n\n{extraction_user_prompt('MD')}"
+
+
+def test_no_article_type_leaves_both_user_prompts_unchanged():
+    profile = make_profile()
+
+    assert article_note(profile, None) == document_article_note(profile, None) == ""
+    assert inventory_user_prompt("MD", "") == (
+        "Paper excerpts (Markdown with provenance markers):\n\nMD\n\nReturn the JSON object now."
+    )
+    assert (
+        extraction_user_prompt("MD") == "Paper (Markdown with provenance markers):\n\nMD\n\nReturn the JSON object now."
+    )

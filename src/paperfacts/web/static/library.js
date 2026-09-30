@@ -3,7 +3,7 @@
 // upload and the bulk run are all under the profile on screen; a document with results under other profiles says so.
 
 import { api, profileApi } from "./api.js";
-import { escapeHtml, keepFocus, toast } from "./html.js";
+import { articleTag, escapeHtml, keepFocus, toast } from "./html.js";
 import { profileTitle, servedProfile } from "./profiles.js";
 import { documentHash, navigate, reloadView } from "./router.js";
 import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, isCurrent, slot, state, viewShows } from "./state.js";
@@ -91,7 +91,7 @@ function libraryItem(doc) {
   if (doc.document_id === state.current) button.setAttribute("aria-current", "page");
   button.innerHTML = `
     <span class="name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</span>
-    <span class="sub">${progressDots(doc)}${queuedMark(doc)}<code>${escapeHtml(doc.document_id.slice(0, 8))}</code></span>
+    <span class="sub">${articleTag(doc)}${progressDots(doc)}${queuedMark(doc)}<code>${escapeHtml(doc.document_id.slice(0, 8))}</code></span>
     ${miniCounts(doc)}${otherProfilesMark(doc)}`;
   button.addEventListener("click", () => {
     if (!WIDE.matches) document.getElementById("doc-list-wrap").open = false;

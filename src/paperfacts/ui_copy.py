@@ -10,6 +10,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# What an article type (extract.detect_article_type) is called on the page and in the workbook. Domain-free: a
+# review is a review in every field of research.
+ARTICLE_TYPE_ZH: dict[str, str] = {"review": "综述"}
+
+
+def article_type_zh(article_type: str | None) -> str | None:
+    """The Chinese label of ``article_type``, the type itself when it has none, None for an ordinary paper."""
+    return None if article_type is None else ARTICLE_TYPE_ZH.get(article_type, article_type)
+
 
 @dataclass(frozen=True)
 class UiCopy:

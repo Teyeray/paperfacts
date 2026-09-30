@@ -67,6 +67,31 @@ def test_an_empty_export_still_records_failures(tmp_path, tco_profile):
     assert workbook["运行记录"].cell(2, 3).value == "failed"
 
 
+def test_the_paper_sheet_names_a_reviews_article_type(tmp_path, tco_profile):
+    thickness = [value("thickness", "0.3", "μm")]
+    result = paired(thickness, thickness)
+    output = tmp_path / "dataset.xlsx"
+
+    write_dataset([result], output, tco_profile, article_types={result.document_id: "review"})
+
+    workbook = load_workbook(output)
+    papers = {cell.value: cell.column for cell in workbook["论文数据"][1]}
+    assert workbook["论文数据"].cell(2, papers["文献类型"]).value == "综述"
+    assert papers["文献类型"] == papers["文件名"] + 1
+    # A paper's type, not a sample's: no sample sheet repeats it.
+    assert "文献类型" not in {cell.value for cell in workbook["样品数据"][1]}
+
+
+def test_without_a_typed_paper_the_paper_sheet_has_no_article_type_column(tmp_path, tco_profile):
+    thickness = [value("thickness", "0.3", "μm")]
+    result = paired(thickness, thickness)
+    output = tmp_path / "dataset.xlsx"
+
+    write_dataset([result], output, tco_profile, article_types={result.document_id: None})
+
+    assert "文献类型" not in {cell.value for cell in load_workbook(output)["论文数据"][1]}
+
+
 def test_the_series_mark_reaches_the_quality_sheet(tmp_path, tco_profile):
     result = paired(
         [value("thickness", "300", "nm", series=True)],

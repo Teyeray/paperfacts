@@ -57,6 +57,19 @@ def test_prefix_case_distinguishes_milli_from_mega():
     assert mega / milli == pytest.approx(1e9)
 
 
+@pytest.mark.parametrize("unit", ["Ω cm^-2", "Ω cm⁻²", "Ω cm−2", "Ω/cm²", "Ω·cm-2", "ohm cm-2", "ohm/cm2"])
+def test_the_per_square_centimetre_misprint_is_read_as_ohms_per_square_under_the_tco_profile(unit):
+    # derrar2022's Table 3 heads its sheet resistance "Ω cm^-2", a misprint for Ω/sq. The TCO profile declares the
+    # family as aliases of the built-in (no registry rule of its own); the registry exposes no alias note.
+    assert convert("sheet_resistance", 544.92, unit) == (544.92, "Ω/sq", None)
+
+
+@pytest.mark.parametrize("unit", ["Ω cm^-2", "Ω cm⁻²"])
+def test_the_per_square_centimetre_misprint_stays_unknown_for_resistivity(unit):
+    # The built-in resistivity pattern ends in "cm", so the alias never makes a resistivity out of an area unit.
+    assert convert("resistivity", 1e-3, unit) == (None, None, f"unknown unit {unit!r} for Ω·cm")
+
+
 # ---- Resistivity Ω·cm -------------------------------------------------------------------
 
 

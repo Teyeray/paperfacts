@@ -133,6 +133,11 @@ this file is the part that is easy to get wrong.
 - A number, date or interval quote longer than `fields.MAX_NUMBER_QUOTE` characters is dropped at cleaning and
   refused by `normalize.read_value` before parsing (the number reader is quadratic in a digit run); both measure
   the stored `value_raw`. `read_number` keeps a backstop that leaves room for the bound `read_value` prefixes.
+- Article type: `extract.detect_article_type` (page-0 badge or "this review", high precision only) is decided once
+  per document from both parses by `workflow.document_article_type` and passed to both lanes as the required
+  `article_type` of `extract_document`; a review's inventory question (document mode: its one question) carries the
+  `article_type_hint` note, the same bytes in both lanes. A stored lane told another type is a miss in
+  `extract_document`, never in `read_lane`. It is shown as a tag and the paper sheet's 文献类型 column, never a cell.
 - The model quotes; the code converts. `ExtractionResponse` has no `value`/`unit` field, so unit
   conversion cannot happen in the model even by accident.
 - Five guardrails on the response: schema and type cleaning (a numeric quote needs a digit, a number word or a

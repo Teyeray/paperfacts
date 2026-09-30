@@ -50,7 +50,8 @@
     "matching_justification_example": "both are the 100 sccm O2 sample",
     "scaled_header_examples": "\"ρ × 10^4 (Ω cm)\" or \"ρ (×10^-4 Ω·cm)\"",
     "plain_header_example": "a column \"Thickness (nm)\" gives just \"nm\"",
-    "implausible_origin": "a different layer, process step or quantity"
+    "implausible_origin": "a different layer, process step or quantity",
+    "article_type_hint": "Only TCO / transparent-electrode films the authors deposited themselves for this work are samples; films from the reviewed literature (other groups' results, compiled tables and figures of prior work) are not, however many values are quoted for them."
   },
   "figures": {
     "subject": "thin films (e.g. sputtered transparent conductive oxides)",
@@ -79,7 +80,23 @@
     ],
     "condition_unit_pattern": "\\d\\s*(?:sccm|W\\b|°C|℃|K\\b|Pa\\b|mtorr|torr|mbar|kv\\b|ma\\b|rpm|min\\b|h\\b|s\\b|(?:vol|at)\\.?\\s*%)"
   },
-  "units": {},
+  "units": {
+    "Ω/sq": {
+      "extends_builtin": true,
+      "aliases": {
+        "Ω cm^-2": 1,
+        "Ω cm-2": 1,
+        "Ω·cm^-2": 1,
+        "Ω·cm-2": 1,
+        "Ω/cm^2": 1,
+        "Ω/cm2": 1,
+        "ohm cm^-2": 1,
+        "ohm cm-2": 1,
+        "ohm/cm^2": 1,
+        "ohm/cm2": 1
+      }
+    }
+  },
   "ignored_unit_suffixes": ["Ar", "O2", "N2", "H2", "He", "Kr", "Xe", "air"],
   "ui": {
     "paper_level_label_zh": "靶材（论文级）",
@@ -446,7 +463,12 @@
       "rel_tol": 0.02,
       "abs_tol": 2.0,
       "condition_hint": null,
-      "bare_number": "reject"
+      "bare_number": "reject",
+      "named_values": {
+        "room temperature": 25,
+        "RT": 25,
+        "ambient temperature": 25
+      }
     },
     {
       "name": "annealing_temperature",

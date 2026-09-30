@@ -159,6 +159,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc-id { color: var(--ink-3); font-size: 12px; }
 .doc-note { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
 .doc-note.other-job { padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--paper-2); }
+/* A paper's front matter marks it as a review: neutral, and always a word, never a colour alone. */
+.article-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); font-family: var(--font-body); font-size: 11px; font-weight: 600; line-height: 16px; color: var(--ink-2); vertical-align: middle; }
+h1 .article-tag { margin: 0 0 0 10px; font-size: 12px; }
 .doc-item .other-profiles { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); }
 .doc-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .force-label { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--ink-2); }

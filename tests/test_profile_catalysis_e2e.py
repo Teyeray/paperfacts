@@ -420,11 +420,11 @@ def test_the_profile_endpoint_lists_the_entities(tmp_path: Path, profile: Domain
 
 
 def test_tco_keys_are_those_pinned_and_differ_from_the_catalysis_run(run):
-    from test_tco_fingerprints_pinned import B1
+    from test_tco_fingerprints_pinned import CURRENT
 
     result, _, settings, _ = run
     tco = load_profile(SHIPPED_PROFILE_PATH)
-    assert {function: function(tco) for function in B1} == B1
+    assert {function: function(tco) for function in CURRENT} == CURRENT
     tco_settings = dataclasses.replace(settings, profile=str(SHIPPED_PROFILE_PATH))
     assert extractor_key_for(tco_settings, tco) != result.dataset.extractor_key
     assert result.excel_path.name == "catalysis.xlsx"

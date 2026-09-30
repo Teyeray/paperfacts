@@ -109,9 +109,9 @@ def test_the_lanes_and_the_figures_stage_run_in_the_callers_context(monkeypatch,
     seen: list[tuple[str, str | None]] = []
     fake_extract = workflow.extract_document  # the fake pipeline's, installed above
 
-    def recording_extract(document, backend, settings, options, client, *, force=False):
+    def recording_extract(document, backend, settings, options, client, *, article_type=None, force=False):
         seen.append((backend, CALLER.get()))
-        return fake_extract(document, backend, settings, options, client, force=force)
+        return fake_extract(document, backend, settings, options, client, article_type=article_type, force=force)
 
     def recording_figures(document, settings, profile, *, force, artifact, stop):
         seen.append(("figures", CALLER.get()))

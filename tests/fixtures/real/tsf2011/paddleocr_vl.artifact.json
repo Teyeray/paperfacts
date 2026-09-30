@@ -1,0 +1,123 @@
+{
+ "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+ "backend": "paddleocr_vl",
+ "backend_version": "3.7.0",
+ "pages": [
+  {
+   "index": 0,
+   "width_pt": 595.2760009765625,
+   "height_pt": 793.7009887695312
+  }
+ ],
+ "blocks": [
+  {
+   "source_id": "paddleocr_vl_p0_b0",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "paddleocr_vl",
+   "page": 0,
+   "order": 0,
+   "bbox": {
+    "x1": 0.06831922611850061,
+    "y1": 0.1854875283446712,
+    "x2": 0.1807738814993954,
+    "y2": 0.20045351473922904
+   },
+   "type": "text",
+   "content": "Critical review",
+   "raw_label": "text",
+   "raw_backend_id": "7",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p0_b1",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "paddleocr_vl",
+   "page": 0,
+   "order": 1,
+   "bbox": {
+    "x1": 0.06711003627569528,
+    "y1": 0.20816326530612245,
+    "x2": 0.7079806529625151,
+    "y2": 0.2290249433106576
+   },
+   "type": "title",
+   "content": "TCO/metal/TCO structures for energy and flexible electronics",
+   "raw_label": "doc_title",
+   "raw_backend_id": "8",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p0_b2",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "paddleocr_vl",
+   "page": 0,
+   "order": 2,
+   "bbox": {
+    "x1": 0.06771463119709795,
+    "y1": 0.23900226757369614,
+    "x2": 0.25574365175332525,
+    "y2": 0.2562358276643991
+   },
+   "type": "text",
+   "content": "C. Guillén $ ^{*} $, J. Herrero",
+   "raw_label": "text",
+   "raw_backend_id": "9",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p0_b3",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "paddleocr_vl",
+   "page": 0,
+   "order": 3,
+   "bbox": {
+    "x1": 0.06771463119709795,
+    "y1": 0.26258503401360545,
+    "x2": 0.4607013301088271,
+    "y2": 0.2748299319727891
+   },
+   "type": "text",
+   "content": "Departamento de Energía (CIEMAT), Avda. Complutense 22, Madrid 28040, Spain",
+   "raw_label": "text",
+   "raw_backend_id": "10",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p0_b4",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "paddleocr_vl",
+   "page": 0,
+   "order": 4,
+   "bbox": {
+    "x1": 0.06771463119709795,
+    "y1": 0.3034013605442177,
+    "x2": 0.23337363966142685,
+    "y2": 0.3165532879818594
+   },
+   "type": "title",
+   "content": "ARTICLE INFO",
+   "raw_label": "paragraph_title",
+   "raw_backend_id": "11",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p0_b5",
+   "document_id": "88115225f9bed72fed69447e7c20689fb1fada27bcad84049e7b5417375e95f8",
+   "backend": "paddleocr_vl",
+   "page": 0,
+   "order": 5,
+   "bbox": {
+    "x1": 0.06831922611850061,
+    "y1": 0.32834467120181404,
+    "x2": 0.22128174123337363,
+    "y2": 0.3401360544217687
+   },
+   "type": "text",
+   "content": "Available online 30 June 2011",
+   "raw_label": "text",
+   "raw_backend_id": "12",
+   "confidence": null
+  }
+ ],
+ "raw_output_dir": "data/docs/88115225f9bed72f/raw/paddleocr_vl"
+}

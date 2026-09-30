@@ -45,6 +45,7 @@ from support.profiles import shipped_profile
 def extract(document: DocumentInput, backend: Backend, settings: Settings, profile: DomainProfile, client, **kwargs):
     """extract_document under the options a run builds from these settings for this client."""
     options = ExtractionOptions.from_settings(settings, profile, client.model)
+    kwargs.setdefault("article_type", None)
     return extract_document(document, backend, settings, options, client, **kwargs)
 
 
@@ -320,6 +321,47 @@ def test_a_lane_file_without_a_recorded_parse_still_reads(
     extract(document, "mineru", settings, tco_profile, client)
 
     assert client.call_count == 1  # unknown is not a mismatch
+
+
+def test_a_stored_lane_told_another_article_type_is_extracted_again(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile: DomainProfile
+):
+    # A re-parse of the other lane can change what the document is detected as; a lane told the old type must
+    # not keep a note its partner no longer carries.
+    client = FakeLlmClient([extraction_json(), extraction_json(value="99")])
+    extract(document, "mineru", settings, tco_profile, client)
+
+    lane = extract(document, "mineru", settings, tco_profile, client, article_type="review")
+
+    assert client.call_count == 2
+    assert client.calls[1].user.startswith("Note on this paper: its front matter marks it as a review.")
+    assert lane.article_type == "review"
+    assert extract(document, "mineru", settings, tco_profile, client, article_type="review").article_type == "review"
+    assert client.call_count == 2  # the same type is a cache hit
+
+
+def test_the_standalone_comparison_tells_both_lanes_the_documents_type(
+    settings: Settings, document: DocumentInput, parsed: dict[Backend, str], tco_profile: DomainProfile
+):
+    # Only MinerU's parse keeps the badge (xu2020's case); PaddleOCR-VL's lane is told all the same.
+    layout = DataLayout(settings.data_root)
+    blocks = (
+        make_block(page=0, order=0, backend="mineru", document_id=document.document_id, content="REVIEW"),
+        make_block(page=0, order=1, backend="mineru", document_id=document.document_id, content="Rs = 12.5"),
+    )
+    make_artifact(blocks, backend="mineru", document_id=document.document_id).write(
+        layout.artifact_path(document.document_id, "mineru")
+    )
+    client = FakeLlmClient([extraction_json(), extraction_json()])
+
+    compare(document, settings, tco_profile, client)
+
+    notes = [call.user.split("\n\n")[0] for call in client.calls]
+    assert len(notes) == 2 and notes[0] == notes[1]
+    assert notes[0].startswith("Note on this paper: its front matter marks it as a review.")
+    key = extractor_key(ExtractionOptions.from_settings(settings, tco_profile, client.model))
+    lanes = [LaneExtraction.read(layout.extraction_path(document.document_id, b, key)) for b in BACKENDS]
+    assert [lane.article_type for lane in lanes] == ["review", "review"]
 
 
 def test_a_comparison_of_other_parses_is_compared_again(
@@ -688,5 +730,5 @@ def test_options_for_another_model_are_refused(settings: Settings, document: Doc
     options = ExtractionOptions.from_settings(settings, tco_profile, "other-model")
 
     with pytest.raises(ValueError, match="do not match"):
-        extract_document(document, "mineru", settings, options, client)
+        extract_document(document, "mineru", settings, options, client, article_type=None)
     assert client.calls == []

@@ -143,6 +143,29 @@ def test_extract_forwards_force_to_the_llm(monkeypatch, two_page_pdf: Path, data
     assert client.refreshes == [False, True]
 
 
+def test_a_single_lane_extract_is_told_the_documents_article_type(
+    monkeypatch, two_page_pdf: Path, data_root: Path, api_key, document: DocumentInput, parsed
+):
+    # Only the other lane's parse shows the badge: the one lane asked for is still told, as a full run would.
+    blocks = (make_block(page=0, order=0, backend="paddleocr_vl", document_id=document.document_id, content="REVIEW"),)
+    make_artifact(blocks, backend="paddleocr_vl", document_id=document.document_id).write(
+        DataLayout(data_root).artifact_path(document.document_id, "paddleocr_vl")
+    )
+    told: list[tuple[Backend, str | None]] = []
+
+    def fake_extract_document(document, backend, settings, options, client, *, article_type, force=False):
+        told.append((backend, article_type))
+        return make_lane(backend=backend)
+
+    monkeypatch.setattr("paperfacts.cli.extract_document", fake_extract_document)
+    install_fake_llm(monkeypatch, [])
+
+    result = runner.invoke(app, ["extract", str(two_page_pdf), "-b", "mineru", "--data-root", str(data_root)])
+
+    assert result.exit_code == 0, result.output
+    assert told == [("mineru", "review")]
+
+
 def test_the_passes_option_reaches_the_settings_used_for_extraction(
     monkeypatch, two_page_pdf: Path, data_root: Path, api_key, parsed
 ):
@@ -152,7 +175,14 @@ def test_the_passes_option_reaches_the_settings_used_for_extraction(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
+        document: DocumentInput,
+        backend: Backend,
+        settings: Settings,
+        profile,
+        client,
+        *,
+        article_type: str | None,
+        force: bool = False,
     ):
         captured.append(settings)
         return make_lane(backend=backend)
@@ -175,7 +205,14 @@ def test_the_passes_option_defaults_to_the_settings_default_when_omitted(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
+        document: DocumentInput,
+        backend: Backend,
+        settings: Settings,
+        profile,
+        client,
+        *,
+        article_type: str | None,
+        force: bool = False,
     ):
         captured.append(settings)
         return make_lane(backend=backend)
@@ -197,7 +234,14 @@ def test_the_mode_option_reaches_the_settings_used_for_extraction(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
+        document: DocumentInput,
+        backend: Backend,
+        settings: Settings,
+        profile,
+        client,
+        *,
+        article_type: str | None,
+        force: bool = False,
     ):
         captured.append(settings)
         return make_lane(backend=backend)
@@ -220,7 +264,14 @@ def test_the_mode_option_defaults_to_the_settings_default_when_omitted(
     captured: list[Settings] = []
 
     def fake_extract_document(
-        document: DocumentInput, backend: Backend, settings: Settings, profile, client, *, force: bool = False
+        document: DocumentInput,
+        backend: Backend,
+        settings: Settings,
+        profile,
+        client,
+        *,
+        article_type: str | None,
+        force: bool = False,
     ):
         captured.append(settings)
         return make_lane(backend=backend)

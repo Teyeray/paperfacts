@@ -303,7 +303,8 @@ The flags worth knowing:
 - `--mode document|passage` picks how the model is asked; see below.
 - `--figures` / `--no-figures` on `run` and `batch` switches the figures stage on or off for this run,
   over `figures.enabled`; `--force-figures` re-reads the charts without redoing anything else.
-- `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
+- `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both. A one-lane
+  `extract` still needs both parses: the article type (a review) is decided over both, so both lanes are told the same.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
 - `--profile NAME_OR_PATH` on `run`, `batch`, `export`, `extract`, `compare` and `serve` runs the command
   under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
@@ -888,6 +889,7 @@ lessons come from the prompt comments and `.omc/research/`.
 | `multi_condition_example` | | Rule 7 | Two measurements of one quantity (transmittance at 550 nm and averaged) merged into one, or one dropped |
 | `implausible_origin` | | Every field line with a `valid_range` | Told what an out-of-range number usually is, the model checks before quoting it (TCO: "a different layer, process step or quantity") |
 | `sample_list_heading` | | The field question's sample list ("Samples this paper reports:") | Wording only; an entity type names its own list with it ("Reaction tests") |
+| `article_type_hint` | | A note in front of the inventory question (document mode: the one question), only when the paper's first page marks it as a review ("Critical review", "This review summarizes"); the same note in both lanes | A review lists the films of the works it reviews as samples, and both lanes agree on them. Default generic ("only samples the authors prepared and measured themselves"); TCO names its films. The paper is tagged 综述 in the library and the workbook's 文献类型 column |
 | `matching_condition_examples`, `matching_value_examples`, `matching_justification_example` | | The sample-matching prompt | Samples paired across the lanes by similar values rather than by the condition that defines them |
 
 A field's `condition_rule` fills rule 8 ("For `transmittance` always fill `condition` with the wavelength or
@@ -955,8 +957,8 @@ A profile may declare several kinds of sample, each an **entity type**: heteroge
   `prompt` may override only `sample_definition`, `field_scope`, `sample_plural`, `sample_singular`,
   `sample_unit`, `sample_examples`, `sample_id_example`, `condition_noun`, `condition_examples`,
   `no_samples_clause`, `no_samples_condition`, `samples_present_condition`, `subset_examples`,
-  `whole_series_examples`, `partial_collective_example`, `multi_condition_example`, `sample_list_heading` and the
-  `matching_*` slots; with several entities each must give its own `sample_definition`. Its `retrieval` replaces
+  `whole_series_examples`, `partial_collective_example`, `multi_condition_example`, `sample_list_heading`,
+  `article_type_hint` and the `matching_*` slots; with several entities each must give its own `sample_definition`. Its `retrieval` replaces
   either key of the profile's. Everything else is the profile's.
 - **Asking.** Each lane asks one inventory per entity, with that entity's slots and retrieval. A sample-level
   field is asked with its entity's field system prompt and sample list; a paper-level field with the primary

@@ -268,8 +268,40 @@ def extraction_system_prompt(profile: DomainProfile) -> str:
     return render(_EXTRACTION_SYSTEM, {**_values(profile), "fields": fields})
 
 
-def extraction_user_prompt(markdown: str) -> str:
-    return f"Paper (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now."
+# Put in front of the paper when its front matter marks it as a review (extract.detect_article_type), the same text in
+# both lanes. Passage mode tells the inventory question, which decides what the samples are; document mode's one
+# question has no no-samples key, so its note ends on an empty sample list instead.
+_ARTICLE_NOTE = (
+    "Note on this paper: its front matter marks it as a {article_type}. {article_type_hint} If that leaves no"
+    ' sample, set "{no_samples_key}" to true and "samples" empty.'
+)
+_DOCUMENT_ARTICLE_NOTE = (
+    "Note on this paper: its front matter marks it as a {article_type}. {article_type_hint} If that leaves no"
+    ' sample, return "samples" empty.'
+)
+
+
+def article_note(profile: DomainProfile, article_type: str | None, entity: EntitySpec | None = None) -> str:
+    """The note the inventory question of ``entity`` carries for a paper of ``article_type``; "" for None."""
+    if article_type is None:
+        return ""
+    return render(_ARTICLE_NOTE, {**_values(profile, entity), "article_type": article_type})
+
+
+def document_article_note(profile: DomainProfile, article_type: str | None) -> str:
+    """The same note for document mode's one question; "" for None."""
+    if article_type is None:
+        return ""
+    return render(_DOCUMENT_ARTICLE_NOTE, {**_values(profile), "article_type": article_type})
+
+
+def _with_note(note: str, prompt: str) -> str:
+    """``prompt`` with ``note`` in front of it; byte-identical when there is no note."""
+    return f"{note}\n\n{prompt}" if note else prompt
+
+
+def extraction_user_prompt(markdown: str, note: str = "") -> str:
+    return _with_note(note, f"Paper (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now.")
 
 
 def inventory_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:
@@ -277,8 +309,10 @@ def inventory_system_prompt(profile: DomainProfile, entity: EntitySpec | None = 
     return render(_INVENTORY_SYSTEM, _values(profile, entity))
 
 
-def inventory_user_prompt(markdown: str) -> str:
-    return f"Paper excerpts (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now."
+def inventory_user_prompt(markdown: str, note: str = "") -> str:
+    return _with_note(
+        note, f"Paper excerpts (Markdown with provenance markers):\n\n{markdown}\n\nReturn the JSON object now."
+    )
 
 
 def field_system_prompt(profile: DomainProfile, entity: EntitySpec | None = None) -> str:

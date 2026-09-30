@@ -16,6 +16,13 @@ export function el(tag, { className = "", text = null, title = null } = {}, ...c
   return node;
 }
 
+// The article-type tag (综述) of a document summary, from the server's label; "" for an ordinary paper. One builder, so
+// the library rail and the document header cannot tag a paper differently.
+export function articleTag(summary) {
+  if (!summary.article_type_zh) return "";
+  return `<span class="article-tag" title="首页标明为${escapeHtml(summary.article_type_zh)}">${escapeHtml(summary.article_type_zh)}</span>`;
+}
+
 // Very large / very small numbers use scientific notation; everything else keeps 6 significant figures with trailing zeros stripped
 export const fmt = (n) => (Math.abs(n) >= 1e5 || (Math.abs(n) < 1e-3 && n !== 0) ? n.toExponential(3) : Number(n.toPrecision(6)).toString());
 

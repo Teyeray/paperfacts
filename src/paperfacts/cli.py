@@ -43,6 +43,7 @@ from paperfacts.workflow import (
     StageStatus,
     build_llm_client,
     compare_document,
+    document_article_type,
     extract_document,
     load_artifact,
     load_run_profile,
@@ -323,8 +324,13 @@ def extract(
     try:
         with build_llm_client(settings) as client:
             options = ExtractionOptions.from_settings(settings, profile, client.model)
+            # The document's type, from both parses, even for one lane: the other lane is told the same thing.
+            article_type = document_article_type(document, settings)
             for name in backend.backends():
-                _echo_lines(render_lane(extract_document(document, name, settings, options, client, force=force)))
+                lane = extract_document(
+                    document, name, settings, options, client, article_type=article_type, force=force
+                )
+                _echo_lines(render_lane(lane))
     except REPORTABLE_ERRORS as exc:
         _fail("extract", exc)
 
