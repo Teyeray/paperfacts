@@ -18,7 +18,7 @@ from paperfacts.models import BACKENDS, Backend, ParsedArtifact
 from paperfacts.readings import stored_figures_path
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import DataLayout
-from paperfacts.workflow import Stage, StageStatus, stage_names
+from paperfacts.workflow import FIGURES_NOT_REQUESTED, Stage, StageStatus, stage_names
 
 
 def stored_comparison(
@@ -161,13 +161,18 @@ def stored_stages(
     def current(path: Path, hashes: Callable[[Path], Mapping]) -> StageStatus:
         return "done" if _current(layout, document_id, path, hashes) else "pending"
 
-    figures: StageStatus = (
-        "pending" if stored_figures_path(layout, document_id, figure_key, profile) is None else "done"
-    )
+    # Opt-in: charts nobody asked to read are a skip, not work still to do -- "pending" read as a stage stuck
+    # waiting. Pending only while figures.enabled is on, when every run reads them; a job that asks for them
+    # (the page's 识图) draws its own stages while it runs, and afterwards the stored readings make this done.
+    if stored_figures_path(layout, document_id, figure_key, profile) is not None:
+        figures = Stage(name="figures", status="done")
+    elif figures_enabled:
+        figures = Stage(name="figures", status="pending")
+    else:
+        figures = Stage(name="figures", status="skipped", detail=FIGURES_NOT_REQUESTED)
     stages: dict[str, Stage] = {
         **{f"parse:{b}": Stage(name=f"parse:{b}", status=done(layout.artifact_path(document_id, b))) for b in BACKENDS},
-        # Opt-in: switched off and never read is a skip, not work still to do.
-        "figures": Stage(name="figures", status=figures if figures == "done" or figures_enabled else "skipped"),
+        "figures": figures,
         **{f"extract:{b}": _extract_stage(layout.extraction_path(document_id, b, extractor_key), b) for b in BACKENDS},
         "compare": Stage(
             name="compare",

@@ -195,7 +195,7 @@ def test_the_pipeline_walks_the_six_stages_in_order(monkeypatch, document: Docum
         ("parse:paddleocr_vl", "running", ""),
         ("parse:paddleocr_vl", "done", "11 blocks"),
         # Opt-in and off by default, so it is announced as skipped and never runs.
-        ("figures", "skipped", "figures.enabled is false"),
+        ("figures", "skipped", "charts not requested"),
         # The two lanes run as a pair, so both are announced before either can finish; their "done"
         # marks are still emitted in BACKENDS order, from the calling thread.
         ("extract:mineru", "running", ""),

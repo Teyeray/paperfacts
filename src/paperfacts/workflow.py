@@ -601,10 +601,15 @@ def _read_figures_stage(
     return ("done" if readings.complete else "failed"), _figures_detail(readings)
 
 
+# The figures stage's detail when a run does not read the charts: figures.enabled is off and the run (a CLI run
+# without --figures, a web job nobody asked to read them) did not switch it on.
+FIGURES_NOT_REQUESTED = "charts not requested"
+
+
 def _figures_mark(status: StageStatus, detail: str, view: FiguresView | None) -> str:
     """The stage detail, plus what the reader should know about the readings actually shown."""
     if status == "skipped":
-        detail = "figures.enabled is false" + (f"; {len(view.rows)} stored readings kept" if view is not None else "")
+        detail = FIGURES_NOT_REQUESTED + (f"; {len(view.rows)} stored readings kept" if view is not None else "")
     warning = view.warning() if view is not None else ""
     return f"{detail}; {warning}" if warning else detail
 

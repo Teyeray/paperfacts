@@ -290,7 +290,7 @@ def test_switched_off_the_stage_asks_nothing_but_stored_readings_are_still_shown
 
     figures, result, _ = run(monkeypatch, document, off, client)
 
-    assert figures == [("figures", "skipped", "figures.enabled is false; 2 stored readings kept")]
+    assert figures == [("figures", "skipped", "charts not requested; 2 stored readings kept")]
     assert client.calls == []
     assert result.figures is not None and len(result.figures.rows) == 2
 
@@ -325,7 +325,7 @@ def test_readings_under_an_older_key_are_shown_marked_stale(
     view = shown_figures(document.document_id, "paper.pdf", moved, tco_profile)
     assert view is not None and view.stale
     assert all("旧版本读数" in (row["detail"] or "") for row in view.rows)
-    assert figures == [("figures", "skipped", "figures.enabled is false; 2 stored readings kept; stale (older key)")]
+    assert figures == [("figures", "skipped", "charts not requested; 2 stored readings kept; stale (older key)")]
     assert result.figures is not None and result.figures.stale
 
 

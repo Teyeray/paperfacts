@@ -55,6 +55,8 @@ class RunnerCall:
     document_id: str
     force: bool
     profile: str = ""
+    figures: bool = False
+    force_figures: bool = False
 
 
 class RecordingRunner:
@@ -80,7 +82,15 @@ class RecordingRunner:
         self.entered = threading.Event()  # the job body actually started running (not just submitted)
 
     def __call__(self, job: Job, mark: Mark) -> None:
-        self.calls.append(RunnerCall(document_id=job.document_id, force=job.force, profile=job.profile))
+        self.calls.append(
+            RunnerCall(
+                document_id=job.document_id,
+                force=job.force,
+                profile=job.profile,
+                figures=job.figures,
+                force_figures=job.force_figures,
+            )
+        )
         self.entered.set()
         if self.gate is not None and not self.gate.wait(timeout=WAIT_TIMEOUT_S):
             raise AssertionError("job body timed out waiting for the gate: the test forgot to call set()")
@@ -96,6 +106,11 @@ class RecordingRunner:
     @property
     def forces(self) -> list[bool]:
         return [call.force for call in self.calls]
+
+    @property
+    def figures(self) -> list[tuple[bool, bool]]:
+        """(figures, force_figures) per call."""
+        return [(call.figures, call.force_figures) for call in self.calls]
 
     @property
     def document_ids(self) -> list[str]:
