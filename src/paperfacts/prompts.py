@@ -173,7 +173,13 @@ Return the JSON object only."""
 
 # ``note`` is what the field's kind adds to its description (kinds.KindRules.note); "" for numeric, and for single-valued
 # text and composition.
-_FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{note}{condition}{plausible}"
+_FIELD_LINE = "- `{name}` (group: {group}, kind: {kind}{unit}): {description}{note}{named}{condition}{plausible}"
+# Only for a field that declares named values (FieldSpec.named_values). The model copies the words; the code reads
+# them as the declared number, so the line never states that number.
+_NAMED_VALUES = (
+    " It may also be stated in words rather than as a number ({phrases}): then copy those words exactly as written"
+    " into value_raw and leave unit_raw null."
+)
 # Told to the model so it checks what it is quoting before it answers; the code drops what still falls outside.
 _PLAUSIBLE = (
     " Plausible values are {range}; a number outside that range almost always belongs to {origin}, so check"
@@ -236,6 +242,8 @@ def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str, ctx:
     for spec in specs:
         unit = f", canonical unit: {spec.canonical_unit}" if spec.canonical_unit else ""
         condition = f" Condition: {spec.condition_hint}." if spec.condition_hint else ""
+        phrases = ", ".join(f'"{phrase}"' for phrase, _ in spec.named_values)
+        named = _NAMED_VALUES.format(phrases=phrases) if phrases else ""
         described = spec.describe_range()
         plausible = _PLAUSIBLE.format(range=described, origin=implausible_origin) if described else ""
         lines.append(
@@ -246,6 +254,7 @@ def render_field_table(specs: Sequence[FieldSpec], implausible_origin: str, ctx:
                 unit=unit,
                 description=spec.description,
                 note=rules_for(spec).note(spec, ctx),
+                named=named,
                 condition=condition,
                 plausible=plausible,
             )

@@ -33,6 +33,7 @@ from paperfacts.fields import DIGIT_KINDS, MAX_NUMBER_QUOTE, FieldSpec
 from paperfacts.models import Backend
 from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.storage import write_text_atomic
+from paperfacts.text import normalize_text
 
 if TYPE_CHECKING:
     from paperfacts.profile import EntitySpec
@@ -522,11 +523,46 @@ def spell_number_word(value_raw: str, unit_raw: str | None) -> str:
     return str(NUMBER_WORDS[match.group("word").lower()])
 
 
+# What may stand around a declared phrase in a quote: "at room temperature", "room temperature (RT)".
+_LEADING_AT = re.compile(r"at\s+", re.IGNORECASE)
+_TRAILING_PARENTHESIS = re.compile(r"\s*\(([^()]*)\)")
+
+
+def _phrase_key(text: str) -> str:
+    return normalize_text(text).casefold()
+
+
+def named_value(spec: FieldSpec, value_raw: str) -> tuple[str, float] | None:
+    """The declared phrase (``FieldSpec.named_values``) ``value_raw`` states, with its value, or None.
+
+    The phrase must be the whole quote, optionally after a leading "at" and before a trailing parenthesis that
+    holds no digit ("room temperature (RT)"). A parenthesis with a digit ("RT (27 °C)") is a stated number, which
+    always wins: the quote falls through to the number reader. A phrase inside other words ("RT-annealed") is
+    never one.
+    """
+    if not spec.named_values:
+        return None
+    text = normalize_text(value_raw)
+    candidates = [text]
+    without_at = _LEADING_AT.match(text)
+    if without_at:
+        candidates.append(text[without_at.end() :])
+    for candidate in list(candidates):
+        parenthesis = _TRAILING_PARENTHESIS.search(candidate)
+        if parenthesis and parenthesis.end() == len(candidate):
+            if any(character.isdigit() for character in parenthesis.group(1)):
+                return None
+            candidates.append(candidate[: parenthesis.start()])
+    keys = {_phrase_key(candidate) for candidate in candidates}
+    return next(((phrase, value) for phrase, value in spec.named_values if _phrase_key(phrase) in keys), None)
+
+
 class ResponseCleaning:
     """The audit kept while a model's answer is turned into records, shared by both extraction modes.
 
     Two things are recorded rather than silently discarded: ids the model cited that it was never shown, and
-    values dropped for being impossible (a numeric field whose value has no digit and no number word in it).
+    values dropped for being impossible (a numeric field whose value has no digit, no number word and no declared
+    named value in it).
     """
 
     def __init__(self) -> None:
@@ -557,7 +593,11 @@ class ResponseCleaning:
         if spec.kind in DIGIT_KINDS and len(text) > MAX_NUMBER_QUOTE:
             self.dropped.append(f"{spec.name}: a value of {len(text)} characters is too long to be one value")
             return None
-        if spec.kind in DIGIT_KINDS and not any(character.isdigit() for character in spell_number_word(text, unit_raw)):
+        if (
+            spec.kind in DIGIT_KINDS
+            and not any(character.isdigit() for character in spell_number_word(text, unit_raw))
+            and named_value(spec, text) is None
+        ):
             self.dropped.append(f"{spec.name}: non-numeric value {text!r}")
             return None
         if spec.kind == "boolean" and holds is None:

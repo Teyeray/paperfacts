@@ -1,0 +1,632 @@
+{
+ "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+ "backend": "mineru",
+ "backend_version": "3.4.5",
+ "pages": [
+  {
+   "index": 0,
+   "width_pt": 612.0,
+   "height_pt": 709.0
+  },
+  {
+   "index": 1,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 2,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 3,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 4,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 5,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 6,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 7,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 8,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 9,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 10,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 11,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 12,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 13,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 14,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 15,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 16,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 17,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 18,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 19,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  }
+ ],
+ "blocks": [
+  {
+   "source_id": "mineru_p0_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 0,
+   "order": 0,
+   "bbox": {
+    "x1": 0.107,
+    "y1": 0.1,
+    "x2": 0.392,
+    "y2": 0.129
+   },
+   "type": "title",
+   "content": "Accepted Manuscript",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p5_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 5,
+   "order": 2,
+   "bbox": {
+    "x1": 0.084,
+    "y1": 0.503,
+    "x2": 0.912,
+    "y2": 0.707
+   },
+   "type": "text",
+   "content": "The average transmittance of the films increased as the increases of the $\\mathrm { \\mathbf { O } } _ { 2 }$ partial flow rates from 0 to 3sccm in the Ar sputtering atmosphere, changing from approximately 86.5% to 95% within the visible range (table 1 and figure 5). The absorption edges obviously shifted towards large band gaps as the increases of the oxygen flows up to 2sccm, showed in the inner graph in figure 5. Then the band gap of the film decreased again when the oxygen flow rate increased to 3sccm. In optical theory of thin films, the total incident light to be 1, then",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p9_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 9,
+   "order": 2,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.385,
+    "x2": 0.186,
+    "y2": 0.402
+   },
+   "type": "title",
+   "content": "References",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p9_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 9,
+   "order": 3,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.406,
+    "x2": 0.788,
+    "y2": 0.42
+   },
+   "type": "text",
+   "content": "<sup>1</sup>A. Smith, J.-M.Laurent, D.S. Smith, J.-P.Bonnet, R.-R. Clemente, Thin Solid Films, 266 (1995) 20-30.\n<sup>2</sup> H. Yang, D. Fu, M. Jiang, J. Duan, F. Zhang, X. Zeng, U. Bach, Thin Solid Films, 531 (2013) 519-524.\n<sup>3</sup> Z. Dai, A. Miyashita, S. Yamamoto, K. Narumi, H. Naramoto, Thin Solid Films, 349 (1999) 51-55.\nP. Jalkanen, S. Kulju, K. Arutyunov, L. Antila, P. Myllyperkiö, T. Ihalainen, T. Kääriäinen, M.-L. Kääriäinen, J. Korppi-Tommola, Thin Solid Films, 519 (2011) 3835-3839.\n<sup>5</sup>X.-X. Ding, F. Fang, J.-Q. Jiang, J. Vac. Sci. Technol. Chin., 32(2012) 379-384.\n<sup>6</sup>S.-Y.Lee, B.-O. Park, Thin Solid Films, 510 (2006) 154-158.\n<sup>7</sup> B. Thangaraju, Thin Solid Films, 402 (2002) 71-78.\n<sup>8</sup> C. Quintana, P. Atienzar, G. Budroni, L. Mora, L. Hernández, H. García, A. Corma, Thin Solid Films, 519 (2010) 487-493.\n<sup>9</sup> H. Widiyandari, A. Purwanto, K. Diharjo, Suyitno, E. Hidayanto, AIP Conference Proceedings, 1554 (2013) 147-149.\n<sup>10</sup> A. Muthukumar, G. Rey, G. Giusti, V. Consonni, E. Appert, H. Roussel, A. Dakshnamoorthy, D. Bellet, AIP Conference Proceedings, 1512 (2013) 710-711.\n<sup>11</sup> Y. F. Li, W. J. Yin, R. Deng, R. Chen, J. Chen, Q. Y. Yan, B. Yao, H. D. Sun, S. H. Wei and T. Wu, NPG Asia Materials (2014) 4, e30.\n<sup>12</sup> W.-H. Baek, M. Choi, T.-S.Yoon, H.H. Lee, Y.-S. Kim, Appl. Phys. Lett., 96 133506 (2010) .\n<sup>13</sup> R.Y. Korotkov, P. Ricou, A.J.E. Farran, Thin Solid Films, 502 (2006) 79-87.\n<sup>14</sup> Q. Gao, H. Jiang, C. Li, Y. Ma, X. Li, Z. Ren, Y. Liu, C. Song, G. Han, J. Alloys Compd., 574 (2013) 427-431.\n<sup>15</sup>Y.-W.Zhou, X. Liu, F.-Y.Wu, C.-K.Zhang, X.-Y. Zhang, Surf.Coat.Technol., 228, Supplement 1 (2013) S150-S154.\n<sup>16</sup>Y.-W.Zhou, F.-Y.Wu, C.-Y.Zheng, Chin. Phys. Lett., 28(2011) 107307-1\\~3.\n<sup>17</sup> Z.Banyamin, P.J. Kelly, G.T. West, J. Boardman, Coatings, 4 (2014) 732-746\n<sup>18</sup> P.J. Kelly, Y. Zhou, J. Vac. Sci. Technol. A24(5) 2006, 1782-1789.\n<sup>19</sup>J. Xu, D.-X.Lu, T.-S.Yuan, ACTA Pysica.Sinica., 56 (2007) 7195-7200.\n<sup>20</sup>J. Ru, W. Liu, Y. Qiang, Techniques of Optical Films, Publising House of Electronics Industry, 2<sup>nd</sup> edition, 141-142, in Chinese.\n<sup>21</sup> A.-V.Moholkar, S.-M.Pawar, K.-Y.Rajpure, C.-H.Bhosale, Mater.Lett., 61 (2007) 3030-3036.\n<sup>22</sup>C.-Y.Kim, D.-H.Ru, Thin Solid Films, 519 (2011) 3081-3085.",
+   "raw_label": "list",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p9_b4",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 9,
+   "order": 4,
+   "bbox": {
+    "x1": 0.363,
+    "y1": 0.057,
+    "x2": 0.635,
+    "y2": 0.073
+   },
+   "type": "unknown",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "header",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 0,
+   "bbox": {
+    "x1": 0.087,
+    "y1": 0.086,
+    "x2": 0.729,
+    "y2": 0.102
+   },
+   "type": "text",
+   "content": "<sup>23</sup> F.-A.Garcés, N. Budini, R.-R.Koropecki, R.-D. Arce, Thin Solid Films, 531 (2013) 172-178.",
+   "raw_label": "list",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 1,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.16,
+    "x2": 0.21,
+    "y2": 0.176
+   },
+   "type": "title",
+   "content": "Figure caption",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 2,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.195,
+    "x2": 0.894,
+    "y2": 0.288
+   },
+   "type": "text",
+   "content": "Figure1: Variation with oxygen flow rate of coating stoichiometry and thickness for FTO thin films. Figure 2: AFM and SEM morphologies of the FTO films via various oxygen flows: a) 0, b) 1, c) 2 and d) 3sccm.",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 3,
+   "bbox": {
+    "x1": 0.084,
+    "y1": 0.307,
+    "x2": 0.91,
+    "y2": 0.399
+   },
+   "type": "text",
+   "content": "Figure 3: The distribution of fluorine across several crystal domains: a) drift corrected spectrum profile scanning image; b) STEM HAADF detect image; c) EDX drift corrected spectrum profile and d) line scanning profiles of Sn-L (in green), F-K (in orange) and O-K (in red)",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b4",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 4,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.419,
+    "x2": 0.425,
+    "y2": 0.435
+   },
+   "type": "text",
+   "content": "Figure 4: XRD patterns of the FTO films",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b5",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 5,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.456,
+    "x2": 0.433,
+    "y2": 0.472
+   },
+   "type": "text",
+   "content": "Figure 5: Optical spectra of the FTO films",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b6",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 6,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.492,
+    "x2": 0.473,
+    "y2": 0.509
+   },
+   "type": "text",
+   "content": "Figure 6: Electrical properties of the FTO films",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b7",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 7,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.53,
+    "x2": 0.865,
+    "y2": 0.547
+   },
+   "type": "text",
+   "content": "Figure 7: TEM images of the FTO films via various oxygen flows: a) 0, b) 1, c) 2 and d) 3sccm.",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b8",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 8,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.604,
+    "x2": 0.201,
+    "y2": 0.621
+   },
+   "type": "text",
+   "content": "Table caption",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b9",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 9,
+   "bbox": {
+    "x1": 0.085,
+    "y1": 0.641,
+    "x2": 0.805,
+    "y2": 0.657
+   },
+   "type": "text",
+   "content": "Table 1 The Sn/O and properties of the FTO films with the variations of $\\mathrm { O } _ { 2 }$ partial flows",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b10",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 10,
+   "bbox": {
+    "x1": 0.363,
+    "y1": 0.057,
+    "x2": 0.635,
+    "y2": 0.072
+   },
+   "type": "unknown",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "header",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p10_b11",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 10,
+   "order": 11,
+   "bbox": {
+    "x1": 0.087,
+    "y1": 0.915,
+    "x2": 0.107,
+    "y2": 0.926
+   },
+   "type": "unknown",
+   "content": "10",
+   "raw_label": "page_number",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p11_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 11,
+   "order": 0,
+   "bbox": {
+    "x1": 0.161,
+    "y1": 0.157,
+    "x2": 0.835,
+    "y2": 0.347
+   },
+   "type": "table",
+   "content": "<table><tr><td>No.</td><td> $\\mathbf { O } _ { 2 }$  sccm</td><td>Sn/O</td><td>d nm</td><td>ρ ohm-cm</td><td>n  $/ \\mathbf { c m } ^ { 3 }$ </td><td>μ  $\\mathbf { c m } ^ { 2 } / \\mathbf { V } { \\mathbf { - s } }$ </td><td>T %</td><td> $\\mathbf { S q }$  nm</td></tr><tr><td>a</td><td>0</td><td>33.42 /66.58</td><td>827</td><td>5.4E-3</td><td>8.4E+19</td><td> $1 . 4 \\mathrm { E } { + 1 }$ </td><td>86.5</td><td>2.16</td></tr><tr><td>b</td><td>1</td><td>33.11 /66.89</td><td>680</td><td>8.1E-2</td><td>2.3E+19</td><td>3.4E+0</td><td>88.7</td><td></td></tr><tr><td>C</td><td>2</td><td>32.53 /67.47</td><td>430</td><td>1.8E+2</td><td>3.0E+16</td><td>1.1E+0</td><td>93</td><td>0.65</td></tr><tr><td>d</td><td>3</td><td>31.61 /68.93</td><td>310</td><td>2.1E+1</td><td>2.9E+16</td><td>1.0E+0</td><td>Y</td><td>1.27</td></tr></table>",
+   "raw_label": "table",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p11_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 11,
+   "order": 1,
+   "bbox": {
+    "x1": 0.161,
+    "y1": 0.157,
+    "x2": 0.835,
+    "y2": 0.347
+   },
+   "type": "caption",
+   "content": "Table 1 The Sn/O and properties of the FTO films with the variations of $\\mathrm { O } _ { 2 }$ partial flows",
+   "raw_label": "table_caption",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p11_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 11,
+   "order": 2,
+   "bbox": {
+    "x1": 0.161,
+    "y1": 0.157,
+    "x2": 0.835,
+    "y2": 0.347
+   },
+   "type": "caption",
+   "content": "Note: Sn/O--Sn/O Atomic ratio; d--Thickness; ρ--Resistivity; n--Carrier concentration; µ--Carrier mobility; T-- Transmittance; Sq--Root mean square",
+   "raw_label": "table_footnote",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p11_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 11,
+   "order": 3,
+   "bbox": {
+    "x1": 0.363,
+    "y1": 0.057,
+    "x2": 0.635,
+    "y2": 0.073
+   },
+   "type": "unknown",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "header",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p12_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 12,
+   "order": 0,
+   "bbox": {
+    "x1": 0.121,
+    "y1": 0.085,
+    "x2": 0.843,
+    "y2": 0.395
+   },
+   "type": "figure",
+   "content": "images/910b57e37b75f95fd9843df32a97481e51e43e6366dfce5a253099c9ce790a90.jpg",
+   "raw_label": "chart",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p12_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 12,
+   "order": 1,
+   "bbox": {
+    "x1": 0.121,
+    "y1": 0.085,
+    "x2": 0.843,
+    "y2": 0.395
+   },
+   "type": "caption",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "chart_caption",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p12_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 12,
+   "order": 2,
+   "bbox": {
+    "x1": 0.121,
+    "y1": 0.085,
+    "x2": 0.843,
+    "y2": 0.395
+   },
+   "type": "caption",
+   "content": "Figure 1",
+   "raw_label": "chart_caption",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p19_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 19,
+   "order": 0,
+   "bbox": {
+    "x1": 0.147,
+    "y1": 0.134,
+    "x2": 0.751,
+    "y2": 0.148
+   },
+   "type": "text",
+   "content": "1. The FTO structures could be controlled by O- flow in the sputtering atmosphere.",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p19_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 19,
+   "order": 1,
+   "bbox": {
+    "x1": 0.146,
+    "y1": 0.171,
+    "x2": 0.781,
+    "y2": 0.185
+   },
+   "type": "text",
+   "content": "2. The properties of the FTO films could be customerized by combination Sn with F/O.",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p19_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 19,
+   "order": 2,
+   "bbox": {
+    "x1": 0.146,
+    "y1": 0.207,
+    "x2": 0.749,
+    "y2": 0.223
+   },
+   "type": "text",
+   "content": "3. The slightly O-deficient FTO films were with polar structure and low resistivity.",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p19_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 19,
+   "order": 3,
+   "bbox": {
+    "x1": 0.146,
+    "y1": 0.244,
+    "x2": 0.707,
+    "y2": 0.26
+   },
+   "type": "text",
+   "content": "4. The O-rich FTO films were with un-polar structure and high transparency.",
+   "raw_label": "text",
+   "raw_backend_id": null,
+   "confidence": null
+  },
+  {
+   "source_id": "mineru_p19_b4",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "mineru",
+   "page": 19,
+   "order": 4,
+   "bbox": {
+    "x1": 0.363,
+    "y1": 0.057,
+    "x2": 0.635,
+    "y2": 0.073
+   },
+   "type": "unknown",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "header",
+   "raw_backend_id": null,
+   "confidence": null
+  }
+ ],
+ "raw_output_dir": null
+}

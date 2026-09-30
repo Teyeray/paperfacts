@@ -194,3 +194,22 @@ def test_each_field_with_a_condition_rule_gets_its_sentence():
     )
     assert rule in extraction_system_prompt(profile)
     assert rule in field_system_prompt(profile)
+
+
+# ---- Named values in the field line --------------------------------------------------------------
+
+
+def test_a_field_with_named_values_names_its_phrases_but_never_their_numbers():
+    profile = make_profile({"fields.1.named_values": {"monolayer": 1, "bulk-like": 1000}})
+
+    prompt = extraction_system_prompt(profile)
+
+    assert (
+        ' It may also be stated in words rather than as a number ("monolayer", "bulk-like"): then copy those words'
+        " exactly as written into value_raw and leave unit_raw null." in prompt
+    )
+    assert "1000" not in prompt
+
+
+def test_a_field_without_named_values_renders_its_line_as_before():
+    assert "stated in words" not in extraction_system_prompt(make_profile())

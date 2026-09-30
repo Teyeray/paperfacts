@@ -8,6 +8,8 @@ downstream.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from pydantic import ValidationError
 
@@ -15,6 +17,7 @@ from paperfacts.records import (
     ExtractionResponse,
     InventoryResponse,
     ResponseCleaning,
+    named_value,
     response_models,
     response_to_records,
 )
@@ -674,3 +677,55 @@ def test_a_numeric_answer_too_long_to_be_one_value_is_dropped_with_the_reason(tc
         known_ids=KNOWN_IDS,
     )
     assert text is not None
+
+
+# ---- Named values: words a paper writes instead of the number ------------------------------------------------
+
+ROOM_TEMPERATURE = (("room temperature", 25.0), ("RT", 25.0))
+
+
+def clean_named(value_raw: str, *, spec=None):
+    spec = spec or dataclasses.replace(FIELD_BY_NAME["substrate_temperature"], named_values=ROOM_TEMPERATURE)
+    cleaning = ResponseCleaning()
+    value = cleaning.value(
+        spec, value_raw=value_raw, unit_raw=None, condition=None, source_ids=[], note=None, known_ids=KNOWN_IDS
+    )
+    return cleaning, value
+
+
+@pytest.mark.parametrize("value_raw", ["RT", "room temperature", "Room Temperature (RT)", "at RT"])
+def test_a_declared_named_value_survives_cleaning(value_raw):
+    # coatings-13-01719: "at RT and 200 °C" -- the RT films had no temperature because a word is not a digit.
+    cleaning, value = clean_named(value_raw)
+
+    assert value is not None and value.value_raw == value_raw
+    assert cleaning.dropped == []
+
+
+def test_a_parenthesis_with_a_digit_is_a_stated_number_and_never_the_phrase():
+    spec = dataclasses.replace(FIELD_BY_NAME["substrate_temperature"], named_values=ROOM_TEMPERATURE)
+
+    assert named_value(spec, "RT (27 °C)") is None
+    assert clean_named("RT (27 °C)")[1].value_raw == "RT (27 °C)"
+
+
+@pytest.mark.parametrize("value_raw", ["RT-annealed", "overtly", "near RT"])
+def test_a_phrase_inside_other_words_is_still_non_numeric(value_raw):
+    cleaning, value = clean_named(value_raw)
+
+    assert value is None
+    assert cleaning.dropped == [f"substrate_temperature: non-numeric value {value_raw!r}"]
+
+
+def test_a_phrase_declared_on_another_field_does_not_rescue_a_quote():
+    cleaning, value = clean_named("RT", spec=FIELD_BY_NAME["annealing_temperature"])
+
+    assert value is None
+    assert cleaning.dropped == ["annealing_temperature: non-numeric value 'RT'"]
+
+
+def test_named_value_returns_the_declared_phrase_and_its_number():
+    spec = dataclasses.replace(FIELD_BY_NAME["substrate_temperature"], named_values=ROOM_TEMPERATURE)
+
+    assert named_value(spec, " at  Room temperature ") == ("room temperature", 25.0)
+    assert named_value(spec, "room temperature (RT)") == ("room temperature", 25.0)

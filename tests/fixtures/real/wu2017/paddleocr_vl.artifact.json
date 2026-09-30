@@ -1,0 +1,650 @@
+{
+ "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+ "backend": "paddleocr_vl",
+ "backend_version": "3.7.0",
+ "pages": [
+  {
+   "index": 0,
+   "width_pt": 612.0,
+   "height_pt": 709.0
+  },
+  {
+   "index": 1,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 2,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 3,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 4,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 5,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 6,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 7,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 8,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 9,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 10,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 11,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 12,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 13,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 14,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 15,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 16,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 17,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 18,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  },
+  {
+   "index": 19,
+   "width_pt": 595.0,
+   "height_pt": 842.0
+  }
+ ],
+ "blocks": [
+  {
+   "source_id": "paddleocr_vl_p0_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 0,
+   "order": 0,
+   "bbox": {
+    "x1": 0.1111764705882353,
+    "y1": 0.10203045685279188,
+    "x2": 0.39176470588235296,
+    "y2": 0.1304568527918782
+   },
+   "type": "title",
+   "content": "Accepted Manuscript",
+   "raw_label": "doc_title",
+   "raw_backend_id": "0",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p5_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 5,
+   "order": 2,
+   "bbox": {
+    "x1": 0.08590441621294616,
+    "y1": 0.5049166310389055,
+    "x2": 0.9140955837870538,
+    "y2": 0.708422402736212
+   },
+   "type": "text",
+   "content": "The average transmittance of the films increased as the increases of the  $ O_{2} $ partial flow rates from 0 to 3sccm in the Ar sputtering atmosphere, changing from approximately 86.5% to 95% within the visible range (table 1 and figure 5). The absorption edges obviously shifted towards large band gaps as the increases of the oxygen flows up to 2sccm, showed in the inner graph in figure 5. Then the band gap of the film decreased again when the oxygen flow rate increased to 3sccm. In optical theory of thin films, the total incident light to be 1, then",
+   "raw_label": "text",
+   "raw_backend_id": "3",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p9_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 9,
+   "order": 2,
+   "bbox": {
+    "x1": 0.08711433756805807,
+    "y1": 0.3877725523728089,
+    "x2": 0.1881427707199032,
+    "y2": 0.4031637451902522
+   },
+   "type": "title",
+   "content": "References",
+   "raw_label": "paragraph_title",
+   "raw_backend_id": "3",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p9_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 9,
+   "order": 3,
+   "bbox": {
+    "x1": 0.08650937689050212,
+    "y1": 0.40615647712697733,
+    "x2": 0.7906836055656382,
+    "y2": 0.42154766994442067
+   },
+   "type": "text",
+   "content": "$ ^{1} $A. Smith, J.-M. Laurent, D.S. Smith, J.-P. Bonnet, R.-R. Clemente, Thin Solid Films, 266 (1995) 20-30.",
+   "raw_label": "reference_content",
+   "raw_backend_id": "4",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p9_b4",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 9,
+   "order": 4,
+   "bbox": {
+    "x1": 0.08590441621294616,
+    "y1": 0.42496793501496366,
+    "x2": 0.7955232909860859,
+    "y2": 0.43993159469858917
+   },
+   "type": "text",
+   "content": "$ ^{2} $H. Yang, D. Fu, M. Jiang, J. Duan, F. Zhang, X. Zeng, U. Bach, Thin Solid Films, 531 (2013) 519-524.",
+   "raw_label": "reference_content",
+   "raw_backend_id": "5",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 0,
+   "bbox": {
+    "x1": 0.08590441621294616,
+    "y1": 0.08764429243266353,
+    "x2": 0.7295825771324864,
+    "y2": 0.10260795211628901
+   },
+   "type": "text",
+   "content": "$ ^{23} $ F.-A.Garcés, N. Budini, R.-R.Koropecki, R.-D. Arce, Thin Solid Films, 531 (2013) 172-178.",
+   "raw_label": "text",
+   "raw_backend_id": "1",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 1,
+   "bbox": {
+    "x1": 0.08711433756805807,
+    "y1": 0.16032492518170158,
+    "x2": 0.21173623714458562,
+    "y2": 0.17828131680205217
+   },
+   "type": "title",
+   "content": "Figure caption",
+   "raw_label": "paragraph_title",
+   "raw_backend_id": "2",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 2,
+   "bbox": {
+    "x1": 0.08590441621294616,
+    "y1": 0.4198375374091492,
+    "x2": 0.42710223835450695,
+    "y2": 0.43779392902949976
+   },
+   "type": "text",
+   "content": "Figure 4: XRD patterns of the FTO films",
+   "raw_label": "text",
+   "raw_backend_id": "6",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 3,
+   "bbox": {
+    "x1": 0.08650937689050212,
+    "y1": 0.4566053869174861,
+    "x2": 0.4361766485178463,
+    "y2": 0.47413424540401883
+   },
+   "type": "text",
+   "content": "Figure 5: Optical spectra of the FTO films",
+   "raw_label": "text",
+   "raw_backend_id": "7",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b4",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 4,
+   "bbox": {
+    "x1": 0.08590441621294616,
+    "y1": 0.493373236425823,
+    "x2": 0.47731397459165154,
+    "y2": 0.5117571611799915
+   },
+   "type": "text",
+   "content": "Figure 6: Electrical properties of the FTO films",
+   "raw_label": "text",
+   "raw_backend_id": "8",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b5",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 5,
+   "bbox": {
+    "x1": 0.0852994555353902,
+    "y1": 0.5309961522017956,
+    "x2": 0.8656987295825771,
+    "y2": 0.5489525438221462
+   },
+   "type": "text",
+   "content": "Figure 7: TEM images of the FTO films via various oxygen flows: a) 0, b) 1, c) 2 and d) 3sccm.",
+   "raw_label": "text",
+   "raw_backend_id": "9",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b6",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 6,
+   "bbox": {
+    "x1": 0.08771929824561403,
+    "y1": 0.6049593843522874,
+    "x2": 0.20387174833635813,
+    "y2": 0.6220607097050022
+   },
+   "type": "text",
+   "content": "Table caption",
+   "raw_label": "text",
+   "raw_backend_id": "10",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b7",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 7,
+   "bbox": {
+    "x1": 0.08590441621294616,
+    "y1": 0.6421547669944421,
+    "x2": 0.8076225045372051,
+    "y2": 0.6601111586147926
+   },
+   "type": "text",
+   "content": "Table 1 The Sn/O and properties of the FTO films with the variations of  $ O_{2} $ partial flows",
+   "raw_label": "text",
+   "raw_backend_id": "11",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b8",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 8,
+   "bbox": {
+    "x1": 0.36358136721113127,
+    "y1": 0.05857203933304831,
+    "x2": 0.6346037507562009,
+    "y2": 0.07439076528430953
+   },
+   "type": "unknown",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "header",
+   "raw_backend_id": "0",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b9",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 9,
+   "bbox": {
+    "x1": 0.0852994555353902,
+    "y1": 0.19709277469003847,
+    "x2": 0.8989715668481548,
+    "y2": 0.21547669944420692
+   },
+   "type": "caption",
+   "content": "Figure1: Variation with oxygen flow rate of coating stoichiometry and thickness for FTO thin films.",
+   "raw_label": "figure_title",
+   "raw_backend_id": "3",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b10",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 10,
+   "bbox": {
+    "x1": 0.08469449485783424,
+    "y1": 0.23386062419837536,
+    "x2": 0.8880822746521476,
+    "y2": 0.28986746472851643
+   },
+   "type": "caption",
+   "content": "Figure 2: AFM and SEM morphologies of the FTO films via various oxygen flows: a) 0, b) 1, c) 2 and d) 3sccm.",
+   "raw_label": "figure_title",
+   "raw_backend_id": "4",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b11",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 11,
+   "bbox": {
+    "x1": 0.08650937689050212,
+    "y1": 0.30867892261650276,
+    "x2": 0.911070780399274,
+    "y2": 0.40145361265498075
+   },
+   "type": "caption",
+   "content": "Figure 3: The distribution of fluorine across several crystal domains: a) drift corrected spectrum profile scanning image; b) STEM HAADF detect image; c) EDX drift corrected spectrum profile and d) line scanning profiles of Sn-L (in green), F-K (in orange) and O-K (in red)",
+   "raw_label": "figure_title",
+   "raw_backend_id": "5",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p10_b12",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 10,
+   "order": 12,
+   "bbox": {
+    "x1": 0.08892921960072596,
+    "y1": 0.9162035057716973,
+    "x2": 0.1088929219600726,
+    "y2": 0.927319367250962
+   },
+   "type": "unknown",
+   "content": "10",
+   "raw_label": "number",
+   "raw_backend_id": "12",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p11_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 11,
+   "order": 0,
+   "bbox": {
+    "x1": 0.36358136721113127,
+    "y1": 0.05857203933304831,
+    "x2": 0.6346037507562009,
+    "y2": 0.07439076528430953
+   },
+   "type": "unknown",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "header",
+   "raw_backend_id": "0",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p11_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 11,
+   "order": 1,
+   "bbox": {
+    "x1": 0.19056261343012704,
+    "y1": 0.14322359982898675,
+    "x2": 0.8058076225045372,
+    "y2": 0.15818725951261223
+   },
+   "type": "caption",
+   "content": "Table 1 The Sn/O and properties of the FTO films with the variations of  $ O_{2} $ partial flows",
+   "raw_label": "figure_title",
+   "raw_backend_id": "1",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p11_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 11,
+   "order": 2,
+   "bbox": {
+    "x1": 0.16212946158499697,
+    "y1": 0.15348439504061565,
+    "x2": 0.837870538415003,
+    "y2": 0.34886703719538265
+   },
+   "type": "table",
+   "content": "<table><tr><td>No.</td><td>$ O_{{2}} $ sccm</td><td>Sn/O</td><td>d nm</td><td>$ \\rho $ ohm-cm</td><td>n / $ cm^{{3}} $</td><td>$ \\mu $  $ cm^{{2}}/V $-s</td><td>T %</td><td>Sq nm</td></tr><tr><td>a</td><td>0</td><td>33.42 /66.58</td><td>827</td><td>5.4E-3</td><td>8.4E+19</td><td>1.4E+1</td><td>86.5</td><td>2.16</td></tr><tr><td>b</td><td>1</td><td>33.11 /66.89</td><td>680</td><td>8.1E-2</td><td>2.3E+19</td><td>3.4E+0</td><td>88.7</td><td>2.73</td></tr><tr><td>c</td><td>2</td><td>32.53 /67.47</td><td>430</td><td>1.8E+2</td><td>3.0E+16</td><td>1.1E+0</td><td>93</td><td>0.65</td></tr><tr><td>d</td><td>3</td><td>31.61 /68.93</td><td>310</td><td>2.1E+1</td><td>2.9E+16</td><td>1.0E+0</td><td>95</td><td>1.27</td></tr></table>",
+   "raw_label": "table",
+   "raw_backend_id": "2",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p11_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 11,
+   "order": 3,
+   "bbox": {
+    "x1": 0.20387174833635813,
+    "y1": 0.3698161607524583,
+    "x2": 0.79491833030853,
+    "y2": 0.40444634459170586
+   },
+   "type": "caption",
+   "content": "Note: Sn/O--Sn/O Atomic ratio; d--Thickness;  $ \\rho $--Resistivity; n--Carrier concentration;  $ \\mu $--Carrier mobility; T-- Transmittance; Sq--Root mean square",
+   "raw_label": "vision_footnote",
+   "raw_backend_id": "3",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p12_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 12,
+   "order": 0,
+   "bbox": {
+    "x1": 0.3623714458560194,
+    "y1": 0.0572894399315947,
+    "x2": 0.6352087114337568,
+    "y2": 0.07567336468576315
+   },
+   "type": "caption",
+   "content": "ACCEPTED MANUSCRIPT",
+   "raw_label": "figure_title",
+   "raw_backend_id": "0",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p12_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 12,
+   "order": 1,
+   "bbox": {
+    "x1": 0.13006654567453116,
+    "y1": 0.08849935870029928,
+    "x2": 0.8463399879007865,
+    "y2": 0.3950406156477127
+   },
+   "type": "figure",
+   "content": "",
+   "raw_label": "chart",
+   "raw_backend_id": "1",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p12_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 12,
+   "order": 2,
+   "bbox": {
+    "x1": 0.11796733212341198,
+    "y1": 0.5014963659683626,
+    "x2": 0.18330308529945555,
+    "y2": 0.5181701581872595
+   },
+   "type": "caption",
+   "content": "Figure 1",
+   "raw_label": "figure_title",
+   "raw_backend_id": "2",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p19_b0",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 19,
+   "order": 0,
+   "bbox": {
+    "x1": 0.14761040532365396,
+    "y1": 0.13467293715262932,
+    "x2": 0.7525710828796128,
+    "y2": 0.1496365968362548
+   },
+   "type": "text",
+   "content": "1. The FTO structures could be controlled by O- flow in the sputtering atmosphere.",
+   "raw_label": "text",
+   "raw_backend_id": "1",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p19_b1",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 19,
+   "order": 1,
+   "bbox": {
+    "x1": 0.14640048396854205,
+    "y1": 0.17144078666096624,
+    "x2": 0.7822141560798548,
+    "y2": 0.18683197947840957
+   },
+   "type": "text",
+   "content": "2. The properties of the FTO films could be customized by combination Sn with F/O.",
+   "raw_label": "text",
+   "raw_backend_id": "2",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p19_b2",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 19,
+   "order": 2,
+   "bbox": {
+    "x1": 0.14640048396854205,
+    "y1": 0.20863616930312098,
+    "x2": 0.7507562008469449,
+    "y2": 0.22445489525438223
+   },
+   "type": "text",
+   "content": "3. The slightly O-deficient FTO films were with polar structure and low resistivity.",
+   "raw_label": "text",
+   "raw_backend_id": "3",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p19_b3",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 19,
+   "order": 3,
+   "bbox": {
+    "x1": 0.14640048396854205,
+    "y1": 0.24540401881145787,
+    "x2": 0.7078039927404719,
+    "y2": 0.2612227447627191
+   },
+   "type": "text",
+   "content": "4. The O-rich FTO films were with un-polar structure and high transparency.",
+   "raw_label": "text",
+   "raw_backend_id": "4",
+   "confidence": null
+  },
+  {
+   "source_id": "paddleocr_vl_p19_b4",
+   "document_id": "3ce5b4c43448abed815946b8b1d51a14259b192bcc0d9bdcad430fb38a132fa5",
+   "backend": "paddleocr_vl",
+   "page": 19,
+   "order": 4,
+   "bbox": {
+    "x1": 0.36358136721113127,
+    "y1": 0.058999572466866185,
+    "x2": 0.6346037507562009,
+    "y2": 0.07439076528430953
+   },
+   "type": "unknown",
+   "content": "ACCEPTED D MANUSCRIPT",
+   "raw_label": "header",
+   "raw_backend_id": "0",
+   "confidence": null
+  }
+ ],
+ "raw_output_dir": null
+}

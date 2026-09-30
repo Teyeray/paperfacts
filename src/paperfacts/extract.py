@@ -93,6 +93,13 @@ _END_SECTION = re.compile(
 # whole-block match is what makes admitting text safe, and the plural is required: a lone "Reference" is as
 # often a chart legend or a table column as a heading, and a false cut empties the rest of one lane only.
 _HEADING_TYPES = frozenset({"title", "text"})
+# After the references heading only a table, a caption and a caption-shaped line are still read. Accepted
+# manuscripts put their tables and figure captions behind the bibliography, and a cut that dropped them lost
+# the only table of the paper. The caption shape is the one ``figures`` uses ("Fig. 2.", "Table 1:", "Figure
+# S3"); a reference entry starts with authors, a number or a bracket, never with "Table 1".
+_CAPTION_LIKE = re.compile(r"[\W_]*(?:table|fig(?:ure)?s?)\.?\s*S?\d", re.IGNORECASE)
+# The heading an accepted manuscript puts over that list ("Figure captions", "Tables").
+_CAPTION_SECTION = re.compile(r"(?:figure|table)\s+captions?|tables?|figures?", re.IGNORECASE)
 # Measured on a real 10-page paper: 71.9K characters billed as 21.4K tokens, rounded down so the guard
 # errs towards over-estimating.
 CHARS_PER_TOKEN = 3.0
@@ -147,28 +154,74 @@ def bibliography_cut(blocks: Sequence[SourceBlock]) -> int | None:
 
 
 def informative_blocks(blocks: tuple[SourceBlock, ...]) -> list[SourceBlock]:
-    """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography."""
+    """The blocks the model is shown, in reading order: no page furniture, no figures, no bibliography -- but
+    the tables and captions that follow the bibliography are still read (:func:`_kept_after_cut`)."""
     cut = bibliography_cut(blocks)
-    if cut is not None and cut < len(blocks) / 2:
-        # A cut early in the paper is either a very short paper or a heading misread as the references.
+    after = [] if cut is None else _kept_after_cut(blocks, cut)
+    if cut is not None and len(blocks) - cut - len(after) > len(blocks) / 2:
+        # Skipping most of the paper is either a very short paper or a heading misread as the references.
         logger.warning(
-            "references heading %r at block %d of %d: everything after it is left out",
+            "references heading %r at block %d of %d: everything after it is left out except %d table/caption blocks",
             blocks[cut].content.strip(),
             cut,
             len(blocks),
+            len(after),
         )
     body = blocks if cut is None else blocks[:cut]
-    return [block for block in body if block.type not in NOISE_TYPES and block.content.strip()]
+    return [block for block in body if _shown(block)] + after
+
+
+def _shown(block: SourceBlock) -> bool:
+    return block.type not in NOISE_TYPES and bool(block.content.strip())
+
+
+def _kept_after_cut(blocks: tuple[SourceBlock, ...], cut: int) -> list[SourceBlock]:
+    """The blocks after the references heading that are data, not citations: every table; a caption that is
+    caption-shaped or joined to a kept table on its page through other captions (a "Note: ..." under a table,
+    which explains its column headers); a text or title block that is caption-shaped or a caption-section
+    heading. Both parsers also label author biographies and licence text as captions, which is why a caption
+    needs one of the two reasons. The rule reads each block alone, so it is the same in both lanes."""
+    tail = blocks[cut + 1 :]
+    keep = {
+        index
+        for index, block in enumerate(tail)
+        if _shown(block)
+        and (
+            block.type == "table"
+            or (block.type in {"caption", "text", "title"} and _CAPTION_LIKE.match(block.content.strip()))
+            or (block.type in _HEADING_TYPES and _CAPTION_SECTION.fullmatch(block.content.strip().strip("#*: ")))
+        )
+    }
+    for index, block in enumerate(tail):
+        if block.type != "table" or not _shown(block):
+            continue
+        for step in (-1, 1):
+            neighbour = index + step
+            while (
+                0 <= neighbour < len(tail)
+                and tail[neighbour].type == "caption"
+                and tail[neighbour].page == block.page
+                and _shown(tail[neighbour])
+            ):
+                keep.add(neighbour)
+                neighbour += step
+    return [tail[index] for index in sorted(keep)]
 
 
 def _bibliography_audit(blocks: tuple[SourceBlock, ...]) -> tuple[str, ...]:
-    """The cut, as the lane's audit states it: which heading, and how much of the parse it removed. The two
-    lanes cut at their own headings, so a cut that differs between them is visible where the values are."""
+    """The cut, as the lane's audit states it: which heading, how much of the parse it removed and how many
+    tables and captions after it were still read. The two lanes cut at their own headings, so a cut that
+    differs between them is visible where the values are."""
     cut = bibliography_cut(blocks)
     if cut is None:
         return ()
     heading = blocks[cut].content.strip()
-    return (f"bibliography: {len(blocks) - cut} of {len(blocks)} blocks from the heading {heading!r} on were not read",)
+    kept = len(_kept_after_cut(blocks, cut))
+    skipped = len(blocks) - cut - kept
+    line = f"bibliography: {skipped} of {len(blocks)} blocks from the heading {heading!r} on were not read"
+    if kept:
+        line += f"; {kept} table/caption blocks after it were kept"
+    return (line,)
 
 
 # ---- Extraction ---------------------------------------------------------------------------------------------

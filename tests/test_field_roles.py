@@ -51,6 +51,7 @@ ROLES = {
     "prompt_categories": {P},
     "entity": {P, C, V},
     "references": {P, C, V},
+    "named_values": {P, C},
 }
 # A value off each attribute's default, set on one field of the demo profile to see which fingerprints move.
 EDITS = {
@@ -80,6 +81,7 @@ EDITS = {
     "prompt_categories": ("XRD", "XPS"),
     "entity": "catalyst",
     "references": "catalyst",
+    "named_values": (("room temperature", 25.0),),
 }
 
 
