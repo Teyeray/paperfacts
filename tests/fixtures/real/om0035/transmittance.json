@@ -1,0 +1,261 @@
+{
+ "source": "om0035 59..65.pdf (d18a6ed7288b2508), lanes 8a9e78eb937c, report c029f70dd5bd; transmittance only",
+ "samples": {
+  "Z-1": {
+   "evidence": [
+    [
+     "mineru",
+     {
+      "field": "transmittance",
+      "value_raw": "75.4",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "mineru_p3_b6"
+      ],
+      "note": "average transmittance in 400–700 nm",
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     }
+    ],
+    [
+     "paddleocr_vl",
+     {
+      "field": "transmittance",
+      "value_raw": "75.4",
+      "unit_raw": "%",
+      "condition": "average 400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2"
+      ],
+      "note": null,
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     }
+    ],
+    [
+     "paddleocr_vl",
+     {
+      "field": "transmittance",
+      "value_raw": "~75–81",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2",
+       "paddleocr_vl_p5_b3"
+      ],
+      "note": "average transmittance of Z-TCO and AZ-TCO",
+      "grounded": true,
+      "series": true,
+      "agreement": 1.0,
+      "bound": null
+     }
+    ]
+   ],
+   "comparisons": [
+    {
+     "scope": "sample:Z-1|Z-1",
+     "field": "transmittance",
+     "condition": "400–700 nm",
+     "status": "conflict",
+     "missing_in": null,
+     "a": {
+      "field": "transmittance",
+      "value_raw": "75.4",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "mineru_p3_b6"
+      ],
+      "note": "average transmittance in 400–700 nm",
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     },
+     "b": {
+      "field": "transmittance",
+      "value_raw": "~75–81",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2",
+       "paddleocr_vl_p5_b3"
+      ],
+      "note": "average transmittance of Z-TCO and AZ-TCO",
+      "grounded": true,
+      "series": true,
+      "agreement": 1.0,
+      "bound": null
+     }
+    },
+    {
+     "scope": "sample:Z-1|Z-1",
+     "field": "transmittance",
+     "condition": "average 400–700 nm",
+     "status": "missing",
+     "missing_in": "mineru",
+     "a": null,
+     "b": {
+      "field": "transmittance",
+      "value_raw": "75.4",
+      "unit_raw": "%",
+      "condition": "average 400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2"
+      ],
+      "note": null,
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     }
+    }
+   ],
+   "row_sources": [
+    "mineru_p0_b13",
+    "mineru_p1_b14",
+    "mineru_p4_b0",
+    "mineru_p5_b11",
+    "mineru_p5_b8",
+    "paddleocr_vl_p0_b12",
+    "paddleocr_vl_p1_b21",
+    "paddleocr_vl_p4_b17",
+    "paddleocr_vl_p5_b3",
+    "paddleocr_vl_p5_b6"
+   ]
+  },
+  "AZ-1": {
+   "evidence": [
+    [
+     "mineru",
+     {
+      "field": "transmittance",
+      "value_raw": "77.0",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "mineru_p3_b6"
+      ],
+      "note": "average transmittance in 400–700 nm",
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     }
+    ],
+    [
+     "paddleocr_vl",
+     {
+      "field": "transmittance",
+      "value_raw": "77.0",
+      "unit_raw": "%",
+      "condition": "average 400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2"
+      ],
+      "note": null,
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     }
+    ],
+    [
+     "paddleocr_vl",
+     {
+      "field": "transmittance",
+      "value_raw": "~75–81",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2",
+       "paddleocr_vl_p5_b3"
+      ],
+      "note": "average transmittance of Z-TCO and AZ-TCO",
+      "grounded": true,
+      "series": true,
+      "agreement": 1.0,
+      "bound": null
+     }
+    ]
+   ],
+   "comparisons": [
+    {
+     "scope": "sample:AZ-1|AZ-1",
+     "field": "transmittance",
+     "condition": "400–700 nm",
+     "status": "agree",
+     "missing_in": null,
+     "a": {
+      "field": "transmittance",
+      "value_raw": "77.0",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "mineru_p3_b6"
+      ],
+      "note": "average transmittance in 400–700 nm",
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     },
+     "b": {
+      "field": "transmittance",
+      "value_raw": "~75–81",
+      "unit_raw": "%",
+      "condition": "400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2",
+       "paddleocr_vl_p5_b3"
+      ],
+      "note": "average transmittance of Z-TCO and AZ-TCO",
+      "grounded": true,
+      "series": true,
+      "agreement": 1.0,
+      "bound": null
+     }
+    },
+    {
+     "scope": "sample:AZ-1|AZ-1",
+     "field": "transmittance",
+     "condition": "average 400–700 nm",
+     "status": "missing",
+     "missing_in": "mineru",
+     "a": null,
+     "b": {
+      "field": "transmittance",
+      "value_raw": "77.0",
+      "unit_raw": "%",
+      "condition": "average 400–700 nm",
+      "source_ids": [
+       "paddleocr_vl_p3_b2"
+      ],
+      "note": null,
+      "grounded": true,
+      "series": false,
+      "agreement": 1.0,
+      "bound": null
+     }
+    }
+   ],
+   "row_sources": [
+    "mineru_p0_b13",
+    "mineru_p1_b14",
+    "mineru_p4_b0",
+    "mineru_p5_b11",
+    "mineru_p5_b8",
+    "paddleocr_vl_p0_b12",
+    "paddleocr_vl_p1_b21",
+    "paddleocr_vl_p4_b17",
+    "paddleocr_vl_p5_b3",
+    "paddleocr_vl_p5_b6"
+   ]
+  }
+ }
+}
