@@ -124,8 +124,10 @@ def test_the_document_is_ordinary_when_neither_parse_shows_one(tmp_path: Path):
     assert document_article_type(document, settings) is None
 
 
-def test_the_type_needs_both_parses(tmp_path: Path):
-    document, settings = write_parses(tmp_path, {})
+@pytest.mark.parametrize("present", [{}, {"mineru": "Critical review"}], ids=["ordinary", "review badge"])
+def test_the_type_needs_both_parses_whatever_the_present_one_shows(tmp_path: Path, present: dict[str, str]):
+    # A badge in the one parse there is must not short-circuit the check: one-lane extract always needs both.
+    document, settings = write_parses(tmp_path, present)
     DataLayout(settings.data_root).artifact_path(document.document_id, "paddleocr_vl").unlink()
 
     with pytest.raises(FileNotFoundError, match="paddleocr_vl"):

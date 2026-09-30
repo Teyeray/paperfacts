@@ -270,8 +270,9 @@ def load_artifact(document: DocumentInput, backend: Backend, settings: Settings)
 
 def document_article_type(document: DocumentInput, settings: Settings) -> str | None:
     """What the paper's front matter marks it as, decided once from both lanes' parses: a review badge one parser
-    dropped is still the paper's. Both lanes are told the same thing, so both parses must exist."""
-    detected = (detect_article_type(load_artifact(document, backend, settings).blocks) for backend in BACKENDS)
+    dropped is still the paper's. Both lanes are told the same thing, so both parses must exist. Both are always
+    loaded, never short-circuited, so a missing parse fails the same way whatever the other one shows."""
+    detected = [detect_article_type(load_artifact(document, backend, settings).blocks) for backend in BACKENDS]
     return next((kind for kind in detected if kind is not None), None)
 
 

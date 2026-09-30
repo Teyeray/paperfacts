@@ -303,7 +303,8 @@ The flags worth knowing:
 - `--mode document|passage` picks how the model is asked; see below.
 - `--figures` / `--no-figures` on `run` and `batch` switches the figures stage on or off for this run,
   over `figures.enabled`; `--force-figures` re-reads the charts without redoing anything else.
-- `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both.
+- `--backend mineru|paddleocr_vl|both` on `parse`, `extract` and `overlay` runs one lane or both. A one-lane
+  `extract` still needs both parses: the article type (a review) is decided over both, so both lanes are told the same.
 - `--output` / `-o` names the Excel workbook for `batch` and `export`.
 - `--profile NAME_OR_PATH` on `run`, `batch`, `export`, `extract`, `compare` and `serve` runs the command
   under another domain profile than `profile` in `config.json` (or `PAPERFACTS_PROFILE`). Workbooks are named
