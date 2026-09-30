@@ -4,6 +4,10 @@
 candidate list, each narrowing it or refusing:
 
 1. **Trust.** Only candidates located in the text and carrying a citation count.
+   **Sample over series.** A value the paper states for the whole series is set aside in a lane that also states
+   a value for this sample on its own, at the same measurement (:func:`_sample_specific`): "~75-81 % for all
+   films" says nothing the table's "77.0 %" for this film does not say better, and it must not be the one a
+   later rule picks.
 2. **Narrow.** A lane that quotes the field under several conditions has several measurements; a rule must
    pick one (:func:`_one_condition`), or the lane's values must be one number under several wordings.
    Narrowing sees every candidate, bounds and ranges included: a bound at the condition the rules prefer is
@@ -120,11 +124,17 @@ def decide(
         _Candidate(backend, value, *rules.cell(value, spec, units, replace(ctx, backend=backend)))
         for backend, value in trusted
     ]
+    candidates, superseded = _sample_specific(candidates)
+    superseded_ids = {_identity(c.value) for c in superseded}
     # Narrowing sees every candidate, bounds included. Setting a bound aside first and narrowing again would
     # let it take its own condition out of the running, so the scalar's condition would win although no rule
     # chose it ("<100 nm as-deposited" + "95 nm annealed" would commit 95 as the film's thickness).
     narrowed = _narrow(spec, candidates, row_sources) if candidates else None
-    troubled = [c for c in comparisons if c.status in {"conflict", "ambiguous"} and c not in judged.settled]
+    troubled = [
+        c
+        for c in comparisons
+        if c.status in {"conflict", "ambiguous"} and c not in judged.settled and not _touches(c, superseded_ids)
+    ]
     if narrowed is not None and len(narrowed[0]) < len(candidates):
         # Fail closed: a comparison is ignored only when every side it has is a candidate narrowing set aside.
         # One whose values match no candidate (a stale report, say) still refuses the cell.
@@ -134,6 +144,9 @@ def decide(
         return refused
     details = [_UNTRUSTED_NOTE] if untrusted else []
     details.extend(judged.notes)
+    if superseded:
+        dropped = joined([f"{c.backend}: {_quote(c.value)}".strip() for c in superseded])
+        details.append(f"已排除整系列表述的候选（{dropped}）：同一解析通道对该样品另有同一测量条件下的专属数值")
     several = _several_conditions(candidates)
     if narrowed is None:
         return reject("multiple_conditions", "同一解析通道记录了多种测量条件，无法唯一确定")
@@ -498,6 +511,54 @@ def _identity(value: FieldValue) -> tuple[object, ...]:
 # ---- Narrowing ---------------------------------------------------------------------------------------------
 
 
+def _sample_specific(candidates: Sequence[_Candidate]) -> tuple[list[_Candidate], list[_Candidate]]:
+    """``(kept, superseded)``: per lane, a value the paper states for the whole series (``FieldValue.series``) is
+    set aside when the same lane also states a scalar for this sample on its own at the same measurement
+    (:func:`_same_measurement`).
+
+    Only a scalar supersedes: a bound or a range stated for the sample is weaker than the series' number and
+    leaves it standing. A series value at another condition stays too, since it may be the lane's only reading
+    there and a later rule may prefer that condition. A lane holding only series values keeps them: they are then
+    all it knows. Judged per lane, never across lanes, so a lane that read only the series statement is still
+    compared with the other lane's value for the sample.
+    """
+    superseded: list[_Candidate] = []
+    for backend in BACKENDS:
+        own = [c for c in candidates if c.backend == backend and not c.value.series and c.scalar is not None]
+        superseded += [
+            c
+            for c in candidates
+            if c.backend == backend
+            and c.value.series
+            and any(_same_measurement(c.value.condition, s.value.condition) for s in own)
+        ]
+    gone = {id(c) for c in superseded}
+    return [c for c in candidates if id(c) not in gone], superseded
+
+
+def _same_measurement(series: str | None, sample: str | None) -> bool:
+    """Whether a series statement's condition is positively the sample value's measurement.
+
+    A series statement with no condition is the paper's summary of the series and yields to any value the sample
+    has. One with a condition needs the sample's condition to name exactly its numbers ("400–700 nm" and "average
+    400–700 nm"): conditions with no number to compare ("IWO layer sputtering time" against "Cu layer sputtering
+    time") may well be different quantities, and "not shown to differ" is not "the same".
+    """
+    if not (series or "").strip():
+        return True
+    numbers = sorted(condition_numbers(series))
+    return bool(numbers) and numbers == sorted(condition_numbers(sample))
+
+
+def _touches(comparison: FieldComparison, superseded: set[tuple[object, ...]]) -> bool:
+    """Whether either side of ``comparison`` is a superseded series value. One side is enough, unlike
+    :func:`_only_about`: a superseded value is evidence for nothing in its own lane, so a comparison it takes part
+    in is about a value the cell does not state, whatever the other side is. The live values still meet each
+    other below, where :func:`decide` checks their tolerance itself; a comparison whose values match no
+    candidate is untouched and still refuses the cell."""
+    return any(value is not None and _identity(value) in superseded for value in (comparison.a, comparison.b))
+
+
 def _several_conditions(candidates: Sequence[_Candidate]) -> bool:
     """Whether some lane quotes the field under more than one condition.
 
@@ -561,7 +622,10 @@ def _one_condition(
 
     1. The condition stated in a block the rest of the row also cites. "Resistivity of 5.74e-4 Ω·cm and a
        transmittance of 83.5 % (400-1800 nm)" ties one of several transmittances to the rest of its row;
-       that is the one a reader expects in the cell.
+       that is the one a reader expects in the cell. A whole-series statement the lane also states per sample
+       never reaches this rule (:func:`_sample_specific`), however many row blocks it cites, and the rule gives
+       way when it chose a single wavelength off the field's preferences while a number at a preferred condition
+       is on hand (:func:`_passes_over_a_preference`).
     2. The field's ``condition_preference``, entry by entry: a condition matches an entry when it names
        exactly the entry's numbers, so "average 400–800 nm" and "from 400 to 800 nm" both match "400-800".
        When an entry matches several conditions in one lane, the one that says average / avg / mean / AVT is
@@ -576,7 +640,7 @@ def _one_condition(
     tried.
     """
     kept, _ = _held_to(candidates, lambda value: bool(row_sources.intersection(value.source_ids)))
-    if kept:
+    if kept and not _passes_over_a_preference(spec, kept, candidates):
         return kept, "采用与本行其他字段引用同一原文块的条件"
     for entry in spec.condition_preference:
         numbers = condition_numbers(entry)
@@ -596,6 +660,30 @@ def _one_condition(
         # measurement whose state nobody picked.
         return None
     return None
+
+
+def _passes_over_a_preference(spec: FieldSpec, kept: Sequence[_Candidate], candidates: Sequence[_Candidate]) -> bool:
+    """Whether rule 1 chose a single point off the field's preferred conditions while a number at a preferred one
+    is on hand.
+
+    Citing the row's blocks says which measurement the paper states beside the rest of the row, which is why an
+    average over 400-1800 nm quoted with the row's resistivity is the cell even though the profile prefers
+    400-800 nm. A single wavelength no preference entry names is another matter: om0035's "86.4 % at 498 nm" is
+    the film's peak, quoted in the abstract the row also cites, and must not win over the "average 400-700 nm"
+    the profile asks for -- the rule rule 2 already applies to a peak. A choice with no number in its condition,
+    or a preferred condition with no scalar to offer, leaves rule 1 standing."""
+    preferred = [condition_numbers(entry) for entry in spec.condition_preference]
+
+    def single_off_preference(candidate: _Candidate) -> bool:
+        numbers = condition_numbers(candidate.value.condition)
+        return len(numbers) == 1 and numbers not in preferred
+
+    def preferred_scalar(candidate: _Candidate) -> bool:
+        return candidate.scalar is not None and condition_numbers(candidate.value.condition) in preferred
+
+    return (
+        bool(preferred) and all(single_off_preference(c) for c in kept) and any(preferred_scalar(c) for c in candidates)
+    )
 
 
 def _is_average(value: FieldValue) -> bool:
