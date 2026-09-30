@@ -45,12 +45,15 @@ AFTER_B0 = {
 }
 # Post-B0 attributes a field deliberately moved off its B0 behaviour, with the value it now has; every other field
 # keeps the AFTER_B0 value. substrate_temperature: "at room temperature (RT)" (coatings-13-01719) reads as 25 ℃.
+# transmittance: its spectra are read at 550 nm and as the 400-800 nm mean (the figures stage only).
 EDITED_AFTER_B0 = {
     ("substrate_temperature", "named_values"): [
         ["room temperature", 25.0],
         ["RT", 25.0],
         ["ambient temperature", 25.0],
     ],
+    ("transmittance", "figure_spectrum_axis"): "wavelength (nm)",
+    ("transmittance", "figure_spectrum_points"): ["550", "400-800/50"],
 }
 B0 = json.loads(
     (Path(__file__).parent / "fixtures" / "b0_field_table" / "field_table.json").read_text(encoding="utf-8")

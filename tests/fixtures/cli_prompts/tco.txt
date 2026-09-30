@@ -156,10 +156,10 @@ Only these film properties are of interest (name: meaning, usual unit):
 - transmittance: Optical transmittance (%) of the transparent electrode or transparent conductive film -- not of a perovskite film, an absorber layer or a complete device. Always record the wavelength or range it refers to. (%)
 - thickness: Thickness of the TCO / transparent-electrode film itself (e.g. from SEM cross section or profilometry) -- not of an absorber or active layer, a transport layer, the substrate or a whole device. (nm)
 
-Step 1 - decide whether this chart is a "property-vs-condition" chart: a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name), with one discrete marker per sample.
-Spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are NOT property-vs-condition charts. If it is not one, or none of its y axes plots one of the properties listed above, output {"chart_type": "not_property_vs_condition", "reason": "..."} and nothing else.
+Step 1 - decide whether this chart is a "property-vs-condition" chart: a film property (e.g. sheet resistance, resistivity, carrier concentration, mobility, thickness, average transmittance, figure of merit) plotted against a preparation or treatment condition (e.g. gas flow or ratio, power, pressure, temperature, thickness, doping level, sample name), with one discrete marker per sample; or a spectrum: a continuous curve of transmittance against wavelength (nm), one curve per legend entry. Photographs, micrographs or schematics drawn inside the chart area are insets: ignore them.
+Other spectra, XRD/XPS/Raman patterns, J-V curves, images, maps, schematics and analysis plots (Tauc, Williamson-Hall, fits) are neither. If it is neither, or none of its y axes plots one of the properties listed above, output {"chart_type": "not_property_vs_condition", "reason": "..."} and nothing else.
 
-Step 2 - otherwise read the chart carefully:
+Step 2 - for a property-vs-condition chart, read the chart carefully:
 - Read every plotted data MARKER (squares, circles, triangles, stars...). Do NOT read points from fitted curves, splines or guide-to-the-eye lines; a line vertex without a marker is not a data point. Legend symbols are not data.
 - For each y axis, determine the scale from the tick labels: linear or logarithmic (ticks like 10^1, 10^2, 10^3 evenly spaced => log; interpolate logarithmically between them). Note axis breaks.
 - For each y axis, set "field" to the name of the listed property it plots, or null if it plots none of them. Report points only for series on an axis whose field is not null.
@@ -172,11 +172,20 @@ Step 2 - otherwise read the chart carefully:
 - Include error-bar half-width if error bars are visible, else null.
 - Per point, give a confidence in [0,1] for the y reading.
 
-Output ONLY this JSON (strict JSON: no comments, no trailing text):
+For a property-vs-condition chart, output ONLY this JSON (strict JSON: no comments, no trailing text):
 {"chart_type": "property_vs_condition",
  "x_axis": {"quantity": "...", "unit": "...", "scale": "linear|log|categorical"},
  "y_axes": [{"id": "left", "field": "<listed property name or null>", "quantity": "...", "unit": "... (with multiplier)", "scale": "linear|log", "broken": false}],
  "series": [{"label": "legend text or quantity name", "y_axis": "left|right|right2", "marker": "..."}],
  "points": [{"series": "<label>", "x": <number or string>, "x_on_tick": true, "y": <number>, "y_error": <number or null>, "confidence": <0..1>}]}
+
+Step 2b - if it is a spectrum, read no markers. For each legend curve, read y where the curve crosses each of these x values, and at no other x:
+- transmittance (x = wavelength (nm)): 400, 450, 500, 550, 600, 650, 700, 750, 800
+Leave out an x the curve does not reach. Set "field" on each y axis, decide which axis each curve belongs to, and report y in the units printed on that axis, exactly as in Step 2. Per reading, give a confidence in [0,1] for the y reading.
+For a spectrum, output ONLY this JSON instead (strict JSON: no comments, no trailing text):
+{"chart_type": "spectrum",
+ "x_axis": {"quantity": "...", "unit": "...", "scale": "linear|log"},
+ "y_axes": [{"id": "left", "field": "<listed property name or null>", "quantity": "...", "unit": "... (with multiplier)", "scale": "linear|log", "broken": false}],
+ "curves": [{"label": "legend text", "y_axis": "left|right|right2", "readings": [{"x": <number>, "y": <number>, "confidence": <0..1>}]}]}
 
 

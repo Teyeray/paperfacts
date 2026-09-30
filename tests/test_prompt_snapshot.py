@@ -23,7 +23,7 @@ RECORDED: dict[str, str] = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
 # The comparison below imports snapshot() from the generator, and the generalisation work has to edit the
 # generator (new signatures): re-running it would silently re-record whatever the edited code now renders.
 # The recording's own digest is therefore pinned here, so a re-record fails until this line changes too.
-SNAPSHOT_SHA256 = "a70f1ff07aaee990617056a9b38ff83b70d916f85865f5be6a2fd28febd0dff6"
+SNAPSHOT_SHA256 = "ddff837512eecf9712cd7b29f262123406fb87603f2e324cada25d2c084adfa5"
 
 
 def test_the_recording_itself_is_the_pinned_one():
