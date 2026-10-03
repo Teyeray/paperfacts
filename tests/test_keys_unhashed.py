@@ -25,6 +25,7 @@ UNHASHED = {
     "profile_loader.py",
     "profile_view.py",
     "profile_check.py",
+    "stored.py",
 }
 
 

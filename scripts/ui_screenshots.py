@@ -1,4 +1,5 @@
-"""Screenshots of the web pages against a seeded server, at desktop (1440x900) and phone (390x844) width.
+"""Screenshots of the web pages against a seeded server, at desktop (1440x900) and phone (390x844) width; the document
+page also at 1600x1000, where its summary panel moves beside the content.
 
 The server, its library and the stub job are ``tests/e2e/web_races.py``'s: nothing calls a parser or a model, and
 the pages hold the same seeded papers every run, so two checkouts give comparable pictures. Each page is shot once per
@@ -26,7 +27,7 @@ from web_races import serve  # noqa: E402
 
 from support.factories import make_blank_pdf  # noqa: E402  (tests/ is on the path once web_races is imported)
 
-VIEWPORTS = {"1440x900": (1440, 900), "390x844": (390, 844)}
+VIEWPORTS = {"1440x900": (1440, 900), "390x844": (390, 844), "1600x1000": (1600, 1000)}
 # name -> (hash, the page is ready once this selector shows). ``{A}`` is the seeded paper A's id. A page whose name is
 # in PREPARE is arranged by that step before the shot.
 PAGES = {
@@ -48,6 +49,9 @@ PAGES = {
     "run-all-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "document": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     "document-compact": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
+    # The section bar after a click on 证据: one screen, so the bar is seen stuck under the topbar.
+    "document-sections": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
+    "document-dark": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
 }
 # The density is an attribute on .shell, set by the home toolbar's 紧凑 and remembered by the browser; the document
 # page has no switch of its own, so its picture sets the attribute directly.
@@ -71,6 +75,11 @@ async def open_filters(page: Page, _: Path) -> None:
     if not await page.locator("#filter-panel").count():
         await page.click('#corpus-view [data-focus="filter-toggle"]')
         await page.wait_for_selector("#filter-panel")
+
+
+async def go_to_evidence(page: Page, _: Path) -> None:
+    await page.click('#document-view .section-link[data-goto="evidence"]')
+    await page.wait_for_timeout(800)  # the smooth scroll
 
 
 async def collapse_rail(page: Page, _: Path) -> None:
@@ -125,9 +134,13 @@ async def open_run_all_dialog(page: Page, _: Path) -> None:
 
 
 # The collapse exists on a wide screen only (a phone stacks the rail).
-DESKTOP_ONLY = {"home-rail-collapsed", "home-scrolled"}
+DESKTOP_ONLY = {"home-rail-collapsed", "home-scrolled", "document-dark"}
+# Shot at 1600 px as well; every other page is shot at 1440 and 390 only.
+AT_1600 = {"document", "document-sections"}
+# One screen rather than the full length: a sticky element is shown where it sticks.
+ONE_SCREEN = {"document-sections"}
 # Shot with the browser asking for a dark page.
-DARK = {"home-dark", "home-explore-dark"}
+DARK = {"home-dark", "home-explore-dark", "document-dark"}
 PREPARE = {
     "home-rail-collapsed": collapse_rail,
     "home-rail-filtered": filter_rail,
@@ -137,6 +150,7 @@ PREPARE = {
     "home-filtered": open_filters,
     "home-explore-dark": open_filters,
     "document-compact": lambda page, _: page.evaluate(COMPACT),
+    "document-sections": go_to_evidence,
     "upload-dialog": open_upload_dialog,
     "upload-si-dialog": open_upload_dialog_with_si,
     "document-si": upload_with_si,
@@ -153,7 +167,7 @@ async def shoot(page: Page, base: str, docs: dict[str, str], pdf: Path, name: st
     await page.wait_for_timeout(300)  # fonts and the sticky header settle
     path = out / f"{name}-{viewport}.png"
     # A full-length page would put a modal dialog's backdrop over only the first screen; a dialog is shot as seen.
-    await page.screenshot(path=str(path), full_page=not name.endswith("-dialog"))
+    await page.screenshot(path=str(path), full_page=not name.endswith("-dialog") and name not in ONE_SCREEN)
     return path
 
 
@@ -169,6 +183,8 @@ async def main() -> int:
             for viewport, (width, height) in VIEWPORTS.items():
                 for name in PAGES:
                     if args.only not in name or (name in DESKTOP_ONLY and width <= 960):
+                        continue
+                    if width == 1600 and name not in AT_1600:
                         continue
                     # A context per shot: what one page remembers (the collapsed rail) must not shape the next.
                     context = await browser.new_context(

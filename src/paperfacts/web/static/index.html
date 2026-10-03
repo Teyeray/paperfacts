@@ -86,77 +86,89 @@
 </main>
 
 <template id="tpl-document">
-  <header class="doc-head">
-    <div class="doc-title">
-      <h1 data-slot="name"></h1>
-      <div class="doc-id"><code data-slot="id"></code> <span data-slot="uploaded"></span></div>
+  <div class="doc-layout">
+    <aside class="doc-summary" aria-label="文档概要">
+      <header class="doc-head">
+        <div class="doc-title">
+          <h1 data-slot="name"></h1>
+          <div class="doc-id"><code data-slot="id"></code></div>
+        </div>
+        <div class="doc-actions">
+          <a class="secondary hidden" data-slot="summary-download" download title="本文的结果表（与结果表上方的「下载 Excel」相同）">下载 Excel</a>
+          <label class="force-label"><input type="checkbox" data-slot="force"> 强制重跑</label>
+          <button class="secondary" data-action="figures" type="button">识图</button>
+          <button class="primary" data-action="run" type="button">重新处理</button>
+        </div>
+      </header>
+      <dl class="doc-facts" data-slot="summary-facts"></dl>
+      <ol class="stages" data-slot="stages" aria-label="处理进度"></ol>
+      <p class="doc-note hidden" data-slot="other-profiles"></p>
+      <p class="doc-note other-job hidden" data-slot="other-job" role="status"></p>
+    </aside>
+    <div class="doc-main">
+      <nav class="section-bar" data-slot="section-bar" aria-label="本页各部分"></nav>
+      <section class="results" aria-label="结果表" data-section="results">
+        <div class="results-head">
+          <h2>结果表（按<span data-ui="entity_label_zh"></span>）</h2>
+          <div class="chips" data-slot="results-chips"></div>
+          <button class="copy-table hidden" data-slot="dataset-copy" type="button">复制表格</button>
+          <a class="download hidden" data-slot="dataset-download" download>下载 Excel</a>
+        </div>
+        <p class="results-note muted">每一行是合并两路解析后的一个<span data-ui="entity_label_zh"></span>；空白单元格是流水线拒绝猜测的取值，不是 0。</p>
+        <h3 class="entity-head hidden" data-slot="results-entity"></h3>
+        <div class="table-wrap">
+          <div class="table-empty hidden" data-slot="results-empty">还没有结果表，处理完成后会出现在这里。</div>
+          <table class="facts-table results-table" data-slot="results-table">
+            <thead data-slot="results-head"></thead>
+            <tbody data-slot="results-rows"></tbody>
+          </table>
+        </div>
+        <div data-slot="results-entities"></div>
+      </section>
+      <section class="figures" data-slot="figures" aria-label="图中读数" data-section="figures">
+        <div class="results-head"><h2>图中读数</h2></div>
+        <p class="figures-empty" data-slot="figures-empty" role="status"></p>
+        <p class="figures-warning hidden" data-slot="figures-warning" role="note"></p>
+        <div data-slot="figures-body">
+        <p class="results-note muted">视觉模型从“性质—条件”图上读出的近似值：线性轴 ±10%，对数轴或 4 条以上系列 ±20%。只作参考，不进结果表，也不参与两路比较；横轴读数会被取整到刻度，不用来判断是哪个<span data-ui="entity_label_zh"></span>。点击一行（或聚焦后按回车），在页面上定位这张图。</p>
+        <div class="table-wrap">
+          <table class="facts-table figures-table">
+            <thead><tr><th>图</th><th>字段</th><th>系列</th><th>横轴（参考）</th><th>读数</th><th>图中原始读数</th><th>说明</th></tr></thead>
+            <tbody data-slot="figure-rows"></tbody>
+          </table>
+        </div>
+        </div>
+      </section>
+      <section class="evidence" aria-label="证据" data-section="evidence">
+        <div class="kpis" data-slot="kpis"></div>
+        <div class="workbench">
+          <section class="facts" aria-label="事实对照">
+            <div class="facts-head">
+              <h2>事实对照</h2>
+              <div class="chips" data-slot="filters"></div>
+            </div>
+            <div class="table-wrap">
+              <table class="facts-table">
+                <thead><tr><th>状态</th><th><span data-ui="entity_label_zh"></span></th><th>字段</th><th class="cond">条件</th><th class="lane-a">MinerU</th><th class="lane-b">PaddleOCR-VL</th><th>说明</th></tr></thead>
+                <tbody data-slot="rows"></tbody>
+              </table>
+              <div class="table-empty hidden" data-slot="rows-empty">还没有比较报告。</div>
+            </div>
+          </section>
+          <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
+        </div>
+      </section>
+      <details class="samples" data-slot="samples" data-section="samples">
+        <summary class="samples-head"><h2><span data-ui="entity_label_zh"></span>记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
+        <div class="lanes" data-slot="lanes"></div>
+      </details>
+      <details class="joblog" data-slot="joblog" data-section="log">
+        <summary>处理日志 <span class="muted" data-slot="job-status"></span></summary>
+        <pre data-slot="log"></pre>
+      </details>
+      <div data-section-end></div>
     </div>
-    <div class="doc-actions">
-      <label class="force-label"><input type="checkbox" data-slot="force"> 强制重跑</label>
-      <button class="secondary" data-action="figures" type="button">识图</button>
-      <button class="primary" data-action="run" type="button">重新处理</button>
-    </div>
-  </header>
-  <p class="doc-note hidden" data-slot="other-profiles"></p>
-  <p class="doc-note other-job hidden" data-slot="other-job" role="status"></p>
-  <ol class="stages" data-slot="stages"></ol>
-  <div class="kpis" data-slot="kpis"></div>
-  <section class="results" aria-label="结果表">
-    <div class="results-head">
-      <h2>结果表（按<span data-ui="entity_label_zh"></span>）</h2>
-      <div class="chips" data-slot="results-chips"></div>
-      <button class="copy-table hidden" data-slot="dataset-copy" type="button">复制表格</button>
-      <a class="download hidden" data-slot="dataset-download" download>下载 Excel</a>
-    </div>
-    <p class="results-note muted">每一行是合并两路解析后的一个<span data-ui="entity_label_zh"></span>；空白单元格是流水线拒绝猜测的取值，不是 0。</p>
-    <h3 class="entity-head hidden" data-slot="results-entity"></h3>
-    <div class="table-wrap">
-      <div class="table-empty hidden" data-slot="results-empty">还没有结果表，处理完成后会出现在这里。</div>
-      <table class="facts-table results-table" data-slot="results-table">
-        <thead data-slot="results-head"></thead>
-        <tbody data-slot="results-rows"></tbody>
-      </table>
-    </div>
-    <div data-slot="results-entities"></div>
-  </section>
-  <section class="figures" data-slot="figures" aria-label="图中读数">
-    <div class="results-head"><h2>图中读数</h2></div>
-    <p class="figures-empty" data-slot="figures-empty" role="status"></p>
-    <p class="figures-warning hidden" data-slot="figures-warning" role="note"></p>
-    <div data-slot="figures-body">
-    <p class="results-note muted">视觉模型从“性质—条件”图上读出的近似值：线性轴 ±10%，对数轴或 4 条以上系列 ±20%。只作参考，不进结果表，也不参与两路比较；横轴读数会被取整到刻度，不用来判断是哪个<span data-ui="entity_label_zh"></span>。点击一行（或聚焦后按回车），在页面上定位这张图。</p>
-    <div class="table-wrap">
-      <table class="facts-table figures-table">
-        <thead><tr><th>图</th><th>字段</th><th>系列</th><th>横轴（参考）</th><th>读数</th><th>图中原始读数</th><th>说明</th></tr></thead>
-        <tbody data-slot="figure-rows"></tbody>
-      </table>
-    </div>
-    </div>
-  </section>
-  <div class="workbench">
-    <section class="facts" aria-label="事实对照">
-      <div class="facts-head">
-        <h2>事实对照</h2>
-        <div class="chips" data-slot="filters"></div>
-      </div>
-      <div class="table-wrap">
-        <table class="facts-table">
-          <thead><tr><th>状态</th><th><span data-ui="entity_label_zh"></span></th><th>字段</th><th class="cond">条件</th><th class="lane-a">MinerU</th><th class="lane-b">PaddleOCR-VL</th><th>说明</th></tr></thead>
-          <tbody data-slot="rows"></tbody>
-        </table>
-        <div class="table-empty hidden" data-slot="rows-empty">还没有比较报告。</div>
-      </div>
-    </section>
-    <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
   </div>
-  <details class="samples" data-slot="samples">
-    <summary class="samples-head"><h2><span data-ui="entity_label_zh"></span>记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
-    <div class="lanes" data-slot="lanes"></div>
-  </details>
-  <details class="joblog" data-slot="joblog">
-    <summary>处理日志 <span class="muted" data-slot="job-status"></span></summary>
-    <pre data-slot="log"></pre>
-  </details>
 </template>
 
 <!-- The programmatic upload path: a change here uploads at once with the dialog's options (the e2e checks and

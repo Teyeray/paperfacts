@@ -29,16 +29,31 @@ export function articleTag(summary) {
 const SI_READ_NOTE = "SI 中的表格、图注会被读取；SI 正文段落暂不读取";
 
 export function siTag(summary) {
+  const lines = partLines(summary);
+  if (!lines.length) return "";
+  const title = escapeHtml([...lines, SI_READ_NOTE].join("\n"));
+  return `<span class="article-tag si-tag" title="${title}">含 SI</span>`;
+}
+
+// Each part of a document uploaded with SI, "正文：第 1–3 页（main.pdf）", "SI 1：第 4–5 页（…）"; [] for a single PDF.
+// The 含 SI tag's title and the document page's summary both read it, so they cannot number the pages differently.
+export function partLines(summary) {
   const parts = summary.parts ?? [];
-  if (parts.length < 2) return "";
+  if (parts.length < 2) return [];
   const pages = (part) => {
     const first = part.first_page + 1;
     const last = part.first_page + part.pages;
     return last > first ? `第 ${first}–${last} 页` : `第 ${first} 页`;
   };
-  const lines = parts.map((part, index) => `${index ? `SI ${index}` : "正文"}：${pages(part)}（${part.name}）`);
-  const title = escapeHtml([...lines, SI_READ_NOTE].join("\n"));
-  return `<span class="article-tag si-tag" title="${title}">含 SI</span>`;
+  return parts.map((part, index) => `${index ? `SI ${index}` : "正文"}：${pages(part)}（${part.name}）`);
+}
+
+// A server timestamp (UTC, ISO 8601) in the reader's own time zone, to the minute: "2026-10-04 16:15".
+export function localTime(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return String(iso);
+  const two = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
 }
 
 // Very large / very small numbers use scientific notation; everything else keeps 6 significant figures with trailing zeros stripped

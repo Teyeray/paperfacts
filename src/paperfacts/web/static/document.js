@@ -6,10 +6,23 @@
 // view (profiles.js) fetched beside the data and adopted only together with it.
 
 import { api, optional, profileApi } from "./api.js";
-import { articleTag, siTag, toast } from "./html.js";
+import { articleTag, el, localTime, partLines, siTag, toast } from "./html.js";
 import { renderDefinition } from "./profile.js";
 import { adoptProfile, profileTitle, profileView, servedProfile, syncSwitcher } from "./profiles.js";
-import { LANES, applyUiCopy, currentJob, isActive, isCurrent, jobInProfile, slot, state, uiCopy, viewShows } from "./state.js";
+import {
+  LANES,
+  applyUiCopy,
+  currentJob,
+  entityGroups,
+  inEntity,
+  isActive,
+  isCurrent,
+  jobInProfile,
+  slot,
+  state,
+  uiCopy,
+  viewShows,
+} from "./state.js";
 import { PageViewer } from "./viewer.js";
 import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts.js";
 import { renderLanes } from "./samples.js";
@@ -17,7 +30,8 @@ import { renderResults } from "./table.js";
 import { figuresRead, renderFigures } from "./figures.js";
 import { loadCorpus, renderCorpus } from "./corpus.js";
 import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from "./job.js";
-import { loadLibrary, renderLibrary } from "./library.js";
+import { loadLibrary, miniCounts, renderLibrary } from "./library.js";
+import { renderSectionBar, stopSectionBar, syncSectionBar } from "./sections.js";
 import { documentHash, factFromHash, hashFor, reloadView } from "./router.js";
 
 const VIEWS = ["empty-state", "corpus-view", "document-view", "profile-view", "missing-view", "check-view"];
@@ -36,6 +50,7 @@ export function showPage(id) {
 // Nothing of the document being left may keep drawing: its poller stops, and the next document starts clean.
 function leaveDocument() {
   stopPolling();
+  stopSectionBar();
   state.current = null;
   state.currentProfile = null;
   state.summary = null;
@@ -244,7 +259,6 @@ function renderDocument() {
   s("name").textContent = summary.name;
   s("name").insertAdjacentHTML("beforeend", articleTag(summary) + siTag(summary));
   s("id").textContent = summary.document_id;
-  s("uploaded").textContent = summary.uploaded_at ? `上传于 ${summary.uploaded_at.replace("T", " ").slice(0, 16)}` : "由命令行处理";
   const runButton = node.querySelector('[data-action="run"]');
   runButton.disabled = !summary.runnable || isActive(currentJob());
   if (!summary.runnable) runButton.title = "没有 PDF，也没有两路的解析缓存：请重新上传后再处理";
@@ -261,6 +275,8 @@ function renderDocument() {
   renderStages(s("stages"));
   renderKpis(s("kpis"));
   renderResults(node.querySelector(".results"));
+  mirrorDownload(s("summary-download"), s("dataset-download"));
+  renderSummaryFacts(s("summary-facts"));
   renderFigures(s("figures"));
   renderFilters(s("filters"));
   renderRows(s("rows"), s("rows-empty"));
@@ -268,6 +284,38 @@ function renderDocument() {
   renderJobLog(s("joblog"), s("log"), s("job-status"));
   view.append(node);
   mountViewer(slot("viewer"), viewerState);
+  renderSectionBar(slot("section-bar"), view);
+}
+
+// The summary panel's facts: what the paper is made of, how many samples the table has, how its facts compared and
+// when it was uploaded and last finished. The stages and the actions sit beside them in the template.
+function renderSummaryFacts(root) {
+  const { summary, dataset } = state;
+  const parts = partLines(summary);
+  const rows = dataset?.sample_rows ?? [];
+  const groups = entityGroups();
+  const samples = !dataset
+    ? "—"
+    : groups.length < 2
+      ? `${rows.length} 个`
+      : groups.map((group) => `${group.label} ${rows.filter((row) => inEntity(group, row)).length}`).join(" · ");
+  const fact = (label, ...value) => el("div", { className: "doc-fact" }, el("dt", { text: label }), el("dd", {}, ...value));
+  const tally = document.createElement("dd");
+  tally.innerHTML = miniCounts(summary) || `<span class="muted">尚无比较结果</span>`;
+  const compared = el("div", { className: "doc-fact" }, el("dt", { text: "比较结果" }), tally);
+  root.replaceChildren(
+    fact("组成", ...(parts.length ? parts.map((line) => el("span", { className: "part", text: line })) : ["单个 PDF"])),
+    fact(uiCopy("entity_label_zh"), samples),
+    compared,
+    fact("上传", summary.uploaded_at ? localTime(summary.uploaded_at) : "由命令行处理"),
+    fact("最近完成", summary.finished_at ? localTime(summary.finished_at) : "尚未完成"),
+  );
+}
+
+// The summary's 下载 Excel is the results table's link, shown and addressed the same: table.js decides both.
+function mirrorDownload(mirror, source) {
+  mirror.classList.toggle("hidden", source.classList.contains("hidden"));
+  if (source.getAttribute("href")) mirror.href = source.href;
 }
 
 // The same paper under the other profiles it has results under, one link each.
@@ -319,6 +367,7 @@ function renderJobPanels() {
   // row keeps its focus through the poll.
   const figures = slot("figures");
   if (figures && !state.figures?.rows?.length) renderFigures(figures);
+  syncSectionBar(); // the log appears with the first job
 }
 
 // "识图" reads the charts; once current readings are stored it becomes "重新识图", which re-asks every chart (the

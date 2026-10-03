@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -375,6 +376,20 @@ def test_a_dataset_of_an_earlier_parse_is_neither_served_nor_finished(library: L
 
     assert library.dataset(DOC_KEY) is None
     assert library.finished(DOC_KEY) is False
+
+
+def test_finished_at_is_the_current_dataset_mtime_and_none_once_it_is_of_an_earlier_parse(library: Library):
+    assert library.summary(DOC_KEY).finished_at is None
+    old = seed_artifact(library, "mineru", blocks=(make_block(content="old"),))
+    path = seed_dataset(library, DOC_KEY, {"document_id": DOC_SHA, "artifact_sha256": {"mineru": old.content_hash()}})
+    stamp = datetime(2026, 9, 30, 8, 15, 42, tzinfo=UTC).timestamp()
+    os.utime(path, (stamp, stamp))
+
+    assert library.summary(DOC_KEY).finished_at == "2026-09-30T08:15:42+00:00"
+
+    seed_artifact(library, "mineru", blocks=(make_block(content="re-parsed"),))
+
+    assert library.summary(DOC_KEY).finished_at is None
 
 
 def test_a_dataset_that_recorded_no_parse_is_still_served(library: Library):
