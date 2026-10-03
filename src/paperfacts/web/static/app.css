@@ -551,7 +551,9 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .search-cond { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .search-cond input, .filter-check input { accent-color: var(--accent); }
 .search-help { flex-basis: 100%; margin: 0; font-size: 11.5px; }
-mark { background: color-mix(in oklab, var(--warn) 32%, var(--paper)); color: inherit; border-radius: 2px; padding: 0 1px; }
+/* A match is ink on a warm wash in both themes: inside a muted label the ink keeps it readable on the dark ground. */
+mark { background: color-mix(in oklab, var(--warn) 34%, var(--paper)); color: var(--ink); border-radius: 2px; padding: 0 1px; }
+@media (prefers-color-scheme: dark) { mark { background: color-mix(in oklab, var(--warn) 48%, var(--paper)); } }
 
 .explorer { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
 .explorer.panel-open { grid-template-columns: 248px minmax(0, 1fr); }
