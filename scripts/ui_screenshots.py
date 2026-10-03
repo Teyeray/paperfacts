@@ -33,13 +33,29 @@ PAGES = {
     "home-rail-filtered": ("#/", "#corpus-view:not(.hidden) table"),
     "home-query": ("#/?q=abc", "#corpus-view:not(.hidden) table"),
     "home-compact": ("#/", "#corpus-view:not(.hidden) table"),
+    "home-sorted": ("#/", "#corpus-view:not(.hidden) table"),
+    "home-scrolled": ("#/", "#corpus-view:not(.hidden) table"),
+    "home-dark": ("#/", "#corpus-view:not(.hidden) table"),
     "upload-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "run-all-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "document": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     "document-compact": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
 }
-# The density hook is an attribute on .shell; nothing in the page sets it yet, so the picture does.
+# The density is an attribute on .shell, set by the home toolbar's 紧凑 and remembered by the browser; the document
+# page has no switch of its own, so its picture sets the attribute directly.
 COMPACT = "document.querySelector('.shell').dataset.density = 'compact'"
+
+
+async def sort_home(page: Page, _: Path) -> None:
+    # By paper name, with the papers expanded: the sample rows stay under their paper.
+    await page.click('#corpus-view [data-sort="paper"]')
+    await page.click('#corpus-view [data-focus="expand-all"]')
+
+
+async def scroll_home(page: Page, _: Path) -> None:
+    # Every field shown, so the table is wider than the page: the two frozen columns stay while the values move.
+    await page.click('#corpus-view [data-focus="show-empty"]')
+    await page.evaluate("document.querySelector('#corpus-view .table-wrap').scrollLeft = 600")
 
 
 async def collapse_rail(page: Page, _: Path) -> None:
@@ -64,11 +80,15 @@ async def open_run_all_dialog(page: Page, _: Path) -> None:
 
 
 # The collapse exists on a wide screen only (a phone stacks the rail).
-DESKTOP_ONLY = {"home-rail-collapsed"}
+DESKTOP_ONLY = {"home-rail-collapsed", "home-scrolled"}
+# Shot with the browser asking for a dark page.
+DARK = {"home-dark"}
 PREPARE = {
     "home-rail-collapsed": collapse_rail,
     "home-rail-filtered": filter_rail,
-    "home-compact": lambda page, _: page.evaluate(COMPACT),
+    "home-compact": lambda page, _: page.click('#corpus-view [data-focus="density:compact"]'),
+    "home-sorted": sort_home,
+    "home-scrolled": scroll_home,
     "document-compact": lambda page, _: page.evaluate(COMPACT),
     "upload-dialog": open_upload_dialog,
     "run-all-dialog": open_run_all_dialog,
@@ -102,7 +122,10 @@ async def main() -> int:
                     if args.only not in name or (name in DESKTOP_ONLY and width <= 960):
                         continue
                     # A context per shot: what one page remembers (the collapsed rail) must not shape the next.
-                    context = await browser.new_context(viewport={"width": width, "height": height})
+                    context = await browser.new_context(
+                        viewport={"width": width, "height": height},
+                        color_scheme="dark" if name in DARK else "light",
+                    )
                     page = await context.new_page()
                     print(await shoot(page, base, docs, pdf, name, args.out, viewport))
                     await context.close()

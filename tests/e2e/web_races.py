@@ -1227,6 +1227,178 @@ async def entity_corpus(page: Page, _: str, docs: dict[str, str], __: Path) -> N
     expect("2 个涂层" in (await page.text_content("#corpus-view") or ""), "the primary table did not come back")
 
 
+# ---- the home table as a data table: sort, density, frozen columns, toolbar -----------------------------------------
+
+# The sorting corpus: papers P1-P3 with a numeric field t = 80 / 85 / blank and r = 5 / 2 / 9, served in the order
+# P3, P2, P1 (so "no sort" is told apart from ascending), and sixteen more numeric columns to scroll sideways.
+SORT_FILLERS = [f"x{n:02d}" for n in range(1, 17)]
+SORT_T = {"P1": 80.0, "P2": 85.0, "P3": None}
+SORT_R = {"P1": 5.0, "P2": 2.0, "P3": 9.0}
+SORT_SERVED = ["P3", "P2", "P1"]
+
+
+async def sort_corpus(page: Page) -> None:
+    """Serve the sorting corpus as /api/dataset: the real answer, with these fields and rows in place of its own."""
+
+    async def corpus(route: Route) -> None:
+        response = await route.fetch()
+        data = await response.json()
+        numeric = {"label": "", "scope": "sample", "description": "", "kind": "numeric", "cardinality": "one"}
+        data["fields"] = [
+            {**numeric, "name": "t", "unit": "nm"},
+            {**numeric, "name": "r", "unit": "Ω/sq"},
+            *({**numeric, "name": name, "label": f"填充列{name}", "unit": "nm"} for name in SORT_FILLERS),
+        ]
+        rows = []
+        for name in SORT_SERVED:
+            sample = {
+                "sample_id": f"S-{name}",
+                "available_fields": 2,
+                "agree_fields": 2,
+                "t": SORT_T[name],
+                "r": SORT_R[name],
+                **{filler: 1000.0 + n for n, filler in enumerate(SORT_FILLERS)},
+            }
+            row = {"document_id": f"{name.lower():0<16}", "name": name, "paper_row": sample, "sample_count": 1}
+            rows.append({**row, "sample_rows": [sample]})
+        data["rows"] = rows
+        await route.fulfill(response=response, json=data)
+
+    await page.route("**/api/dataset", corpus)
+
+
+async def open_sort_corpus(page: Page, base: str) -> None:
+    await sort_corpus(page)
+    await page.goto(f"{base}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+
+
+async def first_column(page: Page) -> list[str]:
+    return [cell.strip() for cell in await page.locator("#corpus-view tbody tr td:first-child").all_text_contents()]
+
+
+@check("a header click sorts the home table ascending, descending, then back to the server's order; blanks last")
+async def corpus_sort(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_sort_corpus(page, base)
+    expect(await first_column(page) == SORT_SERVED, f"the served order reads {await first_column(page)}")
+    header = '#corpus-view thead th:has([data-sort="t"])'
+    expect(await page.get_attribute(header, "aria-sort") == "none", "an unsorted header claims a sort")
+    await page.click('#corpus-view [data-sort="t"]')
+    expect(await first_column(page) == ["P1", "P2", "P3"], f"t ascending reads {await first_column(page)}")
+    expect(await page.get_attribute(header, "aria-sort") == "ascending", "aria-sort is not ascending")
+    expect("升序" in (await page.text_content(header) or ""), "the header does not say it is sorted ascending")
+    # From the keyboard: Enter on the focused header sorts again and keeps the focus there.
+    await page.focus('#corpus-view [data-sort="t"]')
+    await page.keyboard.press("Enter")
+    expect(await first_column(page) == ["P2", "P1", "P3"], f"t descending reads {await first_column(page)}")
+    expect(await page.get_attribute(header, "aria-sort") == "descending", "aria-sort is not descending")
+    expect("降序" in (await page.text_content(header) or ""), "the header does not say it is sorted descending")
+    focused = await page.evaluate("document.activeElement.dataset.focus")
+    expect(focused == "sort:t", f"the focus moved to {focused!r}")
+    await page.click('#corpus-view [data-sort="t"]')
+    expect(await first_column(page) == SORT_SERVED, f"a third click leaves {await first_column(page)}")
+    expect(await page.get_attribute(header, "aria-sort") == "none", "a third click leaves a sort on the header")
+    await page.click('#corpus-view [data-sort="r"]')
+    expect(await first_column(page) == ["P2", "P1", "P3"], f"r ascending reads {await first_column(page)}")
+    sort = await page.evaluate("import('/corpus.js').then((corpus) => corpus.getSort())")
+    expect(sort == {"key": "r", "dir": "asc"}, f"getSort() reads {sort}")
+    count = (await page.text_content("#corpus-view .row-count") or "").strip()
+    expect(count == "3 篇论文 · 3 个样品", f"the row count reads {count!r}")
+
+
+@check("the clipboard copy of a sorted home table is its visible columns in the sorted order")
+async def corpus_sorted_copy(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_sort_corpus(page, base)
+    await page.click('#corpus-view [data-sort="t"]')
+    await page.evaluate("navigator.clipboard.writeText = async (text) => { window.__copied = text; }")
+    await page.click("#corpus-view button.copy-table")
+    lines = [line.split("\t") for line in (await page.evaluate("window.__copied") or "").split("\n")]
+    heads = await page.locator("#corpus-view thead th").count()
+    expect(len(lines) == 4 and all(len(line) == heads for line in lines), f"the copy is {lines}")
+    expect(lines[0][:4] == ["论文", "样品", "可用/一致", "t (nm)"], f"the copied header reads {lines[0][:4]}")
+    expect([line[0] for line in lines[1:]] == ["P1", "P2", "P3"], f"the copied rows are {lines[1:]}")
+    expect([line[1] for line in lines[1:]] == ["S-P1", "S-P2", "S-P3"], f"the copied ids are {lines[1:]}")
+    expect([line[3] for line in lines[1:]] == ["80", "85", ""], f"the copied t column is {lines[1:]}")
+
+
+@check("the density switch survives a reload and the document page's results table follows it")
+async def density(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    padding = "getComputedStyle(document.querySelector('{} .results-table tbody td')).paddingTop"
+    await page.goto(f"{base}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    standard = await page.evaluate(padding.format("#corpus-view"))
+    expect(await page.get_attribute('[data-focus="density:standard"]', "aria-pressed") == "true", "标准 not pressed")
+    await page.click('#corpus-view [data-focus="density:compact"]')
+    compact = await page.evaluate(padding.format("#corpus-view"))
+    expect(compact != standard, f"紧凑 left the cell padding at {compact}")
+    await page.reload()
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await page.get_attribute(".shell", "data-density") == "compact", "紧凑 did not survive a reload")
+    expect(await page.get_attribute('[data-focus="density:compact"]', "aria-pressed") == "true", "紧凑 not pressed")
+    expect(await page.evaluate(padding.format("#corpus-view")) == compact, "the reloaded table is not compact")
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_selector('[data-slot="results-rows"] tr')
+    shown = await page.evaluate(padding.format("#document-view"))
+    expect(shown == compact, f"the document's results table pads {shown}, the compact home table {compact}")
+    await page.goto(f"{base}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await page.click('#corpus-view [data-focus="density:standard"]')
+    expect(await page.get_attribute(".shell", "data-density") is None, "标准 left the attribute on")
+    expect(await page.evaluate(padding.format("#corpus-view")) == standard, "标准 did not restore the padding")
+
+
+FROZEN = """() => {
+  const box = (selector) => document.querySelector(selector).getBoundingClientRect();
+  const first = box('#corpus-view thead th:nth-child(1)');
+  const second = box('#corpus-view thead th:nth-child(2)');
+  const cell = box('#corpus-view tbody tr:first-child td:nth-child(2)');
+  return { firstRight: first.right, secondLeft: second.left, cellLeft: cell.left,
+           scroll: document.querySelector('#corpus-view .table-wrap').scrollLeft };
+}"""
+
+
+async def frozen_columns(page: Page, base: str, density: str) -> None:
+    await open_sort_corpus(page, base)
+    await page.click(f'#corpus-view [data-focus="density:{density}"]')
+    before = await page.evaluate(FROZEN)
+    expect(abs(before["firstRight"] - before["secondLeft"]) <= 1, f"the frozen columns overlap or part: {before}")
+    await page.evaluate("document.querySelector('#corpus-view .table-wrap').scrollLeft = 600")
+    after = await page.evaluate(FROZEN)
+    expect(after["scroll"] == 600, f"the table did not scroll 600px: {after}")
+    for key in ("secondLeft", "cellLeft", "firstRight"):
+        expect(abs(after[key] - before[key]) <= 0.5, f"{key} moved while scrolling ({density}): {before} -> {after}")
+
+
+@check("the second frozen column stays put while the table scrolls 600px right, at 1440 px in both densities")
+async def frozen_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await frozen_columns(page, base, "standard")
+    await frozen_columns(page, base, "compact")
+
+
+@check("the second frozen column stays put while the table scrolls 600px right, at 1280 px", width=1280)
+async def frozen_1280(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await frozen_columns(page, base, "standard")
+    await frozen_columns(page, base, "compact")
+
+
+@check("the home toolbar is one row: 列, 显示空字段, 密度, 展开全部, the count, 复制, 下载; the explorer slot is empty")
+async def toolbar(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await page.goto(f"{base}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    tops = await page.evaluate(
+        """() => [...document.querySelectorAll(
+                   '#corpus-view .table-toolbar :is(button, a, .row-count):not(.picker-pop *)')]
+                 .map((element) => Math.round(element.getBoundingClientRect().top + element.offsetHeight / 2))"""
+    )
+    expect(len(tops) >= 7 and max(tops) - min(tops) <= 4, f"the toolbar wraps: centres at {tops}")
+    picker = (await page.text_content('#corpus-view [data-focus="picker"]') or "").strip()
+    expect(picker.startswith("列"), f"the field picker reads {picker!r}")
+    slot = await page.locator('#corpus-view [data-slot="explore"]').inner_html()
+    expect(slot == "", f"the explorer slot holds {slot!r}")
+    count = (await page.text_content("#corpus-view .row-count") or "").strip()
+    expect(re.fullmatch(r"\d+ 篇论文 · \d+ 个样品", count) is not None, f"the row count reads {count!r}")
+
+
 # ---- the profile page -------------------------------------------------------------------------------------------
 
 # A label a profile may carry: shown as text, never parsed as an element.

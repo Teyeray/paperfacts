@@ -32,11 +32,17 @@
      `data-density="compact"` on .shell (see layout), so a density control only flips that attribute. */
   --row-pad: 11px 12px;
   --cell-pad: 9px 10px;
+  /* The home table's two frozen columns (论文, then the entity id): fixed widths, so the second knows where to stick. */
+  --freeze-1: 280px;
+  --freeze-2: 150px;
   --rail: 300px;
   --topbar: 56px;   /* the sticky header's height: what the rail and the content sit under */
   --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --font-body: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  /* Derived, so dark mode gets them from its own stops: a table's row rule and its every-other-row tint. */
+  --line-soft: color-mix(in oklab, var(--line) 60%, var(--paper));
+  --zebra: color-mix(in oklab, var(--ink) 2.5%, var(--paper));
 }
 /* Dark mode picks different stops from the same scale (contrast-checked on a dark ground), not an automatic inversion of light mode */
 @media (prefers-color-scheme: dark) {
@@ -120,7 +126,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ---------- layout ---------- */
 .shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); min-height: calc(100vh - var(--topbar)); }
-.shell[data-density="compact"] { --row-pad: 7px 10px; --cell-pad: 5px 8px; }
+.shell[data-density="compact"] { --row-pad: 7px 10px; --cell-pad: 5px 8px; --freeze-1: 240px; --freeze-2: 128px; }
 /* The rail scrolls on its own under the sticky header, so a long library never pushes the page down. */
 .rail {
   position: sticky; top: var(--topbar); height: calc(100vh - var(--topbar)); overflow: hidden auto; min-width: 0;
@@ -247,7 +253,8 @@ h1 .article-tag { margin: 0 0 0 10px; font-size: 12px; }
 .workbench { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(320px, 1fr); gap: 18px; align-items: start; }
 @media (max-width: 1439px) { .workbench { grid-template-columns: minmax(0, 1fr); } }
 .facts-head, .samples-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
-h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.003em; }
+/* Section headings in the body face: the display serif is for page titles only. */
+h2 { font-family: var(--font-body); font-size: 16px; font-weight: 600; margin: 0; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { border: 1px solid var(--line); background: var(--paper); border-radius: var(--radius-pill); padding: 3px 11px; font-size: 12px; line-height: 1.4; color: var(--ink-2); }
 .chip.on { border-color: var(--ink); color: var(--ink); }
@@ -314,7 +321,7 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .flag.approx { color: var(--neutral); }
 .figures-warning { font-size: 12px; margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--warn); color: var(--ink-2); }
 .results-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
-.results-head h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.003em; }
+.results-head h2 { font-size: 16px; font-weight: 600; margin: 0; }
 .results-note { font-size: 12px; margin: 0 0 10px; }
 /* Only a profile with several entity types names them: one table (and one group of records) per entity. */
 .entity-head { font-size: 13px; font-weight: 600; margin: 12px 0 6px; color: var(--ink-2); }
@@ -329,6 +336,24 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .copy-table { font: inherit; font-size: 12px; cursor: pointer; }
 .download:hover, .copy-table:hover { border-color: var(--ink); color: var(--ink); }
 .results-table tr { cursor: default; }  /* rows are not selectable here; individual cells are */
+/* A row's ground is one variable, so the frozen cells (opaque, see the sticky frame below) repaint with the row:
+   zebra, hover, the paper row's tint and an expanded paper's sample rows. */
+.results-table tbody tr { --row-bg: var(--paper); background: var(--row-bg); }
+.results-table tbody tr:nth-child(even) { --row-bg: var(--zebra); }
+.results-table tbody tr:hover { --row-bg: color-mix(in oklab, var(--accent) 6%, var(--paper)); }
+.results-table th { border-bottom-color: var(--line); }
+.results-table td { border-bottom-color: var(--line-soft); }
+/* Numbers line up on their digits, right-aligned, in a column the field's kind calls numeric. */
+.results-table td.cell { font-variant-numeric: tabular-nums; }
+.results-table .num { text-align: right; }
+/* A sortable header is a button filling its cell; the direction is written beside the title, not only coloured. */
+.results-table th .sort-button {
+  display: block; width: 100%; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: inherit; color: inherit;
+}
+.results-table th .sort-button:hover { color: var(--accent); }
+.results-table th .sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sort-mark { margin-left: 5px; font-size: 10.5px; letter-spacing: 0; text-transform: none; color: var(--accent); white-space: nowrap; }
 .results-table th.fcol small { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
 .results-table td.cell { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; cursor: pointer; }
 /* The colour is a second signal only: every decided cell also carries a badge naming its lane(s). */
@@ -350,12 +375,14 @@ h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin
 .results-table button.expand { display: block; margin-top: 2px; padding: 0; border: 0; background: none;
   font: inherit; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); cursor: pointer; }
 .results-table button.expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.results-table tr.expanded > td { border-bottom-color: transparent; }
-.results-table tr.sample-row > td { background: color-mix(in oklab, var(--ink) 3%, var(--paper)); font-size: 12px; }
+.results-table tr.expanded > td { border-bottom-color: #0000; }
+.results-table tbody tr.sample-row { --row-bg: color-mix(in oklab, var(--ink) 4%, var(--paper)); }
+.results-table tr.sample-row > td { font-size: 12px; }
 .results-table tr.sample-row td.indent { padding-left: 22px; color: var(--ink-2); }
 .results-table tr.sample-row small.chosen { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
 .results-table td.cond { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.results-table tr.paper-row { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
+.results-table tbody tr.paper-row { --row-bg: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
+.results-table tbody tr.paper-row:hover { --row-bg: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
 .results-table tr.paper-level-row td { color: var(--ink-2); }
 .paper-mark { margin-left: 6px; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); white-space: nowrap; }
 
@@ -436,7 +463,6 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .intro-cta { font-size: 14px; color: var(--ink); margin: 18px 0 6px; }
 .intro-steps { font-size: 12px; letter-spacing: .04em; margin: 0; }
 .corpus-view .results { margin-bottom: 0; }
-.corpus-view .results-table td.label { max-width: 320px; }
 .corpus-view .results-table td.cell { cursor: default; }
 .corpus-view .results-table td.mono small { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
 .intro h1 { font-family: var(--font-display); font-weight: 600; font-size: 32px; line-height: 1.2; margin: 0 0 10px; letter-spacing: -.01em; }
@@ -460,17 +486,54 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .results-table th:first-child,
 .results-table td:first-child {
   position: sticky; left: 0; z-index: 1;
-  background: var(--paper);
-  box-shadow: inset -1px 0 0 var(--line), inset 0 -1px 0 var(--line), 3px 0 5px -4px rgb(0 0 0 / 14%);
+  background: var(--row-bg, var(--paper));
+  box-shadow: inset -1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft), 3px 0 5px -4px rgb(0 0 0 / 14%);
 }
 .results-table th:first-child { z-index: 3; background: var(--paper-2); }
 .results-table th { z-index: 2; }
-/* Row states have to be repainted on the sticky cell: it carries its own opaque background, so the
-   row's hover and the paper row's tint never reach it. */
-.results-table tbody tr:hover > td:first-child { background: color-mix(in oklab, var(--accent) 6%, var(--paper)); }
-.results-table tr.paper-row > td:first-child { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
-.results-table tr.paper-row:hover > td:first-child { background: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
+/* The row's state reaches the sticky cell through --row-bg; a selected cell keeps its own mark. */
 .results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+/* The home table freezes a second column, the entity id, right of 论文. Both have a fixed width per density
+   (--freeze-1, --freeze-2), since the second sticks at the first's width; the shadow marks the frozen edge. */
+.corpus-view .results-table th:first-child,
+.corpus-view .results-table td:first-child {
+  width: var(--freeze-1); min-width: var(--freeze-1); max-width: var(--freeze-1);
+  overflow: hidden; text-overflow: ellipsis;
+  box-shadow: inset -1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft);
+}
+.corpus-view .results-table th:nth-child(2),
+.corpus-view .results-table td:nth-child(2) {
+  position: sticky; left: var(--freeze-1); z-index: 1;
+  width: var(--freeze-2); min-width: var(--freeze-2); max-width: var(--freeze-2);
+  overflow: hidden; text-overflow: ellipsis;
+  background: var(--row-bg, var(--paper));
+  box-shadow: inset -1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft), 3px 0 5px -4px rgb(0 0 0 / 14%);
+}
+.corpus-view .results-table th:nth-child(2) { z-index: 3; background: var(--paper-2); }
+.corpus-view .results-table td:nth-child(2) > small,
+.corpus-view .results-table td:nth-child(2) > button.expand { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+/* On a phone two frozen columns would leave no room for the values: only a narrower 论文 stays frozen. */
+@media (max-width: 520px) {
+  .corpus-view { --freeze-1: 132px; }
+  .corpus-view .results-table th:nth-child(2),
+  .corpus-view .results-table td:nth-child(2) { position: static; width: auto; min-width: 0; max-width: none; }
+}
+
+/* ---------- the home table's toolbar: one row, the explorer's slot first, count and outputs at the end ---------- */
+.table-toolbar { gap: 8px 10px; margin-bottom: 8px; }
+.toolbar-slot:empty { display: none; }
+.toolbar-end { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.row-count { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table-toolbar .download, .table-toolbar .copy-table {
+  margin-left: 0; padding: 4px 11px; font-size: 12px; line-height: 1.4; font-weight: 600; color: var(--ink);
+  border-radius: var(--radius);
+}
+/* Two buttons of one choice, the pressed one filled. */
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-pill); overflow: hidden; }
+.segmented button { border: 0; background: var(--paper); padding: 3px 11px; font-size: 12px; line-height: 1.4; color: var(--ink-2); }
+.segmented button + button { border-left: 1px solid var(--line); }
+.segmented button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* ---------- dialogs: the upload box and the bulk run's confirmation ---------- */
 .dialog {

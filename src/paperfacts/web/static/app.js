@@ -5,7 +5,7 @@
 // view), library (left rail: the list, its search and chips, the collapse, the bulk run), upload (the upload dialog
 // and the page-wide drop), document (document view, home view, profile page and the missing-document /
 // missing-profile states), profile (the read-only profile page's renderers), table (the results table and the
-// column model), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
+// column model, sorting and the density switch), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
 // library-wide results table), facts (fact comparison), figures (chart readings), samples (sample records), job
 // (job progress), viewer (page-level provenance), check (the page that checks a pasted profile).
 
@@ -17,6 +17,7 @@ import { loadLibrary, setupLibraryDisclosure, setupLibraryFilter, setupRailToggl
 import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
 import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
+import { applyStoredDensity } from "./table.js";
 import { setupUpload } from "./upload.js";
 
 // Another profile routed to: the rail lists its documents, the old profile's home table is hidden until the new one
@@ -40,6 +41,7 @@ function setupSkipLink() {
 document.addEventListener("DOMContentLoaded", async () => {
   setupSkipLink();
   setupRailToggle();
+  applyStoredDensity();
   setupUpload();
   setupRunAll();
   setupLibraryFilter();
