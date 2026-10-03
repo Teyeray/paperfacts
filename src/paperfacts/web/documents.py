@@ -44,7 +44,14 @@ from paperfacts.storage import (
     write_bytes_atomic,
     write_bytes_if_absent,
 )
-from paperfacts.stored import article_type, is_finished, stored_comparison, stored_dataset, stored_stages
+from paperfacts.stored import (
+    article_type,
+    finished_at,
+    is_finished,
+    stored_comparison,
+    stored_dataset,
+    stored_stages,
+)
 from paperfacts.ui_copy import article_type_zh
 from paperfacts.workflow import Stage, read_lane
 
@@ -68,6 +75,9 @@ class DocumentSummary(BaseModel):
     )
     counts: ComparisonCounts | None = None
     uploaded_at: str | None = None
+    finished_at: str | None = Field(
+        default=None, description="when the run under this profile finished (its dataset's mtime, UTC); None until then"
+    )
     article_type: str | None = Field(
         default=None, description="what the stored lanes were told the paper is (extract.detect_article_type)"
     )
@@ -223,6 +233,9 @@ class Library:
             stages=stages,
             counts=counts,
             uploaded_at=identity.created_at if identity and identity.uploaded else None,
+            finished_at=finished_at(
+                self.layout, document_id, extractor_key=self.extractor_key, comparison_key=self.comparison_key
+            ),
             article_type=kind,
             article_type_zh=article_type_zh(kind),
             parts=identity.parts if identity else None,

@@ -268,22 +268,32 @@ link gives the same table. Changing only the query does not reload the table, a 
 (no history entry per keystroke), and the PaperFacts link in the header returns to the last query of the current
 profile; switching profile drops it.
 
-**A document page** reads top to bottom.
+**A document page** opens with a summary panel: above the content, and from 1600 px wide a sticky panel beside it.
+It holds the display name (with 综述 / 含 SI tags) and the document id; the actions 下载 Excel (the same workbook as the
+link over the results table), 「强制重跑」, 「识图」 and 「重新处理」; and the facts: 组成 (单个 PDF, or the main text and each
+SI file with its page range in the merged PDF), the number of samples in the results table, 比较结果 (the
+一致 / 冲突 / 不确定 / 缺失 tally, each count with its word), 上传 and 最近完成 (when the run under this profile last
+finished -- the time its table was written -- or 尚未完成), both in the browser's time zone. Under them, the stage
+list: `parse:mineru`, `parse:paddleocr_vl`, `figures` (识图: done once readings are stored, skipped with "charts not
+requested" until someone asks, pending only while `figures.enabled` is on), `extract:mineru`, `extract:paddleocr_vl`,
+`compare`, `export`.
+「识图」 queues the paper with its charts read (parse and extraction come from the caches, so in practice it only reads
+the charts); once readings under the current settings are stored it reads 「重新识图」, asks first, and re-asks every
+chart. Both are disabled while the paper's job is active, and 「识图」 without a PDF (the charts are cropped from it).
 
-1. The header carries the display name, the document id, 「强制重跑」, 「识图」 and 「重新处理」. 「识图」 queues the
-   paper with its charts read (parse and extraction come from the caches, so in practice it only reads the charts);
-   once readings under the current settings are stored it reads 「重新识图」, asks first, and re-asks every chart.
-   Both are disabled while the paper's job is active, and 「识图」 without a PDF (the charts are cropped from it).
-2. The stage list and its progress: `parse:mineru`, `parse:paddleocr_vl`, `figures` (识图: done once readings are
-   stored, skipped with "charts not requested" until someone asks, pending only while `figures.enabled` is on),
-   `extract:mineru`, `extract:paddleocr_vl`, `compare`, `export`.
-3. KPI tiles: the 一致 / 冲突 / 不确定 / 缺失 counts.
-4. 结果表（按样品） — the deliverable.
-5. 图中读数: the chart readings, or a note saying why there are none -- 尚未识图 and how to start it, 正在识图
+The content under the panel has a section bar, 结果 · 图中读数 · 证据 · 样品与通道 · 日志 (日志 once the paper has a job in
+this server), which sticks under the header on a screen wider than 960 px. A click scrolls to that section (at once
+when the system asks for reduced motion) and opens it if it is folded; the section being read is underlined as the
+page scrolls. It never changes the address, so a link to a fact (below) keeps working. The sections:
+
+1. 结果表（按样品） — the deliverable.
+2. 图中读数: the chart readings, or a note saying why there are none -- 尚未识图 and how to start it, 正在识图
    while a chart job runs, 已识图 when the charts gave nothing, or that the last read failed; see
    [Reading figures](#reading-figures).
-6. 事实对照 and the page viewer beside it.
-7. 样品记录, collapsed.
+3. 证据: the KPI tiles (the 一致 / 冲突 / 不确定 / 缺失 counts and the sample matching), then 事实对照 and the page
+   viewer beside it.
+4. 样品记录, collapsed.
+5. 处理日志, the paper's last job in this server.
 
 ### 结果表（按样品）
 

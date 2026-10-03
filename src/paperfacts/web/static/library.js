@@ -213,9 +213,9 @@ function otherProfilesMark(doc) {
   return `<span class="other-profiles" title="${titles}">另有 ${others.length} 个领域的结果</span>`;
 }
 
-// The comparison tally on one line, "26 一致 · 3 冲突 · 4 缺失": a zero count is left out, and each count keeps its
+// The comparison tally on one line (the rail's cards and the document page's summary), "26 一致 · 3 冲突 · 4 缺失": a zero count is left out, and each count keeps its
 // status colour but always carries the number and the word. Nothing at all when every count is zero.
-function miniCounts(doc) {
+export function miniCounts(doc) {
   const c = doc.counts;
   if (!c) return "";
   const items = STATUS_ORDER.filter((kind) => c[kind]).map(
