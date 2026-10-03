@@ -12,7 +12,8 @@ PaddleOCR-VL           Pixels of the rendered page image (depends on render DPI)
 PDF native             PDF points (1 pt = 1/72 inch), from pypdfium2              ``from_points``
 =====================  =========================================================  ====================
 
-Naming: ``document_id`` is the PDF's content sha256; ``source_id`` is ``{backend}_p{page}_b{order}`` with
+Naming: ``document_id`` is the PDF's content sha256 (for a web upload with SI, the hash of its parts' hashes,
+:func:`paperfacts.storage.parts_sha256`); ``source_id`` is ``{backend}_p{page}_b{order}`` with
 0-based pages, the key that leads from an extracted value back to a page region.
 """
 
@@ -168,7 +169,10 @@ def _clamp01(value: float) -> float:
 
 
 class DocumentInput(BaseModel):
-    """A PDF to process. ``document_id`` is the content sha256, so moving or renaming never reprocesses."""
+    """A PDF to process. ``document_id`` is the content sha256, so moving or renaming never reprocesses. The one
+    exception is an upload with SI, whose merged ``source.pdf`` is identified by its parts
+    (:func:`paperfacts.storage.parts_sha256`): such a document is reached through its identity
+    (:func:`paperfacts.storage.document_for_path`), never by hashing the file."""
 
     model_config = ConfigDict(frozen=True)
 
