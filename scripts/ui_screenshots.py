@@ -38,6 +38,9 @@ PAGES = {
     "home-sorted": ("#/", "#corpus-view:not(.hidden) table"),
     "home-scrolled": ("#/", "#corpus-view:not(.hidden) table"),
     "home-dark": ("#/", "#corpus-view:not(.hidden) table"),
+    # The explorer: a search reading the conditions too, and a range filter with the table sorted by that field.
+    "home-search": ("#/?q=sample%202&cond=1", "#corpus-view:not(.hidden) table"),
+    "home-filtered": ("#/?f.thickness=150~&sort=-thickness", "#corpus-view:not(.hidden) table"),
     "upload-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "upload-si-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "document-si": ("#/", "#corpus-view:not(.hidden) table"),
@@ -60,6 +63,13 @@ async def scroll_home(page: Page, _: Path) -> None:
     # Every field shown, so the table is wider than the page: the two frozen columns stay while the values move.
     await page.click('#corpus-view [data-focus="show-empty"]')
     await page.evaluate("document.querySelector('#corpus-view .table-wrap').scrollLeft = 600")
+
+
+async def open_filters(page: Page, _: Path) -> None:
+    # The panel starts closed on a phone; the picture shows it open on both widths.
+    if not await page.locator("#filter-panel").count():
+        await page.click('#corpus-view [data-focus="filter-toggle"]')
+        await page.wait_for_selector("#filter-panel")
 
 
 async def collapse_rail(page: Page, _: Path) -> None:
@@ -123,6 +133,7 @@ PREPARE = {
     "home-compact": lambda page, _: page.click('#corpus-view [data-focus="density:compact"]'),
     "home-sorted": sort_home,
     "home-scrolled": scroll_home,
+    "home-filtered": open_filters,
     "document-compact": lambda page, _: page.evaluate(COMPACT),
     "upload-dialog": open_upload_dialog,
     "upload-si-dialog": open_upload_dialog_with_si,
