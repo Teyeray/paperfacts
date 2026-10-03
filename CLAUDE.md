@@ -277,6 +277,11 @@ this file is the part that is easy to get wrong.
   owned by a token, so it cannot run twice.
 - Progress is the server's: `DocumentSummary.stages` (every `stage_names()` stage) and `runnable`. The
   frontend never rebuilds a stage list of its own.
+- The rail's collapse is one attribute, `data-rail="collapsed"` on `.shell` (`library.js` keeps it in localStorage);
+  its search and chips filter `state.docs` on every redraw and never touch the URL. Uploads go through `upload.js`'s
+  dialog and `api.profileUpload` (an XHR with `profileUrl`'s address and `request()`'s profile check); the hidden
+  `#file-input` still uploads at once, with the dialog's options as ticked, because the e2e checks and scripts feed it.
+  「忽略缓存」 for a bulk run is the run-all confirmation's own box, never the upload dialog's.
 - A results table is a list of columns `{header, head, html(item), text(item)}` (`table.js`); the rendered
   rows and the clipboard copy are both built from that one list.
 - Controls that re-render their own table carry a `data-focus` key and the re-render goes through
