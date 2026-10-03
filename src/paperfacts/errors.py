@@ -30,6 +30,16 @@ class ParserError(PaperFactsError):
         super().__init__(f"[{backend}] {stage} failed: {detail}")
 
 
+class UnreadablePdfError(PaperFactsError):
+    """pdfium could not open one of the PDFs an upload is merged from. ``part`` is its 0-based position in the
+    upload (0 the main text, then the SI parts in order), so the caller can name the file."""
+
+    def __init__(self, part: int, detail: str) -> None:
+        self.part = part
+        self.detail = detail
+        super().__init__(f"part {part} could not be opened as a PDF: {detail}")
+
+
 class LlmError(PaperFactsError):
     """An LLM call failed: network, HTTP status, or response shape."""
 

@@ -12,9 +12,10 @@ the default profile when absent, so a URL from before there were several keeps i
     GET  /api/documents                            document list (stage reached, counts)
     GET  /api/dataset                              corpus results table (paper_row + every sample row per document)
     GET  /api/dataset.xlsx                         the whole library as one Excel workbook
-    POST /api/documents  (multipart file, figures, ?force)
-                                                   upload a PDF and queue it -> {document, job}; the
-                                                    form field figures=true also reads its charts
+    POST /api/documents  (multipart file, si*, figures, ?force)
+                                                   upload a PDF and queue it -> {document, job,
+                                                    duplicate_of}; up to four si PDFs are merged after
+                                                    it; the form field figures=true also reads its charts
     POST /api/documents/run-all?force=             queue every unfinished document (or all, with
                                                     force) -> {submitted, skipped}; never reads charts
     POST /api/documents/{id}/run?force=&figures=&force_figures=
@@ -47,6 +48,7 @@ import asyncio
 import base64
 import binascii
 import dataclasses
+import hashlib
 import logging
 import secrets
 import threading
@@ -67,7 +69,7 @@ from starlette.types import Message
 from paperfacts.compare import ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload
-from paperfacts.errors import ConfigError, ProfileCheckError
+from paperfacts.errors import ConfigError, ProfileCheckError, UnreadablePdfError
 from paperfacts.llm import set_max_in_flight
 from paperfacts.models import Backend, ParsedArtifact
 from paperfacts.parsers import install_runner_cleanup
@@ -79,7 +81,7 @@ from paperfacts.readings import FiguresView, shown_figures
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import document_key
 from paperfacts.stored import article_type
-from paperfacts.web.documents import CorpusPayload, DocumentSummary, Library
+from paperfacts.web.documents import CorpusPayload, DocumentSummary, DuplicateDocument, Library
 from paperfacts.web.jobs import Job, JobBrief, JobManager, JobRunner
 from paperfacts.web.registry import ProfileRegistry, ServedProfile, profile_file_changed
 from paperfacts.workflow import StageCallback, corpus_workbook, run_document, stage_names
@@ -88,8 +90,10 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_CHUNK_BYTES = 1 << 20
-# Room for the multipart boundary and part headers around the one file an upload carries.
+# Room for the multipart boundaries and part headers around the files an upload carries (the main PDF and up to
+# MAX_SI_PARTS SI files); the PDFs themselves share one max_upload_bytes between them.
 UPLOAD_OVERHEAD_BYTES = 64 * 1024
+MAX_SI_PARTS = 4
 EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # A check is a child process of its own (profile_check); more than this many at once are refused, not queued.
 MAX_CONCURRENT_CHECKS = 2
@@ -111,6 +115,7 @@ class UploadAccepted(BaseModel):
 
     document: DocumentSummary
     job: Job
+    duplicate_of: DuplicateDocument | None = None
 
 
 class SkippedDocument(BaseModel):
@@ -476,7 +481,14 @@ def create_app(
                             "type": "object",
                             "required": ["file"],
                             "properties": {
-                                "file": {"type": "string", "format": "binary"},
+                                "file": {"type": "string", "format": "binary", "description": "the paper's main text"},
+                                "si": {
+                                    "type": "array",
+                                    "items": {"type": "string", "format": "binary"},
+                                    "maxItems": MAX_SI_PARTS,
+                                    "description": "supplementary information PDFs, merged after the main text in "
+                                    "this order; the upload is then identified by its parts' sha256s",
+                                },
                                 "figures": {"type": "boolean", "default": False},
                             },
                         }
@@ -488,13 +500,14 @@ def create_app(
     async def upload_document(
         request: Request, library: ProfileLibrary, force: Annotated[bool, Query()] = False
     ) -> UploadAccepted:
-        """One PDF per request. The form is parsed here rather than through a ``File()`` parameter because
-        only this call can cap the parts: left to the default, one request may carry a thousand files.
+        """One paper per request: its PDF in ``file`` and up to four SI PDFs in ``si``, merged after it into one
+        document. The form is parsed here rather than through a ``File()`` parameter because only this call can
+        cap the parts: left to the default, one request may carry a thousand files.
 
         The size is checked before the body is parsed, because Starlette spools a multipart file to disk
         without any limit. A declared length over the limit is refused unread; the bytes that actually
         arrive are counted too, so a chunked body (which declares nothing) or one that lies is refused the
-        moment it passes the limit.
+        moment it passes the limit. The limit is on all the PDFs together.
 
         The one other form field, ``figures``, asks for the charts to be read too (the page's "read the charts
         after upload" box); absent, the job reads them only when ``figures.enabled`` is on.
@@ -504,24 +517,52 @@ def create_app(
         if declared is not None and (not declared.isdigit() or int(declared) > limit):
             raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
         async with _capped(request, limit, _too_large(settings.max_upload_bytes)).form(
-            max_files=1, max_fields=1
+            max_files=1 + MAX_SI_PARTS, max_fields=1
         ) as form:
-            file = form.get("file")
+            files = form.getlist("file")
+            if len(files) > 1:
+                raise HTTPException(status_code=400, detail="One upload is one paper: one PDF in 'file', SI in 'si'")
+            file = files[0] if files else None
             if not isinstance(file, UploadFile):
                 raise HTTPException(status_code=422, detail="Expected one PDF in the multipart field 'file'")
-            if (file.size or 0) > settings.max_upload_bytes:
+            si_files = form.getlist("si")
+            if not all(isinstance(part, UploadFile) for part in si_files):
+                raise HTTPException(status_code=422, detail="The multipart field 'si' holds PDF files only")
+            uploads = [file, *(part for part in si_files if isinstance(part, UploadFile))]
+            if sum(part.size or 0 for part in uploads) > settings.max_upload_bytes:
                 raise HTTPException(status_code=413, detail=_too_large(settings.max_upload_bytes))
-            data = await _read_limited(file, settings.max_upload_bytes)
-            filename = file.filename or "upload.pdf"
+            parts: list[tuple[str, bytes]] = []
+            used = 0
+            for index, part in enumerate(uploads):
+                data = await _read_limited(part, settings.max_upload_bytes, used)
+                used += len(data)
+                parts.append((part.filename or ("upload.pdf" if index == 0 else f"si{index}.pdf"), data))
             figures = _form_flag(form.get("figures"), "figures")
-        if not data.startswith(b"%PDF"):
-            raise HTTPException(status_code=400, detail="Only PDF files are accepted (missing %PDF header)")
-        # writing to disk is sync IO; offload to the threadpool so a multi-hundred-MB write can't stall the event loop
-        # Registration is profile-free: the PDF and its identity are the document's, whatever it is run under.
-        document = await run_in_threadpool(library.register_upload, filename, data)
+        for index, (name, data) in enumerate(parts):
+            if not data.startswith(b"%PDF"):
+                what = "Only PDF files are accepted" if index == 0 else f"The SI file {name!r} is not a PDF"
+                raise HTTPException(status_code=400, detail=f"{what} (missing %PDF header)")
+        shas = [hashlib.sha256(data).hexdigest() for _, data in parts]
+        for index, sha in enumerate(shas[1:], 1):
+            if sha in shas[:index]:
+                earlier = parts[shas.index(sha)][0]
+                raise HTTPException(
+                    status_code=400, detail=f"The SI file {parts[index][0]!r} is the same PDF as {earlier!r}"
+                )
+        (filename, main), si = parts[0], parts[1:]
+        # Merging and writing are sync work (the merge under the pdfium lock); offload them to the threadpool so a
+        # multi-hundred-MB upload can't stall the event loop. Registration is profile-free: the PDF and its
+        # identity are the document's, whatever it is run under.
+        try:
+            document = await run_in_threadpool(library.register_upload, filename, main, si)
+        except UnreadablePdfError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"{parts[exc.part][0]!r} could not be opened as a PDF: {exc.detail}"
+            ) from exc
         key = document_key(document.document_id)
+        duplicate = await run_in_threadpool(library.duplicate_of, key, shas[0])
         job = submit(key, library, force=force, figures=figures)
-        return UploadAccepted(document=with_profiles_done(library.summary(key)), job=job)
+        return UploadAccepted(document=with_profiles_done(library.summary(key)), job=job, duplicate_of=duplicate)
 
     # Registration order matters: FastAPI matches in order, so this literal route must stay above the
     # ``/api/documents/{document_id}`` routes, or "run-all" is read as a document id and answered with 404.
@@ -749,11 +790,12 @@ def _capped(request: Request, limit: int, detail: str) -> Request:
     return Request(request.scope, receive)
 
 
-async def _read_limited(file: UploadFile, limit: int) -> bytes:
+async def _read_limited(file: UploadFile, limit: int, used: int = 0) -> bytes:
     """Read the upload body in chunks, raising 413 as soon as the limit is exceeded instead of
-    buffering the whole file into memory before checking."""
+    buffering the whole file into memory before checking. ``used`` is what the request's earlier files took
+    from the same limit."""
     chunks: list[bytes] = []
-    total = 0
+    total = used
     while chunk := await file.read(UPLOAD_CHUNK_BYTES):
         total += len(chunk)
         if total > limit:

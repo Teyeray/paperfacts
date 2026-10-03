@@ -889,6 +889,111 @@ async def dialog_upload(page: Page, base: str, docs: dict[str, str], pdf: Path) 
     await jobs_idle(page)
 
 
+SI_READ_NOTE = "SI 中的表格、图注会被读取；SI 正文段落暂不读取"
+
+
+async def si_names(page: Page) -> list[str]:
+    return await page.locator("#upload-files .upload-file .si-name").evaluate_all(
+        "rows => rows.map((row) => row.title)"
+    )
+
+
+async def opened_tag_titles(page: Page) -> tuple[str, str]:
+    """The 「含 SI」 tag's title in the document header and on the rail's card of the open paper."""
+    header = page.locator(".doc-head h1 .si-tag")
+    await header.wait_for()
+    expect(await header.text_content() == "含 SI", "the header's tag does not read 含 SI")
+    card = page.locator("#doc-list .doc-item.active .si-tag")
+    await card.wait_for(state="attached")
+    return (await header.get_attribute("title") or "", await card.get_attribute("title") or "")
+
+
+@check("a paper uploaded with an SI through the dialog is one request, and shows 含 SI with the page ranges")
+async def dialog_upload_si(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
+    await home(page, base)
+    main = make_blank_pdf(pdf.parent / "si-main.pdf", [(441.0, 641.0), (441.0, 641.0)])
+    si = make_blank_pdf(pdf.parent / "si-only.pdf", [(442.0, 642.0)])
+    await page.click("#upload-open")
+    await page.wait_for_selector("#upload-dialog[open]")
+    await page.set_input_files("#upload-pick", str(main))
+    row = page.locator("#upload-files .upload-file").first
+    expect(await row.locator(".si-add").text_content() == "添加 SI", "the row has no 添加 SI")
+    await row.locator(".si-pick").set_input_files(str(si))
+    expect(await si_names(page) == ["si-only.pdf"], f"the row lists SI {await si_names(page)}")
+    expect(await page.text_content("#upload-start") == "开始上传", "an SI is counted as a paper of its own")
+    posts = []
+    page.on(
+        "request",
+        lambda request: (
+            posts.append(request) if request.method == "POST" and "/api/documents?" in request.url else None
+        ),
+    )
+    # Intercepted, so that the request carries its multipart body to the check.
+    await page.route("**/api/documents?force=*", delayed(0.1))
+    await page.click("#upload-start")
+    await page.wait_for_function(f"!{DIALOG_OPEN}", timeout=10000)
+    expect(len(posts) == 1, f"{len(posts)} requests were posted for one paper with its SI")
+    body = posts[0].post_data_buffer or b""
+    expect(b'name="file"; filename="si-main.pdf"' in body, f"the main PDF is not the request's file: {body[:300]!r}")
+    expect(b'name="si"; filename="si-only.pdf"' in body, "the SI is not the request's si part")
+    await page.wait_for_function("location.hash.startsWith('#/doc/')")
+    header, card = await opened_tag_titles(page)
+    for title, where in ((header, "header"), (card, "rail card")):
+        lines = title.split("\n")
+        expected = ["正文：第 1–2 页（si-main.pdf）", "SI 1：第 3 页（si-only.pdf）", SI_READ_NOTE]
+        expect(lines == expected, f"the {where}'s 含 SI title reads {lines}")
+    await jobs_idle(page)
+
+
+@check("SI files are listed in the order added, can be moved and removed, and the page ranges follow that order")
+async def dialog_si_order(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
+    await home(page, base)
+    main = make_blank_pdf(pdf.parent / "order-main.pdf", [(451.0, 651.0)])
+    parts = {
+        name: make_blank_pdf(pdf.parent / f"{name}.pdf", sizes)
+        for name, sizes in (
+            ("si-a", [(452.0, 652.0)]),
+            ("si-b", [(453.0, 653.0), (453.0, 653.0)]),
+            ("si-c", [(454.0, 654.0)]),
+        )
+    }
+    await page.click("#upload-open")
+    await page.wait_for_selector("#upload-dialog[open]")
+    await page.set_input_files("#upload-pick", str(main))
+    row = page.locator("#upload-files .upload-file").first
+    await row.locator(".si-pick").set_input_files([str(parts["si-a"]), str(parts["si-b"])])
+    await row.locator(".si-pick").set_input_files(str(parts["si-c"]))
+    expect(await si_names(page) == ["si-a.pdf", "si-b.pdf", "si-c.pdf"], f"listed {await si_names(page)}")
+    expect(not await row.locator('[aria-label="上移：si-a.pdf"]').is_enabled(), "the first SI can move up")
+    expect(not await row.locator('[aria-label="下移：si-c.pdf"]').is_enabled(), "the last SI can move down")
+    await row.locator('[aria-label="移除 SI：si-c.pdf"]').click()
+    await row.locator('[aria-label="下移：si-a.pdf"]').click()
+    expect(
+        await si_names(page) == ["si-b.pdf", "si-a.pdf"], f"after 移除 and 下移 the row lists {await si_names(page)}"
+    )
+    # Four at most: a fifth is refused on the row, in words.
+    extra = [make_blank_pdf(pdf.parent / f"si-x{n}.pdf", [(460.0 + n, 660.0)]) for n in range(3)]
+    await row.locator(".si-pick").set_input_files([str(path) for path in extra])
+    expect(len(await si_names(page)) == 4, f"the row holds {len(await si_names(page))} SI files")
+    expect("最多 4 个" in (await row.locator(".si-note").text_content() or ""), "the fifth SI is not refused in words")
+    expect(not await row.locator(".si-add").is_enabled(), "添加 SI stays enabled with four SI files")
+    for name in ("si-x0", "si-x1"):
+        await row.locator(f'[aria-label="移除 SI：{name}.pdf"]').click()
+    await page.click("#upload-start")
+    await page.wait_for_function(f"!{DIALOG_OPEN}", timeout=10000)
+    await page.wait_for_function("location.hash.startsWith('#/doc/')")
+    header, _ = await opened_tag_titles(page)
+    lines = header.split("\n")
+    expected = [
+        "正文：第 1 页（order-main.pdf）",
+        "SI 1：第 2–3 页（si-b.pdf）",
+        "SI 2：第 4 页（si-a.pdf）",
+        SI_READ_NOTE,
+    ]
+    expect(lines == expected, f"the 含 SI title reads {lines}")
+    await jobs_idle(page)
+
+
 @check("处理全部未完成 asks first, and its 忽略缓存 option posts force=true")
 async def run_all_confirm(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await home(page, base)

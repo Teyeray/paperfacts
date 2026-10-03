@@ -723,7 +723,12 @@ class PaddleHttpParser(_HttpParser):
 
 
 def _source_meta(document: DocumentInput, geometry: DocumentGeometry) -> SourceMeta:
-    """The HTTP path always parses the whole document."""
+    """The HTTP path always parses the whole document.
+
+    ``sha256`` is the document's, which for an upload with SI is its parts hash (``storage.parts_sha256``), while
+    a runner hashes the file it was given; so the two lanes' ``meta.json`` of a merged document can disagree on
+    it. Nothing cross-checks the field against the document, which is why that is harmless.
+    """
     return SourceMeta(
         pdf=str(document.pdf_path),
         sha256=document.sha256,

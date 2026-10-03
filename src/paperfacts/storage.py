@@ -7,8 +7,9 @@ one shows every intermediate state of one paper:
 .. code-block:: text
 
     data/docs/<first 16 hex of sha256>/
-    ├── identity.json                 full sha256, display name, origin; written when the directory is created
-    ├── source.pdf                    the uploaded PDF (web uploads only)
+    ├── identity.json                 full sha256, display name, origin, the parts of an SI upload; written when
+    │                                 the directory is created
+    ├── source.pdf                    the uploaded PDF (web uploads only; main text + SI merged into one)
     ├── raw/<backend>/                the parser's native output, plus meta.json
     ├── parsed/<backend>.md           Markdown with <!-- source: id --> markers, for eyeballing
     ├── parsed/<backend>.artifact.json   the complete ParsedArtifact
@@ -31,9 +32,10 @@ and a run killed mid-write must leave the previous file, not a torn one.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,11 +49,28 @@ if TYPE_CHECKING:
     from paperfacts.models import Backend, DocumentInput
 
 DOC_DIR_ID_LENGTH = 16
+# Prefixed into the material of parts_sha256, so the id of a merged upload can never collide with a file's own
+# sha256 and a later change of the scheme gets a new prefix rather than silently re-identifying documents.
+PARTS_ID_PREFIX = b"paperfacts-parts-v1\n"
 
 
 def document_key(sha256: str) -> str:
     """The document directory name and the public short id: the first 16 hex characters of the sha256."""
     return sha256[:DOC_DIR_ID_LENGTH]
+
+
+def parts_sha256(hex_shas: Sequence[str]) -> str:
+    """The identity sha256 of a document uploaded with SI: ``sha256(PARTS_ID_PREFIX + "\\n".join(hex_shas))``, the
+    main part's sha256 first, then each SI part's in upload order.
+
+    A single-file upload is identified by its bytes; a merged one cannot be, because pypdfium2's save is not
+    byte-deterministic (pdfium writes a fresh trailer ``/ID`` per save -- measured: three saves of the same
+    parts, three hashes), so hashing the merged bytes would mint a new document on every upload of the same
+    pair. The parts' own hashes are stable, and their order matters because the page order does.
+    """
+    if not hex_shas:
+        raise ValueError("a document is made of at least one part")
+    return hashlib.sha256(PARTS_ID_PREFIX + "\n".join(hex_shas).encode("ascii")).hexdigest()
 
 
 def is_document_key(value: str) -> bool:
@@ -164,6 +183,26 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
     write_atomic(path, lambda tmp: tmp.write_bytes(data))
 
 
+def write_bytes_if_absent(path: Path, data: bytes) -> bool:
+    """Write ``data`` to ``path`` atomically unless a file is already there; whether this call wrote it.
+
+    The temp file is hard-linked into place, which fails when the target exists, so of two concurrent writers
+    the first wins and the second leaves the first's bytes alone. For a merged upload's ``source.pdf``: the
+    merge is not byte-deterministic, and the parse caches belong to the bytes that were written first.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(data)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def write_text_atomic(path: Path, text: str) -> None:
     write_atomic(path, lambda tmp: tmp.write_text(text, encoding="utf-8"))
 
@@ -171,8 +210,25 @@ def write_text_atomic(path: Path, text: str) -> None:
 # ---- Document identity -------------------------------------------------------------------------------
 
 
+class PartInfo(BaseModel):
+    """One of the PDFs an SI upload was merged from, and where its pages sit in ``source.pdf``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(description="the part's uploaded filename")
+    sha256: str = Field(min_length=64, max_length=64, description="the part's own bytes")
+    first_page: int = Field(ge=0, description="0-based index of its first page in the merged PDF")
+    pages: int = Field(ge=0)
+
+
 class DocumentIdentity(BaseModel):
-    """What the directory name alone cannot tell: the full sha256, a display name, and where the PDF came from."""
+    """What the directory name alone cannot tell: the full sha256, a display name, and where the PDF came from.
+
+    ``sha256`` is the PDF's content hash for a single-file upload or a CLI document, and :func:`parts_sha256`
+    of the parts for an upload with SI (then ``parts`` records each part's own hash). It is written once, when
+    the directory is created, and ``parts`` is never back-filled: a document created before SI uploads existed,
+    or by the CLI, has none.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -181,6 +237,9 @@ class DocumentIdentity(BaseModel):
     source_path: str | None = Field(default=None, description="original CLI path; stale after a machine change")
     uploaded: bool = Field(default=False, description="a web upload, so source.pdf exists in the directory")
     created_at: str
+    parts: tuple[PartInfo, ...] | None = Field(
+        default=None, description="the main text then each SI file of an upload with SI; absent otherwise"
+    )
 
 
 def _now_iso() -> str:
@@ -195,14 +254,22 @@ def read_identity(layout: DataLayout, document_id: str) -> DocumentIdentity | No
 
 
 def write_identity(layout: DataLayout, identity: DocumentIdentity) -> DocumentIdentity:
-    write_text_atomic(layout.identity_path(identity.sha256), identity.model_dump_json(indent=2))
+    # ``parts`` is left out of a document that has none, so the file of an ordinary document reads as before.
+    exclude = None if identity.parts is not None else {"parts"}
+    write_text_atomic(layout.identity_path(identity.sha256), identity.model_dump_json(indent=2, exclude=exclude))
     return identity
 
 
 def ensure_identity(
-    layout: DataLayout, document: DocumentInput, *, name: str | None = None, uploaded: bool = False
+    layout: DataLayout,
+    document: DocumentInput,
+    *,
+    name: str | None = None,
+    uploaded: bool = False,
+    parts: Sequence[PartInfo] | None = None,
 ) -> DocumentIdentity:
-    """Idempotent: return the existing identity unchanged, or write a new one."""
+    """Idempotent: return the existing identity unchanged, or write a new one. ``parts`` (an upload with SI) is
+    recorded at creation only; an existing identity keeps whatever it has."""
     existing = read_identity(layout, document.document_id)
     if existing is not None:
         return existing
@@ -214,6 +281,7 @@ def ensure_identity(
             source_path=None if uploaded else str(document.pdf_path),
             uploaded=uploaded,
             created_at=_now_iso(),
+            parts=None if parts is None else tuple(parts),
         ),
     )
 
@@ -280,3 +348,21 @@ def stored_document(layout: DataLayout, document_id: str) -> DocumentInput:
         # ``display_name`` (set below), so no path has to be invented to name it.
         pdf = layout.source_pdf(identity.sha256)
     return DocumentInput(document_id=identity.sha256, pdf_path=pdf, sha256=identity.sha256, display_name=identity.name)
+
+
+def document_for_path(layout: DataLayout, path: Path) -> DocumentInput:
+    """The :class:`DocumentInput` for a PDF named on the command line or found by a batch.
+
+    A stored document's own ``source.pdf`` (under ``layout``, with an identity) is taken as that document, so a
+    batch over ``data/docs`` reprocesses what is there instead of minting a second document: a merged upload's
+    bytes do not hash to its id (:func:`parts_sha256`), and even an ordinary one would be re-hashed for nothing.
+    Any other path is hashed as :meth:`DocumentInput.from_path` does.
+    """
+    from paperfacts.models import DocumentInput
+
+    resolved = path.resolve()
+    if resolved.name == "source.pdf" and resolved.parent.parent == layout.docs_root().resolve():
+        key = resolved.parent.name
+        if is_document_key(key) and read_identity(layout, key) is not None:
+            return stored_document(layout, key)
+    return DocumentInput.from_path(path)

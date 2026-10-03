@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -23,22 +23,25 @@ from paperfacts.dataset import DatasetPayload, DocumentDataset
 from paperfacts.keys import comparison_key_for, extractor_key_for, figure_key_for
 from paperfacts.kinds import CellValue
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
-from paperfacts.pdf import render_page_cached
+from paperfacts.pdf import merge_pdfs, render_page_cached
 from paperfacts.profile import DomainProfile
 from paperfacts.records import LaneExtraction
 from paperfacts.storage import (
     DataLayout,
     DocumentIdentity,
+    PartInfo,
     document_key,
     ensure_identity,
     has_cached_parse,
     is_document_key,
     is_runnable,
     mark_uploaded,
+    parts_sha256,
     read_identity,
     stored_document,
     stored_pdf,
     write_bytes_atomic,
+    write_bytes_if_absent,
 )
 from paperfacts.stored import article_type, is_finished, stored_comparison, stored_dataset, stored_stages
 from paperfacts.ui_copy import article_type_zh
@@ -68,6 +71,9 @@ class DocumentSummary(BaseModel):
         default=None, description="what the stored lanes were told the paper is (extract.detect_article_type)"
     )
     article_type_zh: str | None = Field(default=None, description="its label on the page (ui_copy.ARTICLE_TYPE_ZH)")
+    parts: tuple[PartInfo, ...] | None = Field(
+        default=None, description="an upload with SI: the main text then each SI file, with their page ranges"
+    )
     # Set by the route, which knows every served profile; the library knows only its own.
     profiles_done: tuple[str, ...] = Field(
         default=(), description="the served profiles this document is finished under, the one asked about included"
@@ -83,6 +89,18 @@ def _file_stamp(path: Path) -> tuple[int, int, int] | None:
     except FileNotFoundError:
         return None
     return (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+
+
+class DuplicateDocument(BaseModel):
+    """Another document holding the same main text as an upload: the main PDF alone when the upload carried SI,
+    or a document merged from it and its SI when the upload is the main PDF alone. The upload goes ahead either
+    way (there is no delete); the page only says so."""
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str
+    name: str
+    has_si: bool = Field(description="the other document is the one with SI")
 
 
 class CorpusRow(BaseModel):
@@ -184,6 +202,7 @@ class Library:
             uploaded_at=identity.created_at if identity and identity.uploaded else None,
             article_type=kind,
             article_type_zh=article_type_zh(kind),
+            parts=identity.parts if identity else None,
         )
 
     def _counts(self, document_id: str) -> ComparisonCounts | None:
@@ -325,7 +344,7 @@ class Library:
         self._require_key(document_id)
         return stored_document(self.layout, document_id)
 
-    def register_upload(self, filename: str, data: bytes) -> DocumentInput:
+    def register_upload(self, filename: str, data: bytes, si: Sequence[tuple[str, bytes]] = ()) -> DocumentInput:
         """Store an uploaded PDF in its document directory (re-uploading the same content is
         idempotent), and return a DocumentInput that's ready to process.
 
@@ -333,10 +352,17 @@ class Library:
         written **atomically**: dying partway through never leaves a document with a PDF but no
         discoverable sha. The idempotency check doesn't just look at whether the file exists — a
         file left truncated by a previous half-finished write gets repaired too.
+
+        With ``si`` (each SI file's name and bytes, in upload order) the parts are merged into one PDF after the
+        main text and the document is identified by its parts (:func:`storage.parts_sha256`). Raises
+        :class:`UnreadablePdfError` naming the part pdfium cannot open, and ``ValueError`` for a repeated part.
         """
+        name = Path(filename).name
+        if si:
+            return self._register_merged([(name, data), *((Path(n).name, b) for n, b in si)])
         sha = hashlib.sha256(data).hexdigest()
         pdf = self.layout.source_pdf(sha)
-        name = Path(filename).name or f"{document_key(sha)}.pdf"
+        name = name or f"{document_key(sha)}.pdf"
         document = DocumentInput(document_id=sha, pdf_path=pdf, sha256=sha)
         identity = ensure_identity(self.layout, document, name=name, uploaded=True)
         if not pdf.is_file() or pdf.stat().st_size != len(data):
@@ -346,6 +372,55 @@ class Library:
         # The stored PDF is always source.pdf, so the name a user sees can only come from the identity --
         # the one already on disk, so a re-upload of the same bytes returns exactly what the first did.
         return document.model_copy(update={"display_name": identity.name})
+
+    def _register_merged(self, parts: list[tuple[str, bytes]]) -> DocumentInput:
+        """The main text and its SI as one document. A ``source.pdf`` already there is never rewritten, not even
+        by a repeat of the same upload: the merge is not byte-deterministic, and the parse caches belong to the
+        bytes written first. The parts and their page ranges are recorded only when the identity is created."""
+        shas = [hashlib.sha256(data).hexdigest() for _, data in parts]
+        if len(set(shas)) != len(shas):
+            raise ValueError("the same PDF is attached twice")
+        sha = parts_sha256(shas)
+        pdf = self.layout.source_pdf(sha)
+        document = DocumentInput(document_id=sha, pdf_path=pdf, sha256=sha)
+        merged: bytes | None = None
+        infos: list[PartInfo] | None = None
+        if read_identity(self.layout, sha) is None or not pdf.is_file():
+            merged, counts = merge_pdfs([data for _, data in parts])
+            starts = [sum(counts[:index]) for index in range(len(counts))]
+            infos = [
+                PartInfo(name=part_name, sha256=part_sha, first_page=first, pages=pages)
+                for (part_name, _), part_sha, first, pages in zip(parts, shas, starts, counts, strict=True)
+            ]
+        name = parts[0][0] or f"{document_key(sha)}.pdf"
+        identity = ensure_identity(self.layout, document, name=name, uploaded=True, parts=infos)
+        if merged is not None:
+            write_bytes_if_absent(pdf, merged)
+        logger.info(
+            "registered upload with SI doc=%s name=%s parts=%d bytes=%d",
+            document_key(sha),
+            name,
+            len(parts),
+            sum(len(data) for _, data in parts),
+        )
+        return document.model_copy(update={"display_name": identity.name})
+
+    def duplicate_of(self, document_id: str, main_sha256: str) -> DuplicateDocument | None:
+        """The other document holding this upload's main text, if any (see :class:`DuplicateDocument`): for an
+        upload with SI, the main PDF's own document; for one without, the first document merged from it."""
+        uploaded = self.identity(document_id)
+        if uploaded is not None and uploaded.parts:
+            main = self.identity(document_key(main_sha256))
+            if main is not None and main.sha256 == main_sha256:
+                return DuplicateDocument(document_id=document_key(main_sha256), name=main.name, has_si=False)
+            return None
+        for key in self.document_ids():
+            if key == document_id:
+                continue
+            other = self.identity(key)
+            if other is not None and other.parts and other.parts[0].sha256 == main_sha256:
+                return DuplicateDocument(document_id=key, name=other.name, has_si=True)
+        return None
 
     # ---- internal -----------------------------------------------------------------------
 

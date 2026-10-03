@@ -9,13 +9,14 @@ from __future__ import annotations
 import io
 import math
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
 import pypdfium2 as pdfium
 from PIL import Image
 
+from paperfacts.errors import UnreadablePdfError
 from paperfacts.models import DocumentGeometry, NormalizedBBox, PageGeometry
 from paperfacts.storage import overlay_page_name, write_atomic
 
@@ -41,6 +42,40 @@ def _open(pdf_path: Path) -> Iterator[pdfium.PdfDocument]:
             yield document
         finally:
             document.close()
+
+
+def merge_pdfs(parts: Sequence[bytes]) -> tuple[bytes, list[int]]:
+    """One PDF holding every page of ``parts`` in order (a paper's main text, then its SI files), and each
+    part's page count, so the caller can record where every part starts.
+
+    The whole merge -- opening each part, importing its pages, saving, and closing every document -- runs under
+    ``_PDFIUM_LOCK`` (see its freeing comment), so a large merge holds the lock for its duration and every page
+    render waits behind it; an upload is rare enough for that. The saved bytes are **not** deterministic: pdfium
+    writes a fresh trailer ``/ID`` on every save, so merging the same parts twice gives two different byte
+    strings, which is why a merged document is identified by its parts' hashes (:func:`storage.parts_sha256`)
+    and never by the merged bytes. A part pdfium cannot open raises :class:`UnreadablePdfError` with its index.
+    """
+    if not parts:
+        raise ValueError("nothing to merge")
+    page_counts: list[int] = []
+    with _PDFIUM_LOCK:
+        merged = pdfium.PdfDocument.new()
+        try:
+            for index, data in enumerate(parts):
+                try:
+                    part = pdfium.PdfDocument(data)
+                except pdfium.PdfiumError as exc:
+                    raise UnreadablePdfError(index, str(exc)) from exc
+                try:
+                    page_counts.append(len(part))
+                    merged.import_pages(part)
+                finally:
+                    part.close()
+            buffer = io.BytesIO()
+            merged.save(buffer)
+        finally:
+            merged.close()
+    return buffer.getvalue(), page_counts
 
 
 def read_geometry(pdf_path: Path) -> DocumentGeometry:

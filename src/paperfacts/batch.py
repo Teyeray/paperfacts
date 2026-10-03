@@ -23,7 +23,7 @@ from paperfacts.models import BACKENDS, Backend, DocumentInput
 from paperfacts.profile import DomainProfile
 from paperfacts.readings import shown_figures
 from paperfacts.records import LaneExtraction
-from paperfacts.storage import DataLayout
+from paperfacts.storage import DataLayout, document_for_path
 from paperfacts.stored import article_type
 from paperfacts.supervisor import carry_supervision
 from paperfacts.threads import ContextThreadPoolExecutor
@@ -127,7 +127,8 @@ def run_batch(
     rows nor failures: the next run picks them up from the caches.
     """
     paths = discover_pdfs(source)
-    output = output or DataLayout(settings.data_root).batch_dataset_path(profile.name)
+    layout = DataLayout(settings.data_root)
+    output = output or layout.batch_dataset_path(profile.name)
     if output.suffix.lower() != ".xlsx":
         raise ConfigError("Excel output must have the .xlsx extension")
     if force and export_only:
@@ -199,7 +200,7 @@ def run_batch(
     for index, path in enumerate(paths, 1):
         prefix = f"{index}/{len(paths)} {path.name}"
         try:
-            document = DocumentInput.from_path(path)
+            document = document_for_path(layout, path)
         except (PaperFactsError, OSError, ValueError) as exc:
             settle(index, prefix, failure("", path, exc))
             continue

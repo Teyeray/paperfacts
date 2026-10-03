@@ -31,14 +31,14 @@ from paperfacts.errors import ConfigError, PaperFactsError, ParserError
 from paperfacts.fields import UNIT_KINDS
 from paperfacts.keys import ComparisonOptions, ExtractionOptions
 from paperfacts.llm import OFFLINE_MISSES, set_max_in_flight
-from paperfacts.models import Backend, DocumentInput
+from paperfacts.models import Backend
 from paperfacts.overlay import render_overlays
 from paperfacts.parsers import install_runner_cleanup
 from paperfacts.profile import DomainProfile
 from paperfacts.profile_loader import PROFILES_DIRNAME, load_profile
 from paperfacts.profile_view import prompt_sections
 from paperfacts.report import render_lane, render_report
-from paperfacts.storage import DataLayout, write_text_atomic
+from paperfacts.storage import DataLayout, document_for_path, write_text_atomic
 from paperfacts.workflow import (
     StageStatus,
     build_llm_client,
@@ -263,7 +263,7 @@ def parse(
     """Parse a PDF into Markdown with provenance markers, a block list and a full artifact."""
     _configure_logging(verbose)
     settings = _settings(data_root)
-    document = DocumentInput.from_path(pdf)
+    document = document_for_path(DataLayout(settings.data_root), pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
     for name in backend.backends():
@@ -291,7 +291,7 @@ def overlay(
     """Draw parsed block boxes back onto page images, to check by eye that they line up. Needs parse."""
     _configure_logging(verbose)
     settings = _settings(data_root)
-    document = DocumentInput.from_path(pdf)
+    document = document_for_path(DataLayout(settings.data_root), pdf)
     layout = DataLayout(settings.data_root)
     page_list = [int(p) for p in pages.split(",")] if pages else None
 
@@ -320,7 +320,7 @@ def extract(
     _configure_logging(verbose)
     settings = _settings(data_root, passes, mode, force=force, profile=profile_name)
     profile = _profile(settings)
-    document = DocumentInput.from_path(pdf)
+    document = document_for_path(DataLayout(settings.data_root), pdf)
     try:
         with build_llm_client(settings) as client:
             options = ExtractionOptions.from_settings(settings, profile, client.model)
@@ -349,7 +349,7 @@ def compare(
     _configure_logging(verbose)
     settings = _settings(data_root, passes, mode, force=force, profile=profile_name)
     profile = _profile(settings)
-    document = DocumentInput.from_path(pdf)
+    document = document_for_path(DataLayout(settings.data_root), pdf)
     try:
         with build_llm_client(settings) as client:
             report = compare_document(
@@ -377,7 +377,7 @@ def run(
     _configure_logging(verbose)
     settings = _settings(data_root, passes, mode, figures, offline, force or force_figures, profile_name)
     profile = _profile(settings)
-    document = DocumentInput.from_path(pdf)
+    document = document_for_path(DataLayout(settings.data_root), pdf)
     typer.echo(f"document_id={document.document_id[:16]}  {pdf.name}")
 
     def on_stage(stage: str, status: StageStatus, detail: str) -> None:
