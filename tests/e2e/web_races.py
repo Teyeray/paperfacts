@@ -1292,6 +1292,121 @@ async def missing_keeps_profile(page: Page, _: str, docs: dict[str, str], __: Pa
     expect(href == f"#/p/{DEMO}", f"the link home goes to {href!r}")
 
 
+# ---- the home query (`#/?q=…`): read by the router, written in place, never a new table load ----------------------
+
+# The modules are singletons, so an import from the page gives the very state object the page draws from.
+HOME_QUERY = "import('/state.js').then((module) => module.state.homeQuery)"
+
+
+async def wait_home_query(page: Page, expected: object) -> None:
+    """``state.homeQuery`` becomes ``expected`` (a hashchange is handled a task after the hash is set)."""
+    deadline = time.monotonic() + 3
+    while (got := await page.evaluate(HOME_QUERY)) != expected:
+        expect(time.monotonic() < deadline, f"state.homeQuery reads {got!r}, not {expected!r}")
+        await asyncio.sleep(0.05)
+
+
+def dataset_requests(page: Page) -> list[str]:
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if "/api/dataset" in request.url else None)
+    return requests
+
+
+@check("a home query in the URL is read into state.homeQuery, loads the table once, and rides on the brand link")
+async def home_query_read(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    requests = dataset_requests(page)
+    await page.goto(f"{base}/#/?q=abc")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await wait_home_query(page, {"q": "abc"})
+    expect(len(requests) == 1, f"the table was asked {len(requests)} times")
+    expect(await page.get_attribute(".brand", "href") == "#/?q=abc", "the brand link dropped the query")
+    # The query alone changing is not a new view: no table load, the state and the brand link follow.
+    await page.evaluate("location.hash = '#/?q=def'")
+    await wait_home_query(page, {"q": "def"})
+    await asyncio.sleep(0.3)
+    expect(len(requests) == 1, f"a query change re-asked the table ({len(requests)} requests)")
+    expect(await page.get_attribute(".brand", "href") == "#/?q=def", "the brand link did not follow the query")
+    expect(await page.is_visible("#corpus-view table"), "the table went away on a query change")
+    # Dropping the query is a change too; an empty value counts as no key.
+    await page.evaluate("location.hash = '#/?q='")
+    await wait_home_query(page, {})
+    expect(len(requests) == 1, f"dropping the query re-asked the table ({len(requests)} requests)")
+    # On a document the query is nobody's; the way home still carries the last one seen.
+    await page.evaluate("location.hash = '#/?q=ghi'")
+    await wait_home_query(page, {"q": "ghi"})
+    await page.evaluate(f"location.hash = '#/doc/{docs['A']}'")
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    await wait_home_query(page, None)
+    expect(await page.get_attribute(".brand", "href") == "#/?q=ghi", "the brand link forgot the home query")
+    await page.click(".brand")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await wait_home_query(page, {"q": "ghi"})
+    expect(len(requests) == 2, f"coming home loaded the table {len(requests) - 1} times")
+
+
+@check("setHomeQuery writes the query in place: no hashchange, no history entry, the router's own memory moves")
+async def home_query_write(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    requests = dataset_requests(page)
+    await page.route("**/api/dataset", delayed(1.0))
+    await page.goto(f"{base}/#/?q=a")
+    await page.wait_for_selector("#empty-state:not(.hidden)")
+    history_length = await page.evaluate("history.length")
+    # Written while the table is still on its way: what the view lands with is the written query.
+    await page.evaluate("import('/router.js').then((router) => router.setHomeQuery({ q: 'b', extra: '' }))")
+    expect(await page.evaluate("location.hash") == "#/?q=b", f"the write left {await page.evaluate('location.hash')!r}")
+    expect(await page.evaluate("history.length") == history_length, "a replaceState write added a history entry")
+    expect(await page.evaluate(HOME_QUERY) == {"q": "b"}, "the write did not reach state.homeQuery")
+    expect(await page.get_attribute(".brand", "href") == "#/?q=b", "the brand link did not follow the write")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await page.evaluate(HOME_QUERY) == {"q": "b"}, "the landing table reset the query")
+    expect(len(requests) == 1, f"the table was asked {len(requests)} times")
+    # A hashchange after the write is judged against the written query: the same spelling is no change at all, a
+    # different one is a query change and still no table load.
+    await page.evaluate("location.hash = '#/?q=b'")
+    await asyncio.sleep(0.3)
+    expect(len(requests) == 1, f"re-setting the written hash re-asked the table ({len(requests)} requests)")
+    await page.evaluate("location.hash = '#/?q=c'")
+    await wait_home_query(page, {"q": "c"})
+    await asyncio.sleep(0.3)
+    expect(len(requests) == 1, f"a query change after a write re-asked the table ({len(requests)} requests)")
+    # Clearing leaves a bare home address, and a write on a document is refused.
+    await page.evaluate("import('/router.js').then((router) => router.setHomeQuery({ q: '' }))")
+    expect(await page.evaluate("location.hash") == "#/", f"clearing left {await page.evaluate('location.hash')!r}")
+    expect(await page.evaluate(HOME_QUERY) == {}, "clearing did not reach state.homeQuery")
+    await page.evaluate(f"location.hash = '#/doc/{docs['A']}'")
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    refused = await page.evaluate(
+        "import('/router.js').then((router) => router.setHomeQuery({ q: 'x' }))"
+        ".then(() => null, (error) => error.message)"
+    )
+    expect(refused is not None, "a write on a document view was accepted")
+    expect(await page.evaluate("location.hash") == f"#/doc/{docs['A']}", "a refused write changed the address")
+
+
+@check("a home query under a profile opens that profile's home with the query; switching profile drops it")
+async def home_query_profile(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    requests = dataset_requests(page)
+    await page.goto(f"{docs['multi']}/#/p/{DEMO}/?q=x")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await selected_profile(page) == DEMO, f"the switcher shows {await selected_profile(page)!r}")
+    expect(await page.locator("#corpus-view .entity-switch").count() == 1, "the home table is not the entity profile's")
+    await wait_home_query(page, {"q": "x"})
+    expect(len(requests) == 1 and f"profile={DEMO}" in requests[0], f"the table requests read {requests}")
+    expect(await page.get_attribute(".brand", "href") == f"#/p/{DEMO}/?q=x", "the brand link lost the profile or query")
+    # A query right after the name (no slash) is tolerated as the same address, never read as a profile name.
+    await page.goto(f"{docs['multi']}/#/p/{DEMO}?q=y")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await selected_profile(page) == DEMO, "the slash-less form was not routed to the profile")
+    expect(await page.is_hidden("#missing-view"), "the slash-less form was read as a missing profile")
+    await wait_home_query(page, {"q": "y"})
+    # A profile change is a new view and keeps no query.
+    default = await page.evaluate("import('/state.js').then((module) => module.state.defaultProfile)")
+    await page.select_option("#profile-select", default)
+    await page.wait_for_function("location.hash === '#/'")
+    await wait_home_query(page, {})
+    expect(await page.get_attribute(".brand", "href") == "#/", "the brand link kept another profile's query")
+
+
 @check("the rail marks results under other profiles, and the page links to them")
 async def library_markers(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
     await page.goto(f"{docs['multi']}/")
