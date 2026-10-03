@@ -1,8 +1,9 @@
-// PaperFacts frontend entry point: wire up the upload zone, profile switcher, router, and document library, then
+// PaperFacts frontend entry point: wire up the upload dialog, profile switcher, router, and document library, then
 // open whatever document the URL points at.
 // No build step; module breakdown: state (state & shared constants), api, html (small utilities),
 // router (routes, the profile prefix and the view generation), profiles (the header switcher and each profile's
-// view), library (left rail), document (document view, home view, profile page and the missing-document /
+// view), library (left rail: the list, its search and chips, the collapse, the bulk run), upload (the upload dialog
+// and the page-wide drop), document (document view, home view, profile page and the missing-document /
 // missing-profile states), profile (the read-only profile page's renderers), table (the results table and the
 // column model), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
 // library-wide results table), facts (fact comparison), figures (chart readings), samples (sample records), job
@@ -12,10 +13,11 @@ import { api } from "./api.js";
 import { setupCheck, showCheck } from "./check.js";
 import { showDocument, showEmpty, showMissing, showMissingProfile, showProfilePage } from "./document.js";
 import { toast } from "./html.js";
-import { loadLibrary, setupLibraryDisclosure, setupRunAll, setupUpload } from "./library.js";
+import { loadLibrary, setupLibraryDisclosure, setupLibraryFilter, setupRailToggle, setupRunAll } from "./library.js";
 import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
 import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
+import { setupUpload } from "./upload.js";
 
 // Another profile routed to: the rail lists its documents, the old profile's home table is hidden until the new one
 // lands, and the switcher and header link follow. The old profile's document stays on screen while the new one loads,
@@ -37,8 +39,10 @@ function setupSkipLink() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   setupSkipLink();
+  setupRailToggle();
   setupUpload();
   setupRunAll();
+  setupLibraryFilter();
   setupLibraryDisclosure();
   setupSwitcher();
   setupCheck();

@@ -1,12 +1,12 @@
-// Left rail: the document library list and upload. On a successful upload, navigate to that
-// document; the document view takes over showing progress from there. The list, its progress and tallies, the
-// upload and the bulk run are all under the profile on screen; a document with results under other profiles says so.
+// Left rail: the document library list, its search and chips, the rail's collapse and the bulk run. The list, its
+// progress and tallies and the bulk run are all under the profile on screen; a document with results under other
+// profiles says so. Uploading is upload.js.
 
 import { api, profileApi } from "./api.js";
 import { articleTag, escapeHtml, keepFocus, toast } from "./html.js";
 import { profileTitle, servedProfile } from "./profiles.js";
 import { documentHash, navigate, reloadView } from "./router.js";
-import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, isCurrent, slot, state, viewShows } from "./state.js";
+import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, slot, state, viewShows } from "./state.js";
 
 // While anything is queued or running, the rail refreshes itself: a bulk run's progress would otherwise
 // stay frozen until the reader pressed ↻. A failed refresh is retried with a growing pause, like job
@@ -68,20 +68,89 @@ async function loadActiveDocs() {
   return active;
 }
 
+// ---------- search and chips ----------
+//
+// The filter is the rail's own, never the URL's: a refresh redraws the list through it, and the controls are static
+// markup, so what was typed and what is pressed survive every redraw. Each chip is one predicate over a summary.
+const CHIPS = {
+  review: (doc) => doc.article_type === "review",
+  conflict: (doc) => (doc.counts?.conflict ?? 0) > 0,
+  unfinished: (doc) => !finishedHere(doc),
+};
+const filter = { query: "", chips: new Set() };
+
+// Finished under the profile on screen: the server's `profiles_done` names every served profile the paper is
+// exported under, the one asked about included, so this is the same "finished" run-all skips. The default is routed
+// as null and compared by its name from /api/profiles; until that list has answered, any finished profile counts.
+function finishedHere(doc) {
+  const done = doc.profiles_done ?? [];
+  const name = state.profileName ?? state.defaultProfile;
+  return name == null ? done.length > 0 : done.includes(name);
+}
+
+const matches = (doc) =>
+  doc.name.toLowerCase().includes(filter.query) && [...filter.chips].every((chip) => CHIPS[chip](doc));
+
+export function setupLibraryFilter() {
+  const search = document.getElementById("rail-search");
+  search.addEventListener("input", () => {
+    filter.query = search.value.trim().toLowerCase();
+    renderLibrary();
+  });
+  for (const chip of document.querySelectorAll("#rail-chips .chip")) {
+    chip.addEventListener("click", () => {
+      const name = chip.dataset.chip;
+      if (filter.chips.has(name)) filter.chips.delete(name);
+      else filter.chips.add(name);
+      renderLibrary();
+    });
+  }
+}
+
+function clearFilter() {
+  filter.query = "";
+  filter.chips.clear();
+  document.getElementById("rail-search").value = "";
+  renderLibrary();
+}
+
 export function renderLibrary() {
   const list = document.getElementById("doc-list");
-  document.getElementById("doc-count").textContent = `（${state.docs.length}）`;
+  const shown = state.docs.filter(matches);
+  const filtered = Boolean(filter.query) || filter.chips.size > 0;
+  document.getElementById("doc-count").textContent = filtered
+    ? `（${shown.length}/${state.docs.length}）`
+    : `（${state.docs.length}）`;
+  for (const chip of document.querySelectorAll("#rail-chips .chip")) {
+    const name = chip.dataset.chip;
+    chip.setAttribute("aria-pressed", String(filter.chips.has(name)));
+    chip.querySelector(".n").textContent = String(state.docs.filter(CHIPS[name]).length);
+  }
   keepFocus(list, () => {
     list.innerHTML = "";
     if (!state.docs.length) {
       list.innerHTML = `<li class="doc-list-empty muted">还没有文档</li>`;
       return;
     }
-    for (const doc of state.docs) list.append(libraryItem(doc));
+    if (!shown.length) {
+      const empty = document.createElement("li");
+      empty.className = "doc-list-empty muted";
+      empty.append("没有匹配的文档。");
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "linklike";
+      clear.textContent = "清除筛选";
+      clear.addEventListener("click", clearFilter);
+      empty.append(clear);
+      list.append(empty);
+      return;
+    }
+    for (const doc of shown) list.append(libraryItem(doc));
   });
 }
 
-// A button holds phrasing content only, so every line of the entry is a <span> set as a block.
+// Two lines: the name, then everything else. A button holds phrasing content only, so each line is a <span>
+// set as a block.
 function libraryItem(doc) {
   const li = document.createElement("li");
   const button = document.createElement("button");
@@ -91,8 +160,7 @@ function libraryItem(doc) {
   if (doc.document_id === state.current) button.setAttribute("aria-current", "page");
   button.innerHTML = `
     <span class="name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</span>
-    <span class="sub">${articleTag(doc)}${progressDots(doc)}${queuedMark(doc)}<code>${escapeHtml(doc.document_id.slice(0, 8))}</code></span>
-    ${miniCounts(doc)}${otherProfilesMark(doc)}`;
+    <span class="sub">${articleTag(doc)}${progressDots(doc)}${queuedMark(doc)}${miniCounts(doc)}${otherProfilesMark(doc)}</span>`;
   button.addEventListener("click", () => {
     if (!WIDE.matches) document.getElementById("doc-list-wrap").open = false;
     navigate(documentHash(doc.document_id));
@@ -138,16 +206,17 @@ function otherProfilesMark(doc) {
   return `<span class="other-profiles" title="${titles}">另有 ${others.length} 个领域的结果</span>`;
 }
 
-// The comparison tally as four small badges. Each keeps its status colour but always carries the
-// count and a word, so the row stays readable without relying on colour.
+// The comparison tally on one line, "26 一致 · 3 冲突 · 4 缺失": a zero count is left out, and each count keeps its
+// status colour but always carries the number and the word. Nothing at all when every count is zero.
 function miniCounts(doc) {
   const c = doc.counts;
   if (!c) return "";
-  const badges = STATUS_ORDER
-    .map((kind) => [kind, STATUS[kind].label, c[kind]])
-    .map(([kind, label, n]) => `<span class="tally-item ${kind}${n ? "" : " zero"}" title="${label}：${n}"><i></i>${n}<em>${label}</em></span>`)
-    .join("");
-  return `<span class="tally">${badges}</span>`;
+  const items = STATUS_ORDER.filter((kind) => c[kind]).map(
+    (kind) => `<span class="tally-item ${kind}"><i></i>${c[kind]}<em>${STATUS[kind].label}</em></span>`
+  );
+  if (!items.length) return "";
+  const words = escapeHtml(STATUS_ORDER.map((kind) => `${STATUS[kind].label} ${c[kind]}`).join("，"));
+  return `<span class="tally" title="${words}">${items.join("")}</span>`;
 }
 
 export function setupLibraryDisclosure() {
@@ -157,65 +226,71 @@ export function setupLibraryDisclosure() {
   WIDE.addEventListener("change", sync);
 }
 
-export function setupUpload() {
-  const zone = document.getElementById("dropzone");
-  const input = document.getElementById("file-input");
-  document.getElementById("pick-file").addEventListener("click", () => input.click());
-  input.addEventListener("change", () => { uploadAll([...input.files]); input.value = ""; });
-  for (const type of ["dragenter", "dragover"]) zone.addEventListener(type, (e) => { e.preventDefault(); zone.classList.add("drag"); });
-  for (const type of ["dragleave", "drop"]) zone.addEventListener(type, (e) => { e.preventDefault(); zone.classList.remove("drag"); });
-  zone.addEventListener("drop", (e) => uploadAll([...e.dataTransfer.files]));
+// ---------- the rail's collapse ----------
+//
+// One attribute on .shell is the whole state (app.css closes the first grid track on it); remembered per browser so
+// a reader who put the rail away finds it away. localStorage may be absent or refuse (private windows, quota): a
+// failed read means expanded, a failed write is forgotten.
+const RAIL_KEY = "paperfacts.rail-collapsed";
+
+export function setupRailToggle() {
+  const shell = document.querySelector(".shell");
+  const toggle = document.getElementById("rail-toggle");
+  const apply = (collapsed) => {
+    if (collapsed) shell.dataset.rail = "collapsed";
+    else delete shell.dataset.rail;
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    const word = collapsed ? "展开侧栏" : "收起侧栏";
+    toggle.title = word;
+    toggle.setAttribute("aria-label", word);
+  };
+  let stored = null;
+  try { stored = localStorage.getItem(RAIL_KEY); } catch { /* no storage: start expanded */ }
+  apply(stored === "1");
+  const flip = () => {
+    const collapsed = shell.dataset.rail !== "collapsed";
+    apply(collapsed);
+    try { localStorage.setItem(RAIL_KEY, collapsed ? "1" : "0"); } catch { /* not remembered */ }
+  };
+  toggle.addEventListener("click", flip);
+  // `[` anywhere on the page, except where the key is text: a field, a select, editable content, an open dialog.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "[" || event.ctrlKey || event.metaKey || event.altKey) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("input, textarea, select, [contenteditable], dialog[open]")) return;
+    if (document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    flip();
+  });
 }
 
-// One request per file, in order (the server takes one PDF per upload); the last one that went in is opened,
-// unless the reader moved to another view while the files went up. `reload`, because it may be the document
-// already on screen, whose new job the view must start following.
-async function uploadAll(files) {
-  if (!files.length) return;
-  const generation = state.generation;
-  const profile = state.profileName;
-  const zone = document.getElementById("dropzone");
-  const force = document.getElementById("upload-force").checked;
-  const figures = document.getElementById("upload-figures").checked;
-  let last = null;
-  zone.classList.add("busy");
-  try {
-    for (const file of files) {
-      const form = new FormData();
-      form.append("file", file, file.name);
-      if (figures) form.append("figures", "true");
-      try {
-        const result = await profileApi(profile, `/api/documents?force=${force}`, { method: "POST", body: form });
-        last = result.document.document_id;
-        toast(`已上传 ${file.name}，开始处理${figures ? "（含识图）" : ""}`);
-      } catch (error) {
-        toast(`上传失败（${file.name}）：${error.message}`, true);
-      }
-    }
-  } finally {
-    zone.classList.remove("busy");
-  }
-  await loadLibrary();
-  // The generation covers the profile too: a switch is a new view, so an upload made under the old one opens nothing.
-  if (last && isCurrent(generation)) navigate(documentHash(last), { reload: true });
-}
-
-// Queue everything that is not finished yet. The backend decides what counts as unfinished; here we
-// only report how many went in and how many were left out.
+// ---------- the bulk run ----------
+//
+// Queue everything that is not finished yet, after one confirmation that also offers 「忽略缓存，全部重跑」. The backend
+// decides what counts as unfinished; here we only report how many went in and how many were left out.
 export function setupRunAll() {
   const button = document.getElementById("run-all");
-  button.addEventListener("click", async () => {
-    const force = document.getElementById("upload-force").checked;
+  const dialog = document.getElementById("run-all-dialog");
+  const force = document.getElementById("run-all-force");
+  const confirm = document.getElementById("run-all-confirm");
+  const message = document.getElementById("run-all-message");
+  for (const close of dialog.querySelectorAll('[data-action="close"]')) close.addEventListener("click", () => dialog.close());
+  button.addEventListener("click", () => {
+    const named = manyProfiles() ? `按「${profileTitle(state.profileName)}」` : "";
+    message.textContent = `将${named}处理文档库里全部未完成的文档（共 ${state.docs.length} 篇），每篇一个任务，按文档库顺序排队。`;
+    force.checked = false;
+    dialog.showModal();
+  });
+  // A forced bulk run re-parses every PDF as well, which on a laptop without the MLX service is hours per paper on a
+  // single worker; the box says so beside the option, and the confirmation names the count.
+  confirm.addEventListener("click", async () => {
+    const forced = force.checked;
     const profile = state.profileName;
     const named = manyProfiles() ? `按「${profileTitle(profile)}」` : "";
-    // A forced bulk run re-parses every PDF as well, which on a laptop without the MLX service is hours per
-    // paper on a single worker: worth one question before it is queued. So is any bulk run under a profile other
-    // than the default, which spends tokens on every paper not finished under it (an example profile, by accident).
-    if (force && !window.confirm(`将${named}忽略缓存、强制重跑全部 ${state.docs.length} 篇（含重新解析 PDF），确定？`)) return;
-    if (!force && profile !== null && !window.confirm(`将${named}处理文档库里全部未完成的文档（共 ${state.docs.length} 篇），确定？`)) return;
+    dialog.close();
     button.disabled = true;
     try {
-      const result = await profileApi(profile, `/api/documents/run-all?force=${force}`, { method: "POST" });
+      const result = await profileApi(profile, `/api/documents/run-all?force=${forced}`, { method: "POST" });
       toast(`已${named}排队 ${result.submitted.length} 篇，跳过 ${result.skipped.length} 篇`);
       await loadLibrary();
       // The open document may be one of them: re-read it so its view follows the new job -- only while it is still

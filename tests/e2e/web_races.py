@@ -78,7 +78,22 @@ def stub_runner(job: Job, mark: Callable[[str, str, str], None]) -> None:
         mark(stage, "done", "stub")
 
 
-def seed_document(library: Library, root: Path, index: int, name: str, *, samples: int, comparisons: int) -> str:
+def seed_document(
+    library: Library,
+    root: Path,
+    index: int,
+    name: str,
+    *,
+    samples: int,
+    comparisons: int,
+    article_type: str | None = None,
+    conflicts: int = 0,
+    finished: bool = True,
+) -> str:
+    """A paper with both lanes, a report and (unless ``finished`` is off) a dataset under the library's keys.
+    ``article_type`` is what both lanes were told ("review" tags the paper); ``conflicts`` of the ``comparisons`` are
+    counted as conflicts in the report's tally, the rest as agreements. An unfinished paper has everything but the
+    dataset: the export is the last stage, so the server lists it as not finished under this profile."""
     pdf = make_blank_pdf(root / f"{index}.pdf", [(400.0 + index, 600.0), (400.0 + index, 600.0)])
     document = library.register_upload(name, pdf.read_bytes())
     sha = document.sha256
@@ -101,7 +116,7 @@ def seed_document(library: Library, root: Path, index: int, name: str, *, sample
         ]
         lane = make_lane(backend=backend, samples=lane_samples, document_id=sha, extractor_key=library.extractor_key)
         # A paper with no samples is one that deposits no film of its own, the case with its own message.
-        lane = lane.model_copy(update={"no_samples": not samples})
+        lane = lane.model_copy(update={"no_samples": not samples, "article_type": article_type})
         lane.write(library.layout.extraction_path(sha, backend, library.extractor_key))
     rows = tuple(
         FieldComparison(
@@ -127,9 +142,11 @@ def seed_document(library: Library, root: Path, index: int, name: str, *, sample
         backend_a="mineru",
         backend_b="paddleocr_vl",
         matchings={"sample": SampleMatching()},
-        counts=ComparisonCounts(total=comparisons, agree=comparisons),
+        counts=ComparisonCounts(total=comparisons, agree=comparisons - conflicts, conflict=conflicts),
         comparisons=rows,
     ).write(library.layout.comparison_path(sha, library.extractor_key, library.comparison_key))
+    if not finished:
+        return document_key(sha)
     sample_rows = [
         {
             "sample_id": f"S{n}",
@@ -332,11 +349,19 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
             samples=3,
             comparisons=14,
         ),
-        "B": seed_document(library, root, 1, "B 掺铝氧化锌的透明导电性.pdf", samples=2, comparisons=6),
+        "B": seed_document(library, root, 1, "B 掺铝氧化锌的透明导电性.pdf", samples=2, comparisons=6, conflicts=2),
         "C": seed_document(library, root, 2, "C 钙钛矿电池（买来的 ITO 玻璃）.pdf", samples=0, comparisons=0),
     }
-    for index in range(3, 28):  # a long library, as on the real server
+    for index in range(3, 26):  # a long library, as on the real server: 30 papers in all
         seed_document(library, root, index, f"filler paper {index}.pdf", samples=1, comparisons=1)
+    # The rail's chips and search have one paper each to find: a review, a paper not finished under this profile
+    # (its lanes and report are stored, its dataset is not), and a second one with conflicts; "wu" is in two names,
+    # in either case, and in no other.
+    docs["V"] = seed_document(
+        library, root, 26, "V 透明导电氧化物综述 WU.pdf", samples=1, comparisons=1, article_type="review"
+    )
+    docs["U"] = seed_document(library, root, 27, "U 还没处理完的论文.pdf", samples=1, comparisons=1, finished=False)
+    docs["W"] = seed_document(library, root, 28, "W Wu 氧化锌薄膜的电学性质.pdf", samples=1, comparisons=2, conflicts=1)
     # A paper whose charts were read under the current settings (and gave nothing): its button offers a re-read.
     docs["R"] = seed_document(library, root, 29, "R 已识图的论文.pdf", samples=1, comparisons=1)
     StoredReadings(
@@ -642,15 +667,279 @@ async def reread_charts(page: Page, base: str, docs: dict[str, str], _: Path) ->
 async def upload_with_charts(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
     await page.goto(f"{base}/")
     await page.wait_for_selector("#doc-list .doc-item")
+    # The option is the upload dialog's; the hidden #file-input uploads at once with the options as the dialog has
+    # them, so it is ticked there and the dialog closed before the file goes in.
     box = page.locator("#upload-figures")
-    expect(not await box.is_checked(), "上传后识图 starts ticked")
     for tick in (False, True):
+        await page.click("#upload-open")
+        await page.wait_for_selector("#upload-dialog[open]")
+        if not tick:
+            expect(not await box.is_checked(), "上传后识图 starts ticked")
         await box.set_checked(tick)
+        await page.keyboard.press("Escape")
+        await page.wait_for_function("!document.getElementById('upload-dialog').open")
         async with page.expect_response(lambda response: "/api/documents?" in response.url) as answered:
             await page.set_input_files("#file-input", str(pdf))
         job = (await (await answered.value).json())["job"]
         expect(job["figures"] is tick, f"ticked={tick} queued a job with figures={job['figures']}")
         await page.wait_for_selector("text=处理完成", timeout=len(stage_names()) * STAGE_SECONDS * 1000 + 10000)
+
+
+# ---- the shell: the rail's collapse, its search and chips, the upload dialog and the bulk run's confirmation ----
+
+REVIEW = "V 透明导电氧化物综述 WU.pdf"
+UNFINISHED = "U 还没处理完的论文.pdf"
+WU = "W Wu 氧化锌薄膜的电学性质.pdf"
+CONFLICTS = {"B 掺铝氧化锌的透明导电性.pdf", WU}
+LIBRARY_SIZE = 30  # as seeded; earlier checks may have uploaded more, so a check reads the count it finds
+CONTENT_WIDTH = "document.querySelector('.content').getBoundingClientRect().width"
+VIEWPORT_WIDTH = "document.documentElement.clientWidth"
+COLLAPSED = "document.querySelector('.shell').dataset.rail === 'collapsed'"
+DIALOG_OPEN = "document.getElementById('upload-dialog').open"
+
+
+async def home(page: Page, base: str) -> None:
+    await page.goto(f"{base}/#/")
+    # Attached, not visible: on a phone the list is folded away, and with the rail collapsed it is hidden.
+    await page.wait_for_selector("#doc-list .doc-item", state="attached")
+
+
+async def listed_names(page: Page) -> list[str]:
+    return await page.locator("#doc-list .doc-item .name").all_text_contents()
+
+
+@check("the rail collapses from the toggle and `[`, the content takes the whole width, and a reload keeps it")
+async def rail_collapse(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    expect(await page.evaluate(CONTENT_WIDTH) < await page.evaluate(VIEWPORT_WIDTH), "the rail has no width to start")
+    await page.click("#rail-toggle")
+    expect(await page.evaluate(COLLAPSED), "the toggle did not collapse the rail")
+    expect(
+        await page.evaluate(CONTENT_WIDTH) == await page.evaluate(VIEWPORT_WIDTH),
+        f"collapsed, the content is {await page.evaluate(CONTENT_WIDTH)}px of {await page.evaluate(VIEWPORT_WIDTH)}px",
+    )
+    expect(await page.get_attribute("#rail-toggle", "aria-expanded") == "false", "aria-expanded did not follow")
+    expect(await page.get_attribute("#rail-toggle", "title") == "展开侧栏", "the tooltip did not follow")
+    expect(await page.evaluate("localStorage.getItem('paperfacts.rail-collapsed')") == "1", "not remembered")
+    await page.reload()
+    await page.wait_for_selector("#doc-list .doc-item", state="attached")
+    expect(await page.evaluate(COLLAPSED), "a reload forgot the collapsed rail")
+    expect(await page.evaluate(CONTENT_WIDTH) == await page.evaluate(VIEWPORT_WIDTH), "the reloaded rail took width")
+    await page.keyboard.press("[")  # focus is on the page itself
+    expect(not await page.evaluate(COLLAPSED), "`[` did not expand the rail")
+    expect(await page.get_attribute("#rail-toggle", "aria-expanded") == "true", "aria-expanded did not follow `[`")
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.rail-collapsed')") == "0",
+        "the expansion is not remembered",
+    )
+    expect(await page.evaluate(CONTENT_WIDTH) < await page.evaluate(VIEWPORT_WIDTH), "the expanded rail has no width")
+
+
+@check("`[` typed into the rail search, or pressed in an open dialog, is not the collapse")
+async def rail_bracket_guard(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    await page.focus("#rail-search")
+    await page.keyboard.type("[")
+    expect(await page.input_value("#rail-search") == "[", "the search box did not take the `[`")
+    expect(not await page.evaluate(COLLAPSED), "`[` in the search box collapsed the rail")
+    await page.fill("#rail-search", "")
+    await page.click("#upload-open")
+    await page.wait_for_selector("#upload-dialog[open]")
+    await page.keyboard.press("[")
+    expect(not await page.evaluate(COLLAPSED), "`[` in the open dialog collapsed the rail")
+    await page.keyboard.press("Escape")
+    await page.wait_for_function(f"!{DIALOG_OPEN}")
+
+
+@check("the rail search finds names by substring whatever the case, keeps its filter and focus across a refresh")
+async def rail_search(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    total = len(await listed_names(page))
+    expect(total >= LIBRARY_SIZE, f"the library lists {total} papers")
+    await page.fill("#rail-search", "wu")
+    names = await listed_names(page)
+    expect(sorted(names) == sorted([REVIEW, WU]), f"search 'wu' lists {names}")
+    expect(
+        await page.text_content("#doc-count") == f"（2/{total}）",
+        f"the count reads {await page.text_content('#doc-count')!r}",
+    )
+    await page.focus("#rail-search")
+    await page.evaluate("import('/library.js').then((library) => library.loadLibrary())")
+    await page.wait_for_timeout(400)
+    expect(sorted(await listed_names(page)) == sorted(names), "the refresh dropped the filter")
+    expect(await page.input_value("#rail-search") == "wu", "the refresh cleared the search box")
+    expect(await page.evaluate("document.activeElement.id") == "rail-search", "the refresh took the focus")
+    await page.fill("#rail-search", "nothing like this")
+    empty = page.locator("#doc-list .doc-list-empty")
+    expect(await empty.count() == 1 and "没有匹配的文档" in (await empty.text_content() or ""), "no empty state")
+    await empty.locator("button").click()
+    expect(await page.input_value("#rail-search") == "", "清除筛选 left the query")
+    expect(len(await listed_names(page)) == total, "清除筛选 did not restore the list")
+
+
+async def press_chip(page: Page, chip: str) -> None:
+    await page.click(f'#rail-chips [data-chip="{chip}"]')
+
+
+async def chip_count(page: Page, chip: str) -> str:
+    return await page.text_content(f'#rail-chips [data-chip="{chip}"] .n') or ""
+
+
+@check(
+    "the chips 综述, 有冲突 and 未完成 list exactly the seeded papers; 未完成 follows the profile, the default by name"
+)
+async def rail_chips(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    total = len(await listed_names(page))
+    for chip, expected in (("review", {REVIEW}), ("conflict", CONFLICTS), ("unfinished", {UNFINISHED})):
+        expect(
+            await chip_count(page, chip) == str(len(expected)), f"chip {chip} counts {await chip_count(page, chip)!r}"
+        )
+        await press_chip(page, chip)
+        expect(await page.get_attribute(f'#rail-chips [data-chip="{chip}"]', "aria-pressed") == "true", "not pressed")
+        names = await listed_names(page)
+        expect(set(names) == expected and len(names) == len(expected), f"chip {chip} lists {names}")
+        await press_chip(page, chip)
+    expect(len(await listed_names(page)) == total, "releasing the chips did not restore the list")
+    await press_chip(page, "conflict")
+    await page.fill("#rail-search", "wu")
+    expect(await listed_names(page) == [WU], "a chip and the search do not combine")
+    # Under two profiles: M is finished under both, N under the default only. Routed as the default (null in the
+    # page, resolved to its name from /api/profiles) nothing is unfinished; under the demo profile, N is.
+    await page.goto(f"{docs['multi']}/#/")
+    await page.wait_for_selector("#doc-list .doc-item")
+    expect(await chip_count(page, "unfinished") == "0", f"the default counts {await chip_count(page, 'unfinished')!r}")
+    await press_chip(page, "unfinished")
+    expect(await listed_names(page) == [], f"the default lists {await listed_names(page)} as unfinished")
+    await press_chip(page, "unfinished")  # the profile switch below is a hash change: the chip would stay pressed
+    await page.goto(f"{docs['multi']}/#/p/{DEMO}")
+    await page.wait_for_selector("#doc-list .doc-item")
+    expect(
+        await chip_count(page, "unfinished") == "1", f"the demo profile counts {await chip_count(page, 'unfinished')!r}"
+    )
+    await press_chip(page, "unfinished")
+    expect(
+        await listed_names(page) == ["N 只有默认领域的结果.pdf"], f"the demo profile lists {await listed_names(page)}"
+    )
+
+
+DROP = """(kind) => {
+  const transfer = new DataTransfer();
+  if (kind === "text") transfer.items.add("some words", "text/plain");
+  else transfer.items.add(new File(["%PDF-1.4"], "dropped.pdf", { type: "application/pdf" }));
+  window.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true, cancelable: true }));
+}"""
+
+
+@check("a drop of text does not open the upload dialog; a drop of a PDF opens it with the file listed")
+async def window_drop(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    await page.evaluate(DROP, "text")
+    expect(not await page.evaluate(DIALOG_OPEN), "a drop of text opened the dialog")
+    await page.evaluate(DROP, "file")
+    expect(await page.evaluate(DIALOG_OPEN), "a drop of a PDF did not open the dialog")
+    listed = await page.locator("#upload-files .upload-file .fname").evaluate_all(
+        "rows => rows.map((row) => row.title)"
+    )
+    expect(listed == ["dropped.pdf"], f"the dialog lists {listed}")
+    expect(await page.is_enabled("#upload-start"), "开始上传 is disabled with a file listed")
+    await page.click("#upload-files .upload-file .remove")
+    expect(await page.locator("#upload-files .upload-file").count() == 0, "移除 left the row")
+    expect(not await page.is_enabled("#upload-start"), "开始上传 is enabled with nothing listed")
+    await page.keyboard.press("Escape")
+
+
+@check(
+    "two files chosen in the upload dialog go up as two requests carrying the ticked options, each with its progress"
+)
+async def dialog_upload(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
+    await home(page, base)
+    files = [make_blank_pdf(pdf.parent / f"dialog-{n}.pdf", [(430.0 + n, 630.0)]) for n in (1, 2)]
+    await page.click("#upload-open")
+    await page.wait_for_selector("#upload-dialog[open]")
+    await page.set_input_files("#upload-pick", [str(file) for file in files])
+    expect(await page.locator("#upload-files .upload-file").count() == 2, "the chosen files are not listed")
+    expect(await page.text_content("#upload-start") == "开始上传（2 个）", "the button does not count the files")
+    expect(await page.text_content("#upload-status") == "2 个待上传", "the status line does not count the files")
+    await page.check("#upload-figures")
+    await page.check("#upload-force")
+    posts = []
+    page.on(
+        "request",
+        lambda request: (
+            posts.append(request) if request.method == "POST" and "/api/documents?" in request.url else None
+        ),
+    )
+    await page.route("**/api/documents?force=*", delayed(0.8))
+    await page.click("#upload-start")
+    await page.wait_for_timeout(300)
+    first = page.locator("#upload-files .upload-file").first
+    expect(await first.locator("progress").count() == 1, "the row being uploaded shows no progress bar")
+    expect(await first.locator(".state").text_content() == "上传中…", "the row being uploaded does not say so")
+    expect(not await page.is_enabled("#upload-start"), "开始上传 stays enabled while uploading")
+    await page.wait_for_function(f"!{DIALOG_OPEN}", timeout=10000)
+    expect(len(posts) == 2, f"{len(posts)} uploads were posted")
+    for request, file in zip(posts, files, strict=True):
+        expect("force=true" in request.url, f"posted without force: {request.url}")
+        body = request.post_data_buffer or b""
+        expect(f'filename="{file.name}"'.encode() in body, f"the request does not carry {file.name}")
+        expect(b'name="figures"' in body, "the request does not carry the figures option")
+    await page.wait_for_function("location.hash.startsWith('#/doc/')")
+    expect(await page.locator("#upload-files .upload-file").count() == 0, "uploaded rows stay listed after the close")
+    await jobs_idle(page)
+
+
+@check("处理全部未完成 asks first, and its 忽略缓存 option posts force=true")
+async def run_all_confirm(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    total = len(await listed_names(page))
+    sent: list[str] = []
+
+    async def answer(route: Route) -> None:
+        sent.append(route.request.url)
+        await route.fulfill(status=202, content_type="application/json", body='{"submitted": [], "skipped": []}')
+
+    await page.route("**/api/documents/run-all*", answer)
+    await page.click("#run-all")
+    await page.wait_for_selector("#run-all-dialog[open]")
+    expect(not sent, "run-all posted before the reader confirmed")
+    message = await page.text_content("#run-all-message") or ""
+    expect(f"共 {total} 篇" in message, f"the confirmation reads {message!r}")
+    await page.click('#run-all-dialog button:has-text("取消")')
+    await page.wait_for_function("!document.getElementById('run-all-dialog').open")
+    expect(not sent, "取消 posted the run")
+    await page.click("#run-all")
+    await page.wait_for_selector("#run-all-dialog[open]")
+    expect(not await page.is_checked("#run-all-force"), "忽略缓存 starts ticked")
+    await page.check("#run-all-force")
+    await page.click("#run-all-confirm")
+    await page.wait_for_function("!document.getElementById('run-all-dialog').open")
+    await page.wait_for_timeout(300)
+    expect(len(sent) == 1 and "force=true" in sent[0], f"the confirmed run posted {sent}")
+    await page.click("#run-all")
+    await page.wait_for_selector("#run-all-dialog[open]")
+    expect(not await page.is_checked("#run-all-force"), "忽略缓存 stayed ticked for the next run")
+    await page.click("#run-all-confirm")
+    await page.wait_for_timeout(300)
+    expect(len(sent) == 2 and "force=false" in sent[1], f"the second run posted {sent}")
+
+
+@check("on a phone the rail stacks without a toggle, and the upload dialog fits the screen", width=390, height=844)
+async def narrow_shell(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    expect(await page.is_hidden("#rail-toggle"), "the collapse toggle shows on a phone")
+    expect(not await page.evaluate("document.getElementById('doc-list-wrap').open"), "the list is not folded away")
+    await page.evaluate("localStorage.setItem('paperfacts.rail-collapsed', '1')")
+    await page.reload()
+    await page.wait_for_selector("#rail-search")
+    expect(await page.is_visible("#rail-search"), "a remembered collapse hides the stacked rail")
+    overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+    expect(overflow <= 0, f"the home page scrolls {overflow}px sideways")
+    await page.click("#upload-open")
+    await page.wait_for_selector("#upload-dialog[open]")
+    box = await page.evaluate("document.getElementById('upload-dialog').getBoundingClientRect().toJSON()")
+    expect(box["left"] >= 0 and box["right"] <= 390, f"the dialog spans {box['left']}–{box['right']}px")
+    await page.keyboard.press("Escape")
 
 
 @check("a link to no document says so in Chinese")
