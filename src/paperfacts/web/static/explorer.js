@@ -13,7 +13,7 @@
 
 import { escapeHtml } from "./html.js";
 import { homeQueryFromHash, setHomeQuery } from "./router.js";
-import { inEntity, state, uiCopy } from "./state.js";
+import { inEntity, isCurrent, state, uiCopy } from "./state.js";
 import { filterChips, filterParams, isFiltering, noFilters, passes, readFilters } from "./filters.js";
 
 const SEARCH_DEBOUNCE_MS = 120;
@@ -133,7 +133,12 @@ function buildSearchBar() {
   input.addEventListener("input", () => {
     clear.hidden = !input.value;
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => updateQuery({ q: input.value.trim() }), SEARCH_DEBOUNCE_MS);
+    // Typed under this view: a write that comes due after the reader moved on (another profile's home, whose query
+    // this is not) is dropped.
+    const generation = state.generation;
+    searchTimer = setTimeout(() => {
+      if (isCurrent(generation)) updateQuery({ q: input.value.trim() });
+    }, SEARCH_DEBOUNCE_MS);
   });
   clear.addEventListener("click", () => {
     clearTimeout(searchTimer);

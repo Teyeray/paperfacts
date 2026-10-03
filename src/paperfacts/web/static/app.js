@@ -59,7 +59,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupSwitcher();
   setupCheck();
   document.getElementById("refresh-library").addEventListener("click", loadLibrary);
-  // The home table's sort is the home query's; a status filter re-filters when the rail's list changes.
+  // The home table's sort is the home query's; its status filters and counts follow the rail's list when a status moves.
   onSortChange((sort) => updateQuery(sortParam(sort)));
   onDocsChange(() => refreshCorpus({ docsChanged: true }));
   document.querySelector('#missing-view [data-action="retry"]').addEventListener("click", reloadView);

@@ -36,7 +36,7 @@ import {
   updateQuery,
   writeFilters,
 } from "./explorer.js";
-import { filterChips, filterPanel, itemValue, usesDocs } from "./filters.js";
+import { filterChips, filterPanel, itemValue, statusSignature } from "./filters.js";
 import {
   column,
   densitySwitch,
@@ -76,11 +76,12 @@ function sorted(columns, items) {
   return by ? sortItems(items, by, current.dir) : items;
 }
 
+// The listener writes the sort into the home query, whose change redraws the table (onHomeQuery): drawn once.
 function sortHandler(rerender) {
   return (key) => {
     setSort(nextSort(getSort(), key));
-    sortListener?.(getSort());
-    rerender();
+    if (sortListener) sortListener(getSort());
+    else rerender();
   };
 }
 
@@ -108,17 +109,45 @@ function redraw(root) {
   if (active?.matches?.("input.range-num")) active.setSelectionRange(active.value.length, active.value.length);
 }
 
-// The home query changed (typed into the search box, a filter, a sort, the address) or, with a status filter on, the
-// rail's list did: the table on screen is redrawn from what is already loaded, never re-fetched. Only a table of the
-// profile on screen, on the home view, is redrawn.
+// The rail's statuses the table on screen was drawn with (statusSignature).
+let drawnStatus = null;
+
+// The home query changed (typed into the search box, a filter, a sort, the address) or the rail's list did: the table
+// on screen is redrawn from what is already loaded, never re-fetched. Only a table of the profile on screen, on the
+// home view, is redrawn. The rail refreshes every few seconds while anything runs; a refresh that moved no paper's
+// status (what the status filters and the panel's counts read) redraws nothing, so a range box being typed into or a
+// slider being dragged is left alone.
 export function refreshCorpus({ docsChanged = false } = {}) {
   const root = document.getElementById("corpus-view");
   if (!root || state.homeQuery == null || !state.corpus || state.corpusProfile !== state.profileName) return;
-  if (docsChanged && !usesDocs(readExplore().filters)) return;
+  if (docsChanged && statusSignature() === drawnStatus) return;
   redraw(root);
 }
 
+// Removing a range box that has the focus blurs it, and the browser commits what was typed in it (its change event)
+// in the middle of the removal: that writes the home query, whose redraw would run inside this one. It is deferred
+// until this one is done instead, and then drawn from the query as it now is.
+let drawing = false;
+let drawAgain = false;
+
 export function renderCorpus(root) {
+  if (drawing) {
+    drawAgain = true;
+    return;
+  }
+  drawing = true;
+  try {
+    do {
+      drawAgain = false;
+      drawCorpus(root);
+    } while (drawAgain);
+  } finally {
+    drawing = false;
+  }
+}
+
+function drawCorpus(root) {
+  drawnStatus = statusSignature();
   searchBar(root);
   for (const child of [...root.children]) if (!child.classList.contains("explorer-search")) child.remove();
   if (!(state.corpus?.rows ?? []).length) return;

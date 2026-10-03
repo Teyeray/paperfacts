@@ -127,8 +127,16 @@ function activeFieldFilters(filters, fields) {
 export const isFiltering = (filters, fields) =>
   activeFieldFilters(filters, fields).length > 0 || filters.types.size > 0 || filters.conflict || filters.unfinished;
 
-// Whether a status filter is on: the table then depends on the rail's list, and is redrawn when it changes.
-export const usesDocs = (filters) => filters.conflict || filters.unfinished;
+// Which papers each status holds in the rail's list, as one string: the status filters and the panel's status counts
+// read nothing else of it, so a refresh of the list that leaves this unchanged leaves the home table as it is.
+export const statusSignature = () =>
+  STATUSES.map((status) =>
+    state.docs
+      .filter((doc) => status.test(doc))
+      .map((doc) => doc.document_id)
+      .sort()
+      .join(","),
+  ).join("|");
 
 // The choices of a pick filter: the column's categories, or 是/否.
 function choicesOf(field) {
