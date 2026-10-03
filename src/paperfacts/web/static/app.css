@@ -33,6 +33,7 @@
   --row-pad: 11px 12px;
   --cell-pad: 9px 10px;
   --rail: 300px;
+  --topbar: 56px;   /* the sticky header's height: what the rail and the content sit under */
   --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --font-body: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -82,11 +83,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ---------- top bar ---------- */
 .topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 22px; border-bottom: 1px solid var(--line); background: var(--paper);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  height: var(--topbar); padding: 0 22px 0 14px; border-bottom: 1px solid var(--line); background: var(--paper);
   position: sticky; top: 0; z-index: 5;
 }
-.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+/* The rail's toggle: an icon button with the word in its tooltip and accessible name. */
+.rail-toggle { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; flex-shrink: 0; }
+.rail-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; margin-right: auto; min-width: 0; }
 .brand-mark {
   font-family: var(--font-display); font-weight: 700; font-size: 15px; letter-spacing: .04em;
   width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%;
@@ -115,31 +119,47 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 /* ---------- layout ---------- */
-.shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); min-height: calc(100vh - 56px); }
+.shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); min-height: calc(100vh - var(--topbar)); }
 .shell[data-density="compact"] { --row-pad: 7px 10px; --cell-pad: 5px 8px; }
-.rail { border-right: 1px solid var(--line); padding: 18px 16px; background: var(--paper-2); }
-.content { padding: 22px 28px 60px; min-width: 0; }
-@media (max-width: 960px) { .shell { grid-template-columns: minmax(0, 1fr); } .rail { border-right: 0; border-bottom: 1px solid var(--line); } }
-@media (max-width: 520px) { .content { padding: 16px 14px 48px; } .topbar { padding: 10px 14px; } }
-
-/* ---------- upload ---------- */
-.upload {
-  border: 1.5px dashed var(--line-strong); border-radius: var(--radius); padding: 16px 14px; text-align: center;
-  transition: border-color .15s, background .15s, transform .15s;
+/* The rail scrolls on its own under the sticky header, so a long library never pushes the page down. */
+.rail {
+  position: sticky; top: var(--topbar); height: calc(100vh - var(--topbar)); overflow: hidden auto; min-width: 0;
+  border-right: 1px solid var(--line); padding: 14px 12px 18px; background: var(--paper-2);
 }
-.upload.drag { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 8%, var(--paper-2)); transform: scale(1.01); }
-.upload.busy { opacity: .6; pointer-events: none; }
-.upload-title { font-family: var(--font-display); font-size: 17px; }
+/* Collapsed (the toggle, or `[`): the first track closes and the content takes the whole width. The attribute is the
+   only state; library.js keeps it in localStorage. */
+.shell[data-rail="collapsed"] { grid-template-columns: 0 minmax(0, 1fr); }
+.shell[data-rail="collapsed"] .rail { visibility: hidden; padding: 0; border-right: 0; }
+.content { padding: 22px 28px 60px; min-width: 0; }
+/* Stacked: the rail sits above the content and folds its list away (the <details>); the collapse does not apply. */
+@media (max-width: 960px) {
+  .shell, .shell[data-rail="collapsed"] { grid-template-columns: minmax(0, 1fr); }
+  .rail, .shell[data-rail="collapsed"] .rail { position: static; height: auto; overflow: visible; visibility: visible; padding: 14px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .rail-toggle { display: none; }
+}
+@media (max-width: 520px) { .content { padding: 16px 14px 48px; } .topbar { padding: 0 14px 0 10px; } }
+
+.linklike { background: none; border: 0; padding: 0 2px; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .upload-hint { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
 .upload-profile { color: var(--ink-2); }
-.upload-force { display: inline-flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
-.linklike { background: none; border: 0; padding: 0 2px; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 
-.rail-head { display: flex; align-items: baseline; justify-content: space-between; margin: 22px 4px 8px; }
+.rail-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 2px 10px; }
 .rail-head h2 { font-family: var(--font-display); font-size: 15px; margin: 0; letter-spacing: .02em; }
-.rail-head-actions { display: flex; align-items: center; gap: 4px; }
-#run-all { font-size: 11.5px; }
+.rail-head-actions { display: flex; align-items: center; gap: 2px; }
+.rail-upload { padding: 4px 11px; font-size: 12.5px; margin-right: 4px; }
+#run-all { font-size: 11.5px; padding-inline: 6px; }
 .doc-item .queued { font-size: 11px; }
+/* Search and chips narrow the list below; both are static controls, so a refresh never redraws them. */
+.rail-filter { display: flex; flex-direction: column; gap: 8px; margin: 0 2px 10px; }
+.rail-filter input {
+  width: 100%; font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 5px 9px;
+}
+.rail-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rail-chips .chip { padding: 2px 9px; font-size: 11.5px; cursor: pointer; }
+.rail-chips .chip[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); background: var(--paper); }
+.rail-chips .chip .n:empty { display: none; }
+.doc-list-empty button { font-size: inherit; }
 
 /* The list folds away on a stacked layout (library.js opens it on wide screens, where the toggle is hidden). */
 .doc-list-wrap > summary { cursor: pointer; padding: 6px 4px; font-size: 12.5px; color: var(--ink-2); }
@@ -151,8 +171,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .doc-item.active { background: var(--paper); border-color: var(--line-strong); box-shadow: inset 3px 0 0 var(--accent), var(--shadow); }
 .doc-item.active .name { color: var(--ink); }
+/* Two lines: the name, then the tag, the stage dots, the busy mark and the tally on one line (a mark that does not
+   fit wraps under it, never over the name). */
 .doc-item .name { display: block; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.doc-item .sub { display: flex; gap: 8px; align-items: center; margin-top: 3px; font-size: 11.5px; color: var(--ink-3); }
+.doc-item .sub { display: flex; gap: 3px 8px; align-items: center; flex-wrap: wrap; margin-top: 3px; font-size: 11.5px; color: var(--ink-3); }
+.doc-item .sub .article-tag { margin-right: 0; }
 .dots { display: inline-flex; gap: 3px; }
 /* Fill and shape carry the state (done filled, running ringed, failed square, skipped dashed); the count
    beside the dots and their accessible name carry it in words. */
@@ -162,15 +185,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .dot.failed { border-radius: 1px; background: var(--bad); border-color: var(--bad); }
 .dot.skipped { border-style: dashed; opacity: .6; }
 .dots-text { font-family: var(--font-mono); font-size: 11px; }
-/* Comparison tally: colour plus the count plus a word, never colour alone. */
-.tally { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 6px; font-size: 11px; color: var(--ink-2); }
+/* Comparison tally, one line: each count with its colour and its word ("26 一致 · 3 冲突"), never colour alone. */
+.tally { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 0; font-size: 11px; color: var(--ink-2); white-space: nowrap; }
 .tally-item { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.tally-item + .tally-item::before { content: "·"; margin: 0 5px; color: var(--ink-3); }
 .tally-item i { width: 6px; height: 6px; border-radius: 2px; background: var(--neutral); }
 .tally-item em { font-style: normal; color: var(--ink-3); }
 .tally-item.agree i { background: var(--ok); }
 .tally-item.conflict i { background: var(--bad); }
 .tally-item.ambiguous i { background: var(--warn); }
-.tally-item.zero { opacity: .5; }
 
 /* ---------- document header ---------- */
 .doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 20px; flex-wrap: wrap; }
@@ -183,7 +206,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* A paper's front matter marks it as a review: neutral, and always a word, never a colour alone. */
 .article-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); font-family: var(--font-body); font-size: 11px; font-weight: 600; line-height: 16px; color: var(--ink-2); vertical-align: middle; }
 h1 .article-tag { margin: 0 0 0 10px; font-size: 12px; }
-.doc-item .other-profiles { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); }
+.doc-item .other-profiles { font-size: 11px; color: var(--ink-3); }
 .doc-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .force-label { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
 
@@ -448,6 +471,47 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .results-table tr.paper-row > td:first-child { background: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
 .results-table tr.paper-row:hover > td:first-child { background: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
 .results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+
+/* ---------- dialogs: the upload box and the bulk run's confirmation ---------- */
+.dialog {
+  width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); margin: auto; padding: 18px 20px 16px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--paper); color: var(--ink);
+  box-shadow: var(--shadow); overflow: auto;
+}
+.dialog::backdrop { background: rgb(20 19 17 / 35%); }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.dialog-head h2 { font-size: 18px; }
+.dialog-close { font-size: 14px; line-height: 1; padding: 4px 7px; }
+.dialog-text { margin: 0 0 12px; color: var(--ink-2); }
+.dialog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.dialog-actions [role="status"] { margin-right: auto; font-size: 12px; }
+/* The drop target inside the box; the whole page also takes a drop of files (body.drag) and opens the box. */
+.upload-drop {
+  border: 1.5px dashed var(--line-strong); border-radius: var(--radius); padding: 16px 14px; text-align: center;
+  transition: border-color .15s, background .15s;
+}
+body.drag .upload-drop, .upload-drop.drag { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 8%, var(--paper)); }
+body.drag::after {
+  content: ""; position: fixed; inset: 0; z-index: 4; pointer-events: none;
+  box-shadow: inset 0 0 0 3px var(--accent); background: color-mix(in oklab, var(--accent) 6%, #0000);
+}
+.upload-title { font-family: var(--font-display); font-size: 17px; }
+.upload-files { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.upload-files:empty { display: none; }
+.upload-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-2); font-size: 12.5px; }
+.upload-file .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-file .fname small { margin-left: 6px; color: var(--ink-3); font-family: var(--font-mono); font-size: 11px; }
+.upload-file .remove { font-size: 12px; padding: 1px 6px; }
+.upload-file .state { grid-column: 1 / -1; font-size: 11.5px; color: var(--ink-3); }
+.upload-file .state.error { color: var(--bad); }
+.upload-file .state.done { color: var(--ok); }
+.upload-file progress { grid-column: 1 / -1; width: 100%; height: 6px; accent-color: var(--accent); }
+/* Where B1's 「添加 SI」 goes: empty until then, so the row shows nothing. */
+.upload-file [data-slot="si"]:empty { display: none; }
+.upload-options { display: flex; flex-direction: column; gap: 2px; margin-top: 14px; }
+.upload-options .upload-hint, .confirm-dialog .upload-hint { margin: 0 0 8px 22px; }
+.upload-option { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+.upload-option input { accent-color: var(--accent); }
 
 /* ---------- the profile page (read-only) and the home table's entity chips ---------- */
 .topbar-link { font-size: 12px; color: var(--ink-2); white-space: nowrap; text-underline-offset: 3px; }

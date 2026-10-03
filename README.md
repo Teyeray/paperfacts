@@ -200,19 +200,26 @@ against production's `data/`.
 
 `http://<host>:8000`. The interface is in Chinese; this section names the strings on screen.
 
-**The rail on the left** is the document library, with the drop zone above it. Drag a PDF in, or press
-「选择文件」, and processing starts on upload; 「忽略缓存，全部重跑」 next to the drop zone forces every
-stage to run again, and 「上传后识图」 (off by default) also reads the paper's charts with the vision model --
-slower and billed per chart; see [Reading figures](#reading-figures). Each library entry shows the paper's name and four badges: 一致 (both lanes agreed),
-冲突 (the lanes read different values), 不确定 (the pipeline could not decide) and 缺失 (only one lane
-found it), plus one dot per pipeline stage with a done/total count. Several PDFs can be dropped or picked
-at once; each is uploaded as its own request. On a narrow screen the list folds into 「文档列表」.
-「处理全部未完成」 queues every document that can run and is not already finished (exported) under the
-current keys, one job each, in library order; a document already queued or running simply gets its
-existing job back, so pressing it twice costs nothing. It never reads charts. Documents with neither a PDF nor a cached parse
-are skipped with a reason. Up to `web.max_parallel_documents` (default 3) documents run at once, started in
-the order they were queued; a document is never worked on twice at the same time, so 「强制重跑」 on a
-paper that is already running waits for that run to end.
+**The rail on the left** is the document library. 「上传」 in its head opens the upload dialog, and so does dropping
+PDFs anywhere on the page (dragged text does nothing). The dialog lists the chosen files, one paper each, with a
+progress bar and any error on its own row; 「上传后识图」 (off by default) also reads the paper's charts with the vision
+model -- slower and billed per chart, see [Reading figures](#reading-figures) -- and 「忽略缓存，全部重跑」 forces every
+stage of that upload to run again. Each file is uploaded as its own request, and processing starts on upload.
+Each library entry is two lines: the paper's name, then its 综述 tag if it has one, one dot per pipeline stage with a
+done/total count, an hourglass while a job is queued or running, and one tally of the comparison -- 一致 (both lanes
+agreed), 冲突 (the lanes read different values), 不确定 (the pipeline could not decide), 缺失 (only one lane found it) --
+with zero counts left out. A search box filters the list by name (any case), and the chips 综述, 有冲突 and 未完成
+(not finished under the profile on screen) narrow it further; the count beside 文档列表 reads shown/total while a filter
+is on, and the filter survives the rail's own refresh. The toggle at the left of the header (or `[`, except while
+typing in a field or inside a dialog) collapses the rail so the table takes the whole width; the choice is remembered
+in the browser. The rail scrolls on its own under the header. On a narrow screen it stacks above the content and the
+list folds into 「文档列表」; there is no collapse.
+「处理全部未完成」 asks first -- its confirmation offers 「忽略缓存，全部重跑」 for every paper -- then queues every
+document that can run and is not already finished (exported) under the current keys, one job each, in library order; a
+document already queued or running simply gets its existing job back, so pressing it twice costs nothing. It never
+reads charts. Documents with neither a PDF nor a cached parse are skipped with a reason. Up to
+`web.max_parallel_documents` (default 3) documents run at once, started in the order they were queued; a document is
+never worked on twice at the same time, so 「强制重跑」 on a paper that is already running waits for that run to end.
 
 **The home page** is 论文结果总表: one row per processed paper, showing the sample that paper selected
 across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole

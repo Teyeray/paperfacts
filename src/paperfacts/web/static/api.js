@@ -38,25 +38,57 @@ function profileUrl(profile, path, method = "GET") {
 
 async function request(path, options, profile) {
   const response = await fetch(path, options);
-  if (!response.ok) {
-    let detail = response.statusText;
-    try { detail = (await response.json()).detail ?? detail; } catch { /* non-JSON error body */ }
-    const error = new Error(detail);
-    error.status = response.status;
+  if (!response.ok) throw await failure(response.status, response.statusText, () => response.json());
+  checkProfile(profile, response.headers.get(PROFILE_HEADER));
+  return response.json();
+}
+
+// `form` posted to `path` under `profile` with the upload's progress reported as a fraction of its bytes (fetch
+// has no upload progress): the same address and the same answer and profile checks as `profileApi`.
+export function profileUpload(profile, path, form, onProgress) {
+  const url = profileUrl(profile, path, "POST");
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total);
+    });
+    xhr.addEventListener("load", async () => {
+      try {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          throw await failure(xhr.status, xhr.statusText, () => JSON.parse(xhr.responseText));
+        }
+        checkProfile(profile, xhr.getResponseHeader(PROFILE_HEADER));
+        resolve(JSON.parse(xhr.responseText));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    xhr.addEventListener("error", () => reject(Object.assign(new Error("网络错误，上传没有送达"), { status: 0 })));
+    xhr.addEventListener("abort", () => reject(Object.assign(new Error("上传被中断"), { status: 0 })));
+    xhr.send(form);
+  });
+}
+
+// A non-2xx answer as an Error carrying `status`; the message is the backend's `detail` when the body has one.
+async function failure(status, statusText, body) {
+  let detail = statusText;
+  try { detail = (await body()).detail ?? detail; } catch { /* non-JSON error body */ }
+  const error = new Error(detail);
+  error.status = status;
+  return error;
+}
+
+// The answer is drawn as the profile's: one given under another (a server whose default changed under an open
+// page) is refused rather than shown under the wrong labels. A response without the header says nothing.
+function checkProfile(profile, echoed) {
+  if (profile === undefined) return;
+  const expected = profile ?? state.defaultProfile;
+  if (echoed && expected && echoed !== expected) {
+    const error = new Error(`服务器按领域配置「${echoed}」回答了「${expected}」的请求，请刷新页面`);
+    error.status = 0;
     throw error;
   }
-  // The answer is drawn as the profile's: one given under another (a server whose default changed under an open
-  // page) is refused rather than shown under the wrong labels. A response without the header says nothing.
-  if (profile !== undefined) {
-    const expected = profile ?? state.defaultProfile;
-    const echoed = response.headers.get(PROFILE_HEADER);
-    if (echoed && expected && echoed !== expected) {
-      const error = new Error(`服务器按领域配置「${echoed}」回答了「${expected}」的请求，请刷新页面`);
-      error.status = 0;
-      throw error;
-    }
-  }
-  return response.json();
 }
 
 // "this artifact doesn't exist yet" is a normal state, not an error: 404 -> null, everything else still throws
