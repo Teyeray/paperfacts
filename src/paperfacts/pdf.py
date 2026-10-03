@@ -53,7 +53,9 @@ def merge_pdfs(parts: Sequence[bytes]) -> tuple[bytes, list[int]]:
     render waits behind it; an upload is rare enough for that. The saved bytes are **not** deterministic: pdfium
     writes a fresh trailer ``/ID`` on every save, so merging the same parts twice gives two different byte
     strings, which is why a merged document is identified by its parts' hashes (:func:`storage.parts_sha256`)
-    and never by the merged bytes. A part pdfium cannot open raises :class:`UnreadablePdfError` with its index.
+    and never by the merged bytes. A part pdfium cannot open, or opens but cannot import the pages of, raises
+    :class:`UnreadablePdfError` with its index. A failed save is the merged document's, not any one part's: its
+    ``part`` is ``None``.
     """
     if not parts:
         raise ValueError("nothing to merge")
@@ -69,10 +71,15 @@ def merge_pdfs(parts: Sequence[bytes]) -> tuple[bytes, list[int]]:
                 try:
                     page_counts.append(len(part))
                     merged.import_pages(part)
+                except pdfium.PdfiumError as exc:
+                    raise UnreadablePdfError(index, str(exc)) from exc
                 finally:
                     part.close()
             buffer = io.BytesIO()
-            merged.save(buffer)
+            try:
+                merged.save(buffer)
+            except pdfium.PdfiumError as exc:
+                raise UnreadablePdfError(None, str(exc)) from exc
         finally:
             merged.close()
     return buffer.getvalue(), page_counts

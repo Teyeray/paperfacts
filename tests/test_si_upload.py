@@ -10,6 +10,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
+import pypdfium2 as pdfium
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -195,6 +196,38 @@ def test_an_si_part_pdfium_cannot_open_is_refused_by_name(client: TestClient, li
 
     assert response.status_code == 400
     assert "broken.pdf" in response.json()["detail"]
+    assert library.document_ids() == []
+
+
+def test_an_si_part_whose_pages_cannot_be_imported_is_refused_by_name(
+    client: TestClient, library: Library, main_pdf: bytes, si_pdfs: list[bytes], monkeypatch
+):
+    real_import = pdfium.PdfDocument.import_pages
+
+    def import_pages(self, pdf, *args, **kwargs):
+        if len(pdf) == 1:  # the SI part (one page); the main text has three
+            raise pdfium.PdfiumError("Failed to import pages.")
+        return real_import(self, pdf, *args, **kwargs)
+
+    monkeypatch.setattr(pdfium.PdfDocument, "import_pages", import_pages)
+    response = post(client, main_pdf, [("odd.pdf", si_pdfs[0])])
+
+    assert response.status_code == 400
+    assert "odd.pdf" in response.json()["detail"]
+    assert library.document_ids() == []
+
+
+def test_a_merge_that_cannot_be_saved_is_refused_as_the_upload(
+    client: TestClient, library: Library, main_pdf: bytes, si_pdfs: list[bytes], monkeypatch
+):
+    def save(self, *args, **kwargs):
+        raise pdfium.PdfiumError("Failed to save document.")
+
+    monkeypatch.setattr(pdfium.PdfDocument, "save", save)
+    response = post(client, main_pdf, [("si.pdf", si_pdfs[0])])
+
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("The uploaded PDFs could not be merged into one")
     assert library.document_ids() == []
 
 

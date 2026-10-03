@@ -10,7 +10,7 @@
 
 import { profileHref } from "./api.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
-import { escapeHtml, fmt, keepFocus, onActivate } from "./html.js";
+import { escapeHtml, fmt, keepFocus, onActivate, readStored, writeStored } from "./html.js";
 import { releaseFact } from "./facts.js";
 import { clearEvidence, showEvidence } from "./samples.js";
 import { LANE_LABEL, entityGroups, entityLabel, entityOf, inEntity, noSamplesReason, state, uiCopy } from "./state.js";
@@ -160,9 +160,7 @@ function setDensity(name) {
 }
 
 export function applyStoredDensity() {
-  let stored = null;
-  try { stored = localStorage.getItem(DENSITY_KEY); } catch { /* no storage: 标准 */ }
-  setDensity(stored);
+  setDensity(readStored(DENSITY_KEY));
 }
 
 const currentDensity = () => (document.querySelector(".shell")?.dataset.density === "compact" ? "compact" : "standard");
@@ -181,7 +179,7 @@ export function densitySwitch() {
     button.textContent = label;
     button.addEventListener("click", () => {
       setDensity(name);
-      try { localStorage.setItem(DENSITY_KEY, name); } catch { /* not remembered */ }
+      writeStored(DENSITY_KEY, name);
       for (const other of buttons) other.setAttribute("aria-pressed", String(other === button));
     });
     button.setAttribute("aria-pressed", String(name === currentDensity()));
@@ -191,13 +189,13 @@ export function densitySwitch() {
   return group;
 }
 
-export function headRow(columns) {
+function headRow(columns) {
   const tr = document.createElement("tr");
   tr.innerHTML = columns.map((c) => c.head).join("");
   return tr;
 }
 
-export function bodyRow(columns, item, className = "") {
+function bodyRow(columns, item, className = "") {
   const tr = document.createElement("tr");
   if (className) tr.className = className;
   tr.innerHTML = columns.map((c) => c.html(item)).join("");
@@ -229,7 +227,7 @@ const shownValue = (value, field) => {
 // A value as the reader sees it in a cell: the number (or an interval's ends) and the field's canonical unit,
 // e.g. `125 nm`. Text fields have no unit, and a unitless number stays a bare number. A reference is the id of a row
 // of another entity's table, followed by that entity's label where the unit would be.
-export function valueHtml(value, field) {
+function valueHtml(value, field) {
   const shown = escapeHtml(shownValue(value, field));
   const numeric = typeof value === "number" || (field?.kind === "interval" && Array.isArray(value));
   const unit = field?.references ? entityLabel(field.references) : numeric && field?.unit ? field.unit : "";

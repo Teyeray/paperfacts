@@ -15,6 +15,10 @@ const SECTIONS = [
 // The bar on screen: its buttons by section, the observers that follow the scroll, and the section last clicked (see
 // pick). Replaced whole by every render, so a redrawn page never keeps observing the nodes it threw away.
 let bar = null;
+// A resize is followed once it has settled, not on every frame of a drag.
+const RESIZE_SETTLE_MS = 150;
+// Where the bar sticks under the topbar (app.css); crossing it moves the reading line at once.
+const WIDE = window.matchMedia("(min-width: 961px)");
 
 export function renderSectionBar(root, page) {
   stopSectionBar();
@@ -32,31 +36,63 @@ export function renderSectionBar(root, page) {
     root.append(button);
     entries.push({ key, section, button });
   }
-  bar = { root, entries, clicked: null, observers: [], onLine: new Set(), atEnd: false };
+  const owner = { root, entries, clicked: null, observers: [], crossing: null, onLine: new Set(), atEnd: false };
+  bar = owner;
   syncSectionBar();
-  // What the observers last reported is kept and read, never the geometry at callback time: a smooth scroll goes on
-  // moving after the last crossing it causes, and a reading taken then would be stale once it stops.
-  const line = readingLine();
-  const crossing = new IntersectionObserver(
-    (changes) => {
-      for (const { isIntersecting, target: section } of changes) bar?.onLine[isIntersecting ? "add" : "delete"](section);
-      mark();
-    },
-    { rootMargin: `-${line}px 0px -${Math.max(window.innerHeight - line - 1, 0)}px 0px` },
-  );
+  observeCrossing();
   const end = new IntersectionObserver((changes) => {
     if (bar) bar.atEnd = changes.at(-1).isIntersecting;
     mark();
   });
-  for (const { section } of entries) crossing.observe(section);
   end.observe(page.querySelector("[data-section-end]") ?? page);
-  bar.observers.push(crossing, end);
+  bar.observers.push(end);
+  // The reading line moves with the window: its height, and whether the bar sticks (wide screens only). The observer is
+  // rebuilt for the new line once a resize settles or the layout switches; the listeners go with the bar they were
+  // added for (stopSectionBar), and one that fires for a bar already replaced does nothing.
+  const listeners = new AbortController();
+  owner.listeners = listeners;
+  let resizeTimer = null;
+  const relayout = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (bar === owner) observeCrossing();
+    }, RESIZE_SETTLE_MS);
+  };
+  listeners.signal.addEventListener("abort", () => clearTimeout(resizeTimer));
+  window.addEventListener("resize", relayout, { signal: listeners.signal });
+  WIDE.addEventListener("change", relayout, { signal: listeners.signal });
+}
+
+// (Re)starts the observer of the sections crossing the reading line, for the line where it is now.
+function observeCrossing() {
+  bar.crossing?.disconnect();
+  bar.onLine.clear();
+  // What the observers last reported is kept and read, never the geometry at callback time: a smooth scroll goes on
+  // moving after the last crossing it causes, and a reading taken then would be stale once it stops.
+  const line = readingLine();
+  const owner = bar;
+  const crossing = new IntersectionObserver(
+    (changes) => {
+      if (bar !== owner || owner.crossing !== crossing) return;
+      for (const { isIntersecting, target: section } of changes) owner.onLine[isIntersecting ? "add" : "delete"](section);
+      mark();
+    },
+    { rootMargin: `-${line}px 0px -${Math.max(window.innerHeight - line - 1, 0)}px 0px` },
+  );
+  for (const { section } of bar.entries) crossing.observe(section);
+  bar.crossing = crossing;
+  bar.rootMargin = crossing.rootMargin;
 }
 
 export function stopSectionBar() {
   for (const observer of bar?.observers ?? []) observer.disconnect();
+  bar?.crossing?.disconnect();
+  bar?.listeners?.abort();
   bar = null;
 }
+
+// The reading line the section observer runs on right now, as its rootMargin (null: no bar). Read by the e2e checks.
+export const sectionBarMargin = () => bar?.rootMargin ?? null;
 
 // A section that is not drawn (the log before any job) has no button either.
 export function syncSectionBar() {

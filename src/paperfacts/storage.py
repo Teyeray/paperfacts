@@ -188,7 +188,9 @@ def write_bytes_if_absent(path: Path, data: bytes) -> bool:
 
     The temp file is hard-linked into place, which fails when the target exists, so of two concurrent writers
     the first wins and the second leaves the first's bytes alone. For a merged upload's ``source.pdf``: the
-    merge is not byte-deterministic, and the parse caches belong to the bytes that were written first.
+    merge is not byte-deterministic, and the parse caches belong to the bytes that were written first; and for a
+    new ``identity.json`` (:func:`ensure_identity`). The data root must be on a filesystem with hard links: on one
+    without (FAT, some network or FUSE mounts) ``os.link`` raises ``OSError`` and nothing is written.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -253,10 +255,14 @@ def read_identity(layout: DataLayout, document_id: str) -> DocumentIdentity | No
     return DocumentIdentity.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def write_identity(layout: DataLayout, identity: DocumentIdentity) -> DocumentIdentity:
+def _identity_json(identity: DocumentIdentity) -> str:
     # ``parts`` is left out of a document that has none, so the file of an ordinary document reads as before.
     exclude = None if identity.parts is not None else {"parts"}
-    write_text_atomic(layout.identity_path(identity.sha256), identity.model_dump_json(indent=2, exclude=exclude))
+    return identity.model_dump_json(indent=2, exclude=exclude)
+
+
+def write_identity(layout: DataLayout, identity: DocumentIdentity) -> DocumentIdentity:
+    write_text_atomic(layout.identity_path(identity.sha256), _identity_json(identity))
     return identity
 
 
@@ -269,21 +275,25 @@ def ensure_identity(
     parts: Sequence[PartInfo] | None = None,
 ) -> DocumentIdentity:
     """Idempotent: return the existing identity unchanged, or write a new one. ``parts`` (an upload with SI) is
-    recorded at creation only; an existing identity keeps whatever it has."""
+    recorded at creation only; an existing identity keeps whatever it has.
+
+    The first writer wins (:func:`write_bytes_if_absent`): two concurrent first uploads of the same document both
+    find no identity, but only one creates the file, and the other returns that one's record rather than its own,
+    so no caller is ever handed an identity that is not the one on disk."""
     existing = read_identity(layout, document.document_id)
     if existing is not None:
         return existing
-    return write_identity(
-        layout,
-        DocumentIdentity(
-            sha256=document.sha256,
-            name=name or document.display_filename,
-            source_path=None if uploaded else str(document.pdf_path),
-            uploaded=uploaded,
-            created_at=_now_iso(),
-            parts=None if parts is None else tuple(parts),
-        ),
+    identity = DocumentIdentity(
+        sha256=document.sha256,
+        name=name or document.display_filename,
+        source_path=None if uploaded else str(document.pdf_path),
+        uploaded=uploaded,
+        created_at=_now_iso(),
+        parts=None if parts is None else tuple(parts),
     )
+    if write_bytes_if_absent(layout.identity_path(document.sha256), _identity_json(identity).encode("utf-8")):
+        return identity
+    return read_identity(layout, document.document_id) or identity
 
 
 def mark_uploaded(layout: DataLayout, identity: DocumentIdentity, *, name: str) -> DocumentIdentity:

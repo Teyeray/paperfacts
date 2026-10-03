@@ -556,9 +556,12 @@ def create_app(
         try:
             document = await run_in_threadpool(library.register_upload, filename, main, si)
         except UnreadablePdfError as exc:
-            raise HTTPException(
-                status_code=400, detail=f"{parts[exc.part][0]!r} could not be opened as a PDF: {exc.detail}"
-            ) from exc
+            what = (
+                "The uploaded PDFs could not be merged into one"
+                if exc.part is None
+                else f"{parts[exc.part][0]!r} could not be opened as a PDF"
+            )
+            raise HTTPException(status_code=400, detail=f"{what}: {exc.detail}") from exc
         key = document_key(document.document_id)
         duplicate = await run_in_threadpool(library.duplicate_of, key, shas[0])
         job = submit(key, library, force=force, figures=figures)

@@ -395,7 +395,8 @@ class Library:
 
         With ``si`` (each SI file's name and bytes, in upload order) the parts are merged into one PDF after the
         main text and the document is identified by its parts (:func:`storage.parts_sha256`). Raises
-        :class:`UnreadablePdfError` naming the part pdfium cannot open, and ``ValueError`` for a repeated part.
+        :class:`UnreadablePdfError` naming the part pdfium cannot read (none when the merge cannot be saved), and
+        ``ValueError`` for a repeated part.
         """
         name = Path(filename).name
         if si:

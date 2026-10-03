@@ -75,7 +75,7 @@ function setupWindowDrop() {
   });
 }
 
-export function openUploadDialog(files = []) {
+function openUploadDialog(files = []) {
   addFiles(files);
   const box = dialog();
   if (!box.open) box.showModal();
