@@ -234,20 +234,39 @@ never worked on twice at the same time, so 「强制重跑」 on a paper that is
 **The home page** is 论文结果总表: one row per processed paper, showing the sample that paper selected
 across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
 library. Under a profile with several entity types, a chip per entity type picks what a row is: the primary one
-gives the table above, any other one row per sample of that type across the papers, with that type's fields.
-The toolbar above the table is one row: 「列」 (which field columns to show; the choice is per profile and shared with
+gives the table above, any other one row per sample of that type across the papers (the sample id first, its paper
+second), with that type's fields.
+The search box above the table matches a sample's id, its label and its paper's name, ignoring case and full-width
+forms (NFKC); 「含条件描述」 extends it to the conditions text and adds that column. It matches the text as written --
+there is no translation, so a Chinese word does not find a value the paper wrote in English. 「筛选」 opens the filter
+panel left of the table (open by default on a wide screen; the browser remembers the choice), grouped by the profile's
+groups: a numeric or interval field gets a min–max range in its canonical unit with a slider and a histogram of the
+corpus's values (on a log scale when the values are positive and span more than three decades), and says how many
+rows have no definite value -- a blank never passes a range; an interval passes when it overlaps the range, a list
+when any of its values is inside. A field with a closed set of categories gets a checkbox per canonical category, as
+the server reads each value ("rf-magnetron sputtering" is RF); a yes/no field 是 / 否; date and reference fields have
+no filter yet. At paper level: 文献类型 (综述 / 研究) and 状态 (有冲突, and 未完成 under the profile on screen, as the
+rail shows them). All filters apply together; within one, any ticked choice passes. With a search or a filter the
+table lists one row per matching sample (the sample id first, its paper second, matches marked), and a paper without
+samples found by its name or a paper-level filter is a row of its own; the active filters are chips over the table,
+each removable, with 「清除全部」.
+The toolbar above the table is one row: 「筛选」, 「列」 (which field columns to show; the choice is per profile and shared with
 the document page), 显示空字段, the density switch 标准 / 紧凑 (remembered by the browser, and followed by the
 document page's results table too), 展开全部 (every paper's sample rows), then the count ("<N> 篇论文 · <M> 个样品", in
-the profile's own word for a sample), 复制表格 (the rows shown, as TSV, in the order shown) and 下载全部 Excel. A click on
+the profile's own word for a sample), 复制表格 (the rows shown, as TSV, in the order shown: a search or a filter narrows
+it) and 下载全部 Excel (always every paper, whatever is searched or filtered). A click on
 a column's header (or Enter on it) sorts by it: ascending, descending, then back to the server's order; numbers by
 size, text by locale, and blank cells last in either direction. A paper row is sorted by the value it shows (its
-chosen sample's) and an expanded paper keeps its sample rows under it. The sort lasts while the page is open. The
+chosen sample's) and an expanded paper keeps its sample rows under it. The
 paper name and the sample id stay frozen on the left while the field columns scroll sideways (on a phone only the
 name), numbers are right-aligned, and the rows alternate in tint.
-The home address can carry a query (`#/?q=…`, under a profile `#/p/<name>/?q=…`): what the table is asked to
-show, kept in the URL so a search survives a reload and can be shared. Changing only the query does not reload the
-table, a control bound to it writes it in place (no history entry per keystroke), and the PaperFacts link in the
-header returns to the last query of the current profile; switching profile drops it.
+The home address carries the search, the filters, the sort and the entity type shown as its query (`#/?q=…`, under a
+profile `#/p/<name>/?q=…`): `q` the search, `cond=1` 含条件描述, `f.<field>=<min>~<max>` a range (either end may be
+empty), `f.<field>=<a>|<b>` ticked categories (是 / 否 as `1` / `0`), `type=review|research`, `conflict=1`,
+`unfinished=1`, `sort=<column>` (`-<column>` descending) and `e=<entity type>`. So a reload, the back button or a shared
+link gives the same table. Changing only the query does not reload the table, a control bound to it writes it in place
+(no history entry per keystroke), and the PaperFacts link in the header returns to the last query of the current
+profile; switching profile drops it.
 
 **A document page** reads top to bottom.
 
