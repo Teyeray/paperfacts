@@ -248,7 +248,7 @@ this file is the part that is easy to get wrong.
 ## Web interface
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
-  offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `profile`, `library`, `document`, `table`,
+  offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `profile`, `library`, `upload`, `document`, `table`,
   `fieldpicker`, `tsv`, `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`, `check`; `app.js` is only the
   entry point.
   `profile.js`'s `renderDefinition(root, definition, …)` draws any profile definition (the read-only page,
