@@ -1309,6 +1309,43 @@ async def section_log(page: Page, base: str, docs: dict[str, str], _: Path) -> N
     await jobs_idle(page)
 
 
+async def section_margin(page: Page) -> str | None:
+    return await page.evaluate("import('/sections.js').then((sections) => sections.sectionBarMargin())")
+
+
+async def wait_margin_change(page: Page, before: str | None) -> str | None:
+    deadline = time.monotonic() + 3
+    while (now := await section_margin(page)) == before:
+        expect(time.monotonic() < deadline, f"the section bar's reading line stayed {before!r}")
+        await asyncio.sleep(0.05)
+    return now
+
+
+def margin_px(margin: str | None) -> list[float]:
+    return [float(part.removesuffix("px")) for part in (margin or "").split()]
+
+
+@check("the section bar's reading line follows a resize and the layout switch, and goes with the page")
+async def section_resize(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    first = await section_margin(page)
+    top, _, bottom, _ = margin_px(first)
+    expect(-top - bottom + 1 == 900, f"at 900 px the line's margin reads {first!r}")
+    await page.set_viewport_size({"width": 1440, "height": 600})
+    shorter = await wait_margin_change(page, first)
+    top, _, bottom, _ = margin_px(shorter)
+    expect(-top - bottom + 1 == 600, f"at 600 px the line's margin reads {shorter!r}")
+    # Narrow: the bar no longer sticks, so the line is just under the topbar.
+    await page.set_viewport_size({"width": 800, "height": 600})
+    narrow = await wait_margin_change(page, shorter)
+    expect(margin_px(narrow)[0] > margin_px(shorter)[0], f"the narrow line {narrow!r} is not above {shorter!r}")
+    await home(page, base)
+    expect(await section_margin(page) is None, "the section bar outlived its page")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+    await page.wait_for_timeout(300)
+    expect(await section_margin(page) is None, "a resize after the page was left restarted its bar")
+
+
 @check("a phone-width page does not scroll sideways and keeps 重新处理 on screen", width=390, height=844)
 async def narrow_doc(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
