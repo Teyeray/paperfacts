@@ -4,7 +4,9 @@
 // Both results tables -- this one and the corpus table on the home view (corpus.js) -- are a list of
 // columns. A column is `{ header, head, html(item), text(item) }`: its clipboard header, its <th>, its <td>
 // for one row, and the raw value the clipboard gets for that row. The rendered table and the copy are both
-// `columns.map(...)` over the same list, so they cannot disagree about which column holds what.
+// `columns.map(...)` over the same list, so they cannot disagree about which column holds what. A column the
+// home table can sort by also carries `key` (its stable name: a field's name, or "paper" / "entity" / "counts") and
+// `sort(item)`, the value it is ordered by; sorting reorders the items before both the rows and the copy are built.
 
 import { profileHref } from "./api.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
@@ -54,10 +56,139 @@ export function fieldColumn(field, value, html) {
   const sub = field.label ? `<small>${escapeHtml(field.name)}</small>` : "";
   return {
     header: field.unit ? `${title} (${field.unit})` : title,
-    head: `<th class="fcol" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`,
+    head: `<th class="fcol${numClass(field)}" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`,
     html: (item) => html(item, value(item)),
     text: (item) => fieldText(value(item), field),
+    key: field.name,
+    sort: (item) => sortValue(value(item)),
   };
+}
+
+// Numbers and intervals line up on their digits: the column, never the value's shape, decides (a numeric column's
+// refusal dash sits where its numbers do).
+const NUMERIC_KINDS = new Set(["numeric", "interval"]);
+const numClass = (field) => (NUMERIC_KINDS.has(field?.kind) ? " num" : "");
+
+// ---------- sorting ----------
+
+// What a value is ordered by: a number as itself (an interval by its first end, a list by its first element), a
+// yes/no as 0/1, anything else as its text; no value at all is null, which every order puts last.
+export function sortValue(value) {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "boolean") return Number(value);
+  if (Array.isArray(value)) return sortValue(value.find((item) => item != null) ?? null);
+  return String(value);
+}
+
+const collator = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" });
+// Numbers before text, numbers by size, text by locale (with runs of digits read as numbers, so S2 < S10).
+function compareValues(a, b) {
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  if (typeof a === "number") return -1;
+  if (typeof b === "number") return 1;
+  return collator.compare(a, b);
+}
+
+// `items` ordered by `column.sort` in `dir` ("asc" | "desc"). Blanks go last in both directions, and ties (blanks
+// included) keep the order the items came in, so a sort undone restores exactly what the server sent.
+export function sortItems(items, column, dir) {
+  if (!column?.sort) return items;
+  const sign = dir === "desc" ? -1 : 1;
+  return items
+    .map((item, index) => ({ item, index, value: column.sort(item) }))
+    .sort((a, b) => {
+      if (a.value === null || b.value === null) return (a.value === null) - (b.value === null) || a.index - b.index;
+      return sign * compareValues(a.value, b.value) || a.index - b.index;
+    })
+    .map((entry) => entry.item);
+}
+
+const SORT_LABEL = { asc: "↑ 升序", desc: "↓ 降序" };
+const NEXT_DIR = { asc: "desc", desc: null };
+
+// The next sort after a click on the header of `key`: another column starts ascending, the same one goes
+// ascending → descending → off.
+export const nextSort = (sort, key) => {
+  if (sort?.key !== key) return { key, dir: "asc" };
+  const dir = NEXT_DIR[sort.dir];
+  return dir ? { key, dir } : null;
+};
+
+// Turns the header cells of the sortable columns in `tr` into buttons: `aria-sort` on the cell, the direction in
+// words beside the title (never a colour alone), and `onSort(key)` on a click or Enter. Each button has a
+// `data-focus` key, so the re-render a sort causes keeps the keyboard on it.
+export function sortableHeads(tr, columns, sort, onSort) {
+  columns.forEach((column, index) => {
+    const th = tr.cells[index];
+    if (!th || !column.key || !column.sort) return;
+    const dir = sort?.key === column.key ? sort.dir : null;
+    th.setAttribute("aria-sort", dir === "asc" ? "ascending" : dir === "desc" ? "descending" : "none");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sort-button";
+    button.dataset.focus = `sort:${column.key}`;
+    button.dataset.sort = column.key;
+    button.title = "排序：升序 → 降序 → 取消";
+    button.append(...th.childNodes);
+    if (dir) {
+      const mark = document.createElement("span");
+      mark.className = "sort-mark";
+      mark.textContent = SORT_LABEL[dir];
+      button.insertBefore(mark, button.querySelector("small"));
+    }
+    button.addEventListener("click", () => onSort(column.key));
+    th.append(button);
+  });
+}
+
+// ---------- density ----------
+//
+// 标准 or 紧凑, one choice per browser for every results table: the `data-density` attribute on .shell, which the
+// table's padding and frozen-column widths read (app.css). Storage may be refused; the page then starts at 标准.
+const DENSITY_KEY = "paperfacts.density";
+const DENSITIES = [
+  { name: "standard", label: "标准" },
+  { name: "compact", label: "紧凑" },
+];
+
+function setDensity(name) {
+  const shell = document.querySelector(".shell");
+  if (!shell) return;
+  if (name === "compact") shell.dataset.density = "compact";
+  else delete shell.dataset.density;
+}
+
+export function applyStoredDensity() {
+  let stored = null;
+  try { stored = localStorage.getItem(DENSITY_KEY); } catch { /* no storage: 标准 */ }
+  setDensity(stored);
+}
+
+const currentDensity = () => (document.querySelector(".shell")?.dataset.density === "compact" ? "compact" : "standard");
+
+// Two pressed-or-not buttons. A switch only flips the attribute: nothing is re-rendered, so the focus stays put.
+export function densitySwitch() {
+  const group = document.createElement("div");
+  group.className = "segmented density-switch";
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", "密度");
+  const buttons = DENSITIES.map(({ name, label }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.density = name;
+    button.dataset.focus = `density:${name}`;
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      setDensity(name);
+      try { localStorage.setItem(DENSITY_KEY, name); } catch { /* not remembered */ }
+      for (const other of buttons) other.setAttribute("aria-pressed", String(other === button));
+    });
+    button.setAttribute("aria-pressed", String(name === currentDensity()));
+    return button;
+  });
+  group.append(...buttons);
+  return group;
 }
 
 export function headRow(columns) {
@@ -107,7 +238,9 @@ export function valueHtml(value, field) {
 
 // A cell with no provenance behind it (the corpus table has no quality rows): the value, or a dash.
 export const plainCell = (value, field) =>
-  value == null ? `<td class="cell empty">—</td>` : `<td class="cell">${valueHtml(value, field)}</td>`;
+  value == null
+    ? `<td class="cell empty${numClass(field)}">—</td>`
+    : `<td class="cell${numClass(field)}">${valueHtml(value, field)}</td>`;
 
 // ---------- the per-document table ----------
 
@@ -266,7 +399,7 @@ function cell(value, quality, item, field) {
   if (value == null) {
     const reason = detail || "流水线没有给出取值";
     return (
-      `<td class="cell empty" tabindex="0" title="${escapeHtml(detail)}" aria-label="${escapeHtml(reason)}"` +
+      `<td class="cell empty${numClass(field)}" tabindex="0" title="${escapeHtml(detail)}" aria-label="${escapeHtml(reason)}"` +
       ` data-field="${escapeHtml(field.name)}" data-kind="${item.kind}" data-sample="${escapeHtml(item.row.sample_id ?? "")}"` +
       ` data-entity="${escapeHtml(entityOf(item.row))}">—</td>`
     );
@@ -278,7 +411,7 @@ function cell(value, quality, item, field) {
   // That belongs in the tooltip, not in a badge: next to a lane name it read as "MinerU 全系列".
   const hint = decision?.series ? `${detail}${detail ? "；" : ""}论文对整个系列只写了一次` : detail;
   return (
-    `<td class="cell ${CELL_CLASS[status] ?? ""}" tabindex="0" title="${escapeHtml(hint)}" data-sources="${escapeHtml(sources)}">` +
+    `<td class="cell ${CELL_CLASS[status] ?? ""}${numClass(field)}" tabindex="0" title="${escapeHtml(hint)}" data-sources="${escapeHtml(sources)}">` +
     `${valueHtml(value, field)}<small class="${badge.cls}">${escapeHtml(badge.text)}</small></td>`
   );
 }

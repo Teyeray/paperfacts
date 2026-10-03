@@ -9,13 +9,27 @@
 // With several entity types a chip per entity picks what a row is: the primary entity gives the table above (the
 // paper row is always one of its rows); any other gives one row per sample of that entity across the papers, beside
 // the paper it came from, with that entity's fields. The choice is kept per profile for as long as the page lives.
+//
+// A click on a column's header sorts the table by it (ascending, descending, off). A paper row is ordered by the value
+// it shows (its chosen sample's), and an expanded paper's sample rows stay under it. The sort lives in memory here;
+// getSort/setSort/onSortChange are the hooks the URL state binds to.
 
 import { profileApi, profileHref } from "./api.js";
 import { escapeHtml, keepFocus } from "./html.js";
 import { documentHash } from "./router.js";
 import { entityGroups, inEntity, state } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
-import { column, fieldColumn, plainCell, resultsTable } from "./table.js";
+import {
+  column,
+  densitySwitch,
+  fieldColumn,
+  nextSort,
+  plainCell,
+  resultsTable,
+  sortItems,
+  sortValue,
+  sortableHeads,
+} from "./table.js";
 import { copyButton, copyTable } from "./tsv.js";
 
 let showAllFields = false;
@@ -24,6 +38,37 @@ let showAllFields = false;
 const expanded = new Set();
 // profile key -> the entity name the home table shows under it; absent: the primary.
 const shownEntity = new Map();
+
+// { key, dir: "asc" | "desc" } or null (the server's order), for the profile it was set under: another profile's table
+// starts unsorted. A key no column of the table on screen has is no sort.
+let sort = null;
+let sortProfile = null;
+let sortListener = null;
+export const getSort = () => sort;
+export function setSort(next) {
+  const valid = next && typeof next.key === "string" && (next.dir === "asc" || next.dir === "desc");
+  sort = valid ? { key: next.key, dir: next.dir } : null;
+  sortProfile = state.corpusProfile ?? "";
+}
+// Told of every sort the reader makes by clicking a header (not of setSort's own writes).
+export const onSortChange = (listener) => {
+  sortListener = listener;
+};
+
+// The table's items in the current sort (the server's order when there is none).
+function sorted(columns, items) {
+  const current = getSort();
+  const by = current && columns.find((c) => c.key === current.key);
+  return by ? sortItems(items, by, current.dir) : items;
+}
+
+function sortHandler(rerender) {
+  return (key) => {
+    setSort(nextSort(getSort(), key));
+    sortListener?.(getSort());
+    rerender();
+  };
+}
 
 // The table under `profile`; the home view stores it (state.corpus) only once it knows the view is still current.
 export const loadCorpus = (profile) => profileApi(profile, "/api/dataset");
@@ -63,6 +108,7 @@ const primaryLabel = () => entityGroups()[0].label;
 
 export function renderCorpus(root) {
   root.innerHTML = "";
+  if (sortProfile !== (state.corpusProfile ?? "")) setSort(null);
   if (!(state.corpus?.rows ?? []).length) return;
   const groups = entityGroups();
   const group = currentEntity(groups);
@@ -81,26 +127,33 @@ export function renderCorpus(root) {
   const fields = visibleFields(chosen, allRows, showAllFields);
   const expandable = rows.filter((row) => (row.sample_rows ?? []).length > 1);
   const columns = corpusColumns(fields);
-  // What the table shows, in order: every paper row, plus the sample rows of the papers expanded. The
-  // rendered rows and the clipboard copy are both built from this one list.
-  const items = rows.flatMap((row) => [
-    { kind: "paper", row, source: row.paper_row ?? {} },
-    ...(expanded.has(row.document_id) ? (row.sample_rows ?? []).map((sample) => ({ kind: "sample", row, source: sample })) : []),
+  // What the table shows, in order: every paper row (sorted by the value it shows), each followed by the sample rows
+  // of the papers expanded. The rendered rows and the clipboard copy are both built from this one list.
+  const papers = sorted(columns, rows.map((row) => ({ kind: "paper", row, source: row.paper_row ?? {} })));
+  const items = papers.flatMap((paper) => [
+    paper,
+    ...(expanded.has(paper.row.document_id)
+      ? (paper.row.sample_rows ?? []).map((sample) => ({ kind: "sample", row: paper.row, source: sample }))
+      : []),
   ]);
 
   const chips = [
-    toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
     fieldPicker(data.fields, rerender),
+    toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
+    densitySwitch(),
   ];
   if (expandable.length) chips.push(expandAllChip(expandable, rerender));
   const entity = primaryLabel();
+  const samples = rows.reduce((sum, row) => sum + (row.sample_count ?? 0), 0);
+  const count = `${rows.length} 篇论文 · ${samples} 个${entity}`;
   const note =
-    `${rows.length} 篇论文各取一个完整${entity}行，点${entity}数可展开该论文的全部${entity}；` +
+    `每篇论文取一个完整${entity}行，点${entity}数可展开该论文的全部${entity}；点列名排序；` +
     "空白单元格是流水线拒绝猜测的取值，不是 0。";
 
   const table = resultsTable(columns, items, {
     rowClass: (item) => (item.kind === "sample" ? "sample-row" : expanded.has(item.row.document_id) ? "expanded" : ""),
   });
+  sortableHeads(table.tHead.rows[0], columns, getSort(), sortHandler(rerender));
   table.querySelector("tbody").addEventListener("click", (event) => {
     const button = event.target.closest("button.expand");
     if (!button) return;
@@ -109,43 +162,60 @@ export function renderCorpus(root) {
     else expanded.add(id);
     rerender();
   });
-  root.append(resultsSection(entityChips, chips, columns, items, note, table));
+  root.append(resultsSection(entityChips, chips, columns, items, { count, note }, table));
 }
 
 // A secondary entity: one row per sample of it, beside the paper it came from; no paper row, nothing to expand.
 function renderEntityRows(root, view, group, entityChips, rerender) {
-  const items = view.rows;
   const chosen = chosenFields(view.fields);
-  const fields = visibleFields(chosen, items.map((item) => item.sample), showAllFields);
+  const fields = visibleFields(chosen, view.rows.map((item) => item.sample), showAllFields);
   const columns = entityColumns(fields, group);
+  const items = sorted(columns, view.rows);
   const chips = [
-    toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
     fieldPicker(view.fields, rerender),
+    toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
+    densitySwitch(),
   ];
   const papers = new Set(items.map((item) => item.row.document_id)).size;
-  const note = `${papers} 篇论文共 ${items.length} 个${group.label}，每行一个；空白单元格是流水线拒绝猜测的取值，不是 0。`;
-  root.append(resultsSection(entityChips, chips, columns, items, note, resultsTable(columns, items)));
+  const count = `${papers} 篇论文 · ${items.length} 个${group.label}`;
+  const note = `每行一个${group.label}；点列名排序；空白单元格是流水线拒绝猜测的取值，不是 0。`;
+  const table = resultsTable(columns, items);
+  sortableHeads(table.tHead.rows[0], columns, getSort(), sortHandler(rerender));
+  root.append(resultsSection(entityChips, chips, columns, items, { count, note }, table));
 }
 
-// What every home table has: the entity chips (with several entity types), its own chips, the copy button and the
-// workbook link over a note and the table. The clipboard copy is built from the same columns and items as the rows.
-function resultsSection(entityChips, chips, columns, items, noteText, table) {
+// What every home table has: one toolbar row -- a slot for the explorer's search and filter (empty until it lands), the
+// entity chips (with several entity types), its own controls, then the row count, the copy button and the workbook
+// link -- over a note and the table. The clipboard copy is built from the same columns and items as the rows.
+function resultsSection(entityChips, chips, columns, items, { count, note: noteText }, table) {
   // No heading of its own: on the home view the page title above the table already names it.
   const head = document.createElement("div");
-  head.className = "results-head";
+  head.className = "results-head table-toolbar";
+  const explore = document.createElement("div");
+  explore.className = "toolbar-slot";
+  explore.dataset.slot = "explore";
+  head.append(explore);
   if (entityChips) head.append(entityChips);
   const own = document.createElement("div");
   own.className = "chips";
   own.append(...chips);
   head.append(own);
-  head.append(copyButton(() => copyTable(columns, items)));
+  const end = document.createElement("div");
+  end.className = "toolbar-end";
+  const counter = document.createElement("span");
+  counter.className = "row-count";
+  counter.textContent = count;
+  const copy = copyButton(() => copyTable(columns, items));
+  copy.classList.add("secondary");
+  end.append(counter, copy);
   const download = document.createElement("a");
-  download.className = "download";
+  download.className = "download secondary";
   download.href = profileHref(state.corpusProfile, "/api/dataset.xlsx");
   // Empty: the server's Content-Disposition names the file after the profile.
   download.setAttribute("download", "");
   download.textContent = "下载全部 Excel";
-  head.append(download);
+  end.append(download);
+  head.append(end);
 
   const note = document.createElement("p");
   note.className = "results-note muted";
@@ -189,17 +259,22 @@ function entitySwitch(groups, current, rerender) {
 function entityColumns(fields, group) {
   const name = (item) => item.row.name ?? item.row.document_id ?? "";
   const counts = (item) => `${item.sample.available_fields ?? 0} / ${item.sample.agree_fields ?? 0}`;
+  const id = (item) => item.sample.sample_id ?? "";
   return [
-    column(
-      "论文",
-      (item) => {
-        const text = escapeHtml(name(item));
-        return `<td class="label" title="${text}"><a href="${escapeHtml(documentHash(item.row.document_id))}">${text}</a></td>`;
-      },
+    sortBy(
+      column(
+        "论文",
+        (item) => {
+          const text = escapeHtml(name(item));
+          return `<td class="label" title="${text}"><a href="${escapeHtml(documentHash(item.row.document_id))}">${text}</a></td>`;
+        },
+        name,
+      ),
+      "paper",
       name,
     ),
-    column(group.label, (item) => `<td class="mono">${escapeHtml(item.sample.sample_id ?? "")}</td>`, (item) => item.sample.sample_id ?? ""),
-    column("可用/一致", (item) => `<td class="mono">${escapeHtml(counts(item))}</td>`, counts),
+    sortBy(column(group.label, (item) => `<td class="mono" title="${escapeHtml(id(item))}">${escapeHtml(id(item))}</td>`, id), "entity", id),
+    sortBy(column("可用/一致", (item) => `<td class="mono">${escapeHtml(counts(item))}</td>`, counts), "counts", (item) => item.sample.available_fields),
     ...fields.map((field) => fieldColumn(field, (item) => item.sample[field.name] ?? null, (_, value) => plainCell(value, field))),
   ];
 }
@@ -210,32 +285,49 @@ function entityColumns(fields, group) {
 function corpusColumns(fields) {
   const isPaper = (item) => item.kind === "paper";
   const name = (item) => item.row.name ?? item.row.document_id ?? "";
+  const id = (item) => item.source.sample_id ?? "";
   return [
-    column(
-      "论文",
-      (item) => {
-        if (!isPaper(item)) {
-          const label = escapeHtml(item.source.sample_label ?? "");
-          return `<td class="label indent" title="${label}">${label || "&nbsp;"}</td>`;
-        }
-        const text = escapeHtml(name(item));
-        return `<td class="label" title="${text}"><a href="${escapeHtml(documentHash(item.row.document_id))}">${text}</a></td>`;
-      },
+    sortBy(
+      column(
+        "论文",
+        (item) => {
+          if (!isPaper(item)) {
+            const label = escapeHtml(item.source.sample_label ?? "");
+            return `<td class="label indent" title="${label}">${label || "&nbsp;"}</td>`;
+          }
+          const text = escapeHtml(name(item));
+          return `<td class="label" title="${text}"><a href="${escapeHtml(documentHash(item.row.document_id))}">${text}</a></td>`;
+        },
+        name,
+      ),
+      "paper",
       name,
     ),
-    column(
-      primaryLabel(),
-      (item) => `<td class="mono">${escapeHtml(item.source.sample_id ?? "")}${isPaper(item) ? sampleCount(item.row) : chosenMark(item)}</td>`,
-      (item) => item.source.sample_id ?? "",
+    sortBy(
+      column(
+        primaryLabel(),
+        (item) =>
+          `<td class="mono" title="${escapeHtml(id(item))}">${escapeHtml(id(item))}${isPaper(item) ? sampleCount(item.row) : chosenMark(item)}</td>`,
+        id,
+      ),
+      "entity",
+      id,
     ),
-    column(
-      "可用/一致",
-      (item) => `<td class="mono">${escapeHtml(`${item.source.available_fields ?? 0} / ${item.source.agree_fields ?? 0}`)}</td>`,
-      (item) => `${item.source.available_fields ?? 0} / ${item.source.agree_fields ?? 0}`,
+    sortBy(
+      column(
+        "可用/一致",
+        (item) => `<td class="mono">${escapeHtml(`${item.source.available_fields ?? 0} / ${item.source.agree_fields ?? 0}`)}</td>`,
+        (item) => `${item.source.available_fields ?? 0} / ${item.source.agree_fields ?? 0}`,
+      ),
+      "counts",
+      (item) => item.source.available_fields,
     ),
     ...fields.map((field) => fieldColumn(field, (item) => item.source[field.name] ?? null, (_, value) => plainCell(value, field))),
   ];
 }
+
+// An identity column the table can be sorted by, under a stable key.
+const sortBy = (col, key, value) => ({ ...col, key, sort: (item) => sortValue(value(item)) });
 
 // Only a paper with more than one sample has anything to expand into.
 function sampleCount(row) {

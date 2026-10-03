@@ -14,7 +14,7 @@ export function visibleFields(fields, rows, showAll) {
   return all.filter((field) => present.some((row) => row[field.name] != null));
 }
 
-// ---------- field column picker ----------
+// ---------- field column picker (「列」) ----------
 //
 // Which field columns the reader wants at all, independent of whether they happen to be empty. The
 // choice is one per browser and shared by both results tables, so a column hidden on the home table
@@ -93,7 +93,7 @@ export function fieldPicker(fields, onChange) {
   button.dataset.focus = "picker";
   button.setAttribute("aria-expanded", "false");
   button.setAttribute("aria-haspopup", "dialog");
-  button.innerHTML = `选择字段<span class="n">${all.filter(isOn).length}/${all.length}</span>`;
+  button.innerHTML = `列<span class="n">${all.filter(isOn).length}/${all.length}</span>`;
 
   // Hiding every column is a legitimate request, but a table with only its identity columns looks broken.
   // Say why it is empty next to the control that caused it, so the way back is one click away.
@@ -105,7 +105,7 @@ export function fieldPicker(fields, onChange) {
   const pop = document.createElement("div");
   pop.className = "picker-pop";
   pop.setAttribute("role", "dialog");
-  pop.setAttribute("aria-label", "选择要显示的字段");
+  pop.setAttribute("aria-label", "选择要显示的列");
   pop.hidden = true;
 
   // Both links write an explicit set: "全选" stores every current name rather than clearing the key, so
