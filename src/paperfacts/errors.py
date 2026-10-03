@@ -31,13 +31,16 @@ class ParserError(PaperFactsError):
 
 
 class UnreadablePdfError(PaperFactsError):
-    """pdfium could not open one of the PDFs an upload is merged from. ``part`` is its 0-based position in the
-    upload (0 the main text, then the SI parts in order), so the caller can name the file."""
+    """pdfium could not open, or import the pages of, one of the PDFs an upload is merged from. ``part`` is its
+    0-based position in the upload (0 the main text, then the SI parts in order), so the caller can name the file;
+    ``None`` when the parts were read but the merged document could not be saved, which no one part is to blame for.
+    """
 
-    def __init__(self, part: int, detail: str) -> None:
+    def __init__(self, part: int | None, detail: str) -> None:
         self.part = part
         self.detail = detail
-        super().__init__(f"part {part} could not be opened as a PDF: {detail}")
+        what = "the merged PDF could not be saved" if part is None else f"part {part} could not be opened as a PDF"
+        super().__init__(f"{what}: {detail}")
 
 
 class LlmError(PaperFactsError):
