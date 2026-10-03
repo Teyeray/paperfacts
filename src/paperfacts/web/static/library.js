@@ -3,7 +3,7 @@
 // profiles says so. Uploading is upload.js.
 
 import { api, profileApi } from "./api.js";
-import { articleTag, escapeHtml, keepFocus, toast } from "./html.js";
+import { articleTag, escapeHtml, keepFocus, siTag, toast } from "./html.js";
 import { profileTitle, servedProfile } from "./profiles.js";
 import { documentHash, navigate, reloadView } from "./router.js";
 import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, slot, state, viewShows } from "./state.js";
@@ -160,7 +160,7 @@ function libraryItem(doc) {
   if (doc.document_id === state.current) button.setAttribute("aria-current", "page");
   button.innerHTML = `
     <span class="name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</span>
-    <span class="sub">${articleTag(doc)}${progressDots(doc)}${queuedMark(doc)}${miniCounts(doc)}${otherProfilesMark(doc)}</span>`;
+    <span class="sub">${articleTag(doc)}${siTag(doc)}${progressDots(doc)}${queuedMark(doc)}${miniCounts(doc)}${otherProfilesMark(doc)}</span>`;
   button.addEventListener("click", () => {
     if (!WIDE.matches) document.getElementById("doc-list-wrap").open = false;
     navigate(documentHash(doc.document_id));

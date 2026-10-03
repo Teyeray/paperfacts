@@ -569,8 +569,16 @@ body.drag::after {
 .upload-file .state.error { color: var(--bad); }
 .upload-file .state.done { color: var(--ok); }
 .upload-file progress { grid-column: 1 / -1; width: 100%; height: 6px; accent-color: var(--accent); }
-/* Where B1's 「添加 SI」 goes: empty until then, so the row shows nothing. */
-.upload-file [data-slot="si"]:empty { display: none; }
+/* A paper's SI files under its row, in merge order, then 「添加 SI」. */
+.upload-si { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
+.si-list { flex: 1 0 100%; list-style: none; margin: 2px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.si-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center; }
+.si-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.si-name small { margin-left: 6px; color: var(--ink-3); font-family: var(--font-mono); font-size: 11px; }
+.si-item button { font-size: 12px; padding: 1px 6px; }
+.si-add { font-size: 12px; }
+.si-note { font-size: 11.5px; color: var(--bad); }
+.si-note:empty { display: none; }
 .upload-options { display: flex; flex-direction: column; gap: 2px; margin-top: 14px; }
 .upload-options .upload-hint, .confirm-dialog .upload-hint { margin: 0 0 8px 22px; }
 .upload-option { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--ink-2); }

@@ -23,6 +23,24 @@ export function articleTag(summary) {
   return `<span class="article-tag" title="首页标明为${escapeHtml(summary.article_type_zh)}">${escapeHtml(summary.article_type_zh)}</span>`;
 }
 
+// The 「含 SI」 tag of a document uploaded with its supplementary files, from the summary's `parts`; "" otherwise. Its
+// title gives each part's page range in the merged PDF and says what of the SI is read: tables and captions after
+// the references are kept, the SI's prose is not (extract.informative_blocks cuts it with the bibliography).
+const SI_READ_NOTE = "SI 中的表格、图注会被读取；SI 正文段落暂不读取";
+
+export function siTag(summary) {
+  const parts = summary.parts ?? [];
+  if (parts.length < 2) return "";
+  const pages = (part) => {
+    const first = part.first_page + 1;
+    const last = part.first_page + part.pages;
+    return last > first ? `第 ${first}–${last} 页` : `第 ${first} 页`;
+  };
+  const lines = parts.map((part, index) => `${index ? `SI ${index}` : "正文"}：${pages(part)}（${part.name}）`);
+  const title = escapeHtml([...lines, SI_READ_NOTE].join("\n"));
+  return `<span class="article-tag si-tag" title="${title}">含 SI</span>`;
+}
+
 // Very large / very small numbers use scientific notation; everything else keeps 6 significant figures with trailing zeros stripped
 export const fmt = (n) => (Math.abs(n) >= 1e5 || (Math.abs(n) < 1e-3 && n !== 0) ? n.toExponential(3) : Number(n.toPrecision(6)).toString());
 
