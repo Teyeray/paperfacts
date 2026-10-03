@@ -942,6 +942,9 @@ async def dialog_upload_si(page: Page, base: str, docs: dict[str, str], pdf: Pat
         lines = title.split("\n")
         expected = ["正文：第 1–2 页（si-main.pdf）", "SI 1：第 3 页（si-only.pdf）", SI_READ_NOTE]
         expect(lines == expected, f"the {where}'s 含 SI title reads {lines}")
+    await page.wait_for_selector("#document-view .doc-facts .part")
+    parts = await page.locator("#document-view .doc-facts .part").all_text_contents()
+    expect(parts == expected[:2], f"the summary panel's 组成 reads {parts}")
     await jobs_idle(page)
 
 
@@ -1163,6 +1166,17 @@ async def facts_1920(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     await lanes_visible(page)
 
 
+@check("both lanes of 事实对照 fit side by side at 1600 px, beside the summary panel", width=1600, height=1000)
+async def facts_1600(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await lanes_visible(page)
+    boxes = await page.evaluate(
+        """() => ['.doc-summary', '.doc-main'].map((s) => document.querySelector(s).getBoundingClientRect().toJSON())"""
+    )
+    summary, main = boxes
+    expect(summary["right"] <= main["left"], f"the summary panel is not beside the content: {boxes}")
+
+
 async def lanes_visible(page: Page) -> None:
     box = await page.evaluate(
         """() => {
@@ -1173,6 +1187,126 @@ async def lanes_visible(page: Page) -> None:
         }"""
     )
     expect(box["laneRight"] <= box["wrapRight"] + 1, f"PaddleOCR-VL column is cut off: {box}")
+
+
+async def summary_facts(page: Page) -> dict[str, str]:
+    return await page.evaluate(
+        """() => Object.fromEntries([...document.querySelectorAll('#document-view .doc-fact')].map(
+          (row) => [row.querySelector('dt').textContent, row.querySelector('dd').textContent]))"""
+    )
+
+
+@check("the summary panel shows the paper's parts, sample count, tally, stages, finish time and actions")
+async def summary_panel(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["B"])
+    facts = await summary_facts(page)
+    expect(facts.get("组成") == "单个 PDF", f"组成 reads {facts.get('组成')!r}")
+    expect(facts.get("样品") == "2 个", f"the sample count reads {facts.get('样品')!r}")
+    expect(facts.get("比较结果") == "4一致2冲突", f"the tally reads {facts.get('比较结果')!r}")
+    expect(re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d", facts.get("最近完成", "")), f"finished: {facts}")
+    stages = await page.locator("#document-view .doc-summary .stages li").count()
+    expect(stages == len(stage_names()), f"the panel lists {stages} stages")
+    for action in ('[data-action="run"]', '[data-action="figures"]', '[data-slot="summary-download"]'):
+        expect(await page.locator(f"#document-view .doc-summary {action}").count() == 1, f"no {action} in the panel")
+    download = page.locator('#document-view [data-slot="summary-download"]')
+    expect(await download.is_visible(), "the panel's 下载 Excel is hidden")
+    same = await page.get_attribute('#document-view [data-slot="dataset-download"]', "href")
+    expect(await download.get_attribute("href") == same, "the panel's 下载 Excel is another address")
+    await open_doc(page, base, docs["U"])  # lanes and report stored, no dataset: not finished under this profile
+    await page.wait_for_function("document.querySelector('#document-view h1')?.textContent.startsWith('U ')")
+    facts = await summary_facts(page)
+    expect(facts.get("最近完成") == "尚未完成", f"an unfinished paper's finish time reads {facts.get('最近完成')!r}")
+    expect(await download.is_hidden(), "下载 Excel is offered without a table")
+
+
+async def section_state(page: Page) -> dict:
+    return await page.evaluate(
+        """() => {
+          const on = [...document.querySelectorAll('#document-view .section-link.on')].map((b) => b.dataset.goto);
+          const tops = Object.fromEntries([...document.querySelectorAll('#document-view [data-section]')].map(
+            (s) => [s.dataset.section, s.getBoundingClientRect().top]));
+          const bar = document.querySelector('#document-view .section-bar').getBoundingClientRect();
+          const labels = [...document.querySelectorAll('#document-view .section-link')]
+            .filter((b) => !b.hidden).map((b) => b.textContent);
+          return { on, tops, barTop: bar.top, barBottom: bar.bottom, labels, hash: location.hash, y: scrollY };
+        }"""
+    )
+
+
+@check("a section click scrolls its section under the sticky bar, without touching the URL; a scroll moves the mark")
+async def section_bar(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    state = await section_state(page)
+    # 日志 follows the paper's jobs, which earlier checks may have run (its own check below).
+    labels = [label for label in state["labels"] if label != "日志"]
+    expect(labels == ["结果", "图中读数", "证据", "样品与通道"], f"the bar reads {state['labels']}")
+    expect(state["on"] == ["results"], f"at the top the bar marks {state['on']}")
+    hash_before = state["hash"]
+    # A smooth scroll goes on after the last crossing it causes; the mark must still end on the section clicked.
+    await page.click('#document-view .section-link[data-goto="evidence"]')
+    await page.wait_for_function(
+        "document.querySelector('#document-view .section-link.on')?.dataset.goto === 'evidence'", timeout=3000
+    )
+    await page.wait_for_timeout(1500)
+    state = await section_state(page)
+    expect(state["on"] == ["evidence"], f"once the smooth scroll stopped the bar marks {state['on']}")
+    await page.evaluate("scrollTo(0, 0)")
+    await page.emulate_media(reduced_motion="reduce")  # an instant jump, so the check reads where it landed
+    for key in ("evidence", "figures", "samples"):
+        await page.click(f'#document-view .section-link[data-goto="{key}"]')
+        await page.wait_for_timeout(300)
+        state = await section_state(page)
+        expect(abs(state["barTop"] - 56) <= 1, f"the bar is not stuck under the topbar: {state['barTop']}")
+        top = state["tops"][key]
+        at_end = await page.evaluate("innerHeight + scrollY >= document.documentElement.scrollHeight - 2")
+        expect(
+            state["barBottom"] <= top <= state["barBottom"] + 40 or (at_end and 0 < top < 900),
+            f"{key} lands at {top}px (bar ends at {state['barBottom']}px)",
+        )
+        expect(state["on"] == [key], f"after a click on {key} the bar marks {state['on']}")
+        expect(state["hash"] == hash_before, f"a section click changed the URL to {state['hash']}")
+    expect(await page.evaluate("document.querySelector('[data-section=samples]').open"), "样品与通道 stayed folded")
+    # A scroll the bar did not make: the mark follows it.
+    await page.evaluate(
+        "scrollTo(0, document.querySelector('[data-section=figures]').getBoundingClientRect().top"
+        " + scrollY - 56 - 42 - 8)"
+    )
+    await page.wait_for_function(
+        "document.querySelector('#document-view .section-link.on')?.dataset.goto === 'figures'", timeout=3000
+    )
+    await page.evaluate("scrollTo(0, 0)")
+    await page.wait_for_function(
+        "document.querySelector('#document-view .section-link.on')?.dataset.goto === 'results'", timeout=3000
+    )
+
+
+@check("a fact deep link still selects its fact and shows it on screen, below the section bar")
+async def section_fact_link(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"], fact=2)
+    await page.wait_for_selector('tr.selected[data-index="2"]')
+    expect(await page.evaluate("location.hash") == f"#/doc/{docs['A']}/fact/2", "the deep link lost its fact")
+    box = await page.evaluate("document.querySelector('tr.selected').getBoundingClientRect().toJSON()")
+    bar = await page.evaluate("document.querySelector('#document-view .section-bar').getBoundingClientRect().bottom")
+    expect(bar <= box["top"] and box["bottom"] <= 901, f"the selected fact is at {box}, the bar ends at {bar}")
+    highlighted = await page.locator('[data-slot="viewer"] .hl').count()
+    expect(highlighted > 0, "the viewer highlights none of the fact's blocks")
+    await page.click('#document-view .section-link[data-goto="results"]')
+    await page.wait_for_timeout(300)
+    expect(await page.evaluate("location.hash") == f"#/doc/{docs['A']}/fact/2", "a section click dropped the fact")
+    expect(await page.locator('tr.selected[data-index="2"]').count() == 1, "a section click unselected the fact")
+
+
+@check("the log appears in the section bar once a job runs")
+async def section_log(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["W"])
+    expect("日志" not in (await section_state(page))["labels"], "日志 is offered with no job")
+    await page.click('#document-view [data-action="run"]')
+    await page.wait_for_function(
+        "[...document.querySelectorAll('#document-view .section-link')]"
+        ".some((b) => !b.hidden && b.textContent === '日志')",
+        timeout=5000,
+    )
+    await jobs_idle(page)
 
 
 @check("a phone-width page does not scroll sideways and keeps 重新处理 on screen", width=390, height=844)
