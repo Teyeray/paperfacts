@@ -283,7 +283,11 @@ this file is the part that is easy to get wrong.
   `#file-input` still uploads at once, with the dialog's options as ticked, because the e2e checks and scripts feed it.
   「忽略缓存」 for a bulk run is the run-all confirmation's own box, never the upload dialog's.
 - A results table is a list of columns `{header, head, html(item), text(item)}` (`table.js`); the rendered
-  rows and the clipboard copy are both built from that one list.
+  rows and the clipboard copy are both built from that one list. A sortable column also has `key` (a field's name, or
+  `paper` / `entity` / `counts`) and `sort(item)`; the home table sorts its items (`sortItems`, blanks last) before
+  both are built, and its sort is `corpus.js`'s `getSort` / `setSort` / `onSortChange`, the hooks the URL state binds
+  to. The density is `data-density` on `.shell`, set by `table.js`'s switch and kept in localStorage
+  (`paperfacts.density`).
 - Controls that re-render their own table carry a `data-focus` key and the re-render goes through
   `keepFocus`, so keyboard focus survives. Clickable rows and cells are focusable and act on Enter/Space.
 - The HTTP edge (`web/app.py`'s one middleware): Basic auth compared as UTF-8 bytes, a same-origin check
