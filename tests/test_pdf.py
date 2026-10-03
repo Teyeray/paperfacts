@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pypdfium2 as pdfium
 import pytest
 
 from paperfacts.errors import UnreadablePdfError
@@ -303,6 +304,42 @@ def test_a_part_pdfium_cannot_open_is_named_by_its_index(tmp_path: Path):
 
     assert excinfo.value.part == 1
     assert "part 1" in str(excinfo.value)
+
+
+def test_a_part_whose_pages_pdfium_cannot_import_is_named_by_its_index(tmp_path: Path, monkeypatch):
+    main = make_blank_pdf(tmp_path / "main.pdf", [(300.0, 400.0)]).read_bytes()
+    si = make_blank_pdf(tmp_path / "si.pdf", [(500.0, 600.0)]).read_bytes()
+    real_import = pdfium.PdfDocument.import_pages
+    calls = []
+
+    def import_pages(self, pdf, *args, **kwargs):
+        calls.append(pdf)
+        if len(calls) == 2:
+            raise pdfium.PdfiumError("Failed to import pages.")
+        return real_import(self, pdf, *args, **kwargs)
+
+    monkeypatch.setattr(pdfium.PdfDocument, "import_pages", import_pages)
+
+    with pytest.raises(UnreadablePdfError) as excinfo:
+        merge_pdfs([main, si])
+
+    assert excinfo.value.part == 1
+    assert "Failed to import pages" in excinfo.value.detail
+
+
+def test_a_merge_that_cannot_be_saved_blames_no_part(tmp_path: Path, monkeypatch):
+    main = make_blank_pdf(tmp_path / "main.pdf", [(300.0, 400.0)]).read_bytes()
+
+    def save(self, *args, **kwargs):
+        raise pdfium.PdfiumError("Failed to save document.")
+
+    monkeypatch.setattr(pdfium.PdfDocument, "save", save)
+
+    with pytest.raises(UnreadablePdfError) as excinfo:
+        merge_pdfs([main])
+
+    assert excinfo.value.part is None
+    assert "could not be saved" in str(excinfo.value)
 
 
 def test_merging_nothing_is_refused():

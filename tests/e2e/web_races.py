@@ -1309,6 +1309,43 @@ async def section_log(page: Page, base: str, docs: dict[str, str], _: Path) -> N
     await jobs_idle(page)
 
 
+async def section_margin(page: Page) -> str | None:
+    return await page.evaluate("import('/sections.js').then((sections) => sections.sectionBarMargin())")
+
+
+async def wait_margin_change(page: Page, before: str | None) -> str | None:
+    deadline = time.monotonic() + 3
+    while (now := await section_margin(page)) == before:
+        expect(time.monotonic() < deadline, f"the section bar's reading line stayed {before!r}")
+        await asyncio.sleep(0.05)
+    return now
+
+
+def margin_px(margin: str | None) -> list[float]:
+    return [float(part.removesuffix("px")) for part in (margin or "").split()]
+
+
+@check("the section bar's reading line follows a resize and the layout switch, and goes with the page")
+async def section_resize(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    first = await section_margin(page)
+    top, _, bottom, _ = margin_px(first)
+    expect(-top - bottom + 1 == 900, f"at 900 px the line's margin reads {first!r}")
+    await page.set_viewport_size({"width": 1440, "height": 600})
+    shorter = await wait_margin_change(page, first)
+    top, _, bottom, _ = margin_px(shorter)
+    expect(-top - bottom + 1 == 600, f"at 600 px the line's margin reads {shorter!r}")
+    # Narrow: the bar no longer sticks, so the line is just under the topbar.
+    await page.set_viewport_size({"width": 800, "height": 600})
+    narrow = await wait_margin_change(page, shorter)
+    expect(margin_px(narrow)[0] > margin_px(shorter)[0], f"the narrow line {narrow!r} is not above {shorter!r}")
+    await home(page, base)
+    expect(await section_margin(page) is None, "the section bar outlived its page")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+    await page.wait_for_timeout(300)
+    expect(await section_margin(page) is None, "a resize after the page was left restarted its bar")
+
+
 @check("a phone-width page does not scroll sideways and keeps 重新处理 on screen", width=390, height=844)
 async def narrow_doc(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
@@ -2640,6 +2677,88 @@ async def explore_panel(page: Page, base: str, docs: dict[str, str], _: Path) ->
     await page.wait_for_selector("#corpus-view .active-filters")
     label = (await page.text_content('#corpus-view [data-focus="filter-toggle"]') or "").strip()
     expect(label == "筛选1", f"the button reads {label!r}")
+
+
+async def refresh_rail(page: Page) -> None:
+    """One refresh of the rail's list, as the 5 s timer makes while a job runs; resolves once it has painted."""
+    await page.evaluate("import('/library.js').then((library) => library.loadLibrary())")
+
+
+async def status_count(page: Page, key: str) -> str:
+    return (await page.text_content(f'#corpus-view .filter-check:has([data-focus="status:{key}"]) .n') or "").strip()
+
+
+@check("a rail refresh that moves no status leaves a range box being typed into alone; one that does redraws")
+async def explore_rail_refresh(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_explore(page, base, docs)
+    await page.check('#corpus-view [data-focus="status:unfinished"]')
+    await wait_ids(page, ["S-P3"])
+    expect(await status_count(page, "conflict") == "1", f"有冲突 counts {await status_count(page, 'conflict')!r}")
+    box = '#corpus-view [data-focus="min:t"]'
+    await page.fill(box, "8")  # typed, not committed (no Enter, no change)
+    await refresh_rail(page)
+    await refresh_rail(page)
+    expect(await page.input_value(box) == "8", f"a refresh reset the typed range to {await page.input_value(box)!r}")
+    expect(await page.evaluate("document.activeElement.dataset.focus") == "min:t", "a refresh moved the focus")
+    expect("f.t=" not in await page.evaluate("location.hash"), "the typed range was committed")
+
+    # B (P1) is now unfinished and has no conflict: the table and both counts follow the next refresh. The redraw takes
+    # the focused box away, which commits what was typed in it (t ≥ 8) as leaving the box would, once and whole.
+    async def moved(route: Route) -> None:
+        response = await route.fetch()
+        listed = await response.json()
+        for doc in listed:
+            if doc["document_id"] == docs["B"]:
+                doc["profiles_done"] = []
+                doc["counts"] = {**(doc.get("counts") or {}), "conflict": 0}
+        await route.fulfill(response=response, json=listed)
+
+    await page.route(re.compile(r"/api/documents(\?|$)"), moved)
+    await refresh_rail(page)
+    await wait_ids(page, ["S-P1"])
+    counts = (await status_count(page, "conflict"), await status_count(page, "unfinished"))
+    expect(counts == ("0", "2"), f"after the refresh 有冲突 / 未完成 count {counts}")
+    hash_ = await page.evaluate("location.hash")
+    expect("f.t=8%7E" in hash_, f"the address reads {hash_}")
+    expect(await page.input_value(box) == "8", f"the committed range reads {await page.input_value(box)!r}")
+    tables = await page.locator("#corpus-view table").count()
+    expect(tables == 1, f"the home view holds {tables} tables")
+    await page.uncheck('#corpus-view [data-focus="status:unfinished"]')
+    await wait_ids(page, ["S-P1", "S-P2"])
+
+
+@check("a header click sorts the home table with one redraw")
+async def explore_sort_once(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_explore(page, base, docs)
+    await page.evaluate(
+        """() => {
+          window.__draws = 0;
+          new MutationObserver((changes) => {
+            for (const change of changes)
+              for (const node of change.addedNodes) if (node.classList?.contains('explorer')) window.__draws += 1;
+          }).observe(document.getElementById('corpus-view'), { childList: true });
+        }"""
+    )
+    await page.click('#corpus-view [data-sort="t"]')
+    await page.wait_for_function("location.hash.includes('sort=t')")
+    await page.wait_for_timeout(200)
+    draws = await page.evaluate("window.__draws")
+    expect(draws == 1, f"one sort click drew the table {draws} times")
+
+
+@check("a search typed just before a profile switch is not written into the other profile's address")
+async def explore_search_switch(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['multi']}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) #corpus-search")
+    # The other profile's table is slow to come, so nothing redraws the search box before the pause is over.
+    await page.route(re.compile(r"/api/dataset\?.*profile="), delayed(1.0))
+    await page.click("#corpus-search")
+    await page.keyboard.type("abc")
+    await page.select_option("#profile-select", DEMO)  # well within the search's 120 ms pause
+    await page.wait_for_function(f"location.hash === '#/p/{DEMO}'")
+    await page.wait_for_timeout(400)
+    hash_ = await page.evaluate("location.hash")
+    expect(hash_ == f"#/p/{DEMO}", f"the other profile's address became {hash_!r}")
 
 
 @check(

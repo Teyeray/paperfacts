@@ -11,9 +11,9 @@
 // full-width "ＰＥＴ" finds "PET"); with 含条件描述 its conditions text too. It matches the text as written: there is
 // no translation, so a Chinese word does not find a value the paper wrote in English.
 
-import { escapeHtml } from "./html.js";
+import { escapeHtml, readStored, writeStored } from "./html.js";
 import { homeQueryFromHash, setHomeQuery } from "./router.js";
-import { inEntity, state, uiCopy } from "./state.js";
+import { inEntity, isCurrent, state, uiCopy } from "./state.js";
 import { filterChips, filterParams, isFiltering, noFilters, passes, readFilters } from "./filters.js";
 
 const SEARCH_DEBOUNCE_MS = 120;
@@ -133,7 +133,12 @@ function buildSearchBar() {
   input.addEventListener("input", () => {
     clear.hidden = !input.value;
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => updateQuery({ q: input.value.trim() }), SEARCH_DEBOUNCE_MS);
+    // Typed under this view: a write that comes due after the reader moved on (another profile's home, whose query
+    // this is not) is dropped.
+    const generation = state.generation;
+    searchTimer = setTimeout(() => {
+      if (isCurrent(generation)) updateQuery({ q: input.value.trim() });
+    }, SEARCH_DEBOUNCE_MS);
   });
   clear.addEventListener("click", () => {
     clearTimeout(searchTimer);
@@ -152,21 +157,8 @@ function buildSearchBar() {
 
 // Whether the filter panel is open: one choice per browser, open by default on a wide screen.
 export function panelOpen() {
-  try {
-    const stored = localStorage.getItem(PANEL_KEY);
-    if (stored !== null) return stored === "1";
-  } catch {
-    // no storage: the default below
-  }
-  return window.matchMedia("(min-width: 961px)").matches;
-}
-
-function setPanelOpen(open) {
-  try {
-    localStorage.setItem(PANEL_KEY, open ? "1" : "0");
-  } catch {
-    // not remembered past this page
-  }
+  const stored = readStored(PANEL_KEY);
+  return stored === null ? window.matchMedia("(min-width: 961px)").matches : stored === "1";
 }
 
 // 筛选, with the number of active filters; it opens and closes the panel and redraws.
@@ -180,7 +172,7 @@ export function filterToggle(count, rerender) {
   button.setAttribute("aria-controls", "filter-panel");
   button.innerHTML = `筛选${count ? `<span class="n">${count}</span>` : ""}`;
   button.addEventListener("click", () => {
-    setPanelOpen(!panelOpen());
+    writeStored(PANEL_KEY, panelOpen() ? "0" : "1");
     rerender();
   });
   return button;
