@@ -208,7 +208,7 @@ this file is the part that is easy to get wrong.
   `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
   `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading
   a profile file is `profile_loader.py`. `workbook`, `columns`, `readings`, `ui_copy`, `profile_loader`, `llm`,
-  `config`, `cli`, `workflow`, `batch`, `profile_view` and `profile_check` are in no key list, and `tests/test_keys_unhashed.py`
+  `config`, `cli`, `workflow`, `batch`, `stored`, `profile_view` and `profile_check` are in no key list, and `tests/test_keys_unhashed.py`
   holds that. Do not move display, storage or loading code into a hashed module. The prompt preview
   (`profile_view.prompt_sections`, what `paperfacts prompts` prints and `/api/profiles/<name>/prompts` returns) is
   assembled in `profile_view.py`, never in `prompts.py`; `tests/fixtures/cli_prompts/` pins its output.

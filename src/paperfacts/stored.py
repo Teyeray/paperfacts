@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 from paperfacts.compare import ComparisonReport
@@ -210,3 +211,16 @@ def is_finished(layout: DataLayout, document_id: str, *, extractor_key: str, com
     return _current(
         layout, document_id, layout.dataset_json_path(document_id, extractor_key, comparison_key), _dataset_hashes
     )
+
+
+def finished_at(layout: DataLayout, document_id: str, *, extractor_key: str, comparison_key: str) -> str | None:
+    """When the run under these keys finished, as UTC ISO 8601 to the second: the modification time of its dataset,
+    the last file a run writes. None while the document is not finished (:func:`is_finished`), so a table of
+    another parse never dates a run that has to be redone."""
+    if not is_finished(layout, document_id, extractor_key=extractor_key, comparison_key=comparison_key):
+        return None
+    try:
+        mtime = layout.dataset_json_path(document_id, extractor_key, comparison_key).stat().st_mtime
+    except FileNotFoundError:  # removed between the two reads
+        return None
+    return datetime.fromtimestamp(mtime, UTC).isoformat(timespec="seconds")
