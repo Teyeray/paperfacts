@@ -58,6 +58,10 @@ export const state = {
   // The profile the URL routes to: null is the server's default (#/…), a name is #/p/<name>/…. Set by the router
   // only; a load reads it once, before its first await, and asks every per-profile route under that value.
   profileName: null,
+  // The home view's URL query (`#/?q=…`) as { key: value }, {} when it has none; null on every other view. Set by the
+  // router only (a route, a hashchange of the query alone, or a `setHomeQuery` write), so it is current when a load
+  // lands, whatever the URL said when the load began.
+  homeQuery: null,
   currentProfile: null, // the profile the open document was loaded under (with `current`)
   shownProfile: null, // the profile the view on screen was drawn under (with `profile`, its view)
   otherJob: null,  // an active job on the open document under another profile, or null
