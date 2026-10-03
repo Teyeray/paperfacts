@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts import storage
 from paperfacts.models import DocumentInput
 from paperfacts.storage import DataLayout, DocumentIdentity, ensure_identity, mark_uploaded, read_identity
 from support.factories import DOC_ID
@@ -59,6 +60,29 @@ def test_ensure_identity_is_idempotent_and_keeps_the_first_record(layout: DataLa
 
     assert second == first
     assert read_identity(layout, DOC_ID).name == "first.pdf"
+
+
+def test_of_two_concurrent_first_writers_the_first_identity_wins(
+    layout: DataLayout, document: DocumentInput, monkeypatch: pytest.MonkeyPatch
+):
+    # The second upload read no identity before the first one's landed: it must not replace it, and is handed the
+    # record on disk, not its own.
+    first = ensure_identity(layout, document, name="first.pdf", uploaded=True)
+    on_disk = layout.identity_path(DOC_ID).read_bytes()
+    reads = []
+    real_read = storage.read_identity
+
+    def read_identity(*args):
+        reads.append(args)
+        return None if len(reads) == 1 else real_read(*args)
+
+    monkeypatch.setattr(storage, "read_identity", read_identity)
+
+    second = storage.ensure_identity(layout, document, name="second.pdf")
+
+    assert second == first
+    assert layout.identity_path(DOC_ID).read_bytes() == on_disk
+    assert [p.name for p in layout.identity_path(DOC_ID).parent.iterdir() if p.name.endswith(".tmp")] == []
 
 
 def test_the_identity_is_addressable_by_the_full_sha_and_by_the_directory_name(
