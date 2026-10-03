@@ -130,7 +130,7 @@ def test_the_dataset_is_returned_once_it_is_on_disk(
     assert body["paper_row"] == {}
     assert body["quality_rows"] == []
     # The columns come from the profile, whatever the file stored with the table.
-    assert body["fields"] == [column.model_dump() for column in field_columns(tco_profile)]
+    assert body["fields"] == [column.model_dump(mode="json") for column in field_columns(tco_profile)]
 
 
 def test_a_label_edit_shows_without_a_rerun(settings: Settings, library: Library, parsed_only: str):
@@ -248,7 +248,7 @@ def test_the_corpus_carries_one_row_per_document_with_a_dataset(
 
     assert [row["document_id"] for row in body["rows"]] == [parsed_only]
     # The profile's columns, not the one column the stored payload carried.
-    assert body["fields"] == [column.model_dump() for column in field_columns(tco_profile)]
+    assert body["fields"] == [column.model_dump(mode="json") for column in field_columns(tco_profile)]
     row = body["rows"][0]
     assert row["paper_row"]["thickness"] == 300
     assert row["sample_count"] == 2
@@ -256,6 +256,49 @@ def test_the_corpus_carries_one_row_per_document_with_a_dataset(
     assert [sample["sample_id"] for sample in row["sample_rows"]] == ["S1", "S2"]
     assert row["name"]
     assert "fields" not in row  # the field list travels once, at the top level
+
+
+def test_each_corpus_column_names_its_group_and_categories(client: TestClient, library: Library, parsed_only: str):
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only))
+
+    fields = {field["name"]: field for field in client.get("/api/dataset").json()["fields"]}
+
+    assert fields["mode"]["group"] == "process"
+    assert fields["mode"]["categories"] == ["DC", "RF", "pulsed DC", "DC+RF", "HiPIMS"]
+    assert fields["thickness"]["group"] == "film"
+    assert fields["thickness"]["categories"] == []
+
+
+def test_a_corpus_row_carries_its_article_type_and_the_canonical_category_of_each_value(
+    client: TestClient, library: Library, parsed_only: str
+):
+    # Cells keep the text the paper wrote; the categories beside them are what each names, parallel to sample_rows.
+    payload = corpus_payload(parsed_only, samples=5)
+    written = ["RF", "rf-magnetron sputtering", "DC and RF", None, "sputtered"]
+    payload["sample_rows"] = [{**row, "mode": mode} for row, mode in zip(payload["sample_rows"], written, strict=True)]
+    payload["paper_row"] = {**payload["paper_row"], "mode": "rf-magnetron sputtering"}
+    seed_dataset(library, parsed_only, payload)
+    lane = make_lane(document_id=DOC_SHA, extractor_key=library.extractor_key).model_copy(
+        update={"article_type": "review"}
+    )
+    lane.write(library.layout.extraction_path(parsed_only, "mineru", library.extractor_key))
+
+    row = client.get("/api/dataset").json()["rows"][0]
+
+    assert row["article_type"] == "review"
+    assert [sample["mode"] for sample in row["sample_rows"]] == written
+    assert row["sample_categories"] == [{"mode": ["RF"]}, {"mode": ["RF"]}, {"mode": ["DC+RF"]}, {}, {}]
+    assert row["paper_categories"] == {"mode": ["RF"]}
+
+
+def test_an_ordinary_paper_has_no_article_type_in_the_corpus(client: TestClient, library: Library, parsed_only: str):
+    seed_dataset(library, parsed_only, corpus_payload(parsed_only))
+
+    row = client.get("/api/dataset").json()["rows"][0]
+
+    assert row["article_type"] is None
+    assert row["paper_categories"] == {}
+    assert row["sample_categories"] == [{}, {}]
 
 
 def test_a_dataset_under_a_stale_key_is_left_out_of_the_corpus(client: TestClient, library: Library, parsed_only: str):

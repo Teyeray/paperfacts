@@ -18,6 +18,11 @@ let refreshFailures = 0;
 // Refreshes overlap (the timer, ↻, a finished job, run-all, an upload); each takes a token and only the
 // newest one paints, so an older list that arrives late can never overwrite a newer one.
 let refreshToken = 0;
+// Told when a refresh replaced state.docs: the home table's status filters are joined with it.
+let docsListener = null;
+export const onDocsChange = (listener) => {
+  docsListener = listener;
+};
 // Stacked layout: the rail sits above the content, so its list is folded away rather than pushing the
 // home table and every document ~3000 px down the page.
 const WIDE = window.matchMedia("(min-width: 961px)");
@@ -54,6 +59,7 @@ export async function loadLibrary() {
     slot("other-job")?.classList.add("hidden");
   }
   renderLibrary();
+  docsListener?.();
   refreshTimer = state.activeDocs.size ? setTimeout(loadLibrary, REFRESH_MS) : null;
 }
 
@@ -82,7 +88,8 @@ const filter = { query: "", chips: new Set() };
 // Finished under the profile on screen: the server's `profiles_done` names every served profile the paper is
 // exported under, the one asked about included, so this is the same "finished" run-all skips. The default is routed
 // as null and compared by its name from /api/profiles; until that list has answered, any finished profile counts.
-function finishedHere(doc) {
+// The home table's 未完成 filter asks the same question.
+export function finishedHere(doc) {
   const done = doc.profiles_done ?? [];
   const name = state.profileName ?? state.defaultProfile;
   return name == null ? done.length > 0 : done.includes(name);

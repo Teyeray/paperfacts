@@ -6,14 +6,24 @@
 // and the page-wide drop), document (document view, home view, profile page and the missing-document /
 // missing-profile states), profile (the read-only profile page's renderers), table (the results table and the
 // column model, sorting and the density switch), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
-// library-wide results table), facts (fact comparison), figures (chart readings), samples (sample records), job
+// library-wide results table), explorer (its search box, the home query and the flattened rows), filters (its filter
+// panel), facts (fact comparison), figures (chart readings), samples (sample records), job
 // (job progress), viewer (page-level provenance), check (the page that checks a pasted profile).
 
 import { api } from "./api.js";
 import { setupCheck, showCheck } from "./check.js";
+import { onSortChange, refreshCorpus } from "./corpus.js";
 import { showDocument, showEmpty, showMissing, showMissingProfile, showProfilePage } from "./document.js";
 import { toast } from "./html.js";
-import { loadLibrary, setupLibraryDisclosure, setupLibraryFilter, setupRailToggle, setupRunAll } from "./library.js";
+import { sortParam, updateQuery } from "./explorer.js";
+import {
+  loadLibrary,
+  onDocsChange,
+  setupLibraryDisclosure,
+  setupLibraryFilter,
+  setupRailToggle,
+  setupRunAll,
+} from "./library.js";
 import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
 import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
@@ -49,6 +59,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupSwitcher();
   setupCheck();
   document.getElementById("refresh-library").addEventListener("click", loadLibrary);
+  // The home table's sort is the home query's; a status filter re-filters when the rail's list changes.
+  onSortChange((sort) => updateQuery(sortParam(sort)));
+  onDocsChange(() => refreshCorpus({ docsChanged: true }));
   document.querySelector('#missing-view [data-action="retry"]').addEventListener("click", reloadView);
   applyUiCopy(document);
   // Settled apart: a profile list that fails does not make the backend unavailable (the page then runs on the
@@ -64,9 +77,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   installRouter({
     onDocument: showDocument,
     onEmpty: showEmpty,
-    // The home query changed under the same home view (typed, or arrived at): the table is not re-fetched, only the
-    // brand link follows it. A consumer of the query draws from state.homeQuery.
-    onHomeQuery: () => syncSwitcher(),
+    // The home query changed under the same home view (typed, or arrived at): the table is not re-fetched; the brand
+    // link follows it and the table on screen is redrawn from state.homeQuery.
+    onHomeQuery: () => {
+      syncSwitcher();
+      refreshCorpus();
+    },
     onMissing: showMissing,
     onMissingProfile: showMissingProfile,
     onProfile,

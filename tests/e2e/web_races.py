@@ -1311,14 +1311,17 @@ async def entity_corpus(page: Page, _: str, docs: dict[str, str], __: Path) -> N
     focused = await page.evaluate("document.activeElement.dataset.focus")
     expect(focused == "entity:wear_test", f"the focus moved to {focused!r}")
     heads = await page.locator("#corpus-view thead th").all_text_contents()
-    expect(heads[:3] == ["论文", "磨损测试", "可用/一致"], f"the wear test table's heads read {heads}")
+    # A secondary entity's rows are flattened rows, as a search's are: the sample's id first, its paper second.
+    expect(heads[:3] == ["磨损测试", "论文", "可用/一致"], f"the wear test table's heads read {heads}")
     expect(any("test_temperature" in head for head in heads), f"the wear test table lacks its field: {heads}")
     expect(not any("coating_thickness" in head or "precursor" in head for head in heads), f"other fields: {heads}")
     rows = page.locator("#corpus-view tbody tr")
     expect(await rows.count() == 1, f"the wear test table has {await rows.count()} rows")
     cells = await rows.first.locator("td").all_text_contents()
-    expect(cells[1] == "S1" and any(cell.startswith("S1 涂层") for cell in cells[2:]), f"the row reads {cells}")
-    expect(await page.evaluate("location.hash") == "#/", "the entity choice changed the address")
+    expect(cells[0] == "S1" and any(cell.startswith("S1 涂层") for cell in cells[2:]), f"the row reads {cells}")
+    # The entity shown is part of the home query (explorer.js), so a reload or a shared link shows the same table.
+    hash_ = await page.evaluate("location.hash")
+    expect(hash_ == "#/?e=wear_test", f"the entity choice is not in the address: {hash_!r}")
     expect(await page.get_attribute("#corpus-view a.download", "href") == download, "the Excel link changed")
     await page.evaluate("navigator.clipboard.writeText = async (text) => { window.__copied = text; }")
     await page.click("#corpus-view button.copy-table")
@@ -1326,10 +1329,11 @@ async def entity_corpus(page: Page, _: str, docs: dict[str, str], __: Path) -> N
     expect(len(copied) == 2, f"the copy has {len(copied)} lines: {copied}")
     header, line = (row.split("\t") for row in copied)
     expect(header[:3] == heads[:3] and len(header) == len(heads), f"the copied header reads {header}")
-    expect(line[0] == cells[0] and line[1] == "S1" and "S1" in line[3:], f"the copied row reads {line}")
+    expect(line[0] == "S1" and line[1] == cells[1] and "S1" in line[3:], f"the copied row reads {line}")
     await page.click('#corpus-view [data-focus="entity:coating"]')
     await page.wait_for_selector('#corpus-view [data-focus="entity:coating"][aria-pressed="true"]')
     expect("2 个涂层" in (await page.text_content("#corpus-view") or ""), "the primary table did not come back")
+    expect(await page.evaluate("location.hash") == "#/", "the primary entity left a query behind")
 
 
 # ---- the home table as a data table: sort, density, frozen columns, toolbar -----------------------------------------
@@ -1486,7 +1490,7 @@ async def frozen_1280(page: Page, base: str, docs: dict[str, str], _: Path) -> N
     await frozen_columns(page, base, "compact")
 
 
-@check("the home toolbar is one row: 列, 显示空字段, 密度, 展开全部, the count, 复制, 下载; the explorer slot is empty")
+@check("the home toolbar is one row: 筛选, 列, 显示空字段, 密度, 展开全部, the count, 复制, 下载")
 async def toolbar(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await page.goto(f"{base}/#/")
     await page.wait_for_selector("#corpus-view:not(.hidden) table")
@@ -1498,8 +1502,8 @@ async def toolbar(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     expect(len(tops) >= 7 and max(tops) - min(tops) <= 4, f"the toolbar wraps: centres at {tops}")
     picker = (await page.text_content('#corpus-view [data-focus="picker"]') or "").strip()
     expect(picker.startswith("列"), f"the field picker reads {picker!r}")
-    slot = await page.locator('#corpus-view [data-slot="explore"]').inner_html()
-    expect(slot == "", f"the explorer slot holds {slot!r}")
+    slot = (await page.text_content('#corpus-view [data-slot="explore"]') or "").strip()
+    expect(slot == "筛选", f"the explorer slot holds {slot!r}")
     count = (await page.text_content("#corpus-view .row-count") or "").strip()
     expect(re.fullmatch(r"\d+ 篇论文 · \d+ 个样品", count) is not None, f"the row count reads {count!r}")
 
@@ -2163,6 +2167,363 @@ async def check_across_switch(page: Page, _: str, docs: dict[str, str], __: Path
     await page.wait_for_selector("#check-result .check-verdict")
     verdict = await page.text_content("#check-result .check-verdict") or ""
     expect("有效" in verdict, f"the answer for the text on screen reads {verdict!r}")
+
+
+# ---- the explorer: the search box, the filter panel and the home query that holds them -------------------------------
+
+# The explorer corpus, served as /api/dataset in place of the real one: papers P1-P3 with one sample each (t = 80 / 85 /
+# blank, r = 5 / 2 / 9, mode written "RF" / "rf-magnetron sputtering" / "DC and RF", which the server reads as the
+# categories RF / RF / DC+RF), a value spanning eight decades (rho), an interval (iv) and a list (lst); P2 is a review;
+# Z has no sample at all. Each paper borrows a seeded document's id, so its link opens and the rail's status joins it:
+# P1 is B (it has conflicts), P3 is U (not finished under this profile).
+EXPLORE_PAPERS = {
+    "P1": {
+        "doc": "B",
+        "t": 80.0,
+        "r": 5.0,
+        "mode": "RF",
+        "cat": "RF",
+        "rho": 1e-4,
+        "iv": [10.0, 20.0],
+        "lst": [1.0, 50.0],
+    },
+    "P2": {
+        "doc": "A",
+        "t": 85.0,
+        "r": 2.0,
+        "mode": "rf-magnetron sputtering",
+        "cat": "RF",
+        "rho": 10.0,
+        "iv": [30.0, None],
+        "lst": [5.0],
+    },
+    "P3": {"doc": "U", "t": None, "r": 9.0, "mode": "DC and RF", "cat": "DC+RF", "rho": 1e4, "iv": None, "lst": None},
+}
+EXPLORE_ZERO = "Z 无数据的论文"
+EXPLORE_REVIEW = "P2"
+MODES = ["DC", "RF", "pulsed DC", "DC+RF", "HiPIMS"]
+
+
+async def explore_corpus(page: Page, docs: dict[str, str]) -> None:
+    """Serve the explorer corpus as /api/dataset: the real answer, with these fields and rows in place of its own."""
+
+    async def corpus(route: Route) -> None:
+        response = await route.fetch()
+        data = await response.json()
+        base = {
+            "label": "",
+            "scope": "sample",
+            "description": "",
+            "cardinality": "one",
+            "group": "film",
+            "categories": [],
+        }
+        data["fields"] = [
+            {**base, "name": "t", "kind": "numeric", "unit": "nm"},
+            {**base, "name": "r", "kind": "numeric", "unit": "Ω/sq"},
+            {**base, "name": "mode", "kind": "text", "unit": None, "group": "process", "categories": MODES},
+            {**base, "name": "rho", "kind": "numeric", "unit": "Ω·cm"},
+            {**base, "name": "iv", "kind": "interval", "unit": "nm"},
+            {**base, "name": "lst", "kind": "numeric", "unit": "nm", "cardinality": "many"},
+        ]
+        rows = []
+        for name, paper in EXPLORE_PAPERS.items():
+            sample = {
+                "sample_id": f"S-{name}",
+                "sample_label": f"label {name}",
+                "conditions": "anneal in Ar" if name == "P1" else "",
+                "available_fields": 3,
+                "agree_fields": 2,
+                **{field: paper[field] for field in ("t", "r", "mode", "rho", "iv", "lst")},
+            }
+            rows.append(
+                {
+                    "document_id": docs[paper["doc"]],
+                    "name": name,
+                    "paper_row": sample,
+                    "sample_count": 1,
+                    "sample_rows": [sample],
+                    "article_type": "review" if name == EXPLORE_REVIEW else None,
+                    "paper_categories": {"mode": [paper["cat"]]},
+                    "sample_categories": [{"mode": [paper["cat"]]}],
+                }
+            )
+        rows.append(
+            {
+                "document_id": docs["C"],
+                "name": EXPLORE_ZERO,
+                "paper_row": {},
+                "sample_count": 0,
+                "sample_rows": [],
+                "article_type": None,
+                "paper_categories": {},
+                "sample_categories": [],
+            }
+        )
+        data["rows"] = rows
+        await route.fulfill(response=response, json=data)
+
+    await page.route("**/api/dataset", corpus)
+
+
+async def open_explore(page: Page, base: str, docs: dict[str, str], query: str = "") -> None:
+    await explore_corpus(page, docs)
+    await page.goto(f"{base}/#/" + (f"?{query}" if query else ""))
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await page.wait_for_selector("#doc-list .doc-item", state="attached")  # the status filters join the rail's list
+
+
+# Each row's first cell without the label under it (a sample's id, a paper row's "无<entity>", or unfiltered a paper's
+# name), then its second cell.
+ROWS = """() => [...document.querySelectorAll('#corpus-view tbody tr')].map((tr) => {
+  const first = tr.cells[0].cloneNode(true);
+  const label = first.querySelector('small');
+  if (label && label.textContent.trim() !== first.textContent.trim()) label.remove();
+  return [first.textContent.trim(), tr.cells[1].textContent.trim()];
+})"""
+
+
+async def shown_rows(page: Page) -> list[list[str]]:
+    return await page.evaluate(ROWS)
+
+
+async def shown_ids(page: Page) -> list[str]:
+    return [row[0] for row in await shown_rows(page)]
+
+
+async def wait_ids(page: Page, expected: list[str]) -> None:
+    deadline = time.monotonic() + 3
+    while (got := await shown_ids(page)) != expected:
+        expect(time.monotonic() < deadline, f"the rows read {got}, not {expected}")
+        await asyncio.sleep(0.05)
+
+
+async def set_range(page: Page, field: str, low: str = "", high: str = "") -> None:
+    for end, value in (("min", low), ("max", high)):
+        box = f'#corpus-view [data-focus="{end}:{field}"]'
+        await page.fill(box, value)
+        await page.press(box, "Enter")
+
+
+def range_box(field: str) -> str:
+    return f'#corpus-view .range-filter[data-field="{field}"]'
+
+
+@check("a range filter keeps exactly the values inside it; a blank never passes and the panel counts it")
+async def explore_range(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_explore(page, base, docs)
+    expect(await shown_ids(page) != ["S-P2"], "the table starts filtered")
+    note = (await page.text_content(f"{range_box('t')} .filter-note") or "").strip()
+    expect(note == "1 个无确定值，不参与筛选", f"t's panel note reads {note!r}")
+    await set_range(page, "t", "85")
+    await wait_ids(page, ["S-P2"])
+    expect(
+        "f.t=85%7E" in await page.evaluate("location.hash"), f"the address reads {await page.evaluate('location.hash')}"
+    )
+    chips = await page.locator("#corpus-view .active-filters .chip").all_text_contents()
+    expect([chip.rstrip("×").strip() for chip in chips] == ["t ≥ 85 nm"], f"the active filters read {chips}")
+    count = (await page.text_content("#corpus-view .row-count") or "").strip()
+    expect(count == "1 篇论文 · 1 个样品（共 4 篇）", f"the row count reads {count!r}")
+    heads = await page.locator("#corpus-view thead th").all_text_contents()
+    expect(heads[:3] == ["样品", "论文", "可用/一致"], f"flattened rows put the id first: {heads[:3]}")
+    # The two ends of the slider show the range, and the bars inside it are marked.
+    expect(await page.locator(f"{range_box('t')} .histogram .bar.in").count() > 0, "no bar is marked inside the range")
+    # The slider sets the same filter from the keyboard: the low end moved to the top leaves t ≥ 85 (the largest t).
+    await set_range(page, "t")
+    await wait_ids(page, ["P1", "P2", "P3", EXPLORE_ZERO])
+    await page.focus('#corpus-view [data-focus="range-lo:t"]')
+    await page.keyboard.press("End")
+    await wait_ids(page, ["S-P2"])
+    expect(await page.input_value('#corpus-view [data-focus="min:t"]') == "85", "the slider did not fill the box")
+    # An interval passes when it overlaps the range; a list when any element is inside; a decade-spanning field is
+    # drawn on a log scale, the others not.
+    await set_range(page, "t")
+    await set_range(page, "iv", "15", "25")
+    await wait_ids(page, ["S-P1"])
+    await set_range(page, "iv", "25")
+    await wait_ids(page, ["S-P2"])
+    await set_range(page, "iv")
+    await set_range(page, "lst", "40")
+    await wait_ids(page, ["S-P1"])
+    expect("对数刻度" in (await page.text_content(f"{range_box('rho')} legend") or ""), "rho is not on a log scale")
+    expect("对数刻度" not in (await page.text_content(f"{range_box('t')} legend") or ""), "t is on a log scale")
+    # Removing the chip removes the filter.
+    await page.click('#corpus-view .active-filters [data-focus="remove:f:lst"]')
+    await wait_ids(page, ["P1", "P2", "P3", EXPLORE_ZERO])
+    expect(await page.locator("#corpus-view .active-filters").count() == 0, "the chip row outlived its last filter")
+    expect(await page.evaluate("location.hash") == "#/", f"the address kept {await page.evaluate('location.hash')!r}")
+
+
+@check("category checkboxes filter on the server's canonical category, statuses join the rail, types the article")
+async def explore_categories(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_explore(page, base, docs)
+    counts = {
+        label: (await page.text_content(f'#corpus-view .filter-check:has([data-focus="pick:mode:{label}"]) .n') or "")
+        for label in ("RF", "DC+RF", "DC")
+    }
+    expect(counts == {"RF": "2", "DC+RF": "1", "DC": "0"}, f"the mode counts read {counts}")
+    await page.check('#corpus-view [data-focus="pick:mode:RF"]')
+    await wait_ids(page, ["S-P1", "S-P2"])
+    expect(await page.is_checked('#corpus-view [data-focus="pick:mode:RF"]'), "the box did not stay ticked")
+    focused = await page.evaluate("document.activeElement.dataset.focus")
+    expect(focused == "pick:mode:RF", f"the focus moved to {focused!r}")
+    await page.uncheck('#corpus-view [data-focus="pick:mode:RF"]')
+    await page.check('#corpus-view [data-focus="pick:mode:DC+RF"]')
+    await wait_ids(page, ["S-P3"])
+    await page.uncheck('#corpus-view [data-focus="pick:mode:DC+RF"]')
+    # 未完成 under the default profile: the rail's list says U (P3) is not finished under it.
+    await page.check('#corpus-view [data-focus="status:unfinished"]')
+    await wait_ids(page, ["S-P3"])
+    await page.uncheck('#corpus-view [data-focus="status:unfinished"]')
+    await page.check('#corpus-view [data-focus="status:conflict"]')
+    await wait_ids(page, ["S-P1"])
+    await page.uncheck('#corpus-view [data-focus="status:conflict"]')
+    await page.check('#corpus-view [data-focus="type:review"]')
+    await wait_ids(page, ["S-P2"])
+    # Two filters are both applied: a review that is unfinished is nothing here.
+    await page.check('#corpus-view [data-focus="status:unfinished"]')
+    await wait_ids(page, [])
+    expect(await page.is_visible("#corpus-view .explore-empty"), "an empty result does not say so")
+    await page.click("#corpus-view .explore-empty .clear-all")
+    # Unfiltered, the table is one row per paper again.
+    await wait_ids(page, ["P1", "P2", "P3", EXPLORE_ZERO])
+    expect(await page.evaluate("location.hash") == "#/", f"清除全部 left {await page.evaluate('location.hash')!r}")
+    # The research papers include the one without samples: a paper-level filter lists it as a paper row.
+    await page.check('#corpus-view [data-focus="type:research"]')
+    await wait_ids(page, ["S-P1", "S-P3", "无样品"])
+
+
+@check("the search finds a paper's samples, a sample-less paper by name, conditions only when asked; typing is local")
+async def explore_search(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    requests = dataset_requests(page)
+    await open_explore(page, base, docs)
+    expect(len(requests) == 1, f"the table was asked {len(requests)} times")
+    await page.click("#corpus-search")
+    await page.keyboard.type("ｐ2", delay=40)  # full width: NFKC folds it to "p2"
+    await wait_ids(page, ["S-P2"])
+    rows = await shown_rows(page)
+    expect(rows == [["S-P2", "P2综述"]], f"the P2 search reads {rows}")
+    marks = await page.locator("#corpus-view tbody mark").all_text_contents()
+    expect("P2" in marks, f"the match is not marked: {marks}")
+    expect(
+        await page.evaluate("location.hash") == "#/?q=%EF%BD%902",
+        f"the address reads {await page.evaluate('location.hash')}",
+    )
+    # Five more characters typed: no table load, the focus never left the box.
+    await page.fill("#corpus-search", "")
+    await page.keyboard.type("无数据的论", delay=60)
+    await wait_ids(page, ["无样品"])
+    expect(len(requests) == 1, f"typing asked for the table again ({len(requests)} requests)")
+    expect(await page.evaluate("document.activeElement.id") == "corpus-search", "typing lost the focus")
+    rows = await shown_rows(page)
+    expect(rows == [["无样品", EXPLORE_ZERO]], f"the sample-less paper reads {rows}")
+    # The conditions text is searched only with 含条件描述.
+    await page.fill("#corpus-search", "anneal")
+    await wait_ids(page, [])
+    await page.check("#corpus-view .search-cond input")
+    await wait_ids(page, ["S-P1"])
+    heads = await page.locator("#corpus-view thead th").all_text_contents()
+    expect("条件" in heads, f"the conditions column is not shown: {heads}")
+    # The copy is the visible rows, the id first.
+    await page.evaluate("navigator.clipboard.writeText = async (text) => { window.__copied = text; }")
+    await page.click("#corpus-view button.copy-table")
+    lines = [line.split("\t") for line in (await page.evaluate("window.__copied") or "").split("\n")]
+    expect(len(lines) == 2 and lines[1][:2] == ["S-P1", "P1"], f"the copy reads {lines}")
+    # The clear button empties the box and the address, and keeps the focus in the box.
+    await page.click("#corpus-view .search-clear")
+    await page.wait_for_function("location.hash === '#/?cond=1'")
+    expect(await page.input_value("#corpus-search") == "", "the box was not cleared")
+    expect(await page.evaluate("document.activeElement.id") == "corpus-search", "清除 lost the focus")
+    expect(len(requests) == 1, f"the search asked for the table again ({len(requests)} requests)")
+
+
+@check("a reload restores the search, the filters and the sort; another profile clears them")
+async def explore_round_trip(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_explore(page, base, docs)
+    await page.fill("#corpus-search", "S-P")
+    await wait_ids(page, ["S-P1", "S-P2", "S-P3"])
+    await page.check('#corpus-view [data-focus="pick:mode:RF"]')
+    await wait_ids(page, ["S-P1", "S-P2"])
+    await page.click('#corpus-view [data-sort="t"]')
+    await page.click('#corpus-view [data-sort="t"]')
+    await wait_ids(page, ["S-P2", "S-P1"])
+    hash_ = await page.evaluate("location.hash")
+    query = parse_qs(urlsplit(hash_[1:]).query)
+    expect(query == {"q": ["S-P"], "f.mode": ["RF"], "sort": ["-t"]}, f"the address holds {query}")
+    await page.reload()
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await wait_ids(page, ["S-P2", "S-P1"])
+    expect(await page.input_value("#corpus-search") == "S-P", "the search box is empty after a reload")
+    expect(await page.is_checked('#corpus-view [data-focus="pick:mode:RF"]'), "the RF box is unticked after a reload")
+    sort = await page.get_attribute('#corpus-view thead th:has([data-sort="t"])', "aria-sort")
+    expect(sort == "descending", f"the sort after a reload is {sort!r}")
+    # Back to the bare address: the table and every control follow, with no reload.
+    await page.evaluate("location.hash = '#/'")
+    await page.wait_for_function("document.querySelectorAll('#corpus-view tbody tr').length === 4")
+    expect(await page.input_value("#corpus-search") == "", "the search box kept a query the address dropped")
+
+
+@check("switching profile clears the search and filters; flattened rows follow the entity switch")
+async def explore_profiles(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
+    await page.goto(f"{docs['multi']}/#/?q=S1&f.thickness=50~")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await page.input_value("#corpus-search") == "S1", "the search box did not read the address")
+    await page.select_option("#profile-select", DEMO)
+    await page.wait_for_function(f"location.hash === '#/p/{DEMO}'")
+    await page.wait_for_selector('#corpus-view [data-focus="entity:coating"]')
+    expect(await page.input_value("#corpus-search") == "", "another profile kept the search")
+    expect(await page.locator("#corpus-view .active-filters").count() == 0, "another profile kept the filters")
+    # A two-entity library: a search gives one row per sample of the entity shown, and follows the entity switch.
+    await page.goto(f"{docs['entities']}/#/?q=S1")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    await wait_ids(page, ["S1"])
+    heads = await page.locator("#corpus-view thead th").all_text_contents()
+    expect(heads[:2] == ["涂层", "论文"] and any("coating_thickness" in head for head in heads), f"heads: {heads}")
+    await page.click('#corpus-view [data-focus="entity:wear_test"]')
+    await page.wait_for_function("location.hash === '#/?q=S1&e=wear_test'")
+    await wait_ids(page, ["S1"])
+    heads = await page.locator("#corpus-view thead th").all_text_contents()
+    expect(heads[:2] == ["磨损测试", "论文"] and any("test_temperature" in head for head in heads), f"heads: {heads}")
+    await page.fill("#corpus-search", "S2")
+    await wait_ids(page, [])
+    await page.click('#corpus-view [data-focus="entity:coating"]')
+    await wait_ids(page, ["S2"])
+
+
+@check("the filter panel opens and closes from 筛选, and a reload keeps the choice")
+async def explore_panel(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_explore(page, base, docs)
+    expect(await page.is_visible("#filter-panel"), "the panel is closed on a wide screen")
+    await page.click('#corpus-view [data-focus="filter-toggle"]')
+    expect(await page.locator("#filter-panel").count() == 0, "筛选 did not close the panel")
+    expect(await page.get_attribute('#corpus-view [data-focus="filter-toggle"]', "aria-expanded") == "false", "aria")
+    expect(await page.evaluate("document.activeElement.dataset.focus") == "filter-toggle", "筛选 lost the focus")
+    await page.reload()
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await page.locator("#filter-panel").count() == 0, "a reload reopened the panel")
+    # With the panel closed, an active filter is still shown over the table and counted on the button.
+    await page.goto(f"{base}/#/?f.t=85~")
+    await page.wait_for_selector("#corpus-view .active-filters")
+    label = (await page.text_content('#corpus-view [data-focus="filter-toggle"]') or "").strip()
+    expect(label == "筛选1", f"the button reads {label!r}")
+
+
+@check(
+    "on a phone the search box and the filter panel stack over the table without sideways scrolling",
+    width=390,
+    height=844,
+)
+async def explore_narrow(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_explore(page, base, docs, "f.t=85~")
+    expect(await page.locator("#filter-panel").count() == 0, "the panel opens by default on a phone")
+    await page.click('#corpus-view [data-focus="filter-toggle"]')
+    await page.wait_for_selector("#filter-panel")
+    panel = await page.evaluate("document.querySelector('#filter-panel').getBoundingClientRect().toJSON()")
+    table = await page.evaluate("document.querySelector('#corpus-view .table-wrap').getBoundingClientRect().toJSON()")
+    expect(panel["bottom"] <= table["top"], f"the panel does not sit over the table: {panel} / {table}")
+    overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+    expect(overflow <= 0, f"the page scrolls {overflow}px sideways")
+    await wait_ids(page, ["S-P2"])
 
 
 async def main() -> int:
