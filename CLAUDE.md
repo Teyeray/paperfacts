@@ -256,7 +256,13 @@ this file is the part that is easy to get wrong.
   attributes, never a hand list.
 - Profiles in the page: the router reads `#/p/<name>/…` (no prefix = the default, which is `null` in the frontend,
   never its name) into `state.profileName`; a profile change is a new view (bumps the generation, reloads the
-  rail, drops `/fact/n` and the filter). Every per-profile request goes through `profileApi(profile, path)` /
+  rail, drops `/fact/n`, the filter and the home query). The home view's query (`#/?q=…`, `#/p/<name>/?q=…`; `hashFor`
+  writes it with the slash, `parse` cuts it off before matching, so `#/p/<name>?q=…` is read the same) is
+  `state.homeQuery` (`{}` when none, `null` off home), set by the router only: a hashchange of the query alone calls
+  `onHomeQuery(query)` and never `onEmpty` (no `/api/dataset` load), and a query-bound control writes with
+  `setHomeQuery(params)` (`history.replaceState`, no hashchange; the router moves its own memory of the query and
+  calls `onHomeQuery` itself). A consumer reads `state.homeQuery` when it draws, never when its load began. The brand
+  link carries `lastHomeQuery(profile)`; the missing views' links home stay bare. Every per-profile request goes through `profileApi(profile, path)` /
   `profileHref` (`api.js`) with the profile the load captured before its first await; plain `api()` refuses
   any path outside its profile-free allowlist, `undefined` throws, a POST always names the profile when the
   page knows the default's name, and a response whose `X-PaperFacts-Profile` differs is refused. `state.profile`
