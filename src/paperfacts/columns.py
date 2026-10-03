@@ -39,6 +39,11 @@ class FieldColumn(BaseModel):
     entity: str | None = None
     # The entity type a reference column's cells name a row of (each cell is that row's sample_id); None otherwise.
     references: str | None = None
+    # The profile group the field belongs to, by name: the home view's filter panel groups its filters by it.
+    group: str | None = None
+    # The field's closed set of canonical spellings, () when it has none. A cell holds the value as written; what a
+    # value names among these is computed by the server (CorpusRow's categories), never re-derived in the browser.
+    categories: tuple[str, ...] = ()
 
 
 def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
@@ -54,6 +59,8 @@ def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
             cardinality=spec.cardinality,
             entity=spec.entity,
             references=spec.references,
+            group=spec.group,
+            categories=spec.categories,
         )
         for spec in profile.fields
     )

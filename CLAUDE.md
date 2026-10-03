@@ -255,8 +255,8 @@ this file is the part that is easy to get wrong.
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
   offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `profile`, `library`, `upload`, `document`, `table`,
-  `fieldpicker`, `tsv`, `corpus`, `facts`, `figures`, `samples`, `job`, `viewer`, `check`; `app.js` is only the
-  entry point.
+  `fieldpicker`, `tsv`, `corpus`, `explorer`, `filters`, `facts`, `figures`, `samples`, `job`, `viewer`, `check`;
+  `app.js` is only the entry point.
   `profile.js`'s `renderDefinition(root, definition, …)` draws any profile definition (the read-only page,
   `(#/p/<name>)/profile`, and the check page's preview); its fields table takes its columns from the definition's
   attributes, never a hand list.
@@ -294,6 +294,14 @@ this file is the part that is easy to get wrong.
   both are built, and its sort is `corpus.js`'s `getSort` / `setSort` / `onSortChange`, the hooks the URL state binds
   to. The density is `data-density` on `.shell`, set by `table.js`'s switch and kept in localStorage
   (`paperfacts.density`).
+- The home explorer (`explorer.js`, `filters.js`): the search, the filters, the sort and the entity shown live only in
+  the home query (`q`, `cond`, `f.<field>`, `type`, `conflict`, `unfinished`, `sort`, `e`), read from
+  `state.homeQuery` on every draw and written with `setHomeQuery`; `onHomeQuery` redraws from the loaded corpus
+  (`corpus.refreshCorpus`), never re-fetches. A category filter uses the server's `CorpusRow.paper_categories` /
+  `sample_categories` (`kinds.element_key`); never canonicalise a spelling in JS. The search box is built once and
+  kept across redraws (focus and caret survive typing); the filter panel's open state is localStorage
+  (`paperfacts.filters-open`). A search or filter shows flattened rows, the sample id first and the paper second;
+  the Excel download stays the whole corpus, the copy is the rows shown.
 - Controls that re-render their own table carry a `data-focus` key and the re-render goes through
   `keepFocus`, so keyboard focus survives. Clickable rows and cells are focusable and act on Enter/Space.
 - The HTTP edge (`web/app.py`'s one middleware): Basic auth compared as UTF-8 bytes, a same-origin check

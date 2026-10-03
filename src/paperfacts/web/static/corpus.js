@@ -7,18 +7,36 @@
 // empty cell is "this paper has no committed value for this field".
 //
 // With several entity types a chip per entity picks what a row is: the primary entity gives the table above (the
-// paper row is always one of its rows); any other gives one row per sample of that entity across the papers, beside
-// the paper it came from, with that entity's fields. The choice is kept per profile for as long as the page lives.
+// paper row is always one of its rows); any other gives one row per sample of that entity across the papers, with that
+// entity's fields. A search or an active filter (explorer.js, filters.js) turns the primary's table into the same
+// flattened rows: one per sample, its id first and its paper second, so every row is a sample that matched. A paper
+// with no sample of the entity is one row of its own, so a paper found by its name is still listed.
 //
 // A click on a column's header sorts the table by it (ascending, descending, off). A paper row is ordered by the value
-// it shows (its chosen sample's), and an expanded paper's sample rows stay under it. The sort lives in memory here;
-// getSort/setSort/onSortChange are the hooks the URL state binds to.
+// it shows (its chosen sample's), and an expanded paper's sample rows stay under it. The sort, the entity shown, the
+// search and the filters are the home query's (explorer.js): every draw reads them from it, and getSort/setSort/
+// onSortChange are the hooks app.js binds the sort to.
 
 import { profileApi, profileHref } from "./api.js";
 import { escapeHtml, keepFocus } from "./html.js";
 import { documentHash } from "./router.js";
 import { entityGroups, inEntity, state } from "./state.js";
 import { chosenFields, fieldPicker, toggleChip, visibleFields } from "./fieldpicker.js";
+import {
+  activeChips,
+  clearAllButton,
+  explored,
+  filterToggle,
+  flatItems,
+  highlight,
+  isExploring,
+  panelOpen,
+  readExplore,
+  searchBar,
+  updateQuery,
+  writeFilters,
+} from "./explorer.js";
+import { filterChips, filterPanel, itemValue, usesDocs } from "./filters.js";
 import {
   column,
   densitySwitch,
@@ -36,19 +54,15 @@ let showAllFields = false;
 // Which papers are expanded. Kept across re-renders (a field toggle, a refresh) for as long as the page
 // lives; a paper that left the library simply stops matching.
 const expanded = new Set();
-// profile key -> the entity name the home table shows under it; absent: the primary.
-const shownEntity = new Map();
 
-// { key, dir: "asc" | "desc" } or null (the server's order), for the profile it was set under: another profile's table
-// starts unsorted. A key no column of the table on screen has is no sort.
+// { key, dir: "asc" | "desc" } or null (the server's order), set from the home query on every draw. A key no column of
+// the table on screen has is no sort.
 let sort = null;
-let sortProfile = null;
 let sortListener = null;
 export const getSort = () => sort;
 export function setSort(next) {
   const valid = next && typeof next.key === "string" && (next.dir === "asc" || next.dir === "desc");
   sort = valid ? { key: next.key, dir: next.dir } : null;
-  sortProfile = state.corpusProfile ?? "";
 }
 // Told of every sort the reader makes by clicking a header (not of setSort's own writes).
 export const onSortChange = (listener) => {
@@ -73,57 +87,82 @@ function sortHandler(rerender) {
 // The table under `profile`; the home view stores it (state.corpus) only once it knows the view is still current.
 export const loadCorpus = (profile) => profileApi(profile, "/api/dataset");
 
-// The entity the table shows under the profile on screen, among its groups (the primary when none was picked).
-function currentEntity(groups) {
-  const name = shownEntity.get(state.corpusProfile ?? "");
-  return groups.find((group) => group.name === name) ?? groups[0];
-}
+// The entity the home query asks for, among the groups (the primary when it names none, or one the profile lacks).
+const currentEntity = (groups, name) => groups.find((group) => group.name === name) ?? groups[0];
 
-// The table's data for one entity group. The primary keeps the paper rows (paper-level fields beside its own); any
-// other entity is its sample rows alone, each carrying its paper, with its own fields.
-function entityView(data, group, primary) {
-  const fields = data?.fields ?? [];
-  const papers = data?.rows ?? [];
-  if (group === primary) {
-    return {
-      kind: "paper",
-      fields: fields.filter((field) => field.scope !== "sample" || inEntity(group, field)),
-      rows: papers.map((row) => {
-        const samples = (row.sample_rows ?? []).filter((sample) => inEntity(group, sample));
-        return { ...row, sample_rows: samples, sample_count: samples.length };
-      }),
-    };
-  }
-  return {
-    kind: "sample",
-    fields: fields.filter((field) => field.scope === "sample" && inEntity(group, field)),
-    rows: papers.flatMap((row) =>
-      (row.sample_rows ?? []).filter((sample) => inEntity(group, sample)).map((sample) => ({ row, sample })),
-    ),
-  };
-}
+// The fields of one entity group's table: the primary's sample fields beside the paper-level ones; any other entity's
+// own sample fields alone.
+const entityFields = (fields, group, primary) =>
+  (fields ?? []).filter((field) =>
+    group === primary ? field.scope !== "sample" || inEntity(group, field) : field.scope === "sample" && inEntity(group, field),
+  );
 
 // What the paper table calls a row: the profile's entity, or with several entity types the primary one.
 const primaryLabel = () => entityGroups()[0].label;
 
+// A redraw of the table on screen that keeps the keyboard where it was; a range box that had it gets its caret back
+// at the end of what was typed.
+function redraw(root) {
+  keepFocus(root, () => renderCorpus(root));
+  const active = document.activeElement;
+  if (active?.matches?.("input.range-num")) active.setSelectionRange(active.value.length, active.value.length);
+}
+
+// The home query changed (typed into the search box, a filter, a sort, the address) or, with a status filter on, the
+// rail's list did: the table on screen is redrawn from what is already loaded, never re-fetched. Only a table of the
+// profile on screen, on the home view, is redrawn.
+export function refreshCorpus({ docsChanged = false } = {}) {
+  const root = document.getElementById("corpus-view");
+  if (!root || state.homeQuery == null || !state.corpus || state.corpusProfile !== state.profileName) return;
+  if (docsChanged && !usesDocs(readExplore().filters)) return;
+  redraw(root);
+}
+
 export function renderCorpus(root) {
-  root.innerHTML = "";
-  if (sortProfile !== (state.corpusProfile ?? "")) setSort(null);
+  searchBar(root);
+  for (const child of [...root.children]) if (!child.classList.contains("explorer-search")) child.remove();
   if (!(state.corpus?.rows ?? []).length) return;
+  const explore = readExplore();
+  setSort(explore.sort);
   const groups = entityGroups();
-  const group = currentEntity(groups);
-  const rerender = () => keepFocus(root, () => renderCorpus(root));
-  const data = entityView(state.corpus, group, groups[0]);
-  const entityChips = groups.length < 2 ? null : entitySwitch(groups, group, rerender);
-  if (data.kind === "sample") {
-    renderEntityRows(root, data, group, entityChips, rerender);
-    return;
+  const group = currentEntity(groups, explore.entity);
+  const rerender = () => redraw(root);
+  const fields = entityFields(state.corpus.fields, group, groups[0]);
+  const entityChips = groups.length < 2 ? null : entitySwitch(groups, group);
+  // The panel counts and scales over every row of the entity, whatever the search and filters leave.
+  const all = flatItems(state.corpus.rows, group);
+  const samples = all.filter((item) => item.kind === "sample");
+  const papers = state.corpus.rows.map((row) => ({ kind: "paper", row, source: row.paper_row ?? {}, categories: row.paper_categories ?? {} }));
+  const open = panelOpen();
+  const explorer = {
+    toggle: filterToggle(filterChips(explore.filters, fields).length, rerender),
+    active: activeChips(explore, fields),
+  };
+  const body = document.createElement("div");
+  body.className = `explorer${open ? " panel-open" : ""}`;
+  if (open) body.append(filterPanel(fields, { samples, papers }, explore.filters, writeFilters));
+  const exploring = isExploring(explore, fields);
+  if (group !== groups[0] || exploring) {
+    // A secondary entity is always one row per sample; a paper with none of them is listed only when it was searched for.
+    const items = exploring ? explored(all, explore, fields) : samples;
+    body.append(flatSection(items, fields, group, entityChips, explore, explorer, { samples, exploring }));
+  } else {
+    body.append(paperSection(fields, group, entityChips, explorer));
   }
-  const rows = data.rows;
+  root.append(body);
+}
+
+// The primary entity unsearched and unfiltered: one row per paper, each expandable into its samples.
+function paperSection(allFields, group, entityChips, explorer) {
+  const rerender = () => redraw(document.getElementById("corpus-view"));
+  const rows = state.corpus.rows.map((row) => {
+    const samples = (row.sample_rows ?? []).filter((sample) => inEntity(group, sample));
+    return { ...row, sample_rows: samples, sample_count: samples.length };
+  });
 
   // Columns are decided over every sample, so a field that only an expanded sample has still gets one.
   const allRows = rows.flatMap((row) => [row.paper_row ?? {}, ...(row.sample_rows ?? [])]);
-  const chosen = chosenFields(data.fields);
+  const chosen = chosenFields(allFields);
   const fields = visibleFields(chosen, allRows, showAllFields);
   const expandable = rows.filter((row) => (row.sample_rows ?? []).length > 1);
   const columns = corpusColumns(fields);
@@ -138,7 +177,7 @@ export function renderCorpus(root) {
   ]);
 
   const chips = [
-    fieldPicker(data.fields, rerender),
+    fieldPicker(allFields, rerender),
     toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
     densitySwitch(),
   ];
@@ -162,38 +201,56 @@ export function renderCorpus(root) {
     else expanded.add(id);
     rerender();
   });
-  root.append(resultsSection(entityChips, chips, columns, items, { count, note }, table));
+  return resultsSection(entityChips, chips, columns, items, { count, note }, table, explorer);
 }
 
-// A secondary entity: one row per sample of it, beside the paper it came from; no paper row, nothing to expand.
-function renderEntityRows(root, view, group, entityChips, rerender) {
-  const chosen = chosenFields(view.fields);
-  const fields = visibleFields(chosen, view.rows.map((item) => item.sample), showAllFields);
-  const columns = entityColumns(fields, group);
-  const items = sorted(columns, view.rows);
+// One row per sample of `group` (and per paper without one, when searched for): the sample's id, its paper, its counts
+// and the fields; with 含条件描述 its conditions too. What matched the search is marked.
+function flatSection(found, allFields, group, entityChips, explore, explorer, { samples, exploring }) {
+  const rerender = () => redraw(document.getElementById("corpus-view"));
+  const chosen = chosenFields(allFields);
+  // The columns are decided over every row, not the ones found, so they do not come and go while the reader types.
+  const rows = [...state.corpus.rows.map((row) => row.paper_row ?? {}), ...samples.map((item) => item.source)];
+  const fields = visibleFields(chosen, rows, showAllFields);
+  const columns = flatColumns(fields, group, explore);
+  const items = sorted(columns, found);
   const chips = [
-    fieldPicker(view.fields, rerender),
+    fieldPicker(allFields, rerender),
     toggleChip(chosen, showAllFields, () => { showAllFields = !showAllFields; rerender(); }),
     densitySwitch(),
   ];
   const papers = new Set(items.map((item) => item.row.document_id)).size;
-  const count = `${papers} 篇论文 · ${items.length} 个${group.label}`;
-  const note = `每行一个${group.label}；点列名排序；空白单元格是流水线拒绝猜测的取值，不是 0。`;
-  const table = resultsTable(columns, items);
+  const shown = items.filter((item) => item.kind === "sample").length;
+  const total = state.corpus.rows.length;
+  const count = `${papers} 篇论文 · ${shown} 个${group.label}${exploring ? `（共 ${total} 篇）` : ""}`;
+  const note =
+    `每行一个${group.label}，后面是它所在的论文${exploring ? "，只列出符合搜索和筛选的" : ""}；点列名排序；` +
+    "空白单元格是流水线拒绝猜测的取值，不是 0。";
+  const table = resultsTable(columns, items, { className: "results-table flat" });
   sortableHeads(table.tHead.rows[0], columns, getSort(), sortHandler(rerender));
-  root.append(resultsSection(entityChips, chips, columns, items, { count, note }, table));
+  const empty = items.length ? null : emptyResult(group);
+  return resultsSection(entityChips, chips, columns, items, { count, note }, table, { ...explorer, empty });
 }
 
-// What every home table has: one toolbar row -- a slot for the explorer's search and filter (empty until it lands), the
-// entity chips (with several entity types), its own controls, then the row count, the copy button and the workbook
-// link -- over a note and the table. The clipboard copy is built from the same columns and items as the rows.
-function resultsSection(entityChips, chips, columns, items, { count, note: noteText }, table) {
+// Nothing passed: say so where the table would be, with the way out.
+function emptyResult(group) {
+  const box = document.createElement("div");
+  box.className = "table-empty explore-empty";
+  box.append(`没有符合搜索和筛选条件的${group.label}或论文。`, clearAllButton());
+  return box;
+}
+
+// What every home table has: one toolbar row -- the explorer's slot (筛选), the entity chips (with several entity
+// types), its own controls, then the row count, the copy button and the workbook link -- over the active filters, a
+// note and the table. The clipboard copy is built from the same columns and items as the rows: what is on screen.
+function resultsSection(entityChips, chips, columns, items, { count, note: noteText }, table, { toggle, active, empty = null }) {
   // No heading of its own: on the home view the page title above the table already names it.
   const head = document.createElement("div");
   head.className = "results-head table-toolbar";
   const explore = document.createElement("div");
   explore.className = "toolbar-slot";
   explore.dataset.slot = "explore";
+  explore.append(toggle);
   head.append(explore);
   if (entityChips) head.append(entityChips);
   const own = document.createElement("div");
@@ -213,6 +270,7 @@ function resultsSection(entityChips, chips, columns, items, { count, note: noteT
   download.href = profileHref(state.corpusProfile, "/api/dataset.xlsx");
   // Empty: the server's Content-Disposition names the file after the profile.
   download.setAttribute("download", "");
+  download.title = "全部论文的结果，不受搜索和筛选影响";
   download.textContent = "下载全部 Excel";
   end.append(download);
   head.append(end);
@@ -223,17 +281,18 @@ function resultsSection(entityChips, chips, columns, items, { count, note: noteT
 
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
-  wrap.append(table);
+  // Nothing found still shows the header row, with the way out under it.
+  wrap.append(table, ...(empty ? [empty] : []));
 
   const section = document.createElement("section");
   section.className = "results corpus";
   section.setAttribute("aria-label", "结果总表");
-  section.append(head, note, wrap);
+  section.append(head, ...(active ? [active] : []), note, wrap);
   return section;
 }
 
-// One chip per entity type; the one shown is pressed. Each re-renders the table and keeps the keyboard on itself.
-function entitySwitch(groups, current, rerender) {
+// One chip per entity type; the one shown is pressed. Each writes the home query, whose redraw keeps the keyboard on it.
+function entitySwitch(groups, current) {
   const chips = document.createElement("div");
   chips.className = "chips entity-switch";
   chips.setAttribute("role", "group");
@@ -245,37 +304,59 @@ function entitySwitch(groups, current, rerender) {
     chip.dataset.focus = `entity:${group.name}`;
     chip.setAttribute("aria-pressed", String(group === current));
     chip.textContent = group.label;
-    chip.addEventListener("click", () => {
-      shownEntity.set(state.corpusProfile ?? "", group.name);
-      rerender();
-    });
+    chip.addEventListener("click", () => updateQuery({ e: group === groups[0] ? "" : group.name }));
     chips.append(chip);
   }
   return chips;
 }
 
-// A secondary entity's rows: the paper (a link), the sample's id, its counts, and its fields; a reference column
-// shows the id of the row it names, labelled with that row's entity, as it does everywhere.
-function entityColumns(fields, group) {
+// A flattened row: the sample's id (its label under it), the paper (a link), the conditions when the search reads them,
+// its counts, and the fields, a paper-level one read from the paper; what matched the search is marked. A reference
+// column shows the id of the row it names, labelled with that row's entity, as it does everywhere. A paper listed
+// without a sample has no id.
+function flatColumns(fields, group, explore) {
+  const q = explore.q;
   const name = (item) => item.row.name ?? item.row.document_id ?? "";
-  const counts = (item) => `${item.sample.available_fields ?? 0} / ${item.sample.agree_fields ?? 0}`;
-  const id = (item) => item.sample.sample_id ?? "";
-  return [
+  const id = (item) => (item.kind === "sample" ? String(item.source.sample_id ?? "") : "");
+  const label = (item) => (item.kind === "sample" ? String(item.source.sample_label ?? "") : "");
+  const conditions = (item) => (item.kind === "sample" ? String(item.source.conditions ?? "") : "");
+  const counts = (item) => `${item.source.available_fields ?? 0} / ${item.source.agree_fields ?? 0}`;
+  const review = (item) => (item.row.article_type === "review" ? `<span class="article-tag">综述</span>` : "");
+  const columns = [
+    sortBy(
+      column(
+        group.label,
+        (item) => {
+          if (item.kind !== "sample") return `<td class="mono"><small>无${escapeHtml(group.label)}</small></td>`;
+          const sub = label(item) && label(item) !== id(item) ? `<small>${highlight(label(item), q)}</small>` : "";
+          return `<td class="mono" title="${escapeHtml(id(item))}">${highlight(id(item), q)}${sub}</td>`;
+        },
+        id,
+      ),
+      "entity",
+      id,
+    ),
     sortBy(
       column(
         "论文",
-        (item) => {
-          const text = escapeHtml(name(item));
-          return `<td class="label" title="${text}"><a href="${escapeHtml(documentHash(item.row.document_id))}">${text}</a></td>`;
-        },
+        (item) =>
+          `<td class="label" title="${escapeHtml(name(item))}"><a href="${escapeHtml(documentHash(item.row.document_id))}">` +
+          `${highlight(name(item), q)}</a>${review(item)}</td>`,
         name,
       ),
       "paper",
       name,
     ),
-    sortBy(column(group.label, (item) => `<td class="mono" title="${escapeHtml(id(item))}">${escapeHtml(id(item))}</td>`, id), "entity", id),
-    sortBy(column("可用/一致", (item) => `<td class="mono">${escapeHtml(counts(item))}</td>`, counts), "counts", (item) => item.sample.available_fields),
-    ...fields.map((field) => fieldColumn(field, (item) => item.sample[field.name] ?? null, (_, value) => plainCell(value, field))),
+  ];
+  if (explore.cond) {
+    columns.push(
+      column("条件", (item) => `<td class="muted cond" title="${escapeHtml(conditions(item))}"><div class="clamp">${highlight(conditions(item), q)}</div></td>`, conditions),
+    );
+  }
+  return [
+    ...columns,
+    sortBy(column("可用/一致", (item) => `<td class="mono">${escapeHtml(counts(item))}</td>`, counts), "counts", (item) => item.source.available_fields),
+    ...fields.map((field) => fieldColumn(field, (item) => itemValue(field, item), (_, value) => plainCell(value, field))),
   ];
 }
 

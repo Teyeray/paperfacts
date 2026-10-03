@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -20,8 +20,9 @@ from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.compare import ComparisonCounts, ComparisonReport
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload, DocumentDataset
+from paperfacts.fields import FieldSpec
 from paperfacts.keys import comparison_key_for, extractor_key_for, figure_key_for
-from paperfacts.kinds import CellValue
+from paperfacts.kinds import CellValue, element_key
 from paperfacts.models import BACKENDS, Backend, DocumentInput, ParsedArtifact
 from paperfacts.pdf import merge_pdfs, render_page_cached
 from paperfacts.profile import DomainProfile
@@ -114,6 +115,14 @@ class CorpusRow(BaseModel):
     paper_row: dict[str, CellValue]
     sample_count: int
     sample_rows: tuple[dict[str, CellValue], ...] = ()
+    article_type: str | None = Field(
+        default=None, description="what the stored lanes were told the paper is (extract.detect_article_type)"
+    )
+    # The canonical categories each categorised field's value names (kinds.element_key: the value, or each element of
+    # a list), for the home view's filters; a field whose value names none is absent. Beside the cells rather than in
+    # them, so a cell keeps the text the paper wrote.
+    paper_categories: dict[str, list[str]] = {}
+    sample_categories: tuple[dict[str, list[str]], ...] = Field(default=(), description="parallel to sample_rows")
 
 
 class CorpusPayload(BaseModel):
@@ -125,6 +134,20 @@ class CorpusPayload(BaseModel):
 
     fields: tuple[FieldColumn, ...] = ()
     rows: tuple[CorpusRow, ...] = ()
+
+
+def _categories(specs: tuple[FieldSpec, ...], row: Mapping[str, CellValue]) -> dict[str, list[str]]:
+    """The canonical categories ``row``'s value of each of ``specs`` names, in the order the value names them; a
+    value naming none, and a blank cell, leave its field out."""
+    found: dict[str, list[str]] = {}
+    for spec in specs:
+        value = row.get(spec.name)
+        elements = value if isinstance(value, list) else [value]
+        keys = [element_key(spec, element) for element in elements if isinstance(element, str)]
+        named = list(dict.fromkeys(key for key in keys if key is not None))
+        if named:
+            found[spec.name] = named
+    return found
 
 
 class Library:
@@ -264,6 +287,7 @@ class Library:
         A document without a dataset is absent, not an empty row: the home view shows what has been
         mined, not what is missing.
         """
+        categorised = tuple(spec for spec in self.profile.fields if spec.categories)
         rows: list[CorpusRow] = []
         for summary, dataset in self._corpus_entries():
             rows.append(
@@ -273,6 +297,9 @@ class Library:
                     paper_row=dataset.paper_row,
                     sample_count=len(dataset.sample_rows),
                     sample_rows=dataset.sample_rows,
+                    article_type=summary.article_type,
+                    paper_categories=_categories(categorised, dataset.paper_row),
+                    sample_categories=tuple(_categories(categorised, row) for row in dataset.sample_rows),
                 )
             )
         return CorpusPayload(fields=self.columns if rows else (), rows=tuple(rows))
