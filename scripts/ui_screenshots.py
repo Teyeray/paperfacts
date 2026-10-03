@@ -24,6 +24,8 @@ sys.path.insert(0, str(REPO / "tests" / "e2e"))  # the seeded server
 
 from web_races import serve  # noqa: E402
 
+from support.factories import make_blank_pdf  # noqa: E402  (tests/ is on the path once web_races is imported)
+
 VIEWPORTS = {"1440x900": (1440, 900), "390x844": (390, 844)}
 # name -> (hash, the page is ready once this selector shows). ``{A}`` is the seeded paper A's id. A page whose name is
 # in PREPARE is arranged by that step before the shot.
@@ -37,6 +39,8 @@ PAGES = {
     "home-scrolled": ("#/", "#corpus-view:not(.hidden) table"),
     "home-dark": ("#/", "#corpus-view:not(.hidden) table"),
     "upload-dialog": ("#/", "#corpus-view:not(.hidden) table"),
+    "upload-si-dialog": ("#/", "#corpus-view:not(.hidden) table"),
+    "document-si": ("#/", "#corpus-view:not(.hidden) table"),
     "run-all-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "document": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     "document-compact": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
@@ -74,6 +78,36 @@ async def open_upload_dialog(page: Page, pdf: Path) -> None:
     await page.check("#upload-figures")
 
 
+def si_files(pdf: Path) -> tuple[Path, list[Path]]:
+    """A three-page main text and two SI files, made beside the seeded PDF."""
+    main = make_blank_pdf(pdf.with_name("Main text.pdf"), [(612.0, 792.0)] * 3)
+    si = [
+        make_blank_pdf(pdf.with_name("Supporting Information.pdf"), [(612.0, 792.0)] * 2),
+        make_blank_pdf(pdf.with_name("SI tables.pdf"), [(612.0, 792.0)]),
+    ]
+    return main, si
+
+
+async def open_upload_dialog_with_si(page: Page, pdf: Path) -> None:
+    main, si = si_files(pdf)
+    await page.click("#upload-open")
+    await page.wait_for_selector("#upload-dialog[open]")
+    await page.set_input_files("#upload-pick", [str(main), str(pdf)])
+    await page.locator("#upload-files .upload-file").first.locator(".si-pick").set_input_files([str(p) for p in si])
+
+
+async def upload_with_si(page: Page, pdf: Path) -> None:
+    # Uploaded through the dialog, as a reader would: the stub job walks the stages, the header shows 含 SI.
+    main, si = si_files(pdf)
+    await page.click("#upload-open")
+    await page.wait_for_selector("#upload-dialog[open]")
+    await page.set_input_files("#upload-pick", str(main))
+    await page.locator("#upload-files .upload-file").first.locator(".si-pick").set_input_files([str(p) for p in si])
+    await page.click("#upload-start")
+    await page.wait_for_selector(".doc-head h1 .si-tag")
+    await page.locator(".doc-head h1 .si-tag").hover()
+
+
 async def open_run_all_dialog(page: Page, _: Path) -> None:
     await page.click("#run-all")
     await page.wait_for_selector("#run-all-dialog[open]")
@@ -91,6 +125,8 @@ PREPARE = {
     "home-scrolled": scroll_home,
     "document-compact": lambda page, _: page.evaluate(COMPACT),
     "upload-dialog": open_upload_dialog,
+    "upload-si-dialog": open_upload_dialog_with_si,
+    "document-si": upload_with_si,
     "run-all-dialog": open_run_all_dialog,
 }
 

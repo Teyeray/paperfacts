@@ -6,7 +6,7 @@
 // view (profiles.js) fetched beside the data and adopted only together with it.
 
 import { api, optional, profileApi } from "./api.js";
-import { articleTag, toast } from "./html.js";
+import { articleTag, siTag, toast } from "./html.js";
 import { renderDefinition } from "./profile.js";
 import { adoptProfile, profileTitle, profileView, servedProfile, syncSwitcher } from "./profiles.js";
 import { LANES, applyUiCopy, currentJob, isActive, isCurrent, jobInProfile, slot, state, uiCopy, viewShows } from "./state.js";
@@ -242,7 +242,7 @@ function renderDocument() {
   s("samples").setAttribute("aria-label", `${uiCopy("entity_label_zh")}记录`);
 
   s("name").textContent = summary.name;
-  s("name").insertAdjacentHTML("beforeend", articleTag(summary));
+  s("name").insertAdjacentHTML("beforeend", articleTag(summary) + siTag(summary));
   s("id").textContent = summary.document_id;
   s("uploaded").textContent = summary.uploaded_at ? `上传于 ${summary.uploaded_at.replace("T", " ").slice(0, 16)}` : "由命令行处理";
   const runButton = node.querySelector('[data-action="run"]');

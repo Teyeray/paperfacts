@@ -1,18 +1,21 @@
-// Uploading: the 「上传」 dialog (files listed one paper each, the options, a progress bar per file, errors inline), a
-// drop of files anywhere on the page, and the programmatic path through the hidden #file-input, which uploads at once
-// with the dialog's options. On a successful upload, navigate to that document; the document view takes over
+// Uploading: the 「上传」 dialog (files listed one paper each, each with its SI files, the options, a progress bar per
+// paper, errors inline), a drop of files anywhere on the page, and the programmatic path through the hidden
+// #file-input, which uploads at once with the dialog's options. On a successful upload, navigate to that document; the document view takes over
 // showing progress from there. Every upload goes under the profile on screen.
 
 import { profileUpload } from "./api.js";
-import { el, toast } from "./html.js";
+import { el, keepFocus, toast } from "./html.js";
 import { loadLibrary } from "./library.js";
 import { documentHash, navigate } from "./router.js";
 import { isCurrent, state } from "./state.js";
 
-// The rows of the dialog: { file, row, status: "pending" | "uploading" | "done" | "error" }. Kept between openings, so a
-// row that failed can be sent again; a row that went up is dropped once the dialog closes.
+// The rows of the dialog: { id, file, si: [{ id, file }], row, status: "pending" | "uploading" | "done" | "error" }.
+// Kept between openings, so a row that failed can be sent again; a row that went up is dropped once the dialog closes.
 const pending = [];
 let uploading = false;
+let nextId = 0;
+// The server merges at most this many SI files after a paper's main text (web/app.py's MAX_SI_PARTS).
+const MAX_SI = 4;
 
 const dialog = () => document.getElementById("upload-dialog");
 const options = () => ({
@@ -35,7 +38,10 @@ export function setupUpload() {
     renderStatus();
   });
   // The programmatic path: no dialog, the options as the dialog has them (both off until a reader ticks them).
-  input.addEventListener("change", () => { uploadAll([...input.files], options()); input.value = ""; });
+  input.addEventListener("change", () => {
+    uploadAll([...input.files].map((file) => ({ file, si: [] })), options());
+    input.value = "";
+  });
   setupWindowDrop();
 }
 
@@ -79,8 +85,9 @@ const isPdf = (file) => file.type === "application/pdf" || /\.pdf$/i.test(file.n
 
 function addFiles(files) {
   for (const file of files) {
-    const entry = { file, status: "pending", row: null };
+    const entry = { id: nextId++, file, si: [], status: "pending", row: null };
     entry.row = fileRow(entry);
+    renderSi(entry);
     if (!isPdf(file)) setState(entry, "error", "不是 PDF，不会上传");
     pending.push(entry);
     document.getElementById("upload-files").append(entry.row);
@@ -88,8 +95,8 @@ function addFiles(files) {
   renderStatus();
 }
 
-// One row per file: the name and size, a remove button, and under them the state line and the progress bar. The
-// empty `si` slot is where 「添加 SI」 goes once supplementary files can be attached; until then it holds nothing.
+// One row per paper: the name and size, a remove button, and under them the state line, the paper's SI files with
+// 「添加 SI」, and the progress bar.
 function fileRow(entry) {
   const name = el("span", { className: "fname", title: entry.file.name }, entry.file.name);
   name.append(el("small", { text: formatSize(entry.file.size) }));
@@ -99,10 +106,77 @@ function fileRow(entry) {
   remove.addEventListener("click", () => { removeEntry(entry); renderStatus(); });
   const row = el("li", { className: "upload-file" }, name, remove, el("span", { className: "state" }));
   row.querySelector(".state").dataset.slot = "state";
-  const si = el("span");
+  const si = el("div", { className: "upload-si" });
   si.dataset.slot = "si";
   row.append(si);
   return row;
+}
+
+// The SI files of a paper, in the order they will follow its main text: the order they were added, changed with
+// ↑/↓. They go up in the same request as the paper and become one document with it.
+function renderSi(entry) {
+  const slot = entry.row.querySelector('[data-slot="si"]');
+  const locked = entry.status === "uploading" || entry.status === "done";
+  keepFocus(slot, () => {
+    slot.replaceChildren();
+    if (entry.si.length) {
+      const list = el("ol", { className: "si-list" });
+      list.setAttribute("aria-label", `${entry.file.name} 的 SI 文件（按合并顺序）`);
+      entry.si.forEach((part, index) => {
+        const move = (to, label, symbol, key) => {
+          const button = el("button", { className: "ghost si-move", title: label }, symbol);
+          button.type = "button";
+          button.dataset.focus = `si:${entry.id}:${part.id}:${key}`;
+          button.setAttribute("aria-label", `${label}：${part.file.name}`);
+          button.disabled = locked || to < 0 || to >= entry.si.length;
+          button.addEventListener("click", () => {
+            entry.si.splice(index, 1);
+            entry.si.splice(to, 0, part);
+            renderSi(entry);
+          });
+          return button;
+        };
+        const remove = el("button", { className: "ghost si-remove", title: "移除这个 SI 文件" }, "✕");
+        remove.type = "button";
+        remove.dataset.focus = `si:${entry.id}:${part.id}:remove`;
+        remove.setAttribute("aria-label", `移除 SI：${part.file.name}`);
+        remove.disabled = locked;
+        remove.addEventListener("click", () => {
+          entry.si.splice(entry.si.indexOf(part), 1);
+          renderSi(entry);
+        });
+        const name = el("span", { className: "si-name", title: part.file.name }, `SI ${index + 1}：${part.file.name}`);
+        name.append(el("small", { text: formatSize(part.file.size) }));
+        list.append(el("li", { className: "si-item" }, name, move(index - 1, "上移", "↑", "up"), move(index + 1, "下移", "↓", "down"), remove));
+      });
+      slot.append(list);
+    }
+    const pick = el("input", { className: "si-pick" });
+    pick.type = "file";
+    pick.accept = "application/pdf,.pdf";
+    pick.multiple = true;
+    pick.hidden = true;
+    pick.addEventListener("change", () => { addSi(entry, [...pick.files]); pick.value = ""; });
+    const add = el("button", { className: "linklike si-add" }, "添加 SI");
+    add.type = "button";
+    add.dataset.focus = `si:${entry.id}:add`;
+    add.disabled = locked || !isPdf(entry.file) || entry.si.length >= MAX_SI;
+    add.title = entry.si.length >= MAX_SI ? `每篇最多 ${MAX_SI} 个 SI 文件` : "附上补充材料（SI）PDF：合并在正文之后，作为同一篇论文处理";
+    add.addEventListener("click", () => pick.click());
+    const note = el("span", { className: "si-note" }, entry.siNote ?? "");
+    slot.append(add, pick, note);
+  });
+}
+
+function addSi(entry, files) {
+  const notes = [];
+  for (const file of files) {
+    if (!isPdf(file)) notes.push(`${file.name} 不是 PDF，没有加入`);
+    else if (entry.si.length >= MAX_SI) notes.push(`每篇最多 ${MAX_SI} 个 SI 文件，${file.name} 没有加入`);
+    else entry.si.push({ id: nextId++, file });
+  }
+  entry.siNote = notes.join("；");
+  renderSi(entry);
 }
 
 function setState(entry, status, text) {
@@ -111,6 +185,7 @@ function setState(entry, status, text) {
   line.textContent = text;
   line.className = `state ${status === "error" ? "error" : status === "done" ? "done" : ""}`.trim();
   entry.row.querySelector(".remove").disabled = status === "uploading";
+  renderSi(entry);
 }
 
 function removeEntry(entry) {
@@ -142,7 +217,7 @@ async function startUploads() {
   uploading = true;
   renderStatus();
   try {
-    await uploadAll(ready.map((entry) => entry.file), chosen, (index, progress) => reportRow(ready[index], progress), true);
+    await uploadAll(ready, chosen, (index, progress) => reportRow(ready[index], progress), true);
     // Every row went up: the box has nothing left to say. A failed row keeps it open, its error on the row.
     if (ready.every((entry) => entry.status === "done")) dialog().close();
   } finally {
@@ -158,7 +233,7 @@ function reportRow(entry, progress) {
     return;
   }
   if (progress.done) {
-    setState(entry, "done", "已上传，开始处理");
+    setState(entry, "done", progress.duplicate ? `已上传，开始处理。${progress.duplicate}` : "已上传，开始处理");
     entry.row.querySelector("progress")?.remove();
     return;
   }
@@ -173,18 +248,21 @@ function reportRow(entry, progress) {
   bar.value = progress.fraction;
 }
 
-// One request per file, in order (the server takes one PDF per upload); the last one that went in is opened, unless
-// the reader moved to another view while the files went up. `reload`, because it may be the document already on
-// screen, whose new job the view must start following. `report(index, {fraction} | {done} | {error})` follows each
-// file; without it (the programmatic path) a toast says what happened. Resolves to the last uploaded id, or null.
-async function uploadAll(files, { force, figures }, report = null, quiet = false) {
-  if (!files.length) return null;
+// One request per paper, in order (the server takes one paper per upload, its SI files in the same request as `si`
+// parts, in their order); the last one that went in is opened, unless the reader moved to another view while the
+// files went up. `reload`, because it may be the document already on screen, whose new job the view must start
+// following. `report(index, {fraction} | {done, duplicate} | {error})` follows each paper; without it (the
+// programmatic path) a toast says what happened. A main text the library already holds with or without SI is said
+// either way. Resolves to the last uploaded id, or null.
+async function uploadAll(papers, { force, figures }, report = null, quiet = false) {
+  if (!papers.length) return null;
   const generation = state.generation;
   const profile = state.profileName;
   let last = null;
-  for (const [index, file] of files.entries()) {
+  for (const [index, { file, si }] of papers.entries()) {
     const form = new FormData();
     form.append("file", file, file.name);
+    for (const part of si) form.append("si", part.file, part.file.name);
     if (figures) form.append("figures", "true");
     try {
       report?.(index, { fraction: 0 });
@@ -192,7 +270,9 @@ async function uploadAll(files, { force, figures }, report = null, quiet = false
         report?.(index, { fraction }),
       );
       last = result.document.document_id;
-      report?.(index, { done: true });
+      const duplicate = duplicateNote(result.duplicate_of);
+      report?.(index, { done: true, duplicate });
+      if (duplicate) toast(`${file.name}：${duplicate}`);
       if (!quiet) toast(`已上传 ${file.name}，开始处理${figures ? "（含识图）" : ""}`);
     } catch (error) {
       report?.(index, { error: error.message });
@@ -203,4 +283,11 @@ async function uploadAll(files, { force, figures }, report = null, quiet = false
   // The generation covers the profile too: a switch is a new view, so an upload made under the old one opens nothing.
   if (last && isCurrent(generation)) navigate(documentHash(last), { reload: true });
   return last;
+}
+
+// The library already holds this paper's main text as another document: alone, when this upload carried SI; merged
+// with its SI, when it did not. Both stay; the reader is only told.
+function duplicateNote(duplicate) {
+  if (!duplicate) return "";
+  return `文库里已有这篇正文（${duplicate.has_si ? "含 SI" : "不含 SI"}）：${duplicate.name}`;
 }

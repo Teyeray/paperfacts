@@ -83,8 +83,12 @@ this file is the part that is easy to get wrong.
 - Backend literals are `"mineru"` and `"paddleocr_vl"`. Source ids are `{backend}_p{page}_b{order}`, pages
   0-based.
 - All on-disk paths and atomic writes come from `storage.py`, and so do the path rules over a stored
-  document (`stored_pdf`, `is_runnable`, `stored_document`). A document's full sha256, display name and
-  origin live only in `identity.json`, written the moment the directory is created.
+  document (`stored_pdf`, `is_runnable`, `stored_document`, `document_for_path`). A document's full sha256, display
+  name and origin live only in `identity.json`, written the moment the directory is created.
+- A document id is the sha256 of its PDF, except for a web upload with SI: `storage.parts_sha256` over the main
+  part's sha256 then each SI part's (pdfium's save is not byte-deterministic), with `parts` in its identity, written
+  at creation only. So a stored `source.pdf` is never re-hashed to find its document: anything taking a PDF path
+  resolves it with `storage.document_for_path`, and a merged `source.pdf` that exists is never rewritten.
 - **PDFium is not thread-safe.** Every pypdfium2 call goes through `pdf.py`, serialised behind its
   process-wide lock. Concurrent opens corrupt its global state, after which every subsequent open fails
   with "Data format error" until the process restarts.
@@ -191,7 +195,9 @@ this file is the part that is easy to get wrong.
     which consumes the verdicts, is comparison code. A report holding a failed score (verdict `error`) is not
     stored (`dataset.incomplete_reason`), and an export carries the stored scores onto the rebuilt report
     (`supervisor.carry_supervision`), since an export runs no model;
-  - figure code: `figures`, `normalize`, `readers`, `passages`, `units`, `text`, `fields`, `profile`.
+  - figure code: `figures`, `normalize`, `readers`, `passages`, `units`, `text`, `fields`, `profile`;
+  - `pdf` is hashed only into `validation_code_fingerprint` (with `validate`, `grounding`, `normalize`, `prompts`,
+    `crops`), under which nothing is stored, so editing `pdf.py` (e.g. `merge_pdfs`) moves no stored key.
   Editing any of them re-keys. A module that holds a default the keys omit must be hashed. Besides the rendered
   system prompts, `extractor_key` hashes every prompt slot not at its default (except the `matching_*` ones, which
   `comparison_key` hashes), because a slot may reach only a user prompt.
