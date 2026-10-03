@@ -225,6 +225,15 @@ never worked on twice at the same time, so 「强制重跑」 on a paper that is
 across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
 library. Under a profile with several entity types, a chip per entity type picks what a row is: the primary one
 gives the table above, any other one row per sample of that type across the papers, with that type's fields.
+The toolbar above the table is one row: 「列」 (which field columns to show; the choice is per profile and shared with
+the document page), 显示空字段, the density switch 标准 / 紧凑 (remembered by the browser, and followed by the
+document page's results table too), 展开全部 (every paper's sample rows), then the count ("<N> 篇论文 · <M> 个样品", in
+the profile's own word for a sample), 复制表格 (the rows shown, as TSV, in the order shown) and 下载全部 Excel. A click on
+a column's header (or Enter on it) sorts by it: ascending, descending, then back to the server's order; numbers by
+size, text by locale, and blank cells last in either direction. A paper row is sorted by the value it shows (its
+chosen sample's) and an expanded paper keeps its sample rows under it. The sort lasts while the page is open. The
+paper name and the sample id stay frozen on the left while the field columns scroll sideways (on a phone only the
+name), numbers are right-aligned, and the rows alternate in tint.
 The home address can carry a query (`#/?q=…`, under a profile `#/p/<name>/?q=…`): what the table is asked to
 show, kept in the URL so a search survives a reload and can be shared. Changing only the query does not reload the
 table, a control bound to it writes it in place (no history entry per keystroke), and the PaperFacts link in the
@@ -263,7 +272,7 @@ the cell's tooltip and its accessible name, so a screen reader gets it without a
 pressing Enter on an empty cell jumps down to the two lanes' records for that sample and field, so the
 refusal can be checked against what each lane actually read.
 
-Above the table: 选择字段 chooses which of the twenty columns to show, 显示空字段 adds back the columns
+Above the table: 「列」 chooses which of the twenty columns to show, 显示空字段 adds back the columns
 that are empty for every row, 复制表格 copies the table as TSV for a spreadsheet, and 下载 Excel
 downloads this document's workbook.
 
