@@ -62,6 +62,7 @@ export async function showEmpty() {
   const shown = state.corpus?.rows?.length && state.corpusProfile === profile && state.shownProfile === profile;
   showViews("empty-state", ...(shown ? ["corpus-view"] : []));
   renderLibrary();
+  syncSwitcher(); // the brand link carries the home query this view arrived with
   const [corpus, view] = await Promise.all([
     loadCorpus(profile).then((data) => ({ data }), (error) => ({ error })),
     profileView(profile),

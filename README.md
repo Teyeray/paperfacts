@@ -218,6 +218,10 @@ paper that is already running waits for that run to end.
 across the field columns, with a link into each document and a 「下载全部 Excel」 button for the whole
 library. Under a profile with several entity types, a chip per entity type picks what a row is: the primary one
 gives the table above, any other one row per sample of that type across the papers, with that type's fields.
+The home address can carry a query (`#/?q=…`, under a profile `#/p/<name>/?q=…`): what the table is asked to
+show, kept in the URL so a search survives a reload and can be shared. Changing only the query does not reload the
+table, a control bound to it writes it in place (no history entry per keystroke), and the PaperFacts link in the
+header returns to the last query of the current profile; switching profile drops it.
 
 **A document page** reads top to bottom.
 

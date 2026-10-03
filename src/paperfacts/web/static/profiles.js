@@ -8,7 +8,7 @@
 
 import { api, profileApi } from "./api.js";
 import { onSettledChange, toast } from "./html.js";
-import { documentFromHash, hashFor, navigate, pageFromHash, reloadView } from "./router.js";
+import { documentFromHash, hashFor, lastHomeQuery, navigate, pageFromHash, reloadView } from "./router.js";
 import { applyUiCopy, state, viewShows } from "./state.js";
 
 // The same pause as the job poll's (job.js), without importing it: job.js draws the document view.
@@ -154,12 +154,14 @@ function renderSwitcher() {
   syncSwitcher();
 }
 
-// The select shows the routed profile, and the header links keep it.
+// The select shows the routed profile, and the header links keep it. The brand link is the way back to the home table:
+// it carries the home query last seen under this profile, so leaving a paper returns to the search it was found by.
 export function syncSwitcher() {
   const select = document.getElementById("profile-select");
   const name = state.profileName ?? state.defaultProfile;
   if (name != null && [...select.options].some((option) => option.value === name)) select.value = name;
-  document.querySelector(".brand").setAttribute("href", hashFor({ profile: state.profileName }));
+  const brand = hashFor({ profile: state.profileName, query: lastHomeQuery(state.profileName) });
+  document.querySelector(".brand").setAttribute("href", brand);
   document.getElementById("profile-link").setAttribute("href", hashFor({ profile: state.profileName, page: "profile" }));
   // The check page is profile-free; kept under the prefix, leaving it returns to the same profile.
   document.getElementById("check-link").setAttribute("href", hashFor({ profile: state.profileName, page: "check" }));

@@ -58,6 +58,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   installRouter({
     onDocument: showDocument,
     onEmpty: showEmpty,
+    // The home query changed under the same home view (typed, or arrived at): the table is not re-fetched, only the
+    // brand link follows it. A consumer of the query draws from state.homeQuery.
+    onHomeQuery: () => syncSwitcher(),
     onMissing: showMissing,
     onMissingProfile: showMissingProfile,
     onProfile,
