@@ -185,9 +185,11 @@ came from another site, so a page elsewhere cannot use a logged-in browser to qu
 `Sec-Fetch-Site` decides when it is sent (`same-origin` or `none` pass), so a proxy that rewrites `Host`
 does not lock out the UI; only without it are `Origin` or `Referer` compared with `Host` (or
 `X-Forwarded-Host`). A request naming no origin at all (curl, `scripts/deploy.sh`) is not a browser and
-passes. Every response forbids framing and MIME sniffing. An upload carries one PDF within
-`server.max_upload_mb`: a declared `Content-Length` over it is refused unread, and the bytes that arrive
-are counted, so a chunked upload without a length works and a larger one is refused as it passes the limit.
+passes. Every response forbids framing and MIME sniffing. An upload carries one paper within
+`server.max_upload_mb`: its PDF in the multipart part `file` and up to four supplementary-information PDFs in
+`si` parts, the limit counted over all of them together. A declared `Content-Length` over it is refused unread, and
+the bytes that arrive are counted, so a chunked upload without a length works and a larger one is refused as it
+passes the limit.
 
 ### How code reaches the server
 
@@ -204,7 +206,15 @@ against production's `data/`.
 PDFs anywhere on the page (dragged text does nothing). The dialog lists the chosen files, one paper each, with a
 progress bar and any error on its own row; 「上传后识图」 (off by default) also reads the paper's charts with the vision
 model -- slower and billed per chart, see [Reading figures](#reading-figures) -- and 「忽略缓存，全部重跑」 forces every
-stage of that upload to run again. Each file is uploaded as its own request, and processing starts on upload.
+stage of that upload to run again. Each paper is uploaded as its own request, and processing starts on upload.
+「添加 SI」 on a paper's row attaches its supplementary-information PDFs (up to four, listed in the order added, moved
+with ↑/↓ and removed with ✕): they go up in the paper's request and are merged after its main text into one PDF,
+which both lanes parse as one document. Such a paper carries a 含 SI tag in the rail and in its header, whose
+tooltip gives each part's page range and says what is read of the SI: its tables and captions are, its prose is not
+yet (the bibliography cut drops everything after the first references heading except tables and captions). Charts
+in the SI are read by 「识图」 like the paper's own. When the library already holds the same main text -- alone, for
+an upload with SI, or merged with SI, for one without -- the upload still goes ahead and the dialog names the other
+document (文库里已有这篇正文（不含 SI／含 SI）).
 Each library entry is two lines: the paper's name, then its 综述 tag if it has one, one dot per pipeline stage with a
 done/total count, an hourglass while a job is queued or running, and one tally of the comparison -- 一致 (both lanes
 agreed), 冲突 (the lanes read different values), 不确定 (the pipeline could not decide), 缺失 (only one lane found it) --
@@ -355,7 +365,10 @@ The flags worth knowing:
 - `overlay` also takes `--dpi` and `--pages 0,3,4` (0-based).
 
 `batch` walks subdirectories and accepts `.PDF` as well as `.pdf`. Identical PDF content is processed
-once. Every completed or failed paper checkpoints the workbook atomically, so re-running the same command
+once. A PDF that is a stored document's own `data/docs/<id>/source.pdf` is that document
+(`storage.document_for_path`, which every CLI command taking a PDF path uses too), so `batch data/docs` reprocesses
+the library rather than minting new documents -- a paper uploaded with SI could not be found again by hashing its
+merged file. Every completed or failed paper checkpoints the workbook atomically, so re-running the same command
 reuses the caches and rebuilds the table without appending duplicate rows. Failed papers are listed in the
 运行记录 sheet, processing continues past them, and **the command exits with status 1 if any paper
 failed.**
@@ -1445,8 +1458,8 @@ data/
 ├── llm_cache/                          model answers, keyed by request payload
 ├── exports/<profile>.xlsx              the default batch workbook
 └── docs/<first 16 hex of sha256>/
-    ├── identity.json                   full sha256, display name, origin
-    ├── source.pdf                      the uploaded PDF (web uploads only)
+    ├── identity.json                   full sha256, display name, origin; parts of an upload with SI
+    ├── source.pdf                      the uploaded PDF (web uploads only; main text then SI, merged)
     ├── raw/<backend>/                  the parser's native output plus meta.json
     ├── parsed/<backend>.md             every block behind its <!-- source: id --> marker: exactly
     │                                   what the extraction model reads
@@ -1459,6 +1472,13 @@ data/
     ├── overlays/<backend>/page_*.png   bbox overlays from `overlay`
     └── pages/<dpi>dpi/                 page renders for the web viewer
 ```
+
+A document's id is the sha256 of its PDF, with one exception: a paper uploaded with SI is identified by its parts,
+`sha256(b"paperfacts-parts-v1\n" + "\n".join(hex_shas))` over the main PDF's sha256 then each SI file's in upload
+order (`storage.parts_sha256`), because pdfium does not save the same merge to the same bytes twice. Its
+`identity.json` then holds `parts`, one `{name, sha256, first_page, pages}` per part (pages 0-based in the merged
+PDF), recorded when the document is created and never added later; a document without SI has no `parts`. A repeat
+of the same upload is the same document, and its `source.pdf` is never rewritten.
 
 Every block carries `page` plus a bounding box normalised to `[0, 1]`, and every extracted value cites the
 block ids it was read from, so any value maps back to a rectangle on a page. An export made under
