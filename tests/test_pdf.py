@@ -11,8 +11,17 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts.errors import UnreadablePdfError
 from paperfacts.models import NormalizedBBox
-from paperfacts.pdf import PDF_POINTS_PER_INCH, crop_region, png_bytes, read_geometry, render_page, render_region
+from paperfacts.pdf import (
+    PDF_POINTS_PER_INCH,
+    crop_region,
+    merge_pdfs,
+    png_bytes,
+    read_geometry,
+    render_page,
+    render_region,
+)
 from support.factories import PAGE_SIZES_PT, make_blank_pdf
 
 
@@ -255,3 +264,47 @@ def test_every_page_and_bitmap_is_closed_before_the_lock_is_released(two_page_pd
     assert any(isinstance(item, pdfium.PdfBitmap) for item in closed)
     # The returned image owns its pixels: it is still usable after the bitmap behind it was closed.
     assert image.getpixel((0, 0)) is not None
+
+
+# ---- merging -----------------------------------------------------------------------------------------
+
+
+def test_merge_keeps_every_page_in_part_order_and_counts_each_part(tmp_path: Path):
+    main = make_blank_pdf(tmp_path / "main.pdf", [(300.0, 400.0), (301.0, 400.0), (302.0, 400.0)]).read_bytes()
+    si = make_blank_pdf(tmp_path / "si.pdf", [(500.0, 600.0), (501.0, 600.0)]).read_bytes()
+
+    merged, counts = merge_pdfs([main, si])
+
+    assert counts == [3, 2]
+    assert merged.startswith(b"%PDF")
+    out = tmp_path / "merged.pdf"
+    out.write_bytes(merged)
+    geometry = read_geometry(out)
+    assert geometry.page_count == 5
+    assert [page.width_pt for page in geometry.pages] == [300.0, 301.0, 302.0, 500.0, 501.0]
+
+
+def test_merging_a_single_part_is_a_copy_of_its_pages(tmp_path: Path):
+    only = make_blank_pdf(tmp_path / "only.pdf", [(200.0, 300.0)]).read_bytes()
+
+    merged, counts = merge_pdfs([only])
+
+    assert counts == [1]
+    out = tmp_path / "merged.pdf"
+    out.write_bytes(merged)
+    assert read_geometry(out).page(0).width_pt == 200.0
+
+
+def test_a_part_pdfium_cannot_open_is_named_by_its_index(tmp_path: Path):
+    main = make_blank_pdf(tmp_path / "main.pdf", [(300.0, 400.0)]).read_bytes()
+
+    with pytest.raises(UnreadablePdfError) as excinfo:
+        merge_pdfs([main, b"%PDF-1.4 not really a pdf"])
+
+    assert excinfo.value.part == 1
+    assert "part 1" in str(excinfo.value)
+
+
+def test_merging_nothing_is_refused():
+    with pytest.raises(ValueError):
+        merge_pdfs([])
