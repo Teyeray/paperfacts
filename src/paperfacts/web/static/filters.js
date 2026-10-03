@@ -41,7 +41,7 @@ const STEPS = 1000;
 const BINS = 24;
 
 // What a column can be filtered by: "range", "pick", "none" (said in the panel) or null (left out of the panel).
-export function filterKind(field) {
+function filterKind(field) {
   if (RANGE_KINDS.has(field.kind)) return "range";
   if (field.kind === "boolean") return "pick";
   if ((field.categories ?? []).length) return "pick";
@@ -92,7 +92,7 @@ function splitPicks(text) {
 }
 
 // A range spec as { min, max } (null: that end is open), or null when it constrains nothing or does not parse.
-export function parseRange(spec) {
+function parseRange(spec) {
   const match = /^([^~]*)~([^~]*)$/.exec(spec ?? "");
   if (!match) return null;
   const end = (text) => (text.trim() === "" ? null : Number(text));

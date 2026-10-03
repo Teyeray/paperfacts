@@ -277,7 +277,6 @@ function resultsSection(entityChips, chips, columns, items, { count, note: noteT
   const head = document.createElement("div");
   head.className = "results-head table-toolbar";
   const explore = document.createElement("div");
-  explore.className = "toolbar-slot";
   explore.dataset.slot = "explore";
   explore.append(toggle);
   head.append(explore);

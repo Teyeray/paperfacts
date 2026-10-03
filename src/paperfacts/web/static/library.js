@@ -3,7 +3,7 @@
 // profiles says so. Uploading is upload.js.
 
 import { api, profileApi } from "./api.js";
-import { articleTag, escapeHtml, keepFocus, siTag, toast } from "./html.js";
+import { articleTag, escapeHtml, keepFocus, readStored, siTag, toast, writeStored } from "./html.js";
 import { profileTitle, servedProfile } from "./profiles.js";
 import { documentHash, navigate, reloadView } from "./router.js";
 import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, slot, state, viewShows } from "./state.js";
@@ -236,8 +236,7 @@ export function setupLibraryDisclosure() {
 // ---------- the rail's collapse ----------
 //
 // One attribute on .shell is the whole state (app.css closes the first grid track on it); remembered per browser so
-// a reader who put the rail away finds it away. localStorage may be absent or refuse (private windows, quota): a
-// failed read means expanded, a failed write is forgotten.
+// a reader who put the rail away finds it away; without storage it starts expanded.
 const RAIL_KEY = "paperfacts.rail-collapsed";
 
 export function setupRailToggle() {
@@ -251,13 +250,11 @@ export function setupRailToggle() {
     toggle.title = word;
     toggle.setAttribute("aria-label", word);
   };
-  let stored = null;
-  try { stored = localStorage.getItem(RAIL_KEY); } catch { /* no storage: start expanded */ }
-  apply(stored === "1");
+  apply(readStored(RAIL_KEY) === "1");
   const flip = () => {
     const collapsed = shell.dataset.rail !== "collapsed";
     apply(collapsed);
-    try { localStorage.setItem(RAIL_KEY, collapsed ? "1" : "0"); } catch { /* not remembered */ }
+    writeStored(RAIL_KEY, collapsed ? "1" : "0");
   };
   toggle.addEventListener("click", flip);
   // `[` anywhere on the page, except where the key is text: a field, a select, editable content, an open dialog.
