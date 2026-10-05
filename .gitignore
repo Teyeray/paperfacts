@@ -21,6 +21,12 @@ output/
 .claude/settings.local.json
 .claude/**/.omc/
 
+# Local-only tooling and leftovers, never part of the project: the JetBrains IDE
+# config, the pi agent's session/plans directory, and a one-off docs archive.
+.idea/
+.pi/
+paperfacts_docs.zip
+
 # Secrets
 .env
 .env.*
