@@ -39,8 +39,8 @@
 ## Verification
 
 - For code changes, run the focused tests first and the required project checks before completion:
-  `uv run pytest`, `uv run ruff check src tests runners`, and
-  `uv run ruff format --check src tests runners`.
+  `uv run pytest`, `uv run ruff check src tests runners eval`, and
+  `uv run ruff format --check src tests runners eval`.
 - Relevant frontend changes also require the existing browser regression suite described in `CLAUDE.md`.
 - Real parser/model evaluation is a separate, explicitly identified activity; a fake-client test does
   not establish OCR accuracy or scientific validity.

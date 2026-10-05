@@ -99,7 +99,7 @@ this file is the part that is easy to get wrong.
 - Errors: parsers raise `ParserError(backend, stage, detail)`. Adapters map unknown labels to `unknown`
   while keeping `raw_label`, and skip malformed boxes with a warning — never silently, never fatally.
 - Logging is the standard library, logger name = module name.
-- `ruff check` + `ruff format`, line length 120.
+- `ruff check` + `ruff format`, line length 120, over `src tests runners eval`.
 
 ## Extraction
 
@@ -264,6 +264,8 @@ this file is the part that is easy to get wrong.
 ## Testing
 
 - `uv run pytest` — no models, no network, no real papers. Temporary PDFs are generated with pypdfium2.
+- CI (`.github/workflows/ci.yml`) runs `lint` (ruff check + format --check over `src tests runners eval`) and `test` (`uv run pytest`) on pushes to `main` and on pull requests. No e2e job, no coverage report; deploy is manual via `scripts/deploy.sh`.
+- The Makefile wraps the dev commands (`make help`): `make check` runs the full local gate set (`lint`, `format-check`, `test`); `make e2e` runs the browser suite.
 - `uv run pytest --run-parser` — integration; needs both parser environments and their weights.
 - `tests/fixtures/corpus/` records every numeric value string and sample id of the real corpus with how
   `parse_number` and `sample_key` read them. A change to either that moves a corpus reading fails

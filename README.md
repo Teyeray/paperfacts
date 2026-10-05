@@ -1,5 +1,7 @@
 # PaperFacts
 
+[![CI](https://github.com/Teyeray/paperfacts/actions/workflows/ci.yml/badge.svg)](https://github.com/Teyeray/paperfacts/actions/workflows/ci.yml)
+
 Extract structured, **verifiably traceable** measurements from scientific PDFs.
 
 Give it a batch of papers and a list of target fields — sputtering power, gas flow, sheet resistance,
@@ -1717,11 +1719,13 @@ changed.
 uv run pytest                                              # unit tests; no models, no network, no real papers
 uv run pytest --cov=paperfacts                             # coverage target is 80%
 uv run pytest --run-parser                                 # integration; needs both parser environments and their weights
-uv run ruff check src tests runners && uv run ruff format --check src tests runners
+uv run ruff check src tests runners eval && uv run ruff format --check src tests runners eval
 # the web frontend in a real browser (navigation races, polling, layout, keyboard); deselected by default
 uv run --with playwright python -m playwright install chromium   # once
 PYTHONPATH=src uv run --with playwright pytest -m e2e      # or: python tests/e2e/web_races.py [--only NAME]
 ```
+
+Every command above is wrapped in the Makefile — `make help` lists the targets (`make test`, `make check`, `make format`, …). CI runs the same lint and test gates on every push to `main` and on every pull request; deploys stay a manual `scripts/deploy.sh` on the host.
 
 Line length is 120. Tests never touch a real model or a real LLM: parser output comes from recorded
 fixtures of genuine runs, temporary PDFs are generated with pypdfium2, and the LLM is a fake that doubles
