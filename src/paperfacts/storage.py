@@ -17,11 +17,17 @@ one shows every intermediate state of one paper:
     ├── comparisons/<extractor_key>.<comparison_key>.json   the two-lane comparison report
     ├── datasets/<extractor_key>.<comparison_key>.json      the consolidated per-sample table, for the web UI
     ├── figures/<profile>/<figure_key>.json        values a vision model read off charts (opt-in stage)
-    ├── crops/page_000.<bbox>.<dpi>dpi.png             page regions rendered for a vision model
+    ├── crops/page_000.<bbox>.<dpi>dpi.max-<pixels|unlimited>px.png   rendered page regions
     ├── overlays/<backend>/page_000.png                bbox overlays
     └── pages/<dpi>dpi/page_000.png                    page renders for the web viewer
 
     data/llm_cache/<sha256>.json      content-addressed cache of LLM requests, shared across documents
+
+VisualEvidenceLayout takes an explicit ``output/visual-evidence/<YYYY-MM-DD>-<run-id>/`` root and keeps
+``manifest.json`` and ``<document key>.<strategy>.json`` there. Its naming and retention rules live in
+``eval/README.md``; computing paths never creates a run directory or removes an older run.
+Experiment crops add ``.pdf-<actual PDF sha256>`` before ``.png`` in the existing crops directory, since
+the byte identity of a saved SI merge can differ while the logical document ID stays the same.
 
 A file's existence means its content is complete. ``meta.json`` earns that by being written last into a
 staging directory; every other stored file (artifacts, extractions, comparisons, datasets, readings,
@@ -133,10 +139,26 @@ class DataLayout:
     def crops_dir(self, document_id: str) -> Path:
         return self.doc_dir(document_id) / "crops"
 
-    def crop_path(self, document_id: str, page: int, bbox_key: str, dpi: int) -> Path:
+    def crop_path(
+        self,
+        document_id: str,
+        page: int,
+        bbox_key: str,
+        dpi: int,
+        *,
+        max_pixels: int | None = None,
+        source_pdf_sha256: str | None = None,
+    ) -> Path:
         # Not per profile, unlike figures_path: a crop is pixels cut out of a page, and which fields a profile
         # wants out of it changes nothing about the bytes. Two profiles asking for the same box share one file.
-        return self.crops_dir(document_id) / f"page_{page:03d}.{bbox_key}.{dpi}dpi.png"
+        # Even an unlimited render gets a suffix: legacy files never recorded their limit and cannot be reused.
+        limit = "unlimited" if max_pixels is None else str(max_pixels)
+        if source_pdf_sha256 is not None and (
+            len(source_pdf_sha256) != 64 or any(c not in "0123456789abcdef" for c in source_pdf_sha256)
+        ):
+            raise ValueError("source_pdf_sha256 must be a lowercase SHA-256 digest")
+        source = f".pdf-{source_pdf_sha256}" if source_pdf_sha256 is not None else ""
+        return self.crops_dir(document_id) / f"page_{page:03d}.{bbox_key}.{dpi}dpi.max-{limit}px{source}.png"
 
     def overlay_dir(self, document_id: str, backend: Backend) -> Path:
         return self.doc_dir(document_id) / "overlays" / backend
@@ -159,6 +181,42 @@ class DataLayout:
 
     def batch_dataset_path(self, profile_name: str) -> Path:
         return self.root / "exports" / f"{profile_name}.xlsx"
+
+
+@dataclass(frozen=True)
+class VisualEvidenceLayout:
+    """Paths under one explicit, ignored experiment run directory; never creates directories."""
+
+    root: Path
+
+    def manifest_path(self) -> Path:
+        return self.root / "manifest.json"
+
+    def report_path(self, document_id: str, strategy: str) -> Path:
+        if len(document_id) not in (DOC_DIR_ID_LENGTH, 64) or any(c not in "0123456789abcdef" for c in document_id):
+            raise ValueError("document_id must be a lowercase SHA-256 or 16-character document key")
+        if strategy not in ("risk_only", "balanced"):
+            raise ValueError("strategy must be risk_only or balanced")
+        return self.root / f"{document_key(document_id)}.{strategy}.json"
+
+    def attempt_report_path(self, document_id: str, strategy: str, attempt: int) -> Path:
+        if attempt < 1:
+            raise ValueError("attempt must be positive")
+        base = self.report_path(document_id, strategy)
+        return base if attempt == 1 else base.with_suffix(f".retry-{attempt:04d}.json")
+
+    def state_path(self, document_id: str, strategy: str, attempt: int) -> Path:
+        return self.attempt_report_path(document_id, strategy, attempt).with_suffix(".state.json")
+
+    def state_paths(self, document_id: str, strategy: str) -> tuple[Path, ...]:
+        base = self.report_path(document_id, strategy)
+        return tuple(sorted(self.root.glob(f"{base.stem}*.state.json")))
+
+    def snapshot_path(self, document_id: str) -> Path:
+        return self.root / f"{self.report_path(document_id, 'balanced').name.split('.')[0]}.snapshot.json"
+
+    def workbook_path(self) -> Path:
+        return self.root / "dataset.xlsx"
 
 
 # ---- Atomic writes -----------------------------------------------------------------------------------

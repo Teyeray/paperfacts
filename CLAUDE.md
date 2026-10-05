@@ -237,6 +237,30 @@ this file is the part that is easy to get wrong.
 - Vision requests go through `llm.complete_vision` on a `VisionClient`, never the extraction client;
   crops come from `pdf.render_region`.
 
+## Standalone visual evidence experiment
+
+- `visual_candidates.py` selects bounded risk/discovery regions; `visual_evidence.py` reads independent,
+  profile-scoped facts into sidecar reports. Neither is called by `workflow`, dataset decisions, or exports.
+- `eval/visual_evidence.py` freezes explicit input files and code, then runs two strategies; offline is the
+  default. Experiment parameters live in its ignored per-run JSON, not in new production settings.
+  `eval/visual_evidence_score.py` counts human-reviewed full tuples against the recorded complete A/B lanes.
+  A reviewed-scope metric pass is not proof of a valid C holdout or G1/G2 scientific acceptance.
+- `visual_adoption.py` is a pure, opt-in counterfactual evaluator of numeric missing/conflict cells.
+  `eval/visual_adoption.py` hashes explicit frozen inputs and scores its audit; gold never reaches the
+  decision function. Neither patches production datasets nor participates in workflow/batch or A/B keys.
+- `visual_snapshot.py` rebuilds an independent experimental copy from A/B, including derived rows.
+  The experiment entry saves/reloads snapshots before the existing workbook exporter; `visual_demo.py`
+  under `eval/` uses generated PDF/fixed replies only. Lifecycle receipts bind frozen manifest/report hashes,
+  and numbered retries retain earlier outputs. Production export does not consume these snapshots.
+- `CropStore` disk identity includes `max_pixels`. The experiment also requires `source_pdf_sha256` of
+  the actual PDF bytes in that identity, separately from a merged-SI document's parts-based identity.
+  Historical crops are retained, but files without a matching identity are not reused.
+- Keep raw observations, cached-response validation, unresolved coverage and provenance visible. A parsed
+  or normalized observation is never marked grounded. Counterfactual adoption is explicitly labelled in
+  its separate audit; production datasets remain unchanged.
+- See `eval/README.md` for the input/review contracts and output lifecycle. No live model evaluation is
+  implied by synthetic unit tests. T4 workflow integration and T5 adoption retain their plan gates.
+
 ## Testing
 
 - `uv run pytest` — no models, no network, no real papers. Temporary PDFs are generated with pypdfium2.

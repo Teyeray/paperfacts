@@ -3,7 +3,10 @@
 A region is the part of a page a stage wants a vision model to look at: the blocks a value was cited from,
 a chart's panel, a whole table. Two stages, and two values within one stage, keep asking for the same box --
 two numbers cited from one table share a region, and a re-run asks for every region again -- so the PNG is
-content-addressed by page, box and DPI under the document's ``crops/`` directory and answered from there.
+content-addressed by page, box, DPI and pixel limit under the document's ``crops/`` directory and answered
+from there.
+Experiments may also bind the actual PDF byte digest: a merged SI document's logical identity is separate
+from its saved PDF bytes, so the same logical document must not reuse another merge's image.
 
 The digest travels with the crop because the LLM cache keys a vision request on the image's sha256 rather
 than its base64 (see :mod:`paperfacts.llm`): a stored verdict names the digest, and the file beside it is the
@@ -97,12 +100,14 @@ class CropStore:
         dpi: int,
         max_pixels: int | None = None,
         page_cache: bool = False,
+        source_pdf_sha256: str | None = None,
     ) -> None:
         self.layout = layout
         self.document_id = document_id
         self.pdf_path = pdf_path
         self.dpi = dpi
         self.max_pixels = max_pixels
+        self.source_pdf_sha256 = source_pdf_sha256
         self._lock = threading.Lock()
         self._memory: dict[Path, bytes] = {}
         self._pages: dict[int, Image.Image] | None = {} if page_cache else None
@@ -137,7 +142,14 @@ class CropStore:
             return data
 
     def path_for(self, page: int, bbox: NormalizedBBox) -> Path:
-        return self.layout.crop_path(self.document_id, page, bbox_key(bbox), self.dpi)
+        return self.layout.crop_path(
+            self.document_id,
+            page,
+            bbox_key(bbox),
+            self.dpi,
+            max_pixels=self.max_pixels,
+            source_pdf_sha256=self.source_pdf_sha256,
+        )
 
     def _render(self, page: int, bbox: NormalizedBBox) -> Image.Image:
         # Called under the lock, so the page cache needs no separate guard.

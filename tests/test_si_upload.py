@@ -350,11 +350,16 @@ def test_a_batch_over_the_stored_documents_mints_no_new_document(
 def test_a_cli_command_on_a_stored_source_pdf_names_its_document(
     monkeypatch, settings: Settings, library: Library, merged: DocumentInput
 ):
-    install_fake_pipeline(monkeypatch)
+    from paperfacts import workflow
+
+    spy = install_fake_pipeline(monkeypatch)
+    # The CLI imported its own binding; patch that call site as well to keep this test parser-free.
+    monkeypatch.setattr("paperfacts.cli.parse_document", workflow.parse_document)
     pdf_path = library.layout.source_pdf(merged.document_id)
 
     result = CliRunner().invoke(cli_app, ["parse", str(pdf_path), "--data-root", str(settings.data_root)])
 
     assert result.exit_code == 0, result.output
+    assert spy.parse == [("mineru", False), ("paddleocr_vl", False)]
     assert f"document_id={merged.document_id[:16]}" in result.output
     assert library.document_ids() == [merged.document_id[:16]]

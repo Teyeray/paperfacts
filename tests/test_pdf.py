@@ -1,16 +1,18 @@
 """PDF reading and rendering — the only module in the main package that touches PDF files directly.
 
 This layer is the "source of truth for the page coordinate system": both the runner side and the
-main package independently compute geometry with pypdfium2, and the two must agree. All test cases
-run against blank PDFs generated on the fly, with no dependency on any copyrighted paper.
+main package independently compute geometry with pypdfium2, and the two must agree. Test cases use
+blank or native-text PDFs generated on the fly, with no dependency on any copyrighted paper.
 """
 
 from __future__ import annotations
 
+import ctypes
 from pathlib import Path
 
 import pypdfium2 as pdfium
 import pytest
+from PIL import ImageChops
 
 from paperfacts.errors import UnreadablePdfError
 from paperfacts.models import NormalizedBBox
@@ -24,6 +26,119 @@ from paperfacts.pdf import (
     render_region,
 )
 from support.factories import PAGE_SIZES_PT, make_blank_pdf
+
+
+def make_native_pdf(
+    path: Path,
+    texts: tuple[str, ...] = ("Native layer",),
+    *,
+    rotation: int = 0,
+    cropbox: tuple[float, float, float, float] | None = None,
+    text_x: float = 60,
+) -> Path:
+    """Small native-text fixtures keep geometry checks independent of parser output."""
+    from paperfacts.pdf import _PDFIUM_LOCK
+
+    with _PDFIUM_LOCK:
+        document = pdfium.PdfDocument.new()
+        try:
+            for text in texts:
+                page = document.new_page(320, 240)
+                try:
+                    if text:
+                        obj = pdfium.PdfTextObj(
+                            pdfium.raw.FPDFPageObj_NewTextObj(document, b"Helvetica", 16), pdf=document
+                        )
+                        encoded = ctypes.create_string_buffer(text.encode("utf-16-le") + b"\0\0")
+                        assert pdfium.raw.FPDFText_SetText(obj, ctypes.cast(encoded, ctypes.POINTER(ctypes.c_ushort)))
+                        obj.set_matrix(pdfium.PdfMatrix(e=text_x, f=80))
+                        page.insert_obj(obj)
+                        page.gen_content()
+                    if cropbox is not None:
+                        page.set_cropbox(*cropbox)
+                    page.set_rotation(rotation)
+                finally:
+                    page.close()
+            document.save(str(path))
+        finally:
+            document.close()
+    return path
+
+
+def test_read_native_pages_keeps_text_and_blank_pages_in_document_order(tmp_path: Path):
+    from paperfacts import pdf
+
+    path = make_native_pdf(tmp_path / "native.pdf", ("First page", "", "Last page"))
+
+    pages = pdf.read_native_pages(path)
+
+    assert isinstance(pages, tuple)
+    assert [(page.page, page.text) for page in pages] == [(0, "First page"), (1, ""), (2, "Last page")]
+    assert [region.text for region in pages[0].regions] == ["First page"]
+    assert pages[1].regions == ()
+    assert [region.text for region in pages[2].regions] == ["Last page"]
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+@pytest.mark.parametrize("cropbox", [None, (30, 20, 270, 190)])
+def test_native_regions_follow_the_visible_render_after_rotation_and_crop(tmp_path: Path, rotation, cropbox):
+    from paperfacts import pdf
+
+    path = make_native_pdf(tmp_path / "position.pdf", rotation=rotation, cropbox=cropbox)
+
+    page = pdf.read_native_pages(path)[0]
+    image = render_page(path, 0, dpi=144)
+    ink_bounds = ImageChops.invert(image.convert("L")).point(lambda value: 255 if value > 128 else 0).getbbox()
+
+    assert page.text == "Native layer"
+    assert len(page.regions) == 1
+    region = page.regions[0]
+    assert region.text == "Native layer"
+    assert isinstance(region.bbox, NormalizedBBox)
+    assert ink_bounds is not None
+    assert region.bbox.to_pixels(width_px=image.width, height_px=image.height) == pytest.approx(ink_bounds, abs=2)
+
+
+def test_native_text_without_a_visible_box_is_retained_without_an_invented_region(tmp_path: Path):
+    from paperfacts import pdf
+
+    path = make_native_pdf(tmp_path / "offpage.pdf", ("Outside crop",), text_x=290, cropbox=(30, 20, 270, 190))
+
+    page = pdf.read_native_pages(path)[0]
+
+    assert page.text == "Outside crop"
+    assert page.regions == ()
+
+
+@pytest.mark.parametrize("fail_text_read", [False, True])
+def test_native_text_handles_close_inside_the_lock_even_after_a_read_error(tmp_path: Path, monkeypatch, fail_text_read):
+    from paperfacts import pdf
+
+    path = make_native_pdf(tmp_path / "lifetime.pdf")
+    closed: list[type] = []
+    for cls in (pdfium.PdfTextPage, pdfium.PdfPage, pdfium.PdfDocument):
+        original_close = cls.close
+
+        def tracking_close(self, *args, original_close=original_close, **kwargs):
+            assert pdf._PDFIUM_LOCK.locked(), f"{type(self).__name__} closed outside the pdfium lock"
+            closed.append(type(self))
+            return original_close(self, *args, **kwargs)
+
+        monkeypatch.setattr(cls, "close", tracking_close)
+
+    if fail_text_read:
+
+        def fail_read(self):
+            assert pdf._PDFIUM_LOCK.locked()
+            raise pdfium.PdfiumError("synthetic text read failure")
+
+        monkeypatch.setattr(pdfium.PdfTextPage, "get_text_range", fail_read)
+        with pytest.raises(pdfium.PdfiumError, match="synthetic text read failure"):
+            pdf.read_native_pages(path)
+    else:
+        assert pdf.read_native_pages(path)[0].text == "Native layer"
+
+    assert closed.index(pdfium.PdfTextPage) < closed.index(pdfium.PdfPage) < closed.index(pdfium.PdfDocument)
 
 
 def test_read_geometry_returns_one_entry_per_page_in_document_order(two_page_pdf: Path):
@@ -182,9 +297,11 @@ def test_pdfium_calls_from_many_threads_never_overlap(two_page_pdf: Path, monkey
     with ThreadPoolExecutor(max_workers=6) as pool:
         sizes = list(pool.map(lambda i: pdf_module.render_page(two_page_pdf, i % 2, dpi=20).size, range(12)))
         geometries = list(pool.map(lambda _: pdf_module.read_geometry(two_page_pdf).page_count, range(6)))
+        native_counts = list(pool.map(lambda _: len(pdf_module.read_native_pages(two_page_pdf)), range(6)))
 
     assert peak == 1
     assert len(sizes) == 12 and geometries == [2] * 6
+    assert native_counts == [2] * 6
 
 
 # ---- Region crops for the vision model -----------------------------------------------------

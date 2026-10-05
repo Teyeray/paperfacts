@@ -11,6 +11,7 @@ import math
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 import pypdfium2 as pdfium
@@ -32,6 +33,19 @@ PDF_POINTS_PER_INCH = 72
 # (SIGTRAP, core dumped), and pypdfium2's "Weakref ... was not cleaned up from ObjectTracker" warnings were the
 # sign of it.
 _PDFIUM_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True)
+class NativeTextRegion:
+    text: str
+    bbox: NormalizedBBox
+
+
+@dataclass(frozen=True)
+class NativePage:
+    page: int
+    text: str
+    regions: tuple[NativeTextRegion, ...]
 
 
 @contextmanager
@@ -101,6 +115,68 @@ def read_geometry(pdf_path: Path) -> DocumentGeometry:
             for index, (width_pt, height_pt) in enumerate(sizes)
         )
     )
+
+
+def read_native_pages(pdf_path: Path) -> tuple[NativePage, ...]:
+    """Read the native text layer, retaining text even when it has no visible rectangle.
+
+    Rectangles are PDFium text runs, not inferred tables or figure boundaries. Their coordinates follow
+    the displayed page used by :func:`render_page`, including the PDF's rotation and visible crop.
+    """
+    pages: list[NativePage] = []
+    with _open(pdf_path) as document:
+        for index in range(len(document)):
+            page = document[index]
+            try:
+                textpage = page.get_textpage()
+                try:
+                    text = textpage.get_text_range()
+                    width, height = page.get_size()
+                    geometry = PageGeometry(index=index, width_pt=width, height_pt=height)
+                    page_box = page.get_bbox()
+                    rotation = page.get_rotation()
+                    regions: list[NativeTextRegion] = []
+                    for rect_index in range(textpage.count_rects()):
+                        left, bottom, right, top = textpage.get_rect(rect_index)
+                        if not all(math.isfinite(value) for value in (left, bottom, right, top)):
+                            continue
+                        # A text run can extend beyond CropBox; never attach its hidden portion to a visible box.
+                        left, bottom = max(left, page_box[0]), max(bottom, page_box[1])
+                        right, top = min(right, page_box[2]), min(top, page_box[3])
+                        if left >= right or bottom >= top:
+                            continue
+                        region_text = textpage.get_text_bounded(left, bottom, right, top)
+                        if not region_text.strip():
+                            continue
+                        box = (left, bottom, right, top)
+                        bbox = _native_bbox(box, page_box, rotation, geometry)
+                        regions.append(NativeTextRegion(text=region_text, bbox=bbox))
+                    pages.append(NativePage(page=index, text=text, regions=tuple(regions)))
+                finally:
+                    textpage.close()
+            finally:
+                page.close()
+    return tuple(pages)
+
+
+def _native_bbox(
+    box: tuple[float, float, float, float],
+    page_box: tuple[float, float, float, float],
+    rotation: int,
+    geometry: PageGeometry,
+) -> NormalizedBBox:
+    left, bottom, right, top = box
+    page_left, page_bottom, page_right, page_top = page_box
+    # Native text uses an unrotated, bottom-left origin; render_page displays the cropped, rotated page.
+    if rotation == 90:
+        displayed = (bottom - page_bottom, left - page_left, top - page_bottom, right - page_left)
+    elif rotation == 180:
+        displayed = (page_right - right, bottom - page_bottom, page_right - left, top - page_bottom)
+    elif rotation == 270:
+        displayed = (page_top - top, page_right - right, page_top - bottom, page_right - left)
+    else:
+        displayed = (left - page_left, page_top - top, right - page_left, page_top - bottom)
+    return NormalizedBBox.from_points(displayed, page=geometry)
 
 
 def render_page(pdf_path: Path, page_index: int, *, dpi: int) -> Image.Image:

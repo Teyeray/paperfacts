@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="PaperFacts 自动原图补证行动方案：保留双路主抽取，自动发现候选、读取原图、验证净增益，再开放有限自动采纳。">
+<title>PaperFacts · 自动原图补证行动方案</title>
+<style>
+:root{--paper:#faf9f5;--white:#fff;--ink:#193330;--muted:#65716c;--line:#d8ded6;--teal:#126e60;--wash:#e9f1eb;--blue:#286b9e;--orange:#b86728;--amber:#885821;--amber-bg:#fbf2df;--mono:"SFMono-Regular",Consolas,monospace;--serif:"Iowan Old Style","Baskerville","Songti SC","Noto Serif CJK SC",serif;--sans:"Avenir Next","PingFang SC","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:32px}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.8 var(--sans)}
+a{color:var(--teal);text-underline-offset:4px}button,a,summary{-webkit-tap-highlight-color:transparent}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid var(--orange);outline-offset:4px}
+button{font:inherit;cursor:pointer}code{font:12px/1.65 var(--mono);overflow-wrap:anywhere;background:#edf0ea;padding:2px 5px;border-radius:3px}pre{padding:18px;background:#edf0ea;overflow:auto;line-height:1.7;border-radius:4px}pre code{padding:0;background:none}
+.rail{width:216px;height:100vh;position:fixed;top:0;left:0;border-right:1px solid var(--line);padding:34px 22px;display:flex;flex-direction:column;background:var(--paper);z-index:10}
+.brand{font-size:19px;letter-spacing:-.6px;font-weight:700}.brand i{display:inline-block;width:11px;height:11px;background:var(--teal);margin-right:9px}.rail-label{font:10px/1.5 var(--mono);letter-spacing:2px;margin-top:8px;color:var(--muted)}
+nav{margin:48px 0 24px;display:grid;gap:7px}nav a{text-decoration:none;font-size:13px;padding:8px 10px;border-left:2px solid transparent;color:var(--muted);display:flex;gap:14px}nav a span{font:10px/2.3 var(--mono);color:#8b968f}nav a:hover,nav a.active{background:var(--wash);color:var(--teal);border-color:var(--teal)}
+.rail-foot{margin-top:auto;color:var(--muted);font-size:11px;line-height:1.8}.rail-foot strong{display:block;color:var(--ink);font-weight:500}
+main{max-width:1440px;margin-left:216px;padding:45px 6vw 70px}.topline{display:flex;justify-content:space-between;align-items:center;gap:20px;color:var(--muted);font:11px/1.6 var(--mono);letter-spacing:1px}.top-actions{display:flex;gap:8px;flex-wrap:wrap}.small-btn{border:1px solid var(--line);background:transparent;color:var(--ink);padding:7px 13px;border-radius:3px;font:12px var(--sans);letter-spacing:0}.small-btn:hover{background:var(--wash)}
+.hero{padding:65px 0 44px;display:grid;grid-template-columns:minmax(0,1fr) 205px;gap:36px;align-items:center;border-bottom:1px solid var(--line)}.eyebrow{font:11px/1.6 var(--mono);letter-spacing:2px;color:var(--teal);text-transform:uppercase}.hero h1{font:600 clamp(31px,3.5vw,52px)/1.28 var(--serif);letter-spacing:-1.5px;margin:20px 0}.hero .lead{font-size:18px;line-height:1.85;max-width:730px;margin-bottom:20px}.hero .sub{color:var(--muted);font-size:13px;max-width:710px}
+.formula{border-left:1px solid var(--line);padding-left:32px}.formula .big{font:400 84px/1.1 var(--serif);letter-spacing:-6px}.formula .big em{font-style:normal;color:var(--teal)}.formula p{font-size:12px;color:var(--muted);line-height:1.8}.badge{display:inline-block;font-size:11px;padding:2px 9px;border:1px solid #b9cfc5;border-radius:3px;color:var(--teal);vertical-align:middle;background:#f0f6f1}.badge.amber{color:var(--amber);background:var(--amber-bg);border-color:#e9d7b4}
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:26px 0 0}.fact{padding:0 22px;border-right:1px solid var(--line)}.fact:first-child{padding-left:0}.fact:last-child{border:0}.fact small{display:block;font-size:11px;color:var(--muted);margin-bottom:3px}.fact strong{font-size:14px;font-weight:500}
+section{padding-top:57px;scroll-margin-top:24px}.section-head{display:grid;grid-template-columns:44px minmax(0,1fr);gap:15px;margin-bottom:24px}.index{font:14px/2.5 var(--mono);color:var(--teal)}h2{font:600 29px/1.5 var(--serif);letter-spacing:-.7px;margin:0 0 7px}h3{font-size:17px;line-height:1.5;margin:0 0 12px}h4{font-size:13px;margin:20px 0 7px}p{margin:0 0 14px}.section-head p{color:var(--muted);margin:0;font-size:13px}.section-body{margin-left:59px}.callout{padding:19px 23px;background:var(--wash);border-left:3px solid var(--teal);margin:20px 0}.callout p:last-child{margin-bottom:0}.callout.warn{background:var(--amber-bg);border-color:#c08c47}.callout strong{font-weight:600}.small{font-size:12px;color:var(--muted)}.label{font:10px/1.6 var(--mono);letter-spacing:1.6px;color:var(--muted);margin-bottom:13px}
+.principles{display:grid;grid-template-columns:1fr 1fr;gap:26px}.principles article{border-top:2px solid var(--ink);padding-top:16px}.principles article:nth-child(2){border-color:var(--teal)}ul,ol{margin:8px 0 14px;padding-left:21px}li{padding:3px 0}.checks{list-style:none;padding:0}.checks li{position:relative;padding-left:21px}.checks li:before{content:"□";position:absolute;left:0;color:var(--teal)}
+.pipeline{border:1px solid var(--line);padding:26px;background:var(--white)}.pipe-top{text-align:center;margin-bottom:20px}.pipe-source{display:inline-block;padding:7px 38px;background:var(--ink);color:#fff;font-size:13px;letter-spacing:2px}.pipe-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.pipe-lane{background:#f6f7f4;border:1px solid var(--line);padding:18px}.lane-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}.lane{padding:13px 10px;border-top:3px solid var(--blue);background:#fff;text-align:center;font-size:13px}.lane.orange{border-color:var(--orange)}.arrow{text-align:center;color:#8f9a94;line-height:1.3;padding:8px 0;font-size:20px}.node{padding:12px 16px;background:#fff;border:1px solid var(--line);font-size:13px;line-height:1.7}.node strong{display:block;margin-bottom:2px}.node.teal{border-color:#9bbeb0;background:#f0f7f3}.node.dark{background:var(--ink);border-color:var(--ink);color:white}.node .small{font-size:11px}.node.dark .small{color:#ccdad2}.node.center{text-align:center}.pipe-merge{padding-top:0}.pipe-bottom{display:grid;grid-template-columns:1fr 1fr;gap:12px}.figure-note{margin:14px 0 0;color:var(--muted);font-size:12px}.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:16px}.dot{display:inline-block;width:7px;height:7px;background:var(--teal);margin-right:6px;border-radius:50%}.dot.blue{background:var(--blue)}.dot.orange{background:var(--orange)}
+.scenario{margin-top:22px;border:1px solid var(--line);background:var(--white);padding:22px}.scenario-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 18px}.scenario-tabs button{font-size:12px;border:1px solid var(--line);background:var(--white);color:var(--muted);padding:8px 12px;border-radius:3px}.scenario-tabs button[aria-selected=true]{background:var(--teal);border-color:var(--teal);color:white}.scenario-panel[hidden]{display:none}.scenario-panel{font-size:13px}.scenario-panel p:last-child{margin:0}.example-label{display:inline-block;margin-right:8px;background:#edf0ea;padding:0 7px;font-size:11px}
+.table-wrap{overflow-x:auto;border-top:1px solid var(--line);margin:18px 0}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;letter-spacing:.5px;color:var(--muted);font-weight:500;background:#f0f2ec}th,td{padding:13px 14px;border-bottom:1px solid var(--line);vertical-align:top}td:first-child{font-weight:500}td p{margin:0}table code{font-size:11px}caption{text-align:left;font-size:12px;color:var(--muted);margin:0 0 10px}
+.route{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 24px;font-size:12px}.route b{background:var(--ink);color:white;padding:5px 10px;font-weight:500}.route span{color:var(--muted)}.route .gate{color:var(--teal);border:1px dashed #8daf9f;padding:4px 9px;background:#edf5ef}
+.task{background:var(--white);border:1px solid var(--line);margin:0 0 13px}.task summary{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:15px;padding:22px;cursor:pointer;list-style:none;align-items:start}.task summary::-webkit-details-marker{display:none}.task summary:after{content:"＋";color:var(--teal);font-size:18px}.task[open] summary:after{content:"−"}.task-no{font:13px/1.8 var(--mono);color:var(--teal)}.task-title{font-size:16px;font-weight:600;line-height:1.55}.task-sub{font-size:12px;color:var(--muted);font-weight:400;margin-top:5px}.task-body{padding:0 22px 24px 75px;font-size:13px}.task-body .file-line{font-size:11px;color:var(--muted);line-height:2;margin-bottom:15px}.task-body h4{color:var(--teal)}.task-body ul{margin-top:4px}.accept{margin-top:14px;padding:13px 16px;background:#f1f5ef;border-left:2px solid var(--teal)}.accept strong{display:block;font-size:11px;margin-bottom:3px;color:var(--teal)}.conditional{background:#fdfcf8;border-style:dashed}.code-block{font-size:11px;line-height:1.8;white-space:pre-wrap;word-break:break-word;background:#f3f4ef;padding:13px 15px}
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:17px}.metric{border-top:2px solid var(--teal);padding-top:14px}.metric b{display:block;font:500 23px var(--serif);margin-bottom:8px}.metric p{font-size:12px;color:var(--muted)}.decision-rule{display:grid;grid-template-columns:1fr 1fr;gap:20px}.decision-rule article{padding:20px;border:1px solid var(--line);background:var(--white);font-size:13px}.decision-rule article:last-child{border-top:3px solid #bd8746}.decision-rule h3{font-size:15px}.scope-strip{display:grid;grid-template-columns:1fr 1fr;gap:25px}.scope-strip h3{font-size:15px}.source-list{font-size:12px;color:var(--muted);columns:2;column-gap:30px}.source-list li{break-inside:avoid;padding:5px 0;overflow-wrap:anywhere}.source-list a{color:var(--muted)}
+.footer{margin:52px 0 0 59px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:24px;font-size:11px;color:var(--muted)}
+.print-only{display:none}
+@media(min-width:1500px){main{padding-left:85px;padding-right:85px}}
+@media(max-width:1100px){.rail{width:178px;padding:28px 15px}main{margin-left:178px;padding:35px 4vw 55px}.hero{grid-template-columns:1fr 150px;gap:22px}.formula{padding-left:22px}.formula .big{font-size:66px}.section-body{margin-left:0}.footer{margin-left:0}.pipe-grid{gap:12px}.pipeline{padding:20px}}
+@media(max-width:760px){.rail{position:relative;width:auto;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:19px 22px}.brand{font-size:17px}.rail-label,.rail-foot{display:none}nav{margin:15px 0 0;display:flex;gap:4px;overflow-x:auto}nav a{white-space:nowrap;padding:5px 9px;font-size:11px;border-left:0;border-bottom:2px solid transparent}nav a span{display:none}main{margin:0;padding:24px 22px 40px}.topline{font-size:9px;align-items:start;letter-spacing:.3px}.small-btn{font-size:11px;padding:7px 9px}.hero{padding:36px 0 26px;display:block}.hero h1{font-size:35px}.hero .lead{font-size:16px}.formula{display:none}.facts{grid-template-columns:1fr;gap:13px}.fact{padding:0 0 11px;border-right:0;border-bottom:1px solid var(--line)}.fact small{margin:0}.fact:last-child{padding-bottom:0}section{padding-top:39px}.section-head{grid-template-columns:28px 1fr;gap:10px}h2{font-size:25px}.index{font-size:12px}.principles,.pipe-grid,.pipe-bottom,.decision-rule,.scope-strip{grid-template-columns:1fr}.pipeline{padding:16px}.pipe-lane{padding:12px}.lane-pair{gap:7px}.node{padding:11px 13px}.scenario{padding:17px}.task summary{grid-template-columns:28px 1fr auto;gap:10px;padding:18px 14px}.task-title{font-size:15px}.task-body{padding:0 16px 20px 16px}.metric-grid{grid-template-columns:1fr}.metric{display:grid;grid-template-columns:95px 1fr;gap:10px}.metric b{font-size:20px}.source-list{columns:1}.footer{flex-direction:column;gap:8px}.table-wrap{margin-left:0}th,td{min-width:100px;padding:11px 10px}td:nth-child(2){min-width:195px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{
+ @page{size:A4;margin:16mm 15mm}
+ *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ body{font-size:10pt;line-height:1.65;background:white}.rail,.top-actions,.scenario-tabs{display:none!important}main{margin:0;padding:0;max-width:none}.topline{font-size:8pt}.hero{padding:24px 0 20px;grid-template-columns:1fr 140px}.hero h1{font-size:30pt}.hero .lead{font-size:12pt}.hero .sub{font-size:9pt}.formula{padding-left:18px;min-width:0}.formula .big{font-size:44pt;letter-spacing:-3px;white-space:nowrap}.facts{margin-top:15px}.fact strong{font-size:9pt}.fact small{font-size:8pt}.section-body{margin-left:0}section{padding-top:25px}.section-head{margin-bottom:14px;break-inside:avoid;break-after:avoid-page}h2{font-size:18pt}.section-head p{font-size:9pt}.pipeline,.scenario,.callout,.metric,.decision-rule article{break-inside:avoid}.pipeline{padding:16px}.node,.lane,.task-body,table{font-size:9pt}.small,.node .small,.figure-note,.legend{font-size:8pt}.task summary{padding:15px 16px;break-after:avoid}.task-title{font-size:11pt}.task-sub{font-size:8pt}.task-body{display:block!important;padding:0 16px 16px 60px}.task summary:after{display:none}.task-body h4{break-after:avoid}.task-body li,.accept{break-inside:avoid}.task{break-inside:auto}.table-wrap{overflow:visible}thead{display:table-header-group}tr{break-inside:avoid}th,td{padding:8px}.scenario-panel[hidden]{display:block!important;margin-top:13px;border-top:1px solid var(--line);padding-top:13px}.source-list{columns:1;font-size:8pt}.footer{font-size:8pt;margin-left:0}.print-only{display:block}.code-block{font-size:8pt}
+}
+</style>
+</head>
+<body>
+<aside class="rail" aria-label="文档导航">
+  <div class="brand"><i aria-hidden="true"></i>PaperFacts</div>
+  <div class="rail-label">ENGINEERING NOTE / 02</div>
+  <nav>
+    <a href="#direction" class="active"><span>01</span>目标与边界</a>
+    <a href="#pipeline"><span>02</span>自动化流程</a>
+    <a href="#tasks"><span>03</span>六个实施任务</a>
+    <a href="#acceptance"><span>04</span>验收与停止条件</a>
+    <a href="#adoption"><span>05</span>自动采纳规则</a>
+    <a href="#resources"><span>06</span>资源与维护</a>
+    <a href="#basis"><span>07</span>依据与交付</a>
+  </nav>
+  <div class="rail-foot"><strong>工具开发 · 待真实验收</strong>2026.10.05<br>本地文档 / 可离线阅读<br>复核基线 ef0ebb6</div>
+</aside>
+<main>
+  <div class="topline"><span>IMPLEMENTATION PLAN · REVISION 04</span><div class="top-actions"><button class="small-btn" id="expand-all" type="button" aria-controls="task0 task1 task2 task3 task4 task5 taskqa" aria-expanded="false">展开全部任务</button><button class="small-btn" id="print" type="button">打印 / 保存 PDF</button></div></div>
+  <header class="hero">
+    <div>
+      <div class="eyebrow">AUTOMATED VISUAL EVIDENCE</div>
+      <h1>让第三路自动找证据，<br>让复杂度留在边界内。</h1>
+      <p class="lead">保留两路全文抽取，增加一条按需读取原图的自动支路。先证明能纠错、能补漏，再接入日常运行和有限自动采纳。</p>
+      <p class="sub"><span class="badge">工具工程验证通过</span> 纠错与共同补漏同等重要。T1/T2 与 T3 离线工具已通过合成 PDF 与假客户端验证；已追加纯采纳决策、G2 离线回放、持久状态与独立实验副本导出，提供合成离线演示；真实论文分析、G1/G2 验收及 T4/T5 生产接入待后续进行。<a href="2026-10-05-auto-visual-evidence-progress.md">查看实施记录</a>。</p>
+    </div>
+    <div class="formula" aria-label="两路主抽取，加一路自动补证"><div class="big">2<em>+1</em></div><p>两路主抽取<br>一路自动原图补证<br>保留未决项</p></div>
+  </header>
+  <div class="facts" aria-label="用户已确认的约束">
+    <div class="fact"><small>首轮领域与样例</small><strong>沿用现有 TCO / 11 份 gold</strong></div>
+    <div class="fact"><small>原 PDF 与既有运行数据</small><strong>沿用现有数据目录</strong></div>
+    <div class="fact"><small>自动读图模型</small><strong>沿用项目现有服务</strong></div>
+  </div>
+
+  <section id="direction">
+    <div class="section-head"><div class="index">01</div><div><h2>交付一个能自动跑完的补证流程</h2><p>日常无需人工选区域、点击读图或逐条确认。无法确定时，系统留下原因并继续。</p></div></div>
+    <div class="section-body">
+      <div class="principles">
+        <article><div class="label">GOAL</div><h3>更少遗漏，更少错误归属</h3><p>把“两路有分歧”与“独立发现但尚未覆盖”的内容自动送去看原图。每条输出都能回到论文中的页、区域和可见依据。</p><p class="small">三种读取方式来自同一篇论文，增加的是解析核对依据，不是三份独立科学证据。</p></article>
+        <article><div class="label">ARCHITECTURE</div><h3>一个辅助步骤，复用已有组件</h3><p>复用 PDF 渲染、裁图、视觉客户端、缓存和单位规范化。先用冻结输入离线评估；验收后接入现有 <code>workflow.run_document</code>。</p><p class="small">Python 3.13 · pypdfium2 / Pillow · 现有 OpenAI-compatible 服务 · pytest / ruff。</p></article>
+      </div>
+      <div class="callout"><strong>第一版范围：</strong>自动选候选、读完整事实、输出旁路报告；真实验收通过后接入常规任务。自动采纳作为独立关口，样例不足时保持旁路模式。</div>
+      <div class="scope-strip">
+        <div><h3>本轮优先解决</h3><ul><li>表格数值冲突、单路缺失、单位/条件混淆。</li><li>独立文字扫描发现的相关图表页与部分共同遗漏。</li><li>模型失败、预算耗尽时，已有双路结果仍可使用。</li></ul></div>
+        <div><h3>暂缓建设</h3><ul><li>第三个全文解析 Backend、三路多数投票。</li><li>通用子图分割模型、新数据库、新队列。</li><li>专门的三路 UI、图谱、跨论文关系系统。</li><li>曲线估读自动进入精确事实主表。</li></ul></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="pipeline">
+    <div class="section-head"><div class="index">02</div><div><h2>先自动发现，再独立读取</h2><p>第三路不能只依赖 A/B 发现的内容，否则两路共同漏掉的区域仍然不可见。</p></div></div>
+    <div class="section-body">
+      <div class="pipeline" role="img" aria-label="PDF 分为现有双路抽取与原生文字独立扫描。二者产生自动候选，第三路看原图读取完整事实，输出补证与未决项。通过验收后才允许有限自动采纳。">
+        <div class="pipe-top"><div class="pipe-source">原始 PDF</div><div class="arrow" aria-hidden="true">↓</div></div>
+        <div class="pipe-grid">
+          <div class="pipe-lane"><div class="label">现有主链 · 保留</div><div class="lane-pair"><div class="lane"><strong>A / MinerU</strong><br>全文解析 → 事实抽取</div><div class="lane orange"><strong>B / PaddleOCR-VL</strong><br>全文解析 → 事实抽取</div></div><div class="arrow" aria-hidden="true">↓</div><div class="node center"><strong>双路比较与原始出处</strong>冲突 / 单路缺失 / 未定位 / 高风险一致</div></div>
+          <div class="pipe-lane"><div class="label">独立发现 · 新增薄层</div><div class="node teal"><strong>原生文字、图注、表题、字段关键词</strong>不以 A/B 的样品清单或 SourceBlock 为前提</div><div class="arrow" aria-hidden="true">↓</div><div class="node center"><strong>相关候选页 / 无文字层页面</strong>先做到页级定位；记录覆盖不足</div></div>
+        </div>
+        <div class="pipe-merge"><div class="arrow" aria-hidden="true">↓　合并候选、排序、按区域去重　↓</div><div class="node teal center"><strong>C / 原图独立读事实</strong>整页或完整图表＋上下文 → 必要时一次局部放大<br><span class="small">输入不包含 A/B 候选数值；样品、属性、原始值、单位、条件与行列依据一起读取</span></div></div>
+        <div class="arrow" aria-hidden="true">↓</div>
+        <div class="pipe-bottom"><div class="node dark"><strong>第一版：自动补证报告</strong>观察 / 建议 / 未决原因 / 原图位置</div><div class="node"><strong>通过独立验收后：有限自动采纳</strong><span class="small">只开放验证过的字段与明确印刷值，保留 A/B 原读数</span></div></div>
+        <div class="legend"><span><i class="dot blue"></i>现有 A 路</span><span><i class="dot orange"></i>现有 B 路</span><span><i class="dot"></i>新增辅助步骤</span></div>
+      </div>
+      <p class="figure-note">C 的输入准备可参考 A/B 的位置，但读取结果不以 A/B 答案为提示。独立发现的页面允许出现新的样品候选，第一版不据此自动建主表行。</p>
+      <div class="scenario">
+        <div class="label">规则示例 · 静态演示，不调用模型</div>
+        <div class="scenario-tabs" role="tablist" aria-label="查看自动处理示例">
+          <button id="tab-conflict" role="tab" aria-selected="true" aria-controls="case-conflict" tabindex="0" type="button">两路冲突</button>
+          <button id="tab-missing" role="tab" aria-selected="false" aria-controls="case-missing" tabindex="-1" type="button">两路共同漏掉</button>
+          <button id="tab-unclear" role="tab" aria-selected="false" aria-controls="case-unclear" tabindex="-1" type="button">原图仍不清楚</button>
+        </div>
+        <div class="scenario-panel" id="case-conflict" role="tabpanel" aria-labelledby="tab-conflict" tabindex="0"><p><span class="example-label">自动选中</span>同一样品的电阻率存在数值或单位倍率冲突。</p><p><span class="example-label">独立读取</span>C 读取完整表头、样品行、原始数值和单位。第一版输出对照建议；满足采纳关口与原因白名单后，才允许替换该冲突决策。</p></div>
+        <div class="scenario-panel" id="case-missing" role="tabpanel" aria-labelledby="tab-missing" tabindex="0" hidden><p><span class="example-label">独立发现</span>原 PDF 的 Table 标题或相关关键词指向一个未被 A/B 对应证据覆盖的页面。</p><p><span class="example-label">补充候选</span>C 在整页中寻找字段与样品，输出新增事实候选。新样品、纯曲线估读和覆盖不确定仍留在补证报告中。</p></div>
+        <div class="scenario-panel" id="case-unclear" role="tabpanel" aria-labelledby="tab-unclear" tabindex="0" hidden><p><span class="example-label">有限重试</span>只有像素不足且能确定目标区域时，允许一次局部放大。</p><p><span class="example-label">自动结束</span>仍读不清、缺另一页表头或归属不唯一 → 输出未决原因。不会循环询问模型，也不会阻塞整篇完成。</p></div>
+      </div>
+      <div class="callout"><strong>两类目标同等重要：</strong>首轮每篇四个去重候选，分配为两个风险复核名额＋两个独立发现名额；一类不足时将剩余名额借给另一类。先合并重复区域，保留全部来源与原因，同一区域只占一个候选名额；初读去重，仍允许一次必要放大。某页已有 A/B 引用不表示该页的其他表、列或条件已覆盖。</div>
+      <div class="table-wrap"><table><caption>两类候选分别排序与分配，不再按 P1→P4 全局截取前四项。</caption><thead><tr><th>类别 / 顺序</th><th>触发条件</th><th>第一版处理</th></tr></thead><tbody>
+        <tr><td>风险 · P1</td><td>数值/单位/条件冲突；候选无法可靠定位</td><td>读取完整上下文；不能定位到页则记录未决，不占可读候选名额。</td></tr>
+        <tr><td>风险 · P2</td><td>只有一路有值</td><td>复核已有出处，同时检查样品与字段归属。</td></tr>
+        <tr><td>独立 · P3</td><td>独立发现的相关页；无可用文字层的页</td><td>整页读取；不因同页已有 A/B 引用而排除，扫描页不宣称完整覆盖。</td></tr>
+        <tr><td>风险 · P4</td><td>两路一致，但有倍率表头、脚注或复杂条件风险</td><td>输出核对结果；第一版不覆盖原本一致的主表值。</td></tr>
+      </tbody></table></div>
+    </div>
+  </section>
+
+  <section id="tasks">
+    <div class="section-head"><div class="index">03</div><div><h2>六个任务，按验收关口推进</h2><p>任务内先写能暴露错误的测试，再做最小实现。下列均为计划项，展开可查看文件、步骤与验收。</p></div></div>
+    <div class="section-body">
+      <div class="route" aria-label="任务顺序"><b>T0 输入</b><span>→</span><b>T1 候选</b><span>→</span><b>T2 读图</b><span>→</span><b>T3 评估</b><span>→</span><span class="gate">净增益关口</span><span>→</span><b>T4 接入</b><span>→</span><span class="gate">采纳关口</span><span>→</span><b>T5 采纳</b></div>
+      <details class="task" id="task0">
+        <summary><span class="task-no">T0</span><div><div class="task-title">锁定实际输入与基线</div><div class="task-sub">产出：可重放的输入清单、数据位置、论文划分和运行上限。</div></div></summary>
+        <div class="task-body">
+          <div class="file-line">修改：<code>eval/README.md</code>；复用：<code>storage.py</code>、<code>eval/gold/*.json</code>、<code>profiles/tco.json</code>。运行产物仅写忽略目录。</div>
+          <ul class="checks">
+            <li>核对 HEAD、工作区、有效 data_root 和现有服务配置；不把密钥或完整私有配置写入报告。用户已确认沿用现有目录与服务。</li>
+            <li>匹配 11 份 gold 对应 PDF 的 SHA；记录缺失、版本不同、无 A/B 缓存的项。manifest 分列现有 document_id / 文档身份 SHA、实际读取 PDF 的字节 SHA，以及已有 parts 的摘要与页区间；正文＋SI 的身份不必等于合并文件 SHA。通过现有 storage 解析文档，裁图沿用其目录，不按文件新摘要另建文档。不得隐式重跑全链。</li>
+            <li>固定 A/B artifacts、facts、comparison 和最终 dataset 的明确路径与内容摘要，记录 profile、代码、gold 版本；G1 对照冻结 A/B 完整事实，G2 对照冻结主表，不依赖“最新文件”选择。</li>
+            <li>逐篇记录历史评估、prompt 调整和 C 规则设计的使用史。11 篇齐全时“按 doc_id 排序前 6 / 后 5”仅作初始划分；在调 C 的 prompt 前依据使用史与案例覆盖冻结整篇划分。只有未参与 C 规则设计的论文才可作为 C 留出，不称为整个系统未见论文；不足时记录缺项，不反复调留出。</li>
+            <li>冻结评估页面与事实范围；对原图登记范围内的明确印刷事实、条件/状态和排除理由，不能只给旧 gold 补标签。逐拟采纳字段与证据类型统计有效纠错、共同补漏机会及独立论文数；未覆盖类别和零机会范围单列，不能以论文总数或正确单元格总数代替。</li>
+            <li>先在 eval 文档规定 <code>output/visual-evidence/YYYY-MM-DD-run-id/</code> 的用途与生命周期，再由 storage 定义路径。只存运行报告、私有裁图与响应引用，不清理历史。</li>
+            <li>固定候选与重试上限，记录实际请求与 token；用户确认暂不考虑金额预算。数据不齐可继续合成测试，真实评估停在输入关口。</li>
+          </ul>
+          <div class="accept"><strong>完成条件</strong>待评估文档的原 PDF、身份、冻结 A/B 与主表、gold 版本、使用史、划分及有效机会数均可核验；缺项明确列出。某范围缺少有效留出机会时限制该范围的真实验收，不阻塞已有输入的开发和回归。</div>
+        </div>
+      </details>
+      <details class="task" id="task1">
+        <summary><span class="task-no">T1</span><div><div class="task-title">实现自动候选选择，先做到页级</div><div class="task-sub">产出：同一输入产生同一候选清单；共同漏检有独立发现入口。</div></div></summary>
+        <div class="task-body">
+          <div class="file-line">修改：<code>src/paperfacts/pdf.py</code>；新增：<code>src/paperfacts/visual_candidates.py</code>；测试：<code>tests/test_pdf.py</code>、<code>tests/test_visual_candidates.py</code>。候选与读图各用一个扁平模块，不新增框架。</div>
+          <h4>接口边界（拟新增）</h4>
+          <p><code>read_native_pages(pdf_path) → NativePage[]</code> 只返回文字层与可定位的文字坐标；<code>select_candidates(pages, artifacts, lanes, comparison, profile, limit) → CandidateSelection</code> 返回候选、跳过项与覆盖说明。</p>
+          <ul class="checks">
+            <li>先测：A/B 为空但 PDF 存在相关表题仍产生候选；同页已引用一张表但另一表未覆盖仍进入独立候选；风险项超过四个时独立发现仍保留两个名额；两类重复区域初读去重且不占双份名额；一类不足可借额；两路一致的复杂单位表仍可触发。</li>
+            <li>所有 PDFium 调用进入 pdf.py 的现有进程锁。页码统一 0-based，坐标统一 NormalizedBBox；旋转页/非零 CropBox 要验证定位。</li>
+            <li>风险类内部按 P1→P2→P4 排序，独立发现为 P3；同级按页号与坐标排序。先按区域去重，再从风险/独立列表交替取尚未入选项，首轮各分配两个名额；同一区域保留双来源但只计一次，名额记在选中它的类别。某类不足才借额。其他 limit 按风险 floor(limit/2)、独立剩余名额分配，实验内固定。候选保存页/框、全部原因、字段及可选样品上下文。</li>
+            <li>独立候选默认整页，不依据图注位置猜完整图边界；A/B 候选有完整区域时才裁图。同一整页已入选时合并内部小框的触发原因并保留原框供必要放大；几何覆盖不等于缩图后仍可读，读不清时沿用 T2 的一次放大或未决结果。</li>
+            <li>使用 profile 现有关键词；通用 Figure/Table 标记可做轻量规则。语义表格检测和子图切分暂不进入第一版。</li>
+            <li>无文字层、预算截断、无出处页分别保留原因；“无候选”不能直接显示为“全文无遗漏”。</li>
+          </ul>
+          <div class="accept"><strong>完成条件</strong>自动选取不依赖用户点击；独立来源不依赖 A/B 样品；选择顺序、合并和覆盖说明可用确定性测试复现。文字提取只负责定位，不宣称完成版面理解。</div>
+        </div>
+      </details>
+      <details class="task" id="task2">
+        <summary><span class="task-no">T2</span><div><div class="task-title">把候选原图读成完整、可追溯的事实</div><div class="task-sub">产出：独立观察与未决原因；复用裁图、视觉调用和请求缓存。</div></div></summary>
+        <div class="task-body">
+          <div class="file-line">修改：<code>visual_evidence.py</code>、<code>crops.py</code>、<code>storage.py</code>；复用：<code>validate.region_for</code>、<code>llm.VisionClient</code>、<code>normalize.py</code> / <code>units.py</code>；测试：<code>tests/test_visual_evidence.py</code>、<code>tests/test_crops.py</code>。</div>
+          <h4>接口边界（拟新增）</h4>
+          <p><code>read_candidate(candidate, document, profile, crop_store, client) → EvidenceResult</code>。结果含完整原始观察、<code>outcome</code>、<code>reason</code> 和程序绑定的出处。一个区域可返回多条事实；不增加第三种 Backend。</p>
+          <ul class="checks">
+            <li>先测提示词不含 A/B 候选答案；针对独立发现不限制为旧样品清单。用“同数字在另一行”“倍率单位”“脚注条件”验证归属不能由数字命中替代。</li>
+            <li>C 的提示词继承 profile 的 sample_definition、field_scope、论文级/样品级规则及已确定的 article_type 提示；区分本文研究对象、购买基底、其他器件层和引用文献结果。读取原图的独立性不等于放弃同一领域定义。</li>
+            <li>观察记录 scope（paper/sample）、entity、样品原名、字段、value_raw、unit_raw、condition、condition_status（stated / not_stated / unclear），以及可见行头/列头/图例文字。保留范围、上下界、近似符号，不转成精确标量；单位换算交给现有 UnitRegistry。</li>
+            <li>样品原名到已有行的匹配复用 entity＋sample_key 的唯一匹配及既有 A/B 行映射；无唯一匹配则留作未归属观察，不通过模糊名称相似度或数值接近认领。论文级事实不挂到样品上。先测其他器件层、文献引用、同名跨实体、条件未注明与无法判断的区分。</li>
+            <li>document_id、实际 PDF 字节 SHA、页码、bbox、实际 PNG SHA 与已有 parts 页区间由程序绑定，身份规则见 T0。模型给出的行列说明属于待核实观察，不视为独立确定性证明。</li>
+            <li>复用 CropStore 前将 max_pixels 纳入裁图身份；旧裁图不删除、不误复用。不同参数、旋转页与多页引用分别测试。</li>
+            <li>严格解析 JSON 和字段类型。坏 JSON、截断、缺图、网络失败进入未决/错误；不使用 parse_reading 的自由文本兜底确认事实，也不直接用 adjudicate 采纳。</li>
+            <li>初次图像太小且能确定局部区域时最多放大一次；跨页缺上下文先弃权，不只检查第一页就确认整条事实。</li>
+            <li>复用 complete_vision 的缓存、全局并发和离线拒绝。报告记录图片、prompt 与模型配置摘要；缓存命中仍需重新执行严格解析。</li>
+          </ul>
+          <div class="accept"><strong>完成条件</strong>任意结果可回到实际读取的原图；请求内容不泄漏 A/B 答案；单区域失败不丢失其他结果。假客户端只证明这些工程行为，不证明视觉准确率。</div>
+        </div>
+      </details>
+      <details class="task" id="task3">
+        <summary><span class="task-no">T3</span><div><div class="task-title">用冻结输入运行实验，量出真实净增益</div><div class="task-sub">产出：一份逐条可追溯的评估报告，决定是否值得接入主流程。</div></div></summary>
+        <div class="task-body">
+          <div class="file-line">新增：<code>eval/visual_evidence.py</code>（冻结与回放）、<code>eval/visual_evidence_score.py</code>（人工核验范围内逐事实评分）；修改：<code>eval/README.md</code>；测试：<code>tests/test_visual_evidence_eval.py</code>、<code>tests/test_visual_evidence_score.py</code>。不改变 <code>eval/score.py</code> 的旧口径。</div>
+          <ul class="checks">
+            <li>先测缺 A/B 输入立即报缺项、不启动解析器；一次读图失败不影响已完成记录；重复运行用缓存，离线模式网络请求为零。</li>
+            <li>入口读取 T0 清单，调用 T1/T2，按既定命名保存候选、观察、摘要与 manifest；不调用 run_document。</li>
+            <li>既有 gold 复用已核验答案，但不假定它穷尽原图事实。开发验收人员按 T0 的页面/事实范围独立登记所有范围内事实、条件/状态及排除项，冻结后评分；未标注观察列“待核验”，既不直接算 extra，也不算收益。只做部分标注时，指标命名为“已标注事实召回”；模型不能生成自己的真值。</li>
+            <li>包含冲突、共同漏检、共同错误、正确对照与不可判定案例。某类在真实样本中缺失，标“未覆盖”，不以合成案例冒充真实覆盖。</li>
+            <li>对照三种情况：冻结 A/B 基线、四个名额只复核 A/B 风险、按两个风险＋两个独立发现分配的完整策略。冻结相同候选/请求上限，分别报告跳过页、两类实际用额与各自收益；两种 C 策略分别计数，并报告累计请求。</li>
+            <li>在开发集同时冻结候选规则、prompt，以及拟采纳的字段、证据类型与规则；再一次性使用留出集评分 G1，并保存离线采纳回放供 G2。根据留出错误调参后，原留出结果降为开发证据，需新的未见论文再验收。</li>
+            <li>按文档＋scope/entity/对象＋字段＋条件状态/测量状态建立人工核验的事实标识，一对一匹配、重复观察只计一次，不能用被评估的数值反过来决定样品归属。先测同样的 77% 分别对应平均波段与单点波长、同事实多处引用、错误样品与未标注事实。</li>
+            <li>G1 分别计算纠错与共同补漏净收益，按下节评分契约归类，不把重复确认算新增。G2 将冻结规则回放到冻结主表，统计真正改变的单元格、错误采纳与正确值回退；两者不能共用一个“增益”总数。分别报告候选召回、完整元组正确率、弃权、实际触发/采纳数、独立论文数、调用与耗时。</li>
+            <li>现有 figure_only 在旧评分中属于软匹配，另报明确印刷值与曲线估读结果。禁止把旁路补证数量当成主表召回率提升。</li>
+          </ul>
+          <div class="accept"><strong>完成条件 · 关口 G1</strong>在有效 C 留出集上，纠错与共同补漏两个目标分别有正净收益，错误建议与资源开销公开；一侧收益不能抵消另一侧无收益或负收益。这不表示主表已经提升。零有效机会属于证据不足，不算通过；未通过则保留实验结果，不进入 T4。</div>
+        </div>
+      </details>
+      <details class="task" id="task4">
+        <summary><span class="task-no">T4</span><div><div class="task-title">验收后，接入一个自动补证步骤</div><div class="task-sub">前置：G1 通过。产出：开启后 CLI / Web / batch 自动执行，无需逐篇操作。</div></div></summary>
+        <div class="task-body">
+          <div class="file-line">修改：<code>workflow.py</code>、<code>stored.py</code>、<code>config.py</code>、<code>config.json</code>、<code>storage.py</code>、<code>keys.py</code>、<code>README.md</code>、<code>CLAUDE.md</code>；同步 <code>web/</code> 的批量提交判定与阶段展示。测试：现有 workflow/config/stored 与 Web 回归。</div>
+          <ul class="checks">
+            <li>先测新开关关闭、仅旧 vlm.enabled/fill_blanks 为 true 时新增调用为零；开启后普通运行自动进入 C；已有 A/B 已完成但缺失或过期 C 的论文可由批量任务补跑，A/B 命中缓存；纯查看/导出不发请求。</li>
+            <li>拟增 <code>visual_evidence.enabled=false</code>、<code>visual_evidence.max_regions=4</code>，依 CLAUDE 同步 Settings、环境覆盖和文档。它表达自动补证；旧 vlm 开关不被偷偷赋予新含义。</li>
+            <li>在现有 compare 后、export 前顺序调用同一补证函数，C 串行复用全局限流。CLI/Web/batch 仍共享 run_document，不增第二套作业逻辑。</li>
+            <li>按 storage 统一保存旁路 JSON，记录 A/B 输入摘要、profile、prompt、模型与图像身份；报告失效规则通过 keys 管理，不另建缓存系统。同步 stored_stages 与批量提交判定：A/B 是否可用、当前 C 是否需要执行分别判断，不能因为旧 dataset 存在就跳过首次补证。</li>
+            <li>报告持久记录完整、部分、失败及原因，重启后仍能读取。相同输入/策略指纹下的部分或失败不在每次“处理全部”时自动反复请求；显式重试或输入/策略变化才重新执行，预算超限仍列为未覆盖。保留已有结果，复用现有 job 与请求缓存；显式重试坏响应时使用既有 refresh 语义，不误命中原坏响应。</li>
+            <li>C 超时、坏响应、超限或缺 PDF 时输出部分结果/原因，A/B 和原有导出照常完成。取消遵循现有任务取消，不无限重试。</li>
+            <li>优先让既有阶段摘要显示报告位置、已处理/未处理数；暂不新增专门操作页或 Excel 工作表。真实用户确有查看障碍后再扩展示。</li>
+          </ul>
+          <div class="accept"><strong>完成条件</strong>开关关闭时现有行为保持；打开后新旧论文均按当前 C 状态执行，失败隔离、来源可查，重启保留阶段结果，重复批量操作不会循环重试。全量项目检查与本任务涉及的既有浏览器回归通过。</div>
+        </div>
+      </details>
+      <details class="task conditional" id="task5">
+        <summary><span class="task-no">T5</span><div><div class="task-title">最后才开放有限自动采纳</div><div class="task-sub">先验证采纳规则；G2 通过后才接入主表。未通过则继续自动补证。</div></div></summary>
+        <div class="task-body">
+          <p class="small">工具增量：<code>visual_adoption.py</code> 与 <code>eval/visual_adoption.py</code> 已实现旁路纯决策与离线回放；输出对照审计及独立实验 JSON/Excel 副本，不改生产主表。无需数据/API 的合成验证不替代 G2 真实验收。</p>
+          <div class="file-line">后续生产接入拟修改：<code>decide.py</code>、<code>workflow.py</code>、<code>batch.py</code>、<code>keys.py</code> 及必要的 <code>records.py</code> / <code>dataset.py</code> 输出结构；同步单元、旧产物兼容与离线导出测试。具体差异在 G2 前结合实测结果复核。</div>
+          <ul class="checks">
+            <li>先复核 T3 在开发集冻结的采纳范围、规则及独立留出回放。逐字段、逐证据类型验收，不根据留出表现临时挑选通过项；规则若未预先冻结或发生改变，需新的未见论文验证，否则维持旁路。</li>
+            <li>第一版按下节原因白名单处理已有样品的明确遗漏或获准数值/单位冲突，不以单元格为空作为统一入口。必须是明确印刷数值、唯一归属、单位与条件可解析、原图可定位、规范化与范围校验通过；condition_status 为 unclear 不采纳，not_stated 仅在该字段无需条件且不产生多状态歧义时允许。</li>
+            <li>两路原本一致的值、新样品建行、曲线估读、跨页缺上下文、歧义归属暂不自动改动。它们继续进入报告，运行不中断。</li>
+            <li>不改写 LaneExtraction，不改变双路 compare 含义；在最终决策中显式记录 adopted_from_visual、原读数与依据。同步派生数据指纹，避免旧结果误复用。</li>
+            <li>run_document 与 batch.export_document 共用同一纯采纳决策函数；离线导出只读与当前 A/B、profile、采纳规则及图像身份匹配的 C 报告，不调用模型。过期/缺失报告不采纳并说明原因。先测运行→离线导出→重读的数值、来源、拒绝原因一致；旧报告失效后不留下过期采纳。</li>
+            <li>采纳默认关闭；只有批准范围通过 G2 才启用。新增设置遵循现有配置约定，旧产物无 C 信息仍能读取。</li>
+          </ul>
+          <div class="accept"><strong>完成条件 · 关口 G2</strong>预先冻结的字段/证据范围内，真实触发并采纳的留出案例无错误采纳、无正确值回退，主表净收益为正。逐范围报告有效机会数、采纳数、独立论文数及未覆盖项；零触发不能通过。小样本零错误只支持该范围试用；无足够证据的范围继续旁路，失败不撤销 T4 能力。</div>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section id="acceptance">
+    <div class="section-head"><div class="index">04</div><div><h2>把“能运行”和“值得运行”分开验收</h2><p>不用三路一致率代替准确率，也不把一次模型成功响应当成科学事实确认。</p></div></div>
+    <div class="section-body">
+      <div class="metric-grid"><div class="metric"><b>候选召回</b><p>被选区域覆盖的范围内事实 / 原图独立核验的范围内事实。按文字层、扫描页、图表分别报告；未穷尽标注时仅称“已标注事实召回”。</p></div><div class="metric"><b>事实正确</b><p>对象、字段、值、单位、条件/状态均正确的明确观察 / 已完成真值核验的明确观察；一对一去重，并另报待核验数量与弃权率。</p></div><div class="metric"><b>实际净收益</b><p>纠错、共同补漏分别算正确新增减错误建议；主表回放另算实际改善减新错误。重复确认不增加收益。</p></div></div>
+      <div class="table-wrap"><table><caption>逐事实评分契约：事实身份不依赖模型输出的数值；同一事实多处出现只计一次。</caption><thead><tr><th>评分对象</th><th>基线与计数规则</th><th>不能计作收益</th></tr></thead><tbody>
+        <tr><td>G1 · 纠错</td><td>冻结 A/B 在该事实已有候选但存在错误或未解决冲突；C 给出完整、正确的纠正建议计一次，错误建议计一次负项。</td><td>仅再次确认已有正确事实；仅数字相同但样品、单位或条件不同。</td></tr>
+        <tr><td>G1 · 共同补漏</td><td>该范围内事实在冻结 A/B 均缺失；C 找回完整正确事实计一次，新增错误事实计一次负项。与纠错按基线是否已有候选互斥归类。</td><td>重复发现同一事实、范围外观察、未标注而尚待核验的观察。</td></tr>
+        <tr><td>G2 · 主表采纳</td><td>将冻结规则作用于冻结 dataset；错误/遗漏单元格变正确计改善，错误采纳及原正确值回退计错误。保留逐单元格前后值与依据。</td><td>留在旁路的观察、没有改变主表的确认，以及零实际触发范围的“零错误”。</td></tr>
+        <tr><td>条件与标注范围</td><td>原图核验表固定对象、字段、条件状态/测量状态与真值；stated、not_stated、unclear 分开。只在完成标注的范围内计算确定指标。</td><td>把平均波段与单点波长的相同 77% 合成一个事实；把不完整 gold 当全文事实清单。</td></tr>
+      </tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>关口</th><th>必须有的证据</th><th>不通过时</th></tr></thead><tbody>
+        <tr><td>工程通过</td><td>候选确定性；坐标/图片身份一致；坏响应不确认；离线零网络；关闭零额外调用。</td><td>修复对应边界，不启动真实评价。</td></tr>
+        <tr><td>G1 · 值得接入</td><td>有使用史记录的 C 留出集上，纠错与共同补漏分别净收益为正；有效机会数、待核验项、请求数、耗时、错误建议透明。</td><td>一侧无收益则不通过；零有效机会则证据不足。保留实验报告，停止集成，不以另一侧收益抵消。</td></tr>
+        <tr><td>G2 · 可以采纳</td><td>逐预定字段/证据范围，有真实触发采纳且无错误采纳或正确值回退，主表净收益为正；报告采纳数与独立论文数。</td><td>未覆盖或失败的范围维持旁路，不根据留出表现临时改规则筛选通过项。</td></tr>
+      </tbody></table></div>
+      <details class="task" id="taskqa">
+        <summary><span class="task-no">QA</span><div><div class="task-title">实施时的验证命令与重点失败用例</div><div class="task-sub">文档制作不运行模型，也不重建环境；以下命令用于后续代码实施。</div></div></summary>
+        <div class="task-body">
+          <p>每个任务先运行对应 focused tests；代码阶段结束运行仓库要求的检查。新增 eval 代码显式补充静态检查。</p>
+          <pre><code>uv run pytest
+uv run ruff check src tests runners
+uv run ruff format --check src tests runners
+uv run ruff check eval/visual_evidence.py eval/visual_evidence_score.py
+uv run ruff format --check eval/visual_evidence.py eval/visual_evidence_score.py</code></pre>
+          <p>仅在改动相关 Web 行为时追加：</p>
+          <pre><code>PYTHONPATH=src uv run --with playwright python tests/e2e/web_races.py</code></pre>
+          <p><strong>评审重点：</strong>重复数字落在另一行或另一测量条件；×10ⁿ 表头/脚注；同页已有引用仍共同漏检；风险候选挤占独立名额；缺跨页表头；整页合并后小字不可读；同框改 max_pixels；坏 JSON/截断/超时；旧配置隐式触发；其他器件层/文献引用与同名跨实体；未标注观察误计收益；零采纳误过关。</p>
+          <p><strong>生命周期回归：</strong>旧 A/B 已完成论文首次补跑 C；失败/部分状态跨重启保留且不循环请求；运行与零网络导出结果一致；C 过期后不残留采纳；正文＋SI 不因重新计算文件 SHA 新建文档；歧义、提问失败和非标量空值不被填入精确数值。</p>
+          <p class="small">工具命令与输入格式见 <a href="../../../eval/README.md">eval/README.md</a>，默认离线回放；真实调用需显式启用。单元测试全部通过仍不能代替真实 PDF 验收。</p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section id="adoption">
+    <div class="section-head"><div class="index">05</div><div><h2>自动化可以保守，结果必须诚实</h2><p>完全无人值守的交付物可以同时包含采用值、补充观察和未决项。</p></div></div>
+    <div class="section-body">
+      <div class="decision-rule">
+        <article><h3>经 G2 验收后，允许自动采纳</h3><ul><li>已有样品上的明确遗漏或获准数值/单位冲突。</li><li>原图有明确印刷数值。</li><li>样品、字段、单位和条件对应清楚。</li><li>通过现有规范化与范围校验。</li><li>字段、证据类型与原决策原因均在批准范围。</li><li>保留原始 A/B 值与采纳依据。</li></ul></article>
+        <article><h3>自动记录未决或补充观察</h3><ul><li>曲线估读、图例含糊、样品无法唯一匹配。</li><li>跨页缺上下文，或文字过小仍不可辨。</li><li>只能证明同一个数字出现在别处。</li><li>第三路与已一致的 A/B 发生冲突。</li><li>独立发现了新的样品或未知条件。</li><li>预算耗尽、请求失败、覆盖无法确定。</li></ul></article>
+      </div>
+      <div class="table-wrap"><table><caption>采纳原因白名单；先检查样品身份、提问状态和测量语义，再判断原单元格原因。</caption><thead><tr><th>原决策原因 / 情形</th><th>第一版处理</th><th>必要边界</th></tr></thead><tbody>
+        <tr><td>missing · 明确遗漏</td><td>可进入采纳判断。</td><td>已有样品唯一匹配；A/B 提问已完成；C 的完整事实、字段与证据类型通过 G2。</td></tr>
+        <tr><td>conflict · 获准数值/单位冲突</td><td>可进入采纳判断。</td><td>同一对象和测量条件已确定，C 能给出完整印刷事实；不是用第三路绕过样品或条件歧义。</td></tr>
+        <tr><td>unanswered / ambiguous / unreviewed</td><td>维持未决，C 仅报告观察。</td><td>提问失败、样品匹配歧义、缺比较覆盖不能仅凭主表为空而采纳。</td></tr>
+        <tr><td>multiple_conditions / multiple_values / non_scalar</td><td>维持原决策，C 仅报告观察。</td><td>不任意选择条件或多个值；范围、上下界和近似符号原样保留，不改成精确标量。</td></tr>
+        <tr><td>其他原因、A/B 原本一致</td><td>默认不采纳。</td><td>扩展原因需先在开发集冻结并验收；不临时根据留出结果放行。单路已有正确值的再次确认不计增益。</td></tr>
+      </tbody></table></div>
+      <p class="small">条件状态为 unclear 时不采纳；not_stated 仅在字段无需条件且不存在多状态歧义时允许。真实条件/状态冲突先保留旁路，不因数值可解析而强行消解。</p>
+      <div class="callout warn"><strong>不能用“两票对一票”决定事实。</strong>三路可能共享模型错误，也可能对同一表头产生同样误读。模型自报高置信度和数字字符串命中，均不能单独触发自动采纳。</div>
+    </div>
+  </section>
+
+  <section id="resources">
+    <div class="section-head"><div class="index">06</div><div><h2>约束调用规模，也约束维护规模</h2><p>先用现成组件覆盖主要问题；只有实测暴露必要性，才增加新的工具。</p></div></div>
+    <div class="section-body">
+      <div class="table-wrap"><table><thead><tr><th>项目</th><th>首轮建议值 / 决策</th><th>作用</th></tr></thead><tbody>
+        <tr><td>数据与模型</td><td>沿用现有 data_root 与视觉模型服务；T0 核对有效配置，不读取或输出密钥内容。</td><td>已获用户确认；本次不发模型请求。</td></tr>
+        <tr><td>区域预算</td><td>每篇最多 4 个去重候选：风险 2＋独立发现 2，不足互借；C 串行处理。</td><td>纠错与共同补漏同等重要；两类用额、超限项和收益分别留痕。</td></tr>
+        <tr><td>读图次数</td><td>每候选 1 次初读＋最多 1 次放大；每逻辑请求最多重试 1 次。</td><td>客户端 retry_attempts=2 表示总尝试 2 次。最坏每篇 16 次 HTTP 请求。</td></tr>
+        <tr><td>对照总量</td><td>11 篇齐全时，每策略最坏 176 次；两种 C 策略独立执行最坏 352 次 HTTP 请求。</td><td>缓存命中减少请求，但不假设两策略一定重叠；重跑和累计请求另记。</td></tr>
+        <tr><td>金额预算</td><td id="budget-text">已确认：先不考虑预算。金额上限不作为实施前置条件。</td><td>保留实际请求、token 与耗时记录；不增加费用审批或预算管理服务。</td></tr>
+        <tr><td>依赖</td><td>先用已有 pypdfium2、Pillow、VisionClient。</td><td>暂不新增 pypdf、PyMuPDF 或分割模型。缺口经实测确认后再比较选型。</td></tr>
+        <tr><td>存储与缓存</td><td>现有 storage、请求缓存；一份补证 JSON 和最小 manifest。</td><td>来源与版本可重放；先修 crop 参数身份，不建第二套缓存。</td></tr>
+      </tbody></table></div>
+      <p>按已确认约定，金额预算不作为这版方案的关口。上面的候选与请求上限用于防止无界重试、便于公平比较；不是费用审批。一次实验内固定参数，超限区域保留清单。若覆盖不足，扩大候选数后另存一次完整实验，不把不同参数的结果混成同一轮。</p>
+      <p class="small">pypdf 提取的是原生文字或嵌入图片，不提供完整的图表语义识别。现有 pypdfium2 能做文字检索和坐标提取，但不自带版面分析。因此第一版以“定位页面＋读取原图”实现自动化，避免先建设图片分割系统。</p>
+      <div class="callout"><strong>维护上的停止线：</strong>如果改动开始要求新队列、新数据库、统一三路 schema 或通用版面引擎，先退回当前任务的实际缺口；没有真实失败案例支撑，就不加入这轮范围。</div>
+    </div>
+  </section>
+
+  <section id="basis">
+    <div class="section-head"><div class="index">07</div><div><h2>实施依据与最终交付</h2><p>本计划替代 10 月 2 日的手动复核方案；旧文档保留历史，但不再作为实施清单。</p></div></div>
+    <div class="section-body">
+      <div class="callout warn"><strong>当前输入核查：</strong>仓库有 11 份 TCO gold；本次未在当前 checkout 找到 PDF。config.json 中 data_root 为 data，但运行入口可能有环境覆盖。按你的选择沿用已有目录，实施时先确认实际位置与对应 PDF，不自动下载或重建语料。</div>
+      <div class="table-wrap"><table><thead><tr><th>阶段交付</th><th>具体可检查的结果</th></tr></thead><tbody>
+        <tr><td>T0–T3 · 验证价值</td><td>冻结清单、自动候选、原图事实、未决原因、逐条评分与成本报告。可离线重放，不依赖手动选区域。</td></tr>
+        <tr><td>T4 · 日常自动运行</td><td>一个可关闭的自动补证步骤；CLI/Web/batch 同一逻辑；保留原双路与补证报告。</td></tr>
+        <tr><td>T5 · 有限自动采纳</td><td>通过验收的字段范围、采纳/拒绝规则、原始依据与旧产物兼容验证。未通过时不交付自动改值。</td></tr>
+      </tbody></table></div>
+      <p><strong>执行约定：</strong>先重新读取 <a href="../../../AGENTS.md">AGENTS.md</a>、<a href="../../../CLAUDE.md">CLAUDE.md</a> 和 <a href="../specs/2026-10-05-auto-visual-evidence-design.md">本版设计说明</a>。任务编号即执行顺序；全部计划项当前未完成。后续实施可用 executing-plans 顺序执行，关键边界独立复核，避免并行修改同一模块。</p>
+      <p class="small">本轮授权范围是更新 HTML 行动方案与配套设计。复核基线为 dev_JW / ef0ebb6f2c62d338f5fc9eb9e25a75ef6c322a60；实施前重新核对。后续开始产品实现前需明确启动；真实模型评估沿用已确认的服务与运行边界。删除、密钥/.env/CI 修改、数据库迁移、push/rebase/reset、全局依赖和生产发布仍遵守项目单独授权规则。</p>
+      <ol class="source-list">
+        <li><a href="../../../src/paperfacts/workflow.py">workflow.py</a>：双路编排及现有 figures 阶段；C 尚未接入。</li>
+        <li><a href="../../../src/paperfacts/pdf.py">pdf.py</a> / <a href="../../../src/paperfacts/crops.py">crops.py</a>：渲染、坐标和裁图复用。</li>
+        <li><a href="../../../src/paperfacts/validate.py">validate.py</a>：区域与转写基础；adjudicate 仅做出现匹配。</li>
+        <li><a href="../../../src/paperfacts/llm.py">llm.py</a>：视觉请求、重试、缓存及离线限制。</li>
+        <li><a href="../../../src/paperfacts/batch.py">batch.py</a> / <a href="../../../src/paperfacts/stored.py">stored.py</a>：离线导出重建与已有论文完成状态。</li>
+        <li><a href="../../../src/paperfacts/storage.py">storage.py</a>：正文＋SI 身份、parts 页区间与产物路径。</li>
+        <li><a href="../../../src/paperfacts/decide.py">decide.py</a> / <a href="../../../profiles/tco.json">tco.json</a>：原决策原因与事实适用范围。</li>
+        <li><a href="../../../eval/README.md">eval/README.md</a>：11 份 gold 与 figure_only 评分语义。</li>
+        <li><a href="../../../eval/baselines/gold-B2.md">历史 gold-B2</a> / <a href="../../../eval/gold/c3ab31d08acc066b.json">同值不同条件实例</a>：使用史与逐事实评分依据，不代表当前真实评估结果。</li>
+        <li><a href="https://pypdfium2.readthedocs.io/en/stable/python_api.html#text-page">pypdfium2 官方 API</a>：文字检索、边界与版面分析限制。</li>
+        <li><a href="https://pypdf.readthedocs.io/en/stable/user/extract-text.html">pypdf 官方说明</a>：文字层提取与 OCR 边界。</li>
+        <li><a href="https://github.com/MonoE97/Paper_Reader">Paper_Reader</a>：借鉴原始 PDF 的定位思路，不导入其工作流或运行数据。</li>
+      </ol>
+    </div>
+  </section>
+  <footer class="footer"><span>PaperFacts / 自动原图补证行动方案<br>2026-10-05 · 修订 06 · 复核基线 ef0ebb6 · 工程测试通过，真实验收待开展</span><span>离线单文件 · 无外部脚本/字体 · 打印包含全部任务<br>图中日常自动补证与采纳仍是设计目标，并非已上线能力。</span></footer>
+</main>
+<script>
+(() => {
+  const tasks = [...document.querySelectorAll('.task')];
+  const expand = document.getElementById('expand-all');
+  const syncButton = () => {
+    const allOpen = tasks.every(task => task.open);
+    expand.textContent = allOpen ? '收起全部任务' : '展开全部任务';
+    expand.setAttribute('aria-expanded', String(allOpen));
+  };
+  expand.addEventListener('click', () => {
+    const open = !tasks.every(task => task.open);
+    tasks.forEach(task => { task.open = open; });
+    syncButton();
+  });
+  tasks.forEach(task => task.addEventListener('toggle', syncButton));
+  document.getElementById('print').addEventListener('click', () => window.print());
+  let printState = null;
+  window.addEventListener('beforeprint', () => {
+    if (!printState) printState = tasks.map(task => task.open);
+    tasks.forEach(task => { task.open = true; });
+  });
+  window.addEventListener('afterprint', () => {
+    if (printState) tasks.forEach((task, i) => { task.open = printState[i]; });
+    printState = null;
+    syncButton();
+  });
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  function selectTab(tab) {
+    tabs.forEach(item => {
+      const active = item === tab;
+      item.setAttribute('aria-selected', String(active));
+      item.tabIndex = active ? 0 : -1;
+      document.getElementById(item.getAttribute('aria-controls')).hidden = !active;
+    });
+  }
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('click', () => selectTab(tab));
+    tab.addEventListener('keydown', event => {
+      const offsets = { ArrowRight: 1, ArrowLeft: -1 };
+      let next = null;
+      if (event.key in offsets) next = tabs[(i + offsets[event.key] + tabs.length) % tabs.length];
+      if (event.key === 'Home') next = tabs[0];
+      if (event.key === 'End') next = tabs[tabs.length - 1];
+      if (next) { event.preventDefault(); selectTab(next); next.focus(); }
+    });
+  });
+  const links = [...document.querySelectorAll('nav a')];
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        links.forEach(link => link.classList.toggle('active', link.hash === '#' + entry.target.id));
+      });
+    }, { rootMargin: '-10% 0px -65% 0px', threshold: 0 });
+    document.querySelectorAll('main section').forEach(section => observer.observe(section));
+  }
+})();
+</script>
+</body>
+</html>
