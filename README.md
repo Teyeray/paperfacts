@@ -41,6 +41,19 @@ The model is constrained structurally rather than by instruction: the JSON schem
 All unit conversion, scientific-notation parsing and tolerance comparison happen in ordinary, testable
 Python. The model quotes; the code converts.
 
+## Experimental original-image evidence
+
+The standalone tools in [eval/README.md](eval/README.md#visual-evidence-tooling) freeze explicit A/B inputs,
+select both risk and independent discovery regions, and read complete facts from original PDF images.
+Replay is offline by default. The [G2 replay tool](eval/README.md#offline-adoption-replay-g2-tooling)
+also evaluates conservative adoption rules against frozen cells without modifying the dataset.
+[Experimental export and a synthetic demo](eval/README.md#independent-experimental-exports-and-synthetic-demo)
+now exercise persisted attempts and independent JSON/Excel copies; production datasets stay unchanged.
+Synthetic tests establish engineering behavior; real-paper accuracy and the
+G1/G2 gates still require reviewed evidence. These tools are not connected to daily runs or automatic dataset
+adoption. The [implementation record](docs/superpowers/plans/2026-10-05-auto-visual-evidence-progress.md)
+tracks that boundary.
+
 ## Quick start on a Mac
 
 Requires Apple silicon, Python 3.13 and [uv](https://docs.astral.sh/uv/). Python is pinned to

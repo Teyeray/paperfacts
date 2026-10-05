@@ -30,6 +30,10 @@ Flat modules, in pipeline order:
 - ``normalize``   number parsing, unit conversion
 - ``matching``    which sample in lane A is which sample in lane B
 - ``compare``     field-by-field comparison of the two lanes
+- ``visual_candidates`` deterministic risk/discovery regions for the standalone evidence experiment
+- ``visual_evidence`` independent original-image facts and sidecar reports, without dataset adoption
+- ``visual_adoption`` pure experimental adoption audits against frozen cells; no production mutation
+- ``visual_snapshot`` independent experimental copies rebuilt from A/B, with consistent derived rows
 - ``decide``      one dataset cell's verdict: which candidate the cell states, or why it states none
 - ``dataset``     merge source evidence into unique values: the machine-learning rows
 - ``columns``     what a reader is told about each of those columns; display only, in no cache key

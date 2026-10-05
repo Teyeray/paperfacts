@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from paperfacts import storage
 from paperfacts.storage import DOC_DIR_ID_LENGTH, DataLayout
 
 DOC_ID = "0123456789abcdef" + "f" * 48  # 16-char prefix padded out to 64
@@ -187,3 +188,40 @@ def test_no_profile_workbook_takes_the_pre_profile_names(layout: DataLayout):
     """Workbooks from before profiles are left where they are; a new one never overwrites them."""
     assert layout.dataset_path(DOC_ID, "tco").name != "dataset.xlsx"
     assert layout.batch_dataset_path("tco").name != "paperfacts.xlsx"
+
+
+def test_crop_paths_distinguish_pixel_limits_and_leave_legacy_names_unused(layout: DataLayout):
+    paths = [layout.crop_path(DOC_ID, 0, "box", 72, max_pixels=limit) for limit in (None, 10_000, 20_000)]
+
+    assert len(set(paths)) == 3
+    assert all(path.parent == layout.crops_dir(DOC_ID) for path in paths)
+    assert all(path.name != "page_000.box.72dpi.png" for path in paths)
+
+
+def test_visual_evidence_paths_share_the_explicit_run_root_without_creating_it(tmp_path: Path):
+    run_root = tmp_path / "2026-10-05-synthetic"
+    layout = storage.VisualEvidenceLayout(run_root)
+
+    assert layout.manifest_path() == run_root / "manifest.json"
+    assert layout.report_path(DOC_ID, "risk_only") == run_root / "0123456789abcdef.risk_only.json"
+    assert layout.report_path(DOC_ID, "balanced") == run_root / "0123456789abcdef.balanced.json"
+    assert layout.report_path(DOC_ID[:16], "balanced") == layout.report_path(DOC_ID, "balanced")
+    assert not run_root.exists()
+
+
+@pytest.mark.parametrize("strategy", ["", "unknown", "../balanced", "balanced/../risk_only"])
+def test_visual_evidence_rejects_unknown_strategies_before_forming_paths(tmp_path: Path, strategy: str):
+    layout = storage.VisualEvidenceLayout(tmp_path)
+
+    with pytest.raises(ValueError, match="strategy"):
+        layout.report_path(DOC_ID, strategy)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("document_id", ["", "../outside", "g" * 64, "f" * 63, DOC_ID + "/../outside"])
+def test_visual_evidence_rejects_invalid_document_ids_before_forming_paths(tmp_path: Path, document_id: str):
+    layout = storage.VisualEvidenceLayout(tmp_path)
+
+    with pytest.raises(ValueError, match="document_id"):
+        layout.report_path(document_id, "balanced")
+    assert list(tmp_path.iterdir()) == []
