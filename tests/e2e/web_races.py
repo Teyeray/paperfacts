@@ -1373,7 +1373,12 @@ async def zoom_wheel(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     await page.mouse.wheel(0, 240)
     await page.keyboard.up("Control")
     expect(await page.locator(".viewer-bar .zoom-level").text_content() == "100%", "ctrl+wheel down did not zoom out")
-    # Plain wheel: no zoom, the page itself scrolls.
+    expect(await page.locator(".viewer-bar .zoom-level").text_content() == "100%", "plain wheel changed the zoom")
+    # Slack for the scroll assertion: the document can already sit at max scroll here (the pane-mode
+    # layout is barely taller than the viewport after the image loads), so reset to the top first —
+    # otherwise the plain wheel has nowhere left to scroll and the check order-dependently fails.
+    await page.evaluate("window.scrollTo(0, 0)")
+    await page.wait_for_function("document.querySelector('[data-slot=\"viewer\"] .page img')?.naturalWidth > 0")
     before = await page.evaluate("window.scrollY")
     await page.mouse.wheel(0, 400)
     await page.wait_for_timeout(200)
@@ -1411,6 +1416,59 @@ async def zoom_fallback(page: Page, base: str, docs: dict[str, str], _: Path) ->
     await page.wait_for_timeout(300)
     expect(len(hi) == n, f"the failed hi-dpi render was retried: {hi[n:]}")
     expect(not errors, f"page errors: {errors}")
+
+
+async def zoom_ready(page: Page, clicks: int, level: str) -> None:
+    """Zoom by `clicks` steps and wait for the render to settle (label + loaded image)."""
+    for _ in range(clicks):
+        await page.dispatch_event(".viewer-bar .zoomer button:last-child", "click")
+    await page.wait_for_function(f"document.querySelector('.viewer-bar .zoom-level')?.textContent === '{level}'")
+    await page.wait_for_function("document.querySelector('[data-slot=\"viewer\"] .page img')?.naturalWidth > 0")
+
+
+@check("zooming keeps the reader's vertical place in the pane layout")
+async def zoom_keeps_place_pane(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_function("document.querySelector('[data-slot=\"viewer\"] .page img')?.naturalWidth > 0")
+    # At 100% the page barely outgrows the pane, so climb to 250% first; the probed step (250 -> 300%)
+    # stays on the same dpi, so the page's height scales exactly with its width.
+    await zoom_ready(page, clicks=5, level="250%")
+    await page.evaluate("document.querySelector('.viewer-pane').scrollTop = 600")
+    before, max_before = await page.evaluate(
+        "() => { const p = document.querySelector('.viewer-pane');"
+        " return [p.scrollTop, p.scrollHeight - p.clientHeight]; }"
+    )
+    expect(before > 0, "the pane could not be scrolled for the vertical-preservation check")
+    # dispatch_event: a real click would scroll the button into view and reset the pane's scroll.
+    await page.dispatch_event(".viewer-bar .zoomer button:last-child", "click")
+    await zoom_ready(page, clicks=0, level="300%")
+    after, max_after = await page.evaluate(
+        "() => { const p = document.querySelector('.viewer-pane');"
+        " return [p.scrollTop, p.scrollHeight - p.clientHeight]; }"
+    )
+    expect(after > 0, f"zooming clamped the pane scroll to {after}")
+    drift = abs(after / max_after - before / max_before)
+    expect(drift <= 0.02, f"zooming moved the pane's scroll fraction: {before}/{max_before} -> {after}/{max_after}")
+
+
+@check("zooming keeps the reader's vertical place in the stacked layout", width=1000, height=700)
+async def zoom_keeps_place_stacked(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_function("document.querySelector('[data-slot=\"viewer\"] .page img')?.naturalWidth > 0")
+    await zoom_ready(page, clicks=5, level="250%")
+    await page.evaluate("window.scrollTo(0, 800)")
+    before, max_before = await page.evaluate(
+        "() => { const s = document.scrollingElement; return [s.scrollTop, s.scrollHeight - s.clientHeight]; }"
+    )
+    expect(before > 0, "the window could not be scrolled for the vertical-preservation check")
+    await page.dispatch_event(".viewer-bar .zoomer button:last-child", "click")
+    await zoom_ready(page, clicks=0, level="300%")
+    after, max_after = await page.evaluate(
+        "() => { const s = document.scrollingElement; return [s.scrollTop, s.scrollHeight - s.clientHeight]; }"
+    )
+    expect(after > 0, f"zooming clamped the window scroll to {after}")
+    drift = abs(after / max_after - before / max_before)
+    expect(drift <= 0.02, f"zooming moved the window's scroll fraction: {before}/{max_before} -> {after}/{max_after}")
 
 
 async def lanes_visible(page: Page) -> None:
@@ -1567,6 +1625,13 @@ async def tabs_a11y(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
         "[...document.querySelectorAll('#document-view [data-panel]')].map((s) => s.getAttribute('role'))"
     )
     expect(panels == ["tabpanel"] * 4, f"the panels read {panels}")
+    # Every aria-controls id must resolve: a dangling reference is invisible to keyboard users.
+    dangling = await page.evaluate(
+        "[...document.querySelectorAll('#document-view .tab-bar > button')]"
+        ".map((b) => b.getAttribute('aria-controls'))"
+        ".filter((id) => !document.getElementById(id))"
+    )
+    expect(not dangling, f"tabs point at ids that do not exist: {dangling}")
     # Roving tabindex plus arrow keys: focus and selection move together.
     await page.focus('#document-view .tab-bar [data-tab="results"]')
     expect(
@@ -1582,8 +1647,6 @@ async def tabs_a11y(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
         expect((await tab_state(page))["on"] == [target], f"{key} did not select {target}")
 
 
-@check("a phone-width page does not scroll sideways and keeps 重新处理 on screen", width=390, height=844)
-@check("a phone-width page does not scroll sideways and keeps 重新处理 on screen", width=390, height=844)
 async def narrow_doc(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
     overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")

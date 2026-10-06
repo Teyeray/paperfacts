@@ -61,7 +61,7 @@ export class PageViewer {
   setZoom(i) {
     this.zoomIndex = Math.min(Math.max(i, 0), ZOOM_STEPS.length - 1);
     writeStored(ZOOM_KEY, String(this.zoomIndex));
-    this._render();
+    this._render({ keepPlace: true });
   }
 
   highlight(sourceIds, { jump = true } = {}) {
@@ -94,16 +94,37 @@ export class PageViewer {
   }
 
   // ---- rendering ----
-  _render() {
-    // Keep the reader's place when zoom changes: the old viewport's scroll fractions map onto the
-    // rebuilt one (a fresh zoom render replaces the viewport node, so read before wiping).
+  // The element that actually scrolls the reader vertically: the viewer pane side by side (≥1280px),
+  // otherwise the window. The .page-viewport itself can never scroll vertically (auto height).
+  _scroller() {
+    if (window.matchMedia("(min-width: 1280px)").matches) {
+      const pane = document.querySelector(".viewer-pane");
+      if (pane) return pane;
+    }
+    return document.scrollingElement;
+  }
+
+  // keepPlace: only a zoom change holds the reader's place (see below); content-driven renders —
+  // highlight jumps, page changes, lane toggles — re-render plain so revealViewer's smooth scroll
+  // and the page switch behave as before.
+  _render({ keepPlace = false } = {}) {
+    // Keep the reader's place when zoom changes. Horizontally the viewport itself scrolls (the page
+    // is wider than it above 100%), and its fraction maps onto the rebuilt viewport. Vertically the
+    // real scroller (pane/window) clamps to 0 while the rebuilt img has no intrinsic size, so carry
+    // the old page's height as a min-height until the new image loads, then restore the fraction.
     const oldViewport = this.root.querySelector(".page-viewport");
-    const keep = oldViewport
-      ? {
-          x: oldViewport.scrollWidth > oldViewport.clientWidth ? oldViewport.scrollLeft / (oldViewport.scrollWidth - oldViewport.clientWidth) : 0,
-          y: oldViewport.scrollHeight > oldViewport.clientHeight ? oldViewport.scrollTop / (oldViewport.scrollHeight - oldViewport.clientHeight) : 0,
-        }
-      : null;
+    const keepX = oldViewport && oldViewport.scrollWidth > oldViewport.clientWidth
+      ? oldViewport.scrollLeft / (oldViewport.scrollWidth - oldViewport.clientWidth)
+      : 0;
+    const scroller = this._scroller();
+    const keepY = !keepPlace
+      ? 0
+      : (() => {
+          const max = scroller.scrollHeight - scroller.clientHeight;
+          return max > 0 ? scroller.scrollTop / max : 0;
+        })();
+    const oldPage = this.root.querySelector(".page");
+    const pageHeight = keepPlace && oldPage ? oldPage.getBoundingClientRect().height : 0;
     this.root.innerHTML = "";
     this.root.append(this._bar());
     if (!this.pdfAvailable) {
@@ -125,6 +146,9 @@ export class PageViewer {
     const page = document.createElement("div");
     page.className = "page" + (this.dim && (this.highlighted.size || this.region) ? " dim" : "");
     page.style.width = `${Math.round(this.zoom * 100)}%`;
+    // Hold the vertical space the old page occupied so the ancestor scroller never clamps while the
+    // img loads; released on load, when the fraction below is restored against the real height.
+    if (pageHeight > 0) page.style.minHeight = `${pageHeight}px`;
     const img = document.createElement("img");
     img.alt = `第 ${this.page + 1} 页`;
     img.src = `/api/documents/${this.documentId}/pages/${this.page}.png?dpi=${this.renderDpi}`;
@@ -132,7 +156,7 @@ export class PageViewer {
       // 422 (deployment caps dpi) or a network failure: silently fall back to CSS zoom, once.
       if (this.renderDpi !== this.dpi) {
         this._dpiFailed = true;
-        this._render();
+        this._render({ keepPlace: true });
       }
     });
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -140,14 +164,18 @@ export class PageViewer {
     img.addEventListener("load", () => {
       svg.setAttribute("viewBox", `0 0 ${img.naturalWidth} ${img.naturalHeight}`);
       this._drawBlocks(svg, img.naturalWidth, img.naturalHeight, page);
+      page.style.minHeight = "";
+      if (keepPlace) {
+        const maxY = scroller.scrollHeight - scroller.clientHeight;
+        scroller.scrollTop = keepY * maxY;
+      }
     });
+    // The min-height stays until the fallback re-render replaces it, so the scroller (and thus
+    // keepY, re-read there) never clamps in between.
     page.append(img, svg);
     viewport.append(page);
     this.root.append(viewport);
-    if (keep) {
-      viewport.scrollLeft = keep.x * (viewport.scrollWidth - viewport.clientWidth);
-      viewport.scrollTop = keep.y * (viewport.scrollHeight - viewport.clientHeight);
-    }
+    viewport.scrollLeft = keepX * (viewport.scrollWidth - viewport.clientWidth);
   }
 
   _bar() {

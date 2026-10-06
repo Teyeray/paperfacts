@@ -159,7 +159,7 @@
           </section>
         </div>
       </section>
-      <section class="samples" data-slot="samples" data-panel="samples" role="tabpanel">
+      <section class="samples" id="panel-samples" data-slot="samples" data-panel="samples" role="tabpanel">
         <div class="samples-head"><h2><span data-ui="entity_label_zh"></span>记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></div>
         <div class="lanes" data-slot="lanes"></div>
       </section>
@@ -167,7 +167,6 @@
         <summary>处理日志 <span class="muted" data-slot="job-status"></span></summary>
         <pre data-slot="log"></pre>
       </details>
-      <div data-section-end></div>
     </div>
   </div>
   <button class="ghost viewer-expand" data-action="expand-viewer" type="button" hidden>展开预览</button>
