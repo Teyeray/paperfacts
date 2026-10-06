@@ -49,6 +49,8 @@ PAGES = {
     "run-all-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "document": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     "document-compact": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
+    # The page zoomed to 200%: the controls and the widened page inside the viewport.
+    "document-zoom": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     # The section bar after a click on 证据: one screen, so the bar is seen stuck under the topbar.
     "document-sections": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     "document-dark": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
@@ -80,6 +82,14 @@ async def open_filters(page: Page, _: Path) -> None:
 async def go_to_evidence(page: Page, _: Path) -> None:
     await page.click('#document-view .section-link[data-goto="evidence"]')
     await page.wait_for_timeout(800)  # the smooth scroll
+
+
+async def zoom_document(page: Page, _: Path) -> None:
+    # Four steps up the ladder: 200%, the last CSS-zoom level, with the viewport scrolling the wider page.
+    for _ in range(4):
+        await page.click(".viewer-bar .zoomer button:last-child")
+    await page.wait_for_selector('[data-slot="viewer"] .page-viewport')
+    await page.wait_for_timeout(300)  # the zoomed page image re-renders
 
 
 async def collapse_rail(page: Page, _: Path) -> None:
@@ -150,6 +160,7 @@ PREPARE = {
     "home-filtered": open_filters,
     "home-explore-dark": open_filters,
     "document-compact": lambda page, _: page.evaluate(COMPACT),
+    "document-zoom": zoom_document,
     "document-sections": go_to_evidence,
     "upload-dialog": open_upload_dialog,
     "upload-si-dialog": open_upload_dialog_with_si,

@@ -1312,6 +1312,98 @@ async def viewer_collapse(page: Page, base: str, docs: dict[str, str], _: Path) 
     )
 
 
+@check("the viewer's zoom controls step the ladder, disable at the ends and survive a reload")
+async def zoom_controls(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"], fact=2)
+    await page.wait_for_selector('[data-slot="viewer"] .page')
+    level = page.locator(".viewer-bar .zoom-level")
+    expect(await level.text_content() == "100%", f"the zoom level does not start at 100%: {await level.text_content()}")
+    expect(await page.is_disabled(".viewer-bar .zoomer button:first-child"), "− is not disabled at 100%")
+
+    async def page_width() -> float:
+        return await page.evaluate(
+            "document.querySelector('[data-slot=\"viewer\"] .page').getBoundingClientRect().width"
+        )
+
+    before = await page_width()
+    await page.click(".viewer-bar .zoomer button:last-child")
+    expect(await level.text_content() == "125%", "one + did not step to 125%")
+    expect(await page_width() > before, "the page did not get wider")
+    await page.wait_for_function("document.querySelectorAll('[data-slot=\"viewer\"] .hl').length > 0")
+    # Step to the top: + disables there.
+    for _ in range(6):
+        await page.click(".viewer-bar .zoomer button:last-child")
+    expect(await level.text_content() == "400%", "+ did not reach 400%")
+    expect(await page.is_disabled(".viewer-bar .zoomer button:last-child"), "+ is not disabled at 400%")
+    # The percentage button resets to 100%.
+    await page.click(".viewer-bar .zoom-level")
+    expect(await level.text_content() == "100%", "the percentage button did not reset to 100%")
+    # Set an intermediate level, reload, it survives (localStorage).
+    await page.click(".viewer-bar .zoomer button:last-child")
+    expect(await level.text_content() == "125%", "one + did not step to 125%")
+    await page.reload()
+    await page.wait_for_selector('[data-slot="viewer"] .page')
+    expect(await page.locator(".viewer-bar .zoom-level").text_content() == "125%", "a reload forgot the zoom level")
+
+
+@check("ctrl/cmd+wheel over the page zooms; plain wheel scrolls instead")
+async def zoom_wheel(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_selector('[data-slot="viewer"] .page')
+    await page.evaluate("document.querySelector('.page-viewport').scrollIntoView({block: 'center'})")
+    center = await page.evaluate(
+        "() => { const b = document.querySelector('.page-viewport').getBoundingClientRect();"
+        " return [b.left + b.width / 2, b.top + b.height / 2]; }"
+    )
+    await page.mouse.move(*center)
+    await page.keyboard.down("Control")
+    await page.mouse.wheel(0, -240)
+    await page.keyboard.up("Control")
+    expect(await page.locator(".viewer-bar .zoom-level").text_content() == "125%", "ctrl+wheel up did not zoom in")
+    await page.keyboard.down("Control")
+    await page.mouse.wheel(0, 240)
+    await page.keyboard.up("Control")
+    expect(await page.locator(".viewer-bar .zoom-level").text_content() == "100%", "ctrl+wheel down did not zoom out")
+    # Plain wheel: no zoom, the page itself scrolls.
+    before = await page.evaluate("window.scrollY")
+    await page.mouse.wheel(0, 400)
+    await page.wait_for_timeout(200)
+    expect(await page.locator(".viewer-bar .zoom-level").text_content() == "100%", "plain wheel changed the zoom")
+    expect(await page.evaluate("window.scrollY") > before, "plain wheel did not scroll the page")
+
+
+@check("a failed hi-dpi render falls back to CSS zoom without errors or retry loops")
+async def zoom_fallback(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_selector('[data-slot="viewer"] .page')
+    hi: list[str] = []
+    errors: list[str] = []
+
+    async def abort_220(route: Route) -> None:
+        await route.abort()
+
+    await page.route("**dpi=220*", abort_220)
+    page.on("request", lambda request: hi.append(request.url) if "dpi=220" in request.url else None)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    await page.click(".viewer-bar .zoomer button:last-child")  # 125
+    await page.click(".viewer-bar .zoomer button:last-child")  # 150
+    await page.click(".viewer-bar .zoomer button:last-child")  # 175
+    await page.click(".viewer-bar .zoomer button:last-child")  # 200
+    expect(await page.locator(".viewer-bar .zoom-level").text_content() == "200%", "did not reach 200%")
+    await page.click(".viewer-bar .zoomer button:last-child")  # 250 -> dpi 220 -> abort -> fallback
+    expect(await page.locator(".viewer-bar .zoom-level").text_content() == "250%", "the zoom did not stay at 250%")
+    await page.wait_for_function(
+        "(() => { const img = document.querySelector('[data-slot=\"viewer\"] .page img');"
+        " return img && img.src.includes('dpi=110') && img.naturalWidth > 0; })()"
+    )
+    # More zooming must not re-request the failed dpi.
+    n = len(hi)
+    await page.click(".viewer-bar .zoomer button:last-child")  # 300
+    await page.wait_for_timeout(300)
+    expect(len(hi) == n, f"the failed hi-dpi render was retried: {hi[n:]}")
+    expect(not errors, f"page errors: {errors}")
+
+
 async def lanes_visible(page: Page) -> None:
     box = await page.evaluate(
         """() => {
