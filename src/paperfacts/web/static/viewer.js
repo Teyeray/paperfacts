@@ -8,6 +8,17 @@ import { LANES, LANE_LABEL } from "./state.js";
 
 const LANE_CLASS = { mineru: "a", paddleocr_vl: "b" };
 
+// Zoom ladder: ≤200% is pure CSS width (the overlay is resolution-independent), above that the page
+// is re-rendered at a higher dpi so it stays sharp. Beyond the ladder's top the + button disables.
+const ZOOM_STEPS = [1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
+const ZOOM_HI_DPI = 220;
+const ZOOM_KEY = "paperfacts.viewer-zoom";
+
+function readZoomIndex() {
+  const i = Number(readStored(ZOOM_KEY));
+  return Number.isInteger(i) && i >= 0 && i < ZOOM_STEPS.length ? i : 0;
+}
+
 export class PageViewer {
   // initial: the previous instance's getState(), used so a re-render of the document view keeps
   // showing the same page and the same highlight set
@@ -24,12 +35,33 @@ export class PageViewer {
     this.dim = initial?.dim ?? true;
     // A figure located from the chart readings: drawn in a neutral colour, since it belongs to neither lane.
     this.region = initial?.region ?? null;
+    this.zoomIndex = readZoomIndex();
+    if (Number.isInteger(initial?.zoomIndex) && initial.zoomIndex >= 0 && initial.zoomIndex < ZOOM_STEPS.length) {
+      this.zoomIndex = initial.zoomIndex;
+    }
+    // Set once the hi-dpi render has failed (e.g. the deployment caps dpi below 220): stay on CSS
+    // zoom for the rest of this viewer's life instead of retrying on every zoom change.
+    this._dpiFailed = false;
     this._render();
   }
 
   // ---- public ----
   getState() {
-    return { page: this.page, highlighted: [...this.highlighted], show: { ...this.show }, dim: this.dim, region: this.region };
+    return { page: this.page, highlighted: [...this.highlighted], show: { ...this.show }, dim: this.dim, region: this.region, zoomIndex: this.zoomIndex };
+  }
+
+  get zoom() {
+    return ZOOM_STEPS[this.zoomIndex];
+  }
+
+  get renderDpi() {
+    return !this._dpiFailed && this.zoom > 2 ? ZOOM_HI_DPI : this.dpi;
+  }
+
+  setZoom(i) {
+    this.zoomIndex = Math.min(Math.max(i, 0), ZOOM_STEPS.length - 1);
+    writeStored(ZOOM_KEY, String(this.zoomIndex));
+    this._render();
   }
 
   highlight(sourceIds, { jump = true } = {}) {
@@ -63,6 +95,15 @@ export class PageViewer {
 
   // ---- rendering ----
   _render() {
+    // Keep the reader's place when zoom changes: the old viewport's scroll fractions map onto the
+    // rebuilt one (a fresh zoom render replaces the viewport node, so read before wiping).
+    const oldViewport = this.root.querySelector(".page-viewport");
+    const keep = oldViewport
+      ? {
+          x: oldViewport.scrollWidth > oldViewport.clientWidth ? oldViewport.scrollLeft / (oldViewport.scrollWidth - oldViewport.clientWidth) : 0,
+          y: oldViewport.scrollHeight > oldViewport.clientHeight ? oldViewport.scrollTop / (oldViewport.scrollHeight - oldViewport.clientHeight) : 0,
+        }
+      : null;
     this.root.innerHTML = "";
     this.root.append(this._bar());
     if (!this.pdfAvailable) {
@@ -72,11 +113,28 @@ export class PageViewer {
       this.root.append(empty);
       return;
     }
+    const viewport = document.createElement("div");
+    viewport.className = "page-viewport";
+    // Ctrl/Cmd+wheel (incl. trackpad pinch) zooms; only that combination is taken over, plain
+    // scrolling passes through. Listener on the viewport only — not on .viewer or document.
+    viewport.addEventListener("wheel", (event) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      this.setZoom(this.zoomIndex + (event.deltaY < 0 ? 1 : -1));
+    }, { passive: false });
     const page = document.createElement("div");
     page.className = "page" + (this.dim && (this.highlighted.size || this.region) ? " dim" : "");
+    page.style.width = `${Math.round(this.zoom * 100)}%`;
     const img = document.createElement("img");
     img.alt = `第 ${this.page + 1} 页`;
-    img.src = `/api/documents/${this.documentId}/pages/${this.page}.png?dpi=${this.dpi}`;
+    img.src = `/api/documents/${this.documentId}/pages/${this.page}.png?dpi=${this.renderDpi}`;
+    img.addEventListener("error", () => {
+      // 422 (deployment caps dpi) or a network failure: silently fall back to CSS zoom, once.
+      if (this.renderDpi !== this.dpi) {
+        this._dpiFailed = true;
+        this._render();
+      }
+    });
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("preserveAspectRatio", "none");
     img.addEventListener("load", () => {
@@ -84,7 +142,12 @@ export class PageViewer {
       this._drawBlocks(svg, img.naturalWidth, img.naturalHeight, page);
     });
     page.append(img, svg);
-    this.root.append(page);
+    viewport.append(page);
+    this.root.append(viewport);
+    if (keep) {
+      viewport.scrollLeft = keep.x * (viewport.scrollWidth - viewport.clientWidth);
+      viewport.scrollTop = keep.y * (viewport.scrollHeight - viewport.clientHeight);
+    }
   }
 
   _bar() {
@@ -98,6 +161,21 @@ export class PageViewer {
     label.textContent = `${this.page + 1} / ${this.pageCount}`;
     pager.append(prev, label, next);
     bar.append(pager);
+
+    if (this.pdfAvailable) {
+      const zoomer = document.createElement("span");
+      zoomer.className = "zoomer";
+      const out = button("−", () => this.setZoom(this.zoomIndex - 1), this.zoomIndex === 0);
+      out.setAttribute("aria-label", "缩小");
+      const level = button(`${Math.round(this.zoom * 100)}%`, () => this.setZoom(ZOOM_STEPS.indexOf(1)), false);
+      level.className = "zoom-level";
+      level.setAttribute("aria-label", "重置缩放");
+      level.setAttribute("aria-live", "polite");
+      const inn = button("+", () => this.setZoom(this.zoomIndex + 1), this.zoomIndex === ZOOM_STEPS.length - 1);
+      inn.setAttribute("aria-label", "放大");
+      zoomer.append(out, level, inn);
+      bar.append(zoomer);
+    }
 
     for (const lane of LANES) {
       const l = document.createElement("label");
@@ -191,6 +269,11 @@ export function setupViewerPane(view, node) {
   const sync = () => {
     const collapsed = view.dataset.viewer === "collapsed";
     collapse?.setAttribute("aria-expanded", String(!collapsed));
+    if (collapse) {
+      const word = collapsed ? "展开预览" : "收起预览";
+      collapse.title = word;
+      collapse.setAttribute("aria-label", word);
+    }
   };
   const apply = (collapsed) => {
     if (collapsed) view.dataset.viewer = "collapsed";
