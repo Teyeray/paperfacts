@@ -608,6 +608,22 @@ async def library_order(page: Page, base: str, docs: dict[str, str], _: Path) ->
     expect(await page.locator("#doc-list .doc-item").count() > 0, "the late, older list replaced the newer one")
 
 
+@check("the rail shows its skeleton on a cold boot until the first list answers")
+async def rail_skeleton_cold_boot(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await page.route("**/api/documents", delayed(1.2))
+    await page.goto(f"{base}/")
+    await page.wait_for_selector("#doc-list .skeleton-row", state="visible")
+    expect(await page.get_attribute("#doc-list", "aria-busy") == "true", "the skeleton did not mark the list busy")
+    await page.wait_for_timeout(300)
+    expect(
+        await page.is_visible("#doc-list .skeleton-row"),
+        "the skeleton gave way to the empty state before the list answered",
+    )
+    await page.wait_for_selector("#doc-list .doc-item", timeout=5000)
+    expect(await page.locator("#doc-list .skeleton-row").count() == 0, "the skeleton stayed behind the items")
+    expect(await page.get_attribute("#doc-list", "aria-busy") is None, "the list stayed busy after the list answered")
+
+
 @check("重新处理 pressed as the view reloads still follows the new job")
 async def rerun_during_reload(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["B"])

@@ -19,8 +19,13 @@ let refreshFailures = 0;
 // newest one paints, so an older list that arrives late can never overwrite a newer one.
 let refreshToken = 0;
 // False until the first list has answered: the one time the rail shows skeleton rows instead of a
-// stale (or empty) list. Later refreshes swap the rows in place, so the shimmer never replays.
+// stale (or empty) list. Owned by loadLibrary's success path, so a render that runs before the first
+// fetch lands cannot flip it and skip the skeleton. Later refreshes swap the rows in place, so the
+// shimmer never replays.
 let libraryLoaded = false;
+// Set when the first load failed: the skeleton makes way for the error line, and later retries
+// refresh the data silently instead of re-shimmering. Cleared once a list finally answers.
+let firstLoadFailed = false;
 // Told when a refresh replaced state.docs: the home table's status filters are joined with it.
 let docsListener = null;
 export const onDocsChange = (listener) => {
@@ -35,7 +40,7 @@ const WIDE = window.matchMedia("(min-width: 961px)");
 export async function loadLibrary() {
   const token = ++refreshToken;
   const profile = state.profileName;
-  if (!libraryLoaded) showDocListSkeleton();
+  if (!libraryLoaded && !firstLoadFailed) showDocListSkeleton();
   clearTimeout(refreshTimer);
   refreshTimer = null;
   let docs;
@@ -49,11 +54,19 @@ export async function loadLibrary() {
     refreshFailures += 1;
     // Said once per outage, not on every retry; the last list read stays on screen meanwhile.
     if (refreshFailures === 1) toast(`读取文档库失败：${error.message}`, true);
+    if (!libraryLoaded) {
+      // No list has answered yet: an endless shimmer (and an aria-busy that never clears) is not a
+      // state to sit in, so the skeleton makes way for the muted error line while the retries go on.
+      firstLoadFailed = true;
+      showDocListError();
+    }
     refreshTimer = setTimeout(loadLibrary, Math.min(REFRESH_MS * 2 ** (refreshFailures - 1), MAX_REFRESH_BACKOFF_MS));
     return;
   }
   if (token !== refreshToken) return;
   refreshFailures = 0;
+  firstLoadFailed = false;
+  libraryLoaded = true;
   state.docs = docs;
   state.activeDocs = activeDocs;
   // The open paper's note on another profile's job lasts as long as the rail still sees that job active.
@@ -96,6 +109,14 @@ function showDocListSkeleton() {
       return li;
     }),
   );
+}
+
+// The first load's failure line, where the skeleton was: named in the toast too, but the list itself
+// should not read as still loading.
+function showDocListError() {
+  const list = document.getElementById("doc-list");
+  list.removeAttribute("aria-busy");
+  list.innerHTML = `<li class="doc-list-empty muted">读取文档库失败</li>`;
 }
 
 // ---------- search and chips ----------
@@ -147,8 +168,10 @@ function clearFilter() {
 
 export function renderLibrary() {
   const list = document.getElementById("doc-list");
+  // A render that runs before the first list has answered (the route, the document fetch) must not
+  // replace the pending load's skeleton with the empty state; the load's own renderLibrary does that.
+  if (!libraryLoaded && (list.querySelector(".skeleton-row") || firstLoadFailed)) return;
   list.removeAttribute("aria-busy");
-  libraryLoaded = true;
   const shown = state.docs.filter(matches);
   const filtered = Boolean(filter.query) || filter.chips.size > 0;
   document.getElementById("doc-count").textContent = filtered
