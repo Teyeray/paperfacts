@@ -257,11 +257,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tally-item.conflict i { background: var(--bad); }
 .tally-item.ambiguous i { background: var(--warn); }
 
-/* ---------- document page: the summary panel, then the content under its section bar ----------
-   The panel sits above the content, and beside it (sticky) only from 1600 px, where the content still has room for
-   the facts table and the viewer side by side. The section bar sticks under the topbar on a wide screen; what scrolls
-   to a section, or sticks under the bar, clears both through --doc-sticky. */
-.document { --section-bar: 0px; --doc-sticky: calc(var(--topbar) + var(--section-bar)); }
+/* ---------- document page: left rail + middle content + persistent right PDF pane (≥1280 px) ----------
+   The summary sits in flow at the top of the middle column at every width; the viewer moves into a sticky
+   pane on the right from 1280 px. The pane's state is one attribute on .document (document.js keeps it in
+   localStorage); collapsed, the pane hides and a fixed ghost button offers it back. The section bar sticks
+   under the topbar on a wide screen; what scrolls to a section, or sticks under the bar, clears both
+   through --doc-sticky. */
+.document { --section-bar: 0px; --doc-sticky: calc(var(--topbar) + var(--section-bar)); display: grid; grid-template-columns: minmax(0, 1fr); }
+.viewer-pane { min-width: 0; }
+.viewer-expand { display: none; }
 .doc-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4) var(--space-5); align-items: start; }
 .doc-summary { min-width: 0; padding: var(--space-4) 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
 .doc-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3) var(--space-5); margin: var(--space-4) 0 0; }
@@ -272,7 +276,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc-fact .tally { font-size: 12.5px; white-space: normal; }
 .doc-summary .stages { margin-top: var(--space-4); }
 .doc-summary .doc-note { margin: var(--space-3) 0 0; }
-.section-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 var(--space-1); margin: 0 0 var(--space-5); border-bottom: 1px solid var(--line); background: var(--paper); }
+.section-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 var(--space-1); margin: 0 0 var(--space-5); border-bottom: 1px solid var(--line); background: var(--surface); }
 .section-link { margin-bottom: -1px; padding: 9px 12px 8px; border: 0; border-bottom: 2px solid #0000; background: none; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
 .section-link:hover { color: var(--ink); }
 .section-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -281,13 +285,31 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .evidence .kpis { margin-top: 0; }
 @media (min-width: 961px) {
   .document { --section-bar: 42px; }
-  .section-bar { position: sticky; top: var(--topbar); z-index: 4; height: var(--section-bar); flex-wrap: nowrap; }
+  .section-bar { position: sticky; top: var(--topbar); z-index: 4; height: var(--section-bar); flex-wrap: nowrap; box-shadow: var(--shadow-2); }
 }
-@media (min-width: 1600px) {
-  .doc-layout { grid-template-columns: 300px minmax(0, 1fr); }
-  .doc-summary { position: sticky; top: calc(var(--topbar) + var(--space-4)); max-height: calc(100vh - var(--topbar) - 2 * var(--space-4)); overflow: auto; }
-  .doc-summary .doc-title h1 { font-size: 21px; }
-  .doc-facts { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1280px) {
+  .document:not([data-viewer="collapsed"]) { grid-template-columns: minmax(0, 1fr) var(--viewer-pane); }
+  /* The facts table's two lane columns need ~570 px; at the 1280 rung the full 480 px pane would
+     squeeze the middle below that, so the pane starts narrower and reaches its token width at 1440. */
+  @media (max-width: 1439.98px) {
+    .document:not([data-viewer="collapsed"]) { grid-template-columns: minmax(0, 1fr) 340px; }
+  }
+  .viewer-pane {
+    position: sticky; top: var(--topbar); height: calc(100vh - var(--topbar)); overflow: auto;
+    border-left: 1px solid var(--line); background: var(--surface);
+  }
+  .viewer-pane-head {
+    position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--line); background: var(--paper-2);
+    font-size: 12px; color: var(--ink-2);
+  }
+  .viewer-pane .viewer { position: static; border: 0; border-radius: 0; box-shadow: none; }
+  /* Collapsed: the pane hides; a fixed ghost button at the content's top right offers it back. */
+  .document[data-viewer="collapsed"] .viewer-pane { display: none; }
+  .document[data-viewer="collapsed"] .viewer-expand {
+    display: inline-flex; position: fixed; top: calc(var(--topbar) + var(--space-3)); right: var(--space-4); z-index: 6;
+    background: var(--surface); border-color: var(--line-strong); color: var(--ink-2); box-shadow: var(--shadow-2);
+  }
   .doc-main { container-type: inline-size; }
 }
 
@@ -325,26 +347,27 @@ h1 .article-tag { margin: 0 0 0 10px; font-size: 12px; }
   gap: 10px; margin: 20px 0 var(--gap-section);
 }
 .kpi {
-  display: flex; flex-direction: column; background: var(--paper-2); border: 1px solid var(--line);
+  display: flex; flex-direction: column; border: 1px solid var(--line);
   border-left: 4px solid var(--neutral); border-radius: var(--radius); padding: 11px 13px 10px;
+  background: color-mix(in oklab, var(--neutral) 8%, var(--surface));
 }
 .kpi .label { font-size: 11.5px; letter-spacing: .02em; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
 .kpi .value { font-size: 30px; font-weight: 600; line-height: 1.05; margin-top: 6px; font-variant-numeric: tabular-nums; }
 /* One line: these notes are a glance, and a wrapping one makes the tiles ragged. */
 .kpi .note { font-size: 11.5px; color: var(--ink-3); margin-top: auto; padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kpi.agree { border-left-color: var(--ok); }
-.kpi.conflict { border-left-color: var(--bad); }
-.kpi.ambiguous { border-left-color: var(--warn); }
+.kpi.agree { border-left-color: var(--ok); background: color-mix(in oklab, var(--ok) 8%, var(--surface)); }
+.kpi.conflict { border-left-color: var(--bad); background: color-mix(in oklab, var(--bad) 8%, var(--surface)); }
+.kpi.ambiguous { border-left-color: var(--warn); background: color-mix(in oklab, var(--warn) 8%, var(--surface)); }
 .kpi.missing { border-left-color: var(--neutral); }
-.kpi.unattributed { border-left-color: var(--warn); }
+.kpi.unattributed { border-left-color: var(--warn); background: color-mix(in oklab, var(--warn) 8%, var(--surface)); }
+.kpi.samples { border-left-color: var(--accent); background: color-mix(in oklab, var(--accent) 8%, var(--surface)); }
+/* The colour repeats the label and never replaces it: the tinted number is a second signal. */
+.kpi.agree .value { color: var(--ok); }
+.kpi.conflict .value { color: var(--bad); }
+.kpi.ambiguous .value, .kpi.unattributed .value { color: var(--warn); }
+.kpi.samples .value { color: var(--accent); }
 
-/* ---------- workbench: table + viewer ---------- */
-/* The facts table beside the viewer only where both lane columns still fit next to each other; below that
-   the viewer moves under the table (and a click scrolls it into view), which keeps both lanes on screen. */
-.workbench { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(320px, 1fr); gap: 18px; align-items: start; }
-@media (max-width: 1439px) { .workbench { grid-template-columns: minmax(0, 1fr); } }
-/* From 1600 px the summary panel takes a column (see the document page), so there the content's own width decides. */
-@container (max-width: 1060px) { .workbench { grid-template-columns: minmax(0, 1fr); } }
+/* ---------- workbench: the facts table (the viewer lives in its own pane beside the page) ---------- */
 .facts-head, .samples-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 /* Section headings in the one body face, on the type scale. */
 h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650; margin: 0; }

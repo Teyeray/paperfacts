@@ -23,7 +23,7 @@ import {
   uiCopy,
   viewShows,
 } from "./state.js";
-import { PageViewer } from "./viewer.js";
+import { PageViewer, setupViewerPane } from "./viewer.js";
 import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts.js";
 import { renderLanes } from "./samples.js";
 import { renderResults } from "./table.js";
@@ -187,13 +187,19 @@ async function openDocument(id) {
   const switching = id !== state.current || profile !== state.currentProfile;
   let data;
   let view;
+  // While the document's artifacts are on their way: shimmer rows under the generation guard, replaced
+  // wholesale by renderDocument (or dropped by a newer navigation, which checks the generation first).
+  // Only on a cold view: a switch to another document or profile keeps the old view on screen (inert),
+  // so a reader's eye — and any click that lands before the swap — stays on what they saw.
+  if (state.current == null) showDocumentSkeleton();
   try {
     [data, view] = await Promise.all([loadDocumentData(id, profile), profileView(profile)]);
   } catch (error) {
     if (isCurrent(generation)) showMissing(id, error);
     return;
   }
-  if (!isCurrent(generation)) return; // a later navigation owns the page now
+  if (!isCurrent(generation)) return; // a later navigation owns the page now (the skeleton it left is not ours to clear)
+  document.getElementById("document-view").removeAttribute("aria-busy");
   adoptProfile(profile, view);
   if (switching) {
     stopPolling();
@@ -248,6 +254,25 @@ async function loadDocumentData(id, profile) {
   };
 }
 
+// While the document's artifacts are on their way: shimmer rows under the generation guard, replaced
+// wholesale by renderDocument (or dropped by a newer navigation, which checks the generation first).
+function showDocumentSkeleton() {
+  const view = document.getElementById("document-view");
+  showViews("document-view");
+  view.setAttribute("aria-busy", "true");
+  view.replaceChildren();
+  const panel = document.createElement("div");
+  panel.className = "skeleton-panel doc-skeleton";
+  const widths = ["62%", "38%", "80%", "46%", "70%", "54%"];
+  for (const width of widths) {
+    const bar = document.createElement("div");
+    bar.className = "skeleton";
+    bar.style.width = width;
+    panel.append(bar);
+  }
+  view.append(panel);
+}
+
 function renderDocument() {
   const view = document.getElementById("document-view");
   showViews("document-view");
@@ -286,6 +311,7 @@ function renderDocument() {
   renderRows(s("rows"), s("rows-empty"));
   renderLanes(s("lanes"));
   renderJobLog(s("joblog"), s("log"), s("job-status"));
+  setupViewerPane(view, node);
   view.append(node);
   mountViewer(slot("viewer"), viewerState);
   renderSectionBar(slot("section-bar"), view);
