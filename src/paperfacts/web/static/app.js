@@ -8,7 +8,7 @@
 // column model, sorting and the density switch), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
 // library-wide results table), explorer (its search box, the home query and the flattened rows), filters (its filter
 // panel), facts (fact comparison), figures (chart readings), samples (sample records), job
-// (job progress), viewer (page-level provenance), check (the page that checks a pasted profile).
+// (job progress), viewer (page-level provenance), theme (the manual light/dark override), check (the page that checks a pasted profile).
 
 import { api } from "./api.js";
 import { setupCheck, showCheck } from "./check.js";
@@ -28,6 +28,7 @@ import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
 import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
 import { applyStoredDensity } from "./table.js";
+import { initTheme, cycleTheme } from "./theme.js";
 import { setupUpload } from "./upload.js";
 
 // Another profile routed to: the rail lists its documents, the old profile's home table is hidden until the new one
@@ -48,7 +49,24 @@ function setupSkipLink() {
   });
 }
 
+// The theme button cycles 自动 → 浅色 → 深色 (auto follows the OS preference); the label tells where it is,
+// including on a fresh load that restores a stored choice.
+const THEME_LABELS = { auto: "主题：跟随系统", light: "主题：浅色", dark: "主题：深色" };
+function setupThemeToggle() {
+  const button = document.getElementById("theme-toggle");
+  const label = () => {
+    button.setAttribute("aria-label", THEME_LABELS[document.documentElement.dataset.theme ?? "auto"]);
+  };
+  label();
+  button.addEventListener("click", () => {
+    cycleTheme();
+    label();
+  });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  initTheme();
+  setupThemeToggle();
   setupSkipLink();
   setupRailToggle();
   applyStoredDensity();

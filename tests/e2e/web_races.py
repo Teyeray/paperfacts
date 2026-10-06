@@ -735,6 +735,45 @@ async def rail_collapse(page: Page, base: str, docs: dict[str, str], _: Path) ->
     expect(await page.evaluate(CONTENT_WIDTH) < await page.evaluate(VIEWPORT_WIDTH), "the expanded rail has no width")
 
 
+@check("the topbar's 总表 link is on every page, marks only home, and returns from a document to the home table")
+async def topbar_home(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    nav = page.locator('.topnav [data-nav="home"]')
+    await home(page, base)
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await nav.is_visible(), "总表 is not on the home view")
+    expect(await nav.get_attribute("aria-current") == "page", "the home view does not mark 总表 current")
+    await open_doc(page, base, docs["A"])
+    expect(await nav.is_visible(), "总表 is not on the document view")
+    expect(await nav.get_attribute("aria-current") is None, "the document view marks 总表 current")
+    await nav.click()
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    expect(await nav.get_attribute("aria-current") == "page", "returning home did not mark 总表 current")
+    await open_profile_page(page, f"{base}/#/profile")
+    expect(await nav.is_visible(), "总表 is not on the profile page")
+    expect(await nav.get_attribute("aria-current") is None, "the profile page marks 总表 current")
+
+
+@check("the theme toggle cycles 跟随系统 → 浅色 → 深色, and an explicit choice survives a reload")
+async def theme_cycle(page: Page, base: str, _: dict[str, str], __: Path) -> None:
+    await home(page, base)
+    root = page.locator("html")
+    button = page.locator("#theme-toggle")
+    expect(await root.get_attribute("data-theme") is None, "a fresh visit starts on 跟随系统")
+    await button.click()
+    expect(await root.get_attribute("data-theme") == "light", "one click did not pick 浅色")
+    expect(await button.get_attribute("aria-label") == "主题：浅色", "the label does not say 浅色")
+    await button.click()
+    expect(await root.get_attribute("data-theme") == "dark", "two clicks did not pick 深色")
+    expect(await button.get_attribute("aria-label") == "主题：深色", "the label does not say 深色")
+    await page.reload()
+    await page.wait_for_selector("#doc-list .doc-item", state="attached")
+    expect(await root.get_attribute("data-theme") == "dark", "a reload forgot the explicit 深色")
+    expect(await button.get_attribute("aria-label") == "主题：深色", "a reload reset the label")
+    await page.locator("#theme-toggle").click()
+    expect(await root.get_attribute("data-theme") is None, "the third click did not return to 跟随系统")
+    expect(await page.evaluate("localStorage.getItem('pf-theme')") is None, "auto did not clear the stored choice")
+
+
 @check("`[` typed into the rail search, or pressed in an open dialog, is not the collapse")
 async def rail_bracket_guard(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await home(page, base)
