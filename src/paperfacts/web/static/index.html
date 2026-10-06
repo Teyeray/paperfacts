@@ -108,8 +108,8 @@
       <p class="doc-note other-job hidden" data-slot="other-job" role="status"></p>
     </aside>
     <div class="doc-main">
-      <nav class="section-bar" data-slot="section-bar" aria-label="本页各部分"></nav>
-      <section class="results" aria-label="结果表" data-section="results">
+      <nav class="tab-bar" data-slot="tabs" role="tablist" aria-label="文档内容"></nav>
+      <section class="results" aria-label="结果表" data-panel="results" role="tabpanel" id="panel-results">
         <div class="results-head">
           <h2>结果表（按<span data-ui="entity_label_zh"></span>）</h2>
           <div class="chips" data-slot="results-chips"></div>
@@ -127,7 +127,7 @@
         </div>
         <div data-slot="results-entities"></div>
       </section>
-      <section class="figures" data-slot="figures" aria-label="图中读数" data-section="figures">
+      <section class="figures" data-slot="figures" aria-label="图中读数" data-panel="figures" role="tabpanel" id="panel-figures">
         <div class="results-head"><h2>图中读数</h2></div>
         <p class="figures-empty" data-slot="figures-empty" role="status"></p>
         <p class="figures-warning hidden" data-slot="figures-warning" role="note"></p>
@@ -141,7 +141,7 @@
         </div>
         </div>
       </section>
-      <section class="evidence" aria-label="证据" data-section="evidence">
+      <section class="evidence" aria-label="事实对照" data-panel="facts" role="tabpanel" id="panel-facts">
         <div class="kpis" data-slot="kpis"></div>
         <div class="workbench">
           <section class="facts" aria-label="事实对照">
@@ -159,11 +159,11 @@
           </section>
         </div>
       </section>
-      <details class="samples" data-slot="samples" data-section="samples">
-        <summary class="samples-head"><h2><span data-ui="entity_label_zh"></span>记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></summary>
+      <section class="samples" data-slot="samples" data-panel="samples" role="tabpanel">
+        <div class="samples-head"><h2><span data-ui="entity_label_zh"></span>记录</h2><span class="muted">两路各自的抽取结果（原文 → 规范值 ← 来源块）</span></div>
         <div class="lanes" data-slot="lanes"></div>
-      </details>
-      <details class="joblog" data-slot="joblog" data-section="log">
+      </section>
+      <details class="joblog" data-slot="joblog">
         <summary>处理日志 <span class="muted" data-slot="job-status"></span></summary>
         <pre data-slot="log"></pre>
       </details>

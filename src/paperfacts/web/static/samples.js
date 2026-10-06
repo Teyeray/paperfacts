@@ -1,6 +1,7 @@
 // Sample records: each lane's own LaneExtraction (raw text -> normalized value <- source block); clicking a source id highlights it in the viewer.
 
 import { releaseFact } from "./facts.js";
+import { activateTab } from "./tabs.js";
 import { caveats, escapeHtml, toast } from "./html.js";
 import { LANES, LANE_LABEL, entityGroups, entityOf, inEntity, state, uiCopy } from "./state.js";
 import { readingText } from "./tsv.js";
@@ -122,7 +123,7 @@ export function showEvidence(host, fieldName, rowSampleId, kind = "sample", enti
       if ((row.dataset.field ?? "") === fieldName) rows.push(row);
     }
   }
-  host.open = true;
+  activateTab("samples");
   if (!rows.length) {
     host.scrollIntoView({ behavior: "smooth", block: "start" });
     toast("两路都没有这个字段的记录");

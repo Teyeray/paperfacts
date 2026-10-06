@@ -260,10 +260,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ---------- document page: left rail + middle content + persistent right PDF pane (≥1280 px) ----------
    The summary sits in flow at the top of the middle column at every width; the viewer moves into a sticky
    pane on the right from 1280 px. The pane's state is one attribute on .document (document.js keeps it in
-   localStorage); collapsed, the pane hides and a fixed ghost button offers it back. The section bar sticks
-   under the topbar on a wide screen; what scrolls to a section, or sticks under the bar, clears both
+   localStorage); collapsed, the pane hides and a fixed ghost button offers it back. The tab bar sticks
+   under the topbar on a wide screen; what scrolls, or sticks under the bar, clears both
    through --doc-sticky. */
-.document { --section-bar: 0px; --doc-sticky: calc(var(--topbar) + var(--section-bar)); display: grid; grid-template-columns: minmax(0, 1fr); }
+.document { --tab-bar: 0px; --doc-sticky: calc(var(--topbar) + var(--tab-bar)); display: grid; grid-template-columns: minmax(0, 1fr); }
 .viewer-pane { min-width: 0; }
 .viewer-expand { display: none; }
 .doc-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4) var(--space-5); align-items: start; }
@@ -276,16 +276,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc-fact .tally { font-size: 12.5px; white-space: normal; }
 .doc-summary .stages { margin-top: var(--space-4); }
 .doc-summary .doc-note { margin: var(--space-3) 0 0; }
-.section-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 var(--space-1); margin: 0 0 var(--space-5); border-bottom: 1px solid var(--line); background: var(--surface); }
-.section-link { margin-bottom: -1px; padding: 9px 12px 8px; border: 0; border-bottom: 2px solid #0000; background: none; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
-.section-link:hover { color: var(--ink); }
-.section-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.section-link.on { color: var(--ink); border-bottom-color: var(--accent); }
-[data-section] { scroll-margin-top: calc(var(--doc-sticky) + var(--space-2)); }
+.tab-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 var(--space-1); margin: 0 0 var(--space-5); border-bottom: 1px solid var(--line); background: var(--surface); }
+.tab-bar .tab { margin-bottom: -1px; padding: 9px 12px 8px; border: 0; border-bottom: 2px solid #0000; background: none; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+.tab-bar .tab:hover { color: var(--ink); }
+.tab-bar .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tab-bar .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+[data-panel] { scroll-margin-top: calc(var(--doc-sticky) + var(--space-2)); }
 .evidence .kpis { margin-top: 0; }
 @media (min-width: 961px) {
-  .document { --section-bar: 42px; }
-  .section-bar { position: sticky; top: var(--topbar); z-index: 4; height: var(--section-bar); flex-wrap: nowrap; box-shadow: var(--shadow-2); }
+  .document { --tab-bar: 42px; }
+  .tab-bar { position: sticky; top: var(--topbar); z-index: 4; height: var(--tab-bar); flex-wrap: nowrap; box-shadow: var(--shadow-2); }
 }
 @media (min-width: 1280px) {
   .document:not([data-viewer="collapsed"]) { grid-template-columns: minmax(0, 1fr) var(--viewer-pane); }
@@ -565,13 +565,7 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
 .tooltip code { color: inherit; opacity: .8; }
 
 /* ---------- sample records ---------- */
-details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(--gap-section); }
-/* Closed by default: the results table above is the deliverable, and these per-lane records are the
-   evidence trail behind it, which a reader opens when a cell needs explaining. */
-.samples > summary { cursor: pointer; list-style: none; }
-.samples > summary::-webkit-details-marker { display: none; }
-.samples > summary h2::before { content: "▸ "; color: var(--ink-3); }
-.samples[open] > summary h2::before { content: "▾ "; }
+.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(--gap-section); }
 .lanes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 960px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
 .lane { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: hidden; }

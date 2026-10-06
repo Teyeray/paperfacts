@@ -439,4 +439,4 @@ function bindCells(tr) {
 
 // The records section of the document this table belongs to, not of whichever document rendered first.
 const samplesHost = (td) =>
-  td.closest(".document")?.querySelector("details.samples") ?? document.querySelector("details.samples");
+  td.closest(".document")?.querySelector('[data-slot="samples"]') ?? document.querySelector('[data-slot="samples"]');
