@@ -65,7 +65,7 @@
       </div>
     </div>
     <div class="corpus-view hidden" id="corpus-view"></div>
-    <div class="document hidden" id="document-view"></div>
+    <div class="document hidden" id="document-view" data-viewer=""></div>
     <div class="profile-page hidden" id="profile-view"></div>
     <div class="check-view hidden" id="check-view">
       <h1>检查领域配置</h1>
@@ -157,7 +157,6 @@
               <div class="table-empty hidden" data-slot="rows-empty">还没有比较报告。</div>
             </div>
           </section>
-          <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
         </div>
       </section>
       <details class="samples" data-slot="samples" data-section="samples">
@@ -171,6 +170,14 @@
       <div data-section-end></div>
     </div>
   </div>
+  <button class="ghost viewer-expand" data-action="expand-viewer" type="button" hidden>展开预览</button>
+  <aside class="viewer-pane" aria-label="页面预览">
+    <div class="viewer-pane-head">
+      <span class="viewer-pane-title">页面溯源</span>
+      <button class="ghost" data-action="collapse-viewer" aria-label="收起预览" title="收起预览" type="button">✕</button>
+    </div>
+    <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
+  </aside>
 </template>
 
 <!-- The programmatic upload path: a change here uploads at once with the dialog's options (the e2e checks and

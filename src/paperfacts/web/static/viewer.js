@@ -3,7 +3,7 @@
 // as the backend's NormalizedBBox.to_pixels, so the boxes drawn here line up with the overlay and
 // cropping tools.
 
-import { escapeHtml } from "./html.js";
+import { escapeHtml, readStored, writeStored } from "./html.js";
 import { LANES, LANE_LABEL } from "./state.js";
 
 const LANE_CLASS = { mineru: "a", paddleocr_vl: "b" };
@@ -177,6 +177,26 @@ function svgTitle(text) {
   const title = document.createElementNS(SVG, "title");
   title.textContent = text;
   return title;
+}
+
+// The right pane's collapsed state: one attribute on .document, remembered per browser like the rail's.
+const VIEWER_KEY = "paperfacts.viewer-collapsed";
+
+// Called with each document render: applies the remembered state and wires the pane's two buttons.
+export function setupViewerPane(view, node) {
+  const apply = (collapsed) => {
+    if (collapsed) view.dataset.viewer = "collapsed";
+    else view.dataset.viewer = "";
+  };
+  apply(readStored(VIEWER_KEY) === "1");
+  node.querySelector('[data-action="collapse-viewer"]')?.addEventListener("click", () => {
+    apply(true);
+    writeStored(VIEWER_KEY, "1");
+  });
+  node.querySelector('[data-action="expand-viewer"]')?.addEventListener("click", () => {
+    apply("");
+    writeStored(VIEWER_KEY, "0");
+  });
 }
 
 // In the stacked layout (and for the results table at any width) the viewer sits below what was clicked:

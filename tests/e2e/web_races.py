@@ -1205,7 +1205,11 @@ async def facts_1920(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     await lanes_visible(page)
 
 
-@check("both lanes of 事实对照 fit side by side at 1600 px, beside the summary panel", width=1600, height=1000)
+@check(
+    "both lanes of 事实对照 fit side by side at 1600 px, with the summary above and the viewer pane beside",
+    width=1600,
+    height=1000,
+)
 async def facts_1600(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
     await lanes_visible(page)
@@ -1213,7 +1217,83 @@ async def facts_1600(page: Page, base: str, docs: dict[str, str], _: Path) -> No
         """() => ['.doc-summary', '.doc-main'].map((s) => document.querySelector(s).getBoundingClientRect().toJSON())"""
     )
     summary, main = boxes
-    expect(summary["right"] <= main["left"], f"the summary panel is not beside the content: {boxes}")
+    expect(summary["bottom"] <= main["top"], f"the summary panel is not in flow above the content: {boxes}")
+
+
+PANE = """() => {
+  const pane = document.querySelector('.viewer-pane').getBoundingClientRect();
+  const viewer = document.querySelector('[data-slot="viewer"]');
+  return { right: pane.right, width: window.innerWidth, inside: paneCompare(viewer.closest('.viewer-pane')) };
+  function paneCompare(el) { return Boolean(el && document.querySelector('.viewer-pane').contains(el)); }
+}"""
+
+
+@check("the viewer pane stands beside the content at 1280 px", width=1280)
+async def pane_1280(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    pane = await page.evaluate(PANE)
+    expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
+    expect(pane["inside"], "the viewer does not live in the viewer pane")
+
+
+@check("the viewer pane stands beside the content at 1440 px, and a fact click scrolls no page", width=1440)
+async def pane_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    pane = await page.evaluate(PANE)
+    expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
+    expect(pane["inside"], "the viewer does not live in the viewer pane")
+    before = await page.evaluate("window.scrollY")
+    # focus without scrolling (a click would auto-scroll to the row): the keyboard path activates the row too
+    await page.evaluate("document.querySelector('.facts tbody tr[data-index=\"0\"]').focus({preventScroll: true})")
+    await page.keyboard.press("Enter")
+    await page.wait_for_timeout(400)
+    expect(await page.evaluate("window.scrollY") == before, "clicking a fact scrolled the page")
+    box = await page.evaluate("document.querySelector('.viewer-pane').getBoundingClientRect().toJSON()")
+    expect(box["top"] >= 56 and box["top"] < 900 and box["right"] <= 1440, f"the viewer pane is not on screen: {box}")
+    # Stickiness: scrolling the content pins the pane under the topbar, wholly inside the viewport.
+    await page.evaluate("window.scrollTo(0, 400)")
+    await page.wait_for_timeout(200)
+    box = await page.evaluate("document.querySelector('.viewer-pane').getBoundingClientRect().toJSON()")
+    expect(box["top"] == 56 and box["bottom"] <= 901, f"the scrolled pane did not pin under the topbar: {box}")
+
+
+@check("the viewer pane stands beside the content at 1920 px", width=1920, height=1080)
+async def pane_1920(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    pane = await page.evaluate(PANE)
+    expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
+    expect(pane["inside"], "the viewer does not live in the viewer pane")
+
+
+@check("the viewer pane's collapse is remembered and the expand button brings it back")
+async def viewer_collapse(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.click('[data-action="collapse-viewer"]')
+    expect(
+        await page.get_attribute("#document-view", "data-viewer") == "collapsed",
+        "the collapse toggle did not collapse the pane",
+    )
+    expect(await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "1", "not remembered")
+    expect(await page.is_hidden(".viewer-pane"), "the collapsed pane still takes width")
+    await page.reload()
+    await page.wait_for_selector(
+        '[data-slot="viewer"] .page, [data-slot="viewer"] .viewer-empty, [data-slot="viewer"] .viewer-bar',
+        state="attached",
+    )
+    expect(
+        await page.get_attribute("#document-view", "data-viewer") == "collapsed",
+        "a reload forgot the collapsed pane",
+    )
+    await page.click(".viewer-expand")
+    expect(
+        await page.get_attribute("#document-view", "data-viewer") == "",
+        "the expand button did not restore the pane",
+    )
+    expect(await page.is_visible(".viewer-pane"), "the expanded pane is not on screen")
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "0",
+        "the expansion is not remembered",
+    )
 
 
 async def lanes_visible(page: Page) -> None:
