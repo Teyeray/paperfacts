@@ -340,6 +340,12 @@ in the viewer beside it — blue for MinerU, orange for PaddleOCR-VL, always wit
 The selected fact is part of the URL (`#/doc/<id>/fact/<n>`, `#/p/<profile>/doc/<id>/fact/<n>` under a profile
 other than the default), so a link to one disputed number survives a reload and can be sent to someone else.
 
+The viewer zooms: the page-viewer bar has −, a percentage (click it to reset to 100%), and + controls, and
+Ctrl/Cmd + mouse wheel zooms over the page itself. The chosen level is remembered across sessions and
+document switches. Up to 200% the page is scaled in CSS; above that it is re-rendered at 220 dpi
+(`server.page_dpi.max` — the highest dpi the renderer will produce) so it stays sharp, falling back
+silently to CSS scaling if that render fails or the deployment caps the dpi lower.
+
 ### 样品记录
 
 Collapsed by default: each lane's raw sample records, from the paper's own wording through to the
