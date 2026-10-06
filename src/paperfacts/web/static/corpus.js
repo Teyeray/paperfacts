@@ -146,7 +146,36 @@ export function renderCorpus(root) {
   }
 }
 
+// The home view's first-load placeholder: shimmer rows where the table will be, before /api/dataset
+// answers (document.js calls this before its first await). The swap is generation-guarded in showEmpty:
+// a newer view replaces this node outright, and a same-view answer redraws through renderCorpus, which
+// clears aria-busy. Later refreshes keep the old table up instead of re-showing skeletons. The rows are
+// plain divs, not a table, so the checks (and any code) that wait for the view's `table` still wait for
+// the real data.
+export function showCorpusSkeleton() {
+  const root = document.getElementById("corpus-view");
+  root.classList.remove("hidden");
+  root.setAttribute("aria-busy", "true");
+  root.replaceChildren();
+  const panel = document.createElement("div");
+  panel.className = "skeleton-panel";
+  panel.setAttribute("aria-hidden", "true");
+  for (let r = 0; r < 8; r += 1) {
+    const row = document.createElement("div");
+    row.className = "skeleton-row";
+    for (let c = 0; c < 8; c += 1) {
+      const bar = document.createElement("div");
+      bar.className = "skeleton";
+      if (c % 3 === 2) bar.style.width = "55%";
+      row.append(bar);
+    }
+    panel.append(row);
+  }
+  root.append(panel);
+}
+
 function drawCorpus(root) {
+  root.removeAttribute("aria-busy");
   drawnStatus = statusSignature();
   searchBar(root);
   for (const child of [...root.children]) if (!child.classList.contains("explorer-search")) child.remove();
