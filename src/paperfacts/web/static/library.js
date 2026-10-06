@@ -18,6 +18,9 @@ let refreshFailures = 0;
 // Refreshes overlap (the timer, ↻, a finished job, run-all, an upload); each takes a token and only the
 // newest one paints, so an older list that arrives late can never overwrite a newer one.
 let refreshToken = 0;
+// False until the first list has answered: the one time the rail shows skeleton rows instead of a
+// stale (or empty) list. Later refreshes swap the rows in place, so the shimmer never replays.
+let libraryLoaded = false;
 // Told when a refresh replaced state.docs: the home table's status filters are joined with it.
 let docsListener = null;
 export const onDocsChange = (listener) => {
@@ -32,6 +35,7 @@ const WIDE = window.matchMedia("(min-width: 961px)");
 export async function loadLibrary() {
   const token = ++refreshToken;
   const profile = state.profileName;
+  if (!libraryLoaded) showDocListSkeleton();
   clearTimeout(refreshTimer);
   refreshTimer = null;
   let docs;
@@ -72,6 +76,26 @@ async function loadActiveDocs() {
   const active = new Map();
   for (const job of jobs.filter(isActive)) active.set(job.document_id, [...(active.get(job.document_id) ?? []), job.profile]);
   return active;
+}
+
+// First-load placeholder: shimmer rows where the list will be. renderLibrary (or the error path, which
+// keeps the skeletons up) owns the swap; the refresh token decides whose rows land.
+function showDocListSkeleton() {
+  const list = document.getElementById("doc-list");
+  list.setAttribute("aria-busy", "true");
+  list.replaceChildren(
+    ...Array.from({ length: 6 }, () => {
+      const li = document.createElement("li");
+      li.className = "skeleton-row";
+      const name = document.createElement("div");
+      name.className = "skeleton";
+      const sub = document.createElement("div");
+      sub.className = "skeleton";
+      sub.style.width = "55%";
+      li.append(name, sub);
+      return li;
+    }),
+  );
 }
 
 // ---------- search and chips ----------
@@ -123,6 +147,8 @@ function clearFilter() {
 
 export function renderLibrary() {
   const list = document.getElementById("doc-list");
+  list.removeAttribute("aria-busy");
+  libraryLoaded = true;
   const shown = state.docs.filter(matches);
   const filtered = Boolean(filter.query) || filter.chips.size > 0;
   document.getElementById("doc-count").textContent = filtered

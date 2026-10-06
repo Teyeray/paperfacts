@@ -24,6 +24,9 @@
   --radius: 8px;
   --radius-sm: 6px;
   --radius-pill: 999px;
+  /* A PDF page is white paper in both themes; only the gutter around it themes (dark mode shows the
+     recessed pane behind the page instead of flashing white). */
+  --page: #ffffff;
   /* The spacing scale: a gap or padding is one of these steps, so two controls never sit a pixel apart by accident. */
   --space-1: 4px;
   --space-2: 8px;
@@ -343,7 +346,6 @@ h1 .article-tag { margin: 0 0 0 10px; font-size: 12px; }
 /* From 1600 px the summary panel takes a column (see the document page), so there the content's own width decides. */
 @container (max-width: 1060px) { .workbench { grid-template-columns: minmax(0, 1fr); } }
 .facts-head, .samples-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
-/* Section headings in the body face: the display serif is for page titles only. */
 /* Section headings in the one body face, on the type scale. */
 h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650; margin: 0; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -375,14 +377,14 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
 .picker-group input { accent-color: var(--accent); }
 @media (max-width: 520px) { .picker-pop { width: min(260px, calc(100vw - 32px)); } }
 
-.table-wrap { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: auto; max-height: 70vh; box-shadow: var(--shadow); }
+.table-wrap { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: auto; max-height: 70vh; box-shadow: var(--shadow-1); }
 .facts-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .facts-table th { position: sticky; top: 0; background: var(--paper-2); text-align: left; font-weight: 600; padding: var(--cell-pad); border-bottom: 1px solid var(--line-strong); font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink); }
 .facts-table th.lane-a { color: var(--lane-a); } .facts-table th.lane-b { color: var(--lane-b); }
 .facts-table td { padding: var(--cell-pad); border-bottom: 1px solid var(--line); vertical-align: top; }
 .facts-table tr { cursor: pointer; }
-.facts-table tbody tr:hover { background: color-mix(in oklab, var(--accent) 6%, var(--paper)); }
-.facts-table tr.selected { background: color-mix(in oklab, var(--accent) 12%, var(--paper)); box-shadow: inset 3px 0 0 var(--accent); }
+.facts-table tbody tr:hover { background: color-mix(in oklab, var(--accent) 6%, var(--surface)); }
+.facts-table tr.selected { background: color-mix(in oklab, var(--accent) 14%, var(--surface)); box-shadow: inset 4px 0 0 var(--accent); }
 .facts-table td.val { font-family: var(--font-mono); font-size: 12px; min-width: 96px; }
 .facts-table td.val small { display: block; color: var(--ink-3); font-family: var(--font-body); white-space: normal; }
 .facts-table td.detail { color: var(--ink-3); font-size: 11.5px; min-width: 120px; max-width: 200px; }
@@ -406,6 +408,24 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
 .flag.warn { color: var(--warn); }
 .flag.series { color: var(--accent); border-color: var(--accent); }
 .table-empty { padding: 30px; text-align: center; color: var(--ink-3); }
+
+/* ---------- loading skeletons: shimmer placeholders while a view's data is on its way ----------
+   Mounted only while the fetch is out — the real rows replace them under the view's generation/token
+   guard — so a redraw never replays the shimmer, and the reduced-motion guard above stills it. */
+.skeleton {
+  height: 12px; border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--paper-2) 25%, var(--line-soft) 37%, var(--paper-2) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.2s ease infinite;
+}
+@keyframes skeleton-shimmer { from { background-position: 100% 0 } to { background-position: 0 0 } }
+.doc-list .skeleton-row { padding: var(--row-pad); border: 1px solid var(--line); border-radius: var(--radius); }
+.doc-list .skeleton-row .skeleton + .skeleton { margin-top: 7px; }
+.skeleton-panel {
+  display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3);
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-1);
+}
+.skeleton-panel .skeleton-row { display: grid; grid-template-columns: 2fr 1.2fr 1fr repeat(5, 1fr); gap: var(--space-3); align-items: center; }
 
 /* ---------- results table: the consolidated per-sample deliverable, above the workbench ---------- */
 .results { margin: 0 0 var(--gap-section); }
@@ -437,9 +457,9 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
 .results-table tr { cursor: default; }  /* rows are not selectable here; individual cells are */
 /* A row's ground is one variable, so the frozen cells (opaque, see the sticky frame below) repaint with the row:
    zebra, hover, the paper row's tint and an expanded paper's sample rows. */
-.results-table tbody tr { --row-bg: var(--paper); background: var(--row-bg); }
+.results-table tbody tr { --row-bg: var(--surface); background: var(--row-bg); }
 .results-table tbody tr:nth-child(even) { --row-bg: var(--zebra); }
-.results-table tbody tr:hover { --row-bg: color-mix(in oklab, var(--accent) 6%, var(--paper)); }
+.results-table tbody tr:hover { --row-bg: color-mix(in oklab, var(--accent) 6%, var(--surface)); }
 .results-table th { border-bottom-color: var(--line); }
 .results-table td { border-bottom-color: var(--line-soft); }
 /* Numbers line up on their digits, right-aligned, in a column the field's kind calls numeric. */
@@ -465,7 +485,7 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
 .results-table td.cell.warn { box-shadow: inset 3px 0 0 var(--warn); color: var(--warn); }
 .results-table td.cell.empty { color: var(--ink-3); cursor: pointer; }
 .results-table td.cell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.results-table td.cell.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+.results-table td.cell.selected { background: color-mix(in oklab, var(--accent) 14%, var(--surface)); box-shadow: inset 4px 0 0 var(--accent); }
 /* One line per sample: the id and label stay on one line, and the merged condition text is clipped with the
    full text one hover away, so a row's height comes from its values and not from the model's prose. */
 .results-table th, .results-table td.mono, .results-table td.label { white-space: nowrap; }
@@ -476,13 +496,13 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
   transition: color var(--dur); }
 .results-table button.expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .results-table tr.expanded > td { border-bottom-color: #0000; }
-.results-table tbody tr.sample-row { --row-bg: color-mix(in oklab, var(--ink) 4%, var(--paper)); }
+.results-table tbody tr.sample-row { --row-bg: color-mix(in oklab, var(--ink) 4%, var(--surface)); }
 .results-table tr.sample-row > td { font-size: 12px; }
 .results-table tr.sample-row td.indent { padding-left: 22px; color: var(--ink-2); }
 .results-table tr.sample-row small.chosen { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
 .results-table td.cond { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.results-table tbody tr.paper-row { --row-bg: color-mix(in oklab, var(--accent) 5%, var(--paper)); }
-.results-table tbody tr.paper-row:hover { --row-bg: color-mix(in oklab, var(--accent) 9%, var(--paper)); }
+.results-table tbody tr.paper-row { --row-bg: color-mix(in oklab, var(--accent) 5%, var(--surface)); }
+.results-table tbody tr.paper-row:hover { --row-bg: color-mix(in oklab, var(--accent) 9%, var(--surface)); }
 .results-table tr.paper-level-row td { color: var(--ink-2); }
 .paper-mark { margin-left: 6px; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); white-space: nowrap; }
 
@@ -494,11 +514,14 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
 .viewer-bar button:hover { border-color: var(--ink-3); }
 .viewer-bar button:disabled { opacity: .4; cursor: default; }
 .viewer-bar label { display: inline-flex; gap: 5px; align-items: center; }
+.viewer-bar input { accent-color: var(--accent); }
 .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .swatch.a { background: var(--lane-a); } .swatch.b { background: var(--lane-b); }
 .hl-pages { display: inline-flex; gap: 4px; }
 .hl-pages button { font-family: var(--font-mono); }
-.page { position: relative; background: #fff; }
+/* --page stays white in both themes; the margin themes the gutter around the page (the SVG overlay
+   and the img share the same box, so the evidence rects keep their pixel positions). */
+.page { position: relative; margin: var(--space-2); border-radius: var(--radius-sm); overflow: hidden; background: var(--page); }
 .page img { display: block; width: 100%; height: auto; }
 .page svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .page rect { fill: transparent; stroke-width: 1; opacity: .55; transition: opacity .15s; }
@@ -558,15 +581,15 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .intro.with-corpus { max-width: none; margin: 0 0 18px; text-align: left; }
 .intro.with-corpus [data-when="corpus"] { display: block; }
 .intro.with-corpus [data-when="empty"] { display: none; }
-.intro.with-corpus h1 { font-size: 22px; margin-bottom: 2px; }
-.intro.with-corpus .intro-lead { font-size: 13px; color: var(--ink-3); margin: 0; }
+.intro.with-corpus h1 { font-size: var(--text-lg); margin-bottom: 2px; }
+.intro.with-corpus .intro-lead { font-size: var(--text-sm); color: var(--ink-3); margin: 0; }
 .intro-empty { margin-top: 14px; }
-.intro-cta { font-size: 14px; color: var(--ink); margin: 18px 0 6px; }
-.intro-steps { font-size: 12px; letter-spacing: .04em; margin: 0; }
+.intro-cta { font-size: var(--text-body); color: var(--ink); margin: 18px 0 6px; }
+.intro-steps { font-size: var(--text-sm); letter-spacing: .04em; margin: 0; }
 .corpus-view .results { margin-bottom: 0; }
 .corpus-view .results-table td.cell { cursor: default; }
 .corpus-view .results-table td.mono small { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
-.intro h1 { font-family: var(--font-body); font-weight: 600; font-size: 32px; line-height: 1.2; margin: 0 0 10px; letter-spacing: -.01em; }
+.intro h1 { font-family: var(--font-body); font-weight: 600; font-size: var(--text-xl); line-height: 1.2; margin: 0 0 10px; letter-spacing: -.01em; }
 .intro p { color: var(--ink-2); line-height: 1.7; }
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 10; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: min(420px, calc(100vw - 40px)); }
 .toast { background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px; }
@@ -587,13 +610,13 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .results-table th:first-child,
 .results-table td:first-child {
   position: sticky; left: 0; z-index: 1;
-  background: var(--row-bg, var(--paper));
+  background: var(--row-bg, var(--surface));
   box-shadow: inset -1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft), 3px 0 5px -4px rgb(0 0 0 / 14%);
 }
 .results-table th:first-child { z-index: 3; background: var(--paper-2); }
 .results-table th { z-index: 2; }
 /* The row's state reaches the sticky cell through --row-bg; a selected cell keeps its own mark. */
-.results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--paper)); }
+.results-table td:first-child.selected { background: color-mix(in oklab, var(--accent) 14%, var(--surface)); }
 /* The home table freezes a second column, the entity id, right of 论文. Both have a fixed width per density
    (--freeze-1, --freeze-2), since the second sticks at the first's width; the shadow marks the frozen edge. */
 .corpus-view .results-table th:first-child,
@@ -607,7 +630,7 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
   position: sticky; left: var(--freeze-1); z-index: 1;
   width: var(--freeze-2); min-width: var(--freeze-2); max-width: var(--freeze-2);
   overflow: hidden; text-overflow: ellipsis;
-  background: var(--row-bg, var(--paper));
+  background: var(--row-bg, var(--surface));
   box-shadow: inset -1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft), 3px 0 5px -4px rgb(0 0 0 / 14%);
 }
 .corpus-view .results-table th:nth-child(2) { z-index: 3; background: var(--paper-2); }
@@ -638,28 +661,31 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .explorer-search { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin-bottom: var(--space-4); }
 .search-field { position: relative; flex: 1 1 360px; max-width: 680px; }
 .search-field input {
-  width: 100%; font: inherit; font-size: 15px; padding: 10px 64px 10px 14px; color: var(--ink);
-  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--paper); box-shadow: var(--shadow);
+  width: 100%; font: inherit; font-size: var(--text-body); padding: 5px 64px 5px 12px; color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface);
+  transition: border-color var(--dur), box-shadow var(--dur);
 }
 .search-field input::-webkit-search-cancel-button { display: none; }
 .search-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .search-clear {
-  position: absolute; right: 7px; top: 50%; transform: translateY(-50%); padding: 3px 9px; font-size: 12px;
+  position: absolute; right: 7px; top: 50%; transform: translateY(-50%); padding: 3px 9px; font-size: var(--text-sm);
   border: 0; border-radius: var(--radius-sm); background: var(--paper-2); color: var(--ink-2); cursor: pointer;
+  transition: background-color var(--dur), color var(--dur);
 }
 .search-cond { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .search-cond input, .filter-check input { accent-color: var(--accent); }
 .search-help { flex-basis: 100%; margin: 0; font-size: 11.5px; }
-/* A match is ink on a warm wash in both themes: inside a muted label the ink keeps it readable on the dark ground. */
-mark { background: color-mix(in oklab, var(--warn) 34%, var(--paper)); color: var(--ink); border-radius: 2px; padding: 0 1px; }
-@media (prefers-color-scheme: dark) { mark { background: color-mix(in oklab, var(--warn) 48%, var(--paper)); } }
+/* A match is ink on a cool accent wash in both themes: inside a muted label the ink keeps it readable
+   on the dark ground, and the wash stays in the accent family so a match never reads as a warning. */
+mark { background: color-mix(in oklab, var(--accent) 18%, var(--paper)); color: var(--ink); border-radius: 2px; padding: 0 1px; }
+@media (prefers-color-scheme: dark) { mark { background: color-mix(in oklab, var(--accent) 40%, var(--paper)); } }
 
 .explorer { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
 .explorer.panel-open { grid-template-columns: 248px minmax(0, 1fr); }
 .filter-toggle[aria-expanded="true"] { border-color: var(--ink); color: var(--ink); background: var(--paper-2); }
 .filter-panel {
   position: sticky; top: calc(var(--topbar) + var(--space-3)); max-height: calc(100vh - var(--topbar) - 24px); overflow: auto;
-  padding: var(--space-3); font-size: 12.5px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper);
+  padding: var(--space-3); font-size: 12.5px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2);
 }
 @media (max-width: 960px) {
   .explorer.panel-open { grid-template-columns: minmax(0, 1fr); }
@@ -678,7 +704,8 @@ fieldset.filter legend .scale-tag {
 .filter-check .n { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); }
 .histogram { display: flex; align-items: flex-end; gap: 1px; height: 34px; border-bottom: 1px solid var(--line); }
 .histogram .bar { flex: 1; background: var(--line-strong); border-radius: 1px 1px 0 0; }
-.histogram .bar.in { background: var(--accent); }
+/* In-range bars are context, not the focal accent: the ink family keeps the panel quiet. */
+.histogram .bar.in { background: var(--ink-2); }
 /* Two range inputs over one track: each takes the pointer on its thumb only, so both ends can be dragged. */
 .dual-range { position: relative; height: 18px; }
 .dual-range::before { content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--line); }

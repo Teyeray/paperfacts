@@ -28,7 +28,7 @@ import { renderFilters, renderKpis, renderRows, selectRowByIndex } from "./facts
 import { renderLanes } from "./samples.js";
 import { renderResults } from "./table.js";
 import { figuresRead, renderFigures } from "./figures.js";
-import { loadCorpus, renderCorpus } from "./corpus.js";
+import { loadCorpus, renderCorpus, showCorpusSkeleton } from "./corpus.js";
 import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from "./job.js";
 import { loadLibrary, miniCounts, renderLibrary } from "./library.js";
 import { renderSectionBar, stopSectionBar, syncSectionBar } from "./sections.js";
@@ -76,6 +76,10 @@ export async function showEmpty() {
   // chip or a column toggle on it would draw with the other profile's groups and store under its key.
   const shown = state.corpus?.rows?.length && state.corpusProfile === profile && state.shownProfile === profile;
   showViews("empty-state", ...(shown ? ["corpus-view"] : []));
+  // Skeleton only on a genuinely cold home view: with a table already loaded (even another profile's,
+  // which the view drops until its own answer lands) the old behaviour — hidden until the data arrives —
+  // stands, so the view never shows a stale table nor promises one that is not its own.
+  if (!shown && state.corpus == null) showCorpusSkeleton();
   renderLibrary();
   syncSwitcher(); // the brand link carries the home query this view arrived with
   const [corpus, view] = await Promise.all([
