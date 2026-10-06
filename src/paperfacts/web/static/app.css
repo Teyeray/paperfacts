@@ -1,24 +1,28 @@
-/* ---------- tokens: an editorial lab-notebook feel. Warm white paper, ink-black text, one accent color; each lane gets its own color, plus four status colors ---------- */
+/* ---------- tokens: a cool neutral tool palette. Neutral gray surfaces, near-black ink, one deep-blue
+   accent; each lane keeps its own fixed color, plus four status colors ---------- */
 :root {
   color-scheme: light;
-  --paper: #f7f5f0;
-  --paper-2: #efece4;
-  --line: #d9d4c8;
-  --line-strong: #b9b2a2;
-  --ink: #141311;
-  --ink-2: #4f4b43;
-  --ink-3: #85806f;
-  --accent: #1c3f8f;
+  /* Surfaces: neutral gray ramp; white primary surfaces */
+  --paper: #f6f7f9;   /* app background — cool gray */
+  --paper-2: #eceef1; /* recessed: rail, filter panel, joblog */
+  --surface: #ffffff; /* elevated primary surfaces: tables, summary, workbench */
+  --line: #e3e6ea;
+  --line-strong: #c6ccd4;
+  --ink: #16181d;   --ink-2: #4a505c;   --ink-3: #5c6470;  /* ink-3 verified >=4.5:1 on all surfaces */
+  --accent: #1e40af;  /* deep blue — one focal moment per view */
   --accent-ink: #ffffff;
-  --lane-a: #2a78d6;     /* MinerU: categorical slot 1, blue */
-  --lane-b: #eb6834;     /* PaddleOCR-VL: categorical slot 2, orange */
+  --lane-a: #2a78d6;     /* MinerU: categorical slot 1, blue (FIXED) */
+  --lane-b: #eb6834;     /* PaddleOCR-VL: categorical slot 2, orange (FIXED) */
   --ok: #0ca30c;
   --warn: #b8760a;
   --bad: #d03b3b;
-  --neutral: #85806f;
-  --shadow: 0 1px 0 rgba(20, 19, 17, .04), 0 12px 32px -18px rgba(20, 19, 17, .35);
-  --radius: 6px;
-  --radius-sm: 4px;
+  --neutral: #6b7280;
+  /* Elevation: two levels (resting cards, dialogs/sticky bars) */
+  --shadow-1: 0 1px 2px rgba(16,18,27,.05);
+  --shadow-2: 0 1px 2px rgba(16,18,27,.05), 0 8px 24px -12px rgba(16,18,27,.14);
+  --shadow: var(--shadow-1);  /* legacy alias — sections migrate to -1/-2 in later PRs */
+  --radius: 8px;
+  --radius-sm: 6px;
   --radius-pill: 999px;
   /* The spacing scale: a gap or padding is one of these steps, so two controls never sit a pixel apart by accident. */
   --space-1: 4px;
@@ -37,48 +41,83 @@
   --freeze-2: 150px;
   --rail: 300px;
   --topbar: 56px;   /* the sticky header's height: what the rail and the content sit under */
-  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --font-body: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  /* Type scale: every size in the UI is one of these steps. */
+  --text-2xs: 10.5px;  --text-xs: 11px;  --text-sm: 12.5px;  --text-body: 14px;
+  --text-md: 16px;  --text-lg: 20px;  --text-xl: 26px;
+  /* Motion + layout */
+  --dur: 140ms;   /* one interactive-leaf transition */
+  --viewer-pane: 480px;   /* the document page's right PDF pane (PR3) */
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+               "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   /* Derived, so dark mode gets them from its own stops: a table's row rule and its every-other-row tint. */
   --line-soft: color-mix(in oklab, var(--line) 60%, var(--paper));
   --zebra: color-mix(in oklab, var(--ink) 2.5%, var(--paper));
 }
-/* Dark mode picks different stops from the same scale (contrast-checked on a dark ground), not an automatic inversion of light mode */
+/* Dark mode: same structure, cool-gray stops re-anchored (contrast-checked), not an automatic inversion.
+   Theme mechanism: the media block excludes an explicit light choice; the attribute block after it wins
+   by source order at equal specificity, so [data-theme="dark"] forces dark regardless of the OS. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --paper: #1a1a19; --paper-2: #232321; --line: #34332f; --line-strong: #4c4a43;
-    --ink: #f2efe8; --ink-2: #c3c2b7; --ink-3: #8d8a7f; --accent: #6f9ae8; --accent-ink: #0b0b0b;
+    --paper: #141519; --paper-2: #1b1d22; --surface: #1e2025;
+    --line: #2c2f36; --line-strong: #454a54;
+    --ink: #eceef2; --ink-2: #b6bcc7; --ink-3: #98a0ad;
+    --accent: #8ab2f0; --accent-ink: #0b0b0b;
     --lane-a: #3987e5; --lane-b: #d95926; --neutral: #8d8a7f;
     --ok: #3cbf3c; --warn: #fab219; --bad: #e05252;
-    --shadow: 0 1px 0 rgba(0,0,0,.4), 0 12px 32px -18px rgba(0,0,0,.8);
+    --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+    --shadow-2: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.7);
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #141519; --paper-2: #1b1d22; --surface: #1e2025;
+  --line: #2c2f36; --line-strong: #454a54;
+  --ink: #eceef2; --ink-2: #b6bcc7; --ink-3: #98a0ad;
+  --accent: #8ab2f0; --accent-ink: #0b0b0b;
+  --lane-a: #3987e5; --lane-b: #d95926; --neutral: #8d8a7f;
+  --ok: #3cbf3c; --warn: #fab219; --bad: #e05252;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.7);
 }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
-  font: 14px/1.5 var(--font-body);
+  font: var(--text-body)/1.5 var(--font-body);
   color: var(--ink);
-  background:
-    radial-gradient(rgba(20,19,17,.045) 0.6px, transparent 0.7px) 0 0 / 7px 7px,
-    var(--paper);
+  background: var(--paper);
 }
 a { color: inherit; }
 code, .mono { font-family: var(--font-mono); font-size: 12.5px; }
 button { font: inherit; color: inherit; cursor: pointer; }
-/* ---------- buttons: the default action, a second action beside it, and a quiet one ---------- */
-.primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: var(--radius); padding: 8px 14px; font-weight: 600; }
-.primary:hover { filter: brightness(1.08); }
+/* ---------- buttons: exactly three dialects — the default action, a second action beside it, and a quiet one ---------- */
+.primary {
+  background: var(--accent); color: var(--accent-ink); border: 0; border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4); font-weight: 600;
+  transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur);
+}
+.primary:hover { background: color-mix(in oklab, var(--accent) 92%, var(--ink)); }
 .primary:disabled { opacity: .5; cursor: default; }
 /* The same shape, outlined, so a second action (the paid chart read) never looks like the default. */
-.secondary { background: var(--paper); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 7px 13px; font-weight: 600; }
+.secondary {
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius);
+  padding: calc(var(--space-2) - 1px) calc(var(--space-4) - 1px); font-weight: 600;
+  transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur);
+}
 .secondary:hover { border-color: var(--ink-3); }
 .secondary:disabled { opacity: .5; cursor: default; }
 /* Borderless until hovered: a tool beside a heading, not a call to action. */
-.ghost { background: none; border: 1px solid #0000; border-radius: var(--radius-sm); padding: 3px 8px; color: var(--ink-3); }
+.ghost {
+  background: none; border: 1px solid #0000; border-radius: var(--radius-sm); padding: 3px var(--space-2); color: var(--ink-3);
+  transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur);
+}
 .ghost:hover { border-color: var(--line-strong); color: var(--ink); }
+/* Global motion guard: nothing moves, fades or shimmers when the reader asks it not to. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
 .hidden { display: none !important; }
 .muted { color: var(--ink-3); }
 /* Read by a screen reader, not drawn: the word behind a glyph or a colour. */
@@ -90,20 +129,29 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ---------- top bar ---------- */
 .topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  height: var(--topbar); padding: 0 22px 0 14px; border-bottom: 1px solid var(--line); background: var(--paper);
-  position: sticky; top: 0; z-index: 5;
+  height: var(--topbar); padding: 0 22px 0 14px; border-bottom: 1px solid var(--line); background: var(--surface);
+  position: sticky; top: 0; z-index: 5; box-shadow: var(--shadow-1);
 }
 /* The rail's toggle: an icon button with the word in its tooltip and accessible name. */
 .rail-toggle { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; flex-shrink: 0; }
 .rail-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; margin-right: auto; min-width: 0; }
+.topnav { display: flex; align-items: center; margin-left: -2px; }
+.topnav a {
+  padding: 6px 2px; border-bottom: 2px solid #0000; font-size: 13px; font-weight: 500;
+  color: var(--ink-2); text-decoration: none; white-space: nowrap;
+  transition: color var(--dur), border-color var(--dur);
+}
+.topnav a:hover { color: var(--ink); }
+.topnav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.topnav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
 .brand-mark {
-  font-family: var(--font-display); font-weight: 700; font-size: 15px; letter-spacing: .04em;
-  width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%;
+  font-family: var(--font-body); font-weight: 700; font-size: 15px; letter-spacing: .04em;
+  width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--radius);
   background: var(--ink); color: var(--paper);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
-.brand-text b { font-family: var(--font-display); font-size: 19px; font-weight: 600; }
+.brand-text b { font-family: var(--font-body); font-size: 19px; font-weight: 600; }
 .profile-title { color: var(--ink-3); font-size: 11.5px; }
 .profile-badge {
   margin-left: 6px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill);
@@ -150,10 +198,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .upload-profile { color: var(--ink-2); }
 
 .rail-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 2px 10px; }
-.rail-head h2 { font-family: var(--font-display); font-size: 15px; margin: 0; letter-spacing: .02em; }
+.rail-head h2 { font-family: var(--font-body); font-size: 15px; margin: 0; letter-spacing: .02em; }
 .rail-head-actions { display: flex; align-items: center; gap: 2px; }
-.rail-upload { padding: 4px 11px; font-size: 12.5px; margin-right: 4px; }
-#run-all { font-size: 11.5px; padding-inline: 6px; }
+.rail-upload {
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong);
+  padding: calc(var(--space-1)) var(--space-3); font-size: var(--text-sm); margin-right: var(--space-1);
+  transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur);
+}
+.rail-upload:hover { background: var(--surface); border-color: var(--ink-3); }
+#run-all { font-size: var(--text-sm); padding-inline: var(--space-2); }
 .doc-item .queued { font-size: 11px; }
 /* Search and chips narrow the list below; both are static controls, so a refresh never redraws them. */
 .rail-filter { display: flex; flex-direction: column; gap: 8px; margin: 0 2px 10px; }
@@ -162,8 +215,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 5px 9px;
 }
 .rail-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.rail-chips .chip { padding: 2px 9px; font-size: 11.5px; cursor: pointer; }
-.rail-chips .chip[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); background: var(--paper); }
+.rail-chips .chip { font-size: var(--text-sm); }
+.rail-chips .chip[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); background: var(--surface); }
 .rail-chips .chip .n:empty { display: none; }
 .doc-list-empty button { font-size: inherit; }
 
@@ -239,7 +292,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 20px; flex-wrap: wrap; }
 .doc-title { min-width: 0; flex: 1 1 320px; }
 .doc-title h1 { overflow-wrap: anywhere; }
-.doc-title h1 { font-family: var(--font-display); font-weight: 600; font-size: 26px; line-height: 1.2; margin: 0 0 4px; letter-spacing: -.005em; }
+.doc-title h1 { font-family: var(--font-body); font-weight: 600; font-size: 26px; line-height: 1.2; margin: 0 0 4px; letter-spacing: -.005em; }
 .doc-id { color: var(--ink-3); font-size: 12px; }
 .doc-note { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
 .doc-note.other-job { padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--paper-2); }
@@ -291,10 +344,18 @@ h1 .article-tag { margin: 0 0 0 10px; font-size: 12px; }
 @container (max-width: 1060px) { .workbench { grid-template-columns: minmax(0, 1fr); } }
 .facts-head, .samples-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 /* Section headings in the body face: the display serif is for page titles only. */
-h2 { font-family: var(--font-body); font-size: 16px; font-weight: 600; margin: 0; }
+/* Section headings in the one body face, on the type scale. */
+h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650; margin: 0; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip { border: 1px solid var(--line); background: var(--paper); border-radius: var(--radius-pill); padding: 3px 11px; font-size: 12px; line-height: 1.4; color: var(--ink-2); }
-.chip.on { border-color: var(--ink); color: var(--ink); }
+/* Controls, not buttons: chips and segmented groups share one height and one padding rule; the
+   pressed state is an ink/paper inversion. */
+.chip {
+  height: 28px; display: inline-flex; align-items: center; border: 1px solid var(--line);
+  background: var(--surface); border-radius: var(--radius-pill); padding: 0 var(--space-3);
+  font-size: var(--text-sm); line-height: 1.4; color: var(--ink-2); cursor: pointer;
+  transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur);
+}
+.chip.on { border-color: var(--ink); color: var(--ink); background: var(--paper-2); }
 .chip .n { font-family: var(--font-mono); margin-left: 4px; color: var(--ink-3); }
 
 /* Field column picker: a chip that opens a checkbox list of every field, grouped by scope. */
@@ -358,20 +419,21 @@ h2 { font-family: var(--font-body); font-size: 16px; font-weight: 600; margin: 0
 .flag.approx { color: var(--neutral); }
 .figures-warning { font-size: 12px; margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--warn); color: var(--ink-2); }
 .results-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
-.results-head h2 { font-size: 16px; font-weight: 600; margin: 0; }
+.results-head h2 { font-size: var(--text-lg); font-weight: 650; margin: 0; }
 .results-note { font-size: 12px; margin: 0 0 10px; }
 /* Only a profile with several entity types names them: one table (and one group of records) per entity. */
 .entity-head { font-size: 13px; font-weight: 600; margin: 12px 0 6px; color: var(--ink-2); }
 .entity-table { margin-top: 14px; }
 .entity-table .results-head .entity-head { margin: 0; }
-/* The copy button sits beside the download link and shares its look; both push to the right, and the
-   first of them takes the free space so the pair stays together when one is hidden. */
+/* Both push to the right and share the secondary dialect; the first of them takes the free space
+   so the pair stays together when one is hidden. Class names are pinned by e2e. */
 .download, .copy-table {
-  margin-left: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 4px 12px;
-  font-size: 12px; line-height: 1.4; text-decoration: none; background: var(--paper); color: var(--ink-2);
+  margin-left: auto; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm); line-height: 1.4; text-decoration: none; background: var(--surface); color: var(--ink-2);
+  transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur);
 }
-.copy-table { font: inherit; font-size: 12px; cursor: pointer; }
-.download:hover, .copy-table:hover { border-color: var(--ink); color: var(--ink); }
+.copy-table { font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.download:hover, .copy-table:hover { border-color: var(--ink-3); color: var(--ink); }
 .results-table tr { cursor: default; }  /* rows are not selectable here; individual cells are */
 /* A row's ground is one variable, so the frozen cells (opaque, see the sticky frame below) repaint with the row:
    zebra, hover, the paper row's tint and an expanded paper's sample rows. */
@@ -410,7 +472,8 @@ h2 { font-family: var(--font-body); font-size: 16px; font-weight: 600; margin: 0
 .results-table td.label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 /* The home table's expandable papers: a quiet disclosure button, and sample rows set in beneath. */
 .results-table button.expand { display: block; margin-top: 2px; padding: 0; border: 0; background: none;
-  font: inherit; font-family: var(--font-body); font-size: 10.5px; color: var(--accent); cursor: pointer; }
+  font: inherit; font-family: var(--font-body); font-size: var(--text-2xs); color: var(--accent); cursor: pointer;
+  transition: color var(--dur); }
 .results-table button.expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .results-table tr.expanded > td { border-bottom-color: #0000; }
 .results-table tbody tr.sample-row { --row-bg: color-mix(in oklab, var(--ink) 4%, var(--paper)); }
@@ -427,7 +490,8 @@ h2 { font-family: var(--font-body); font-size: 16px; font-weight: 600; margin: 0
 .viewer { scroll-margin-top: calc(var(--doc-sticky, var(--topbar)) + 14px); position: sticky; top: calc(var(--doc-sticky, var(--topbar)) + 14px); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .viewer-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--paper-2); font-size: 12px; flex-wrap: wrap; }
 .viewer-bar .pager { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
-.viewer-bar button { border: 1px solid var(--line-strong); background: var(--paper); border-radius: var(--radius-sm); padding: 2px 8px; }
+.viewer-bar button { border: 1px solid var(--line-strong); background: var(--surface); border-radius: var(--radius-sm); padding: 2px var(--space-2); transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur); }
+.viewer-bar button:hover { border-color: var(--ink-3); }
 .viewer-bar button:disabled { opacity: .4; cursor: default; }
 .viewer-bar label { display: inline-flex; gap: 5px; align-items: center; }
 .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
@@ -502,7 +566,7 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 .corpus-view .results { margin-bottom: 0; }
 .corpus-view .results-table td.cell { cursor: default; }
 .corpus-view .results-table td.mono small { display: block; font-family: var(--font-body); font-size: 10.5px; color: var(--ink-3); }
-.intro h1 { font-family: var(--font-display); font-weight: 600; font-size: 32px; line-height: 1.2; margin: 0 0 10px; letter-spacing: -.01em; }
+.intro h1 { font-family: var(--font-body); font-weight: 600; font-size: 32px; line-height: 1.2; margin: 0 0 10px; letter-spacing: -.01em; }
 .intro p { color: var(--ink-2); line-height: 1.7; }
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 10; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: min(420px, calc(100vw - 40px)); }
 .toast { background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px; }
@@ -510,7 +574,7 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 
 /* A link that names no document, or one that could not be read. */
 .missing-state { max-width: 620px; margin: 10vh auto 0; text-align: center; }
-.missing-state h1 { font-family: var(--font-display); font-weight: 600; font-size: 26px; margin: 0 0 10px; }
+.missing-state h1 { font-family: var(--font-body); font-weight: 600; font-size: 26px; margin: 0 0 10px; }
 .missing-state p { color: var(--ink-2); line-height: 1.7; overflow-wrap: anywhere; }
 .missing-actions { display: flex; gap: 16px; justify-content: center; }
 
@@ -558,15 +622,14 @@ details.samples { /* not .kpi.samples, the 样品配对 tile */ margin-top: var(
 
 /* ---------- the home table's toolbar: one row, the explorer's slot first, count and outputs at the end ---------- */
 .table-toolbar { gap: 8px 10px; margin-bottom: 8px; }
-.toolbar-end { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.row-count { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.toolbar-end { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.row-count { font-size: var(--text-sm); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-toolbar .download, .table-toolbar .copy-table {
-  margin-left: 0; padding: 4px 11px; font-size: 12px; line-height: 1.4; font-weight: 600; color: var(--ink);
-  border-radius: var(--radius);
+  margin-left: 0; padding: var(--space-1) calc(var(--space-3) - 1px); font-size: var(--text-sm); line-height: 1.4; font-weight: 600; color: var(--ink);
 }
-/* Two buttons of one choice, the pressed one filled. */
-.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-pill); overflow: hidden; }
-.segmented button { border: 0; background: var(--paper); padding: 3px 11px; font-size: 12px; line-height: 1.4; color: var(--ink-2); }
+/* Two buttons of one choice, the pressed one filled (ink/paper inversion). */
+.segmented { display: inline-flex; height: 28px; border: 1px solid var(--line); border-radius: var(--radius-pill); overflow: hidden; }
+.segmented button { border: 0; background: var(--surface); padding: 0 var(--space-3); font-size: var(--text-sm); line-height: 1.4; color: var(--ink-2); transition: background-color var(--dur), color var(--dur), border-color var(--dur), box-shadow var(--dur); }
 .segmented button + button { border-left: 1px solid var(--line); }
 .segmented button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -669,7 +732,7 @@ body.drag::after {
   content: ""; position: fixed; inset: 0; z-index: 4; pointer-events: none;
   box-shadow: inset 0 0 0 3px var(--accent); background: color-mix(in oklab, var(--accent) 6%, #0000);
 }
-.upload-title { font-family: var(--font-display); font-size: 17px; }
+.upload-title { font-family: var(--font-body); font-size: 17px; }
 .upload-files { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .upload-files:empty { display: none; }
 .upload-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-2); font-size: 12.5px; }
@@ -698,13 +761,13 @@ body.drag::after {
 /* ---------- the profile page (read-only) and the home table's entity chips ---------- */
 .topbar-link { font-size: 12px; color: var(--ink-2); white-space: nowrap; text-underline-offset: 3px; }
 .entity-switch { padding-right: 10px; border-right: 1px solid var(--line); }
-.profile-head h1 { font-family: var(--font-display); font-weight: 600; font-size: 28px; line-height: 1.2; margin: 0 0 6px; }
+.profile-head h1 { font-family: var(--font-body); font-weight: 600; font-size: 28px; line-height: 1.2; margin: 0 0 6px; }
 .profile-head .profile-badge { font-family: var(--font-body); font-size: 12px; vertical-align: middle; }
 .profile-meta { margin: 0 0 8px; font-size: 12.5px; }
 .profile-description { margin: 0 0 8px; color: var(--ink-2); max-width: 80ch; }
 .profile-warning { margin: 6px 0; padding: 6px 10px; border: 1px solid var(--warn); border-radius: var(--radius); }
 .profile-section { margin-top: var(--gap-section); }
-.profile-section h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+.profile-section h2 { font-family: var(--font-body); font-size: 17px; font-weight: 600; margin: 0 0 8px; }
 /* Nothing here is clickable; a long value wraps at words, so a short one never breaks letter by letter. */
 .profile-table tr { cursor: default; }
 .profile-table th { white-space: nowrap; }
@@ -732,7 +795,7 @@ body.drag::after {
 /* ---------- the profile check page ---------- */
 .topbar-link:hover { color: var(--accent); }
 .check-view { max-width: 1100px; }
-.check-view > h1 { font-family: var(--font-display); font-weight: 600; font-size: 24px; margin: 0 0 6px; }
+.check-view > h1 { font-family: var(--font-body); font-weight: 600; font-size: 24px; margin: 0 0 6px; }
 .check-result > h2 { font-size: 15px; margin: 18px 0 6px; }
 .check-view textarea {
   display: block; width: 100%; min-height: 280px; resize: vertical; margin: 12px 0 10px;

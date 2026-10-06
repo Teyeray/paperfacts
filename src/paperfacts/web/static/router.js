@@ -77,11 +77,21 @@ function parse(hash) {
 
 const isHome = (view) => view.page === null && view.id === null;
 
+// The topbar's 总表 link marks the home view, the way the section bar marks its current section (a route the
+// router can name without asking any view's DOM). It is set before the handlers run, so even a refused profile
+// or a missing document still marks the home link truthfully.
+function setHomeCurrent(home) {
+  const link = document.querySelector('.topnav [data-nav="home"]');
+  if (home) link?.setAttribute("aria-current", "page");
+  else link?.removeAttribute("aria-current");
+}
+
 export function route({ reload = false } = {}) {
   const view = parse(location.hash);
+  const home = isHome(view);
+  setHomeCurrent(home);
   const key = `${view.profile ?? ""}\n${view.page ?? view.id ?? ""}`;
   const fresh = reload || reloadNext || key !== routed;
-  const home = isHome(view);
   const queryChanged = home && view.queryString !== routedQuery;
   reloadNext = false;
   routed = key;
