@@ -50,6 +50,7 @@ export const state = {
   job: null,       // the current document's most recent job snapshot (this process only)
   filter: null,    // status filter for the facts table
   selectedFact: null, // index into report.comparisons of the fact in the URL, even while a filter hides it
+  tab: null, // the open middle-column tab (results/figures/facts/samples); reset on a document switch (document.js's switching block), kept across a job-finish reload
   viewer: null,    // the PageViewer instance
   profile: null,   // the routed profile's title, UI copy, groups and fields (GET /api/profile), set with what it labels
   // The domain profiles this server serves (GET /api/profiles: { default, profiles, invalid }) | null when unread.

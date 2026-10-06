@@ -296,19 +296,21 @@ requested" until someone asks, pending only while `figures.enabled` is on), `ext
 the charts); once readings under the current settings are stored it reads 「重新识图」, asks first, and re-asks every
 chart. Both are disabled while the paper's job is active, and 「识图」 without a PDF (the charts are cropped from it).
 
-The content under the panel has a section bar, 结果 · 图中读数 · 证据 · 样品与通道 · 日志 (日志 once the paper has a job in
-this server), which sticks under the header on a screen wider than 960 px. A click scrolls to that section (at once
-when the system asks for reduced motion) and opens it if it is folded; the section being read is underlined as the
-page scrolls. It never changes the address, so a link to a fact (below) keeps working. The sections:
+The content under the panel opens on a tab bar, 结果表 · 图中读数 · 事实对照 · 样品记录 (the last named by the
+profile's own entity word), which sticks under the header on a screen wider than 960 px. A click switches the panel
+shown below it; it never changes the address, so a link to a fact (below) keeps working -- such a link opens the
+事实对照 tab with its row selected. Switching to another paper or profile returns to the results table; a job
+finishing on the open paper redraws it without leaving the tab. The processing log stays below the panels, and
+appears once the paper has a job in this server. The tabs:
 
-1. 结果表（按样品） — the deliverable.
+1. 结果表（按样品） — the default, the deliverable.
 2. 图中读数: the chart readings, or a note saying why there are none -- 尚未识图 and how to start it, 正在识图
    while a chart job runs, 已识图 when the charts gave nothing, or that the last read failed; see
    [Reading figures](#reading-figures).
-3. 证据: the KPI tiles (the 一致 / 冲突 / 不确定 / 缺失 counts and the sample matching), then 事实对照 and the page
-   viewer beside it.
-4. 样品记录, collapsed.
-5. 处理日志, the paper's last job in this server.
+3. 事实对照: the KPI tiles (the 一致 / 冲突 / 不确定 / 缺失 counts and the sample matching), then the comparison
+   table, with the page viewer beside it.
+4. 样品记录, the two lanes' own records; an empty results cell opens this tab and marks the field.
+5. 处理日志, below the tabs, the paper's last job in this server.
 
 ### 结果表（按样品）
 

@@ -31,7 +31,7 @@ import { figuresRead, renderFigures } from "./figures.js";
 import { loadCorpus, renderCorpus, showCorpusSkeleton } from "./corpus.js";
 import { renderJobLog, renderStages, startPolling, stopPolling, submitRun } from "./job.js";
 import { loadLibrary, miniCounts, renderLibrary } from "./library.js";
-import { renderSectionBar, stopSectionBar, syncSectionBar } from "./sections.js";
+import { activateTab, renderTabBar } from "./tabs.js";
 import { documentHash, factFromHash, hashFor, reloadView } from "./router.js";
 
 const VIEWS = ["empty-state", "corpus-view", "document-view", "profile-view", "missing-view", "check-view"];
@@ -50,7 +50,6 @@ export function showPage(id) {
 // Nothing of the document being left may keep drawing: its poller stops, and the next document starts clean.
 function leaveDocument() {
   stopPolling();
-  stopSectionBar();
   state.current = null;
   state.currentProfile = null;
   state.summary = null;
@@ -62,8 +61,10 @@ function leaveDocument() {
 
 // Router entry point: a new view loads everything; the open document only moves to the fact in the URL.
 export function showDocument(id, factIndex, { reload }) {
-  if (!reload && id === state.current && state.summary) selectRowByIndex(factIndex);
-  else openDocument(id);
+  if (!reload && id === state.current && state.summary) {
+    if (factIndex != null) activateTab("facts");
+    selectRowByIndex(factIndex);
+  } else openDocument(id);
 }
 
 // The home view: the intro, and under it the whole library's mined table once anything has been mined.
@@ -206,6 +207,7 @@ async function openDocument(id) {
     state.filter = null;
     state.viewer = null;
     state.selectedFact = null;
+    state.tab = null;
   }
   // A rerun queued while this load was on its way may be newer than the job list it read: keep following it
   // rather than let the list's finished job stop the poll (see rerun).
@@ -221,6 +223,7 @@ async function openDocument(id) {
   const factIndex = factFromHash();
   // A new document opens at its top, not at whatever depth the previous one was scrolled to.
   if (switching && factIndex == null) window.scrollTo(0, 0);
+  if (factIndex != null) activateTab("facts");
   selectRowByIndex(factIndex);
   if (isActive(state.job)) startPolling(state.job.job_id, pollCallbacks);
   else stopPolling();
@@ -314,7 +317,7 @@ function renderDocument() {
   setupViewerPane(view, node);
   view.append(node);
   mountViewer(slot("viewer"), viewerState);
-  renderSectionBar(slot("section-bar"), view);
+  renderTabBar(slot("tabs"));
 }
 
 // The summary panel's facts: what the paper is made of, how many samples the table has, how its facts compared and
@@ -397,7 +400,6 @@ function renderJobPanels() {
   // row keeps its focus through the poll.
   const figures = slot("figures");
   if (figures && !state.figures?.rows?.length) renderFigures(figures);
-  syncSectionBar(); // the log appears with the first job
 }
 
 // "识图" reads the charts; once current readings are stored it becomes "重新识图", which re-asks every chart (the

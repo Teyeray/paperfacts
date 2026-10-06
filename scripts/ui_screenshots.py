@@ -51,8 +51,8 @@ PAGES = {
     "document-compact": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     # The page zoomed to 200%: the controls and the widened page inside the viewport.
     "document-zoom": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
-    # The section bar after a click on 证据: one screen, so the bar is seen stuck under the topbar.
-    "document-sections": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
+    # The fact-comparison tab after a click on 事实对照: one screen, so the tab bar is seen stuck under the topbar.
+    "document-tabs": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     "document-dark": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
 }
 # The density is an attribute on .shell, set by the home toolbar's 紧凑 and remembered by the browser; the document
@@ -79,9 +79,9 @@ async def open_filters(page: Page, _: Path) -> None:
         await page.wait_for_selector("#filter-panel")
 
 
-async def go_to_evidence(page: Page, _: Path) -> None:
-    await page.click('#document-view .section-link[data-goto="evidence"]')
-    await page.wait_for_timeout(800)  # the smooth scroll
+async def go_to_facts(page: Page, _: Path) -> None:
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
+    await page.wait_for_timeout(200)
 
 
 async def zoom_document(page: Page, _: Path) -> None:
@@ -146,9 +146,9 @@ async def open_run_all_dialog(page: Page, _: Path) -> None:
 # The collapse exists on a wide screen only (a phone stacks the rail).
 DESKTOP_ONLY = {"home-rail-collapsed", "home-scrolled", "document-dark"}
 # Shot at 1600 px as well; every other page is shot at 1440 and 390 only.
-AT_1600 = {"document", "document-sections"}
+AT_1600 = {"document", "document-tabs"}
 # One screen rather than the full length: a sticky element is shown where it sticks.
-ONE_SCREEN = {"document-sections"}
+ONE_SCREEN = {"document-tabs"}
 # Shot with the browser asking for a dark page.
 DARK = {"home-dark", "home-explore-dark", "document-dark"}
 PREPARE = {
@@ -161,7 +161,7 @@ PREPARE = {
     "home-explore-dark": open_filters,
     "document-compact": lambda page, _: page.evaluate(COMPACT),
     "document-zoom": zoom_document,
-    "document-sections": go_to_evidence,
+    "document-tabs": go_to_facts,
     "upload-dialog": open_upload_dialog,
     "upload-si-dialog": open_upload_dialog_with_si,
     "document-si": upload_with_si,

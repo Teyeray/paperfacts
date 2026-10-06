@@ -638,6 +638,7 @@ async def rerun_during_reload(page: Page, base: str, docs: dict[str, str], _: Pa
 @check("识图 reads the charts of a paper that never had them read, and the section says what is going on")
 async def read_charts(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["B"])
+    await page.click('#document-view .tab-bar [data-tab="figures"]')
     button = page.locator('#document-view [data-action="figures"]')
     empty = page.locator('#document-view [data-slot="figures-empty"]')
     expect((await button.text_content()) == "识图", f"the button reads {await button.text_content()!r}")
@@ -662,6 +663,7 @@ async def read_charts(page: Page, base: str, docs: dict[str, str], _: Path) -> N
 @check("重新识图 on a paper whose charts were read asks first, then re-asks every chart")
 async def reread_charts(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["R"])
+    await page.click('#document-view .tab-bar [data-tab="figures"]')
     button = page.locator('#document-view [data-action="figures"]')
     expect((await button.text_content()) == "重新识图", f"the button reads {await button.text_content()!r}")
     empty = await page.text_content('#document-view [data-slot="figures-empty"]') or ""
@@ -1140,6 +1142,7 @@ async def filter_selection(page: Page, base: str, docs: dict[str, str], _: Path)
 @check("a paper without samples says why")
 async def no_samples(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["C"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     text = await page.text_content('[data-slot="rows-empty"]')
     expect("没有自己沉积的 TCO 膜" in (text or ""), f"facts empty state says {text!r}")
     expect(await page.is_hidden('[data-slot="dataset-copy"]'), "copy is offered for an empty table")
@@ -1157,6 +1160,7 @@ async def profile_retry(page: Page, base: str, docs: dict[str, str], _: Path) ->
 
     await page.route("**/api/profile", flaky)
     await open_doc(page, base, docs["C"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     health = await page.text_content("#health")
     expect((health or "").startswith("model "), f"a profile failure marked the backend down: {health!r}")
     text = await page.text_content('[data-slot="rows-empty"]')
@@ -1206,18 +1210,21 @@ async def list_cell(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
 @check("both lanes of 事实对照 fit side by side at 1440 px", width=1440)
 async def facts_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await lanes_visible(page)
 
 
 @check("both lanes of 事实对照 fit side by side at 1280 px", width=1280)
 async def facts_1280(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await lanes_visible(page)
 
 
 @check("both lanes of 事实对照 fit side by side at 1920 px", width=1920, height=1080)
 async def facts_1920(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await lanes_visible(page)
 
 
@@ -1228,6 +1235,7 @@ async def facts_1920(page: Page, base: str, docs: dict[str, str], _: Path) -> No
 )
 async def facts_1600(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await lanes_visible(page)
     boxes = await page.evaluate(
         """() => ['.doc-summary', '.doc-main'].map((s) => document.querySelector(s).getBoundingClientRect().toJSON())"""
@@ -1255,6 +1263,7 @@ async def pane_1280(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
 @check("the viewer pane stands beside the content at 1440 px, and a fact click scrolls no page", width=1440)
 async def pane_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     pane = await page.evaluate(PANE)
     expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
     expect(pane["inside"], "the viewer does not live in the viewer pane")
@@ -1446,133 +1455,134 @@ async def summary_panel(page: Page, base: str, docs: dict[str, str], _: Path) ->
     expect(await download.is_hidden(), "下载 Excel is offered without a table")
 
 
-async def section_state(page: Page) -> dict:
+async def tab_state(page: Page) -> dict:
     return await page.evaluate(
         """() => {
-          const on = [...document.querySelectorAll('#document-view .section-link.on')].map((b) => b.dataset.goto);
-          const tops = Object.fromEntries([...document.querySelectorAll('#document-view [data-section]')].map(
-            (s) => [s.dataset.section, s.getBoundingClientRect().top]));
-          const bar = document.querySelector('#document-view .section-bar').getBoundingClientRect();
-          const labels = [...document.querySelectorAll('#document-view .section-link')]
-            .filter((b) => !b.hidden).map((b) => b.textContent);
-          return { on, tops, barTop: bar.top, barBottom: bar.bottom, labels, hash: location.hash, y: scrollY };
+          const tabs = [...document.querySelectorAll('#document-view .tab-bar [role="tab"]')];
+          const on = tabs.filter((b) => b.getAttribute('aria-selected') === 'true').map((b) => b.dataset.tab);
+          const panels = Object.fromEntries([...document.querySelectorAll('#document-view [data-panel]')].map(
+            (s) => [s.dataset.panel, !s.hidden]));
+          const bar = document.querySelector('#document-view .tab-bar').getBoundingClientRect();
+          const labels = tabs.map((b) => b.textContent);
+          return { on, panels, barTop: bar.top, barBottom: bar.bottom, labels, hash: location.hash };
         }"""
     )
 
 
-@check("a section click scrolls its section under the sticky bar, without touching the URL; a scroll moves the mark")
-async def section_bar(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+@check("the tab bar offers the four tabs, results first; a click shows only its panel, without touching the URL")
+async def tab_bar(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
-    state = await section_state(page)
-    # 日志 follows the paper's jobs, which earlier checks may have run (its own check below).
-    labels = [label for label in state["labels"] if label != "日志"]
-    expect(labels == ["结果", "图中读数", "证据", "样品与通道"], f"the bar reads {state['labels']}")
-    expect(state["on"] == ["results"], f"at the top the bar marks {state['on']}")
+    state = await tab_state(page)
+    expect(state["labels"] == ["结果表", "图中读数", "事实对照", "样品记录"], f"the bar reads {state['labels']}")
+    expect(state["on"] == ["results"], f"on open the bar marks {state['on']}")
+    expect(
+        state["panels"] == {"results": True, "figures": False, "facts": False, "samples": False},
+        f"the panels read {state['panels']}",
+    )
     hash_before = state["hash"]
-    # A smooth scroll goes on after the last crossing it causes; the mark must still end on the section clicked.
-    await page.click('#document-view .section-link[data-goto="evidence"]')
-    await page.wait_for_function(
-        "document.querySelector('#document-view .section-link.on')?.dataset.goto === 'evidence'", timeout=3000
-    )
-    await page.wait_for_timeout(1500)
-    state = await section_state(page)
-    expect(state["on"] == ["evidence"], f"once the smooth scroll stopped the bar marks {state['on']}")
-    await page.evaluate("scrollTo(0, 0)")
-    await page.emulate_media(reduced_motion="reduce")  # an instant jump, so the check reads where it landed
-    for key in ("evidence", "figures", "samples"):
-        await page.click(f'#document-view .section-link[data-goto="{key}"]')
-        await page.wait_for_timeout(300)
-        state = await section_state(page)
-        expect(abs(state["barTop"] - 56) <= 1, f"the bar is not stuck under the topbar: {state['barTop']}")
-        top = state["tops"][key]
-        at_end = await page.evaluate("innerHeight + scrollY >= document.documentElement.scrollHeight - 2")
-        expect(
-            state["barBottom"] <= top <= state["barBottom"] + 40 or (at_end and 0 < top < 900),
-            f"{key} lands at {top}px (bar ends at {state['barBottom']}px)",
+    # A hidden panel shortens the page; the bar pins only where the page can scroll past its resting place.
+    for key in ("figures", "facts", "samples", "results"):
+        await page.click(f'#document-view .tab-bar [data-tab="{key}"]')
+        await page.wait_for_timeout(100)
+        # From the top, where the bar is not yet pinned, read its natural place; a panel that leaves the
+        # page too short to scroll past it cannot pin the bar, and there the check does not apply.
+        await page.evaluate("scrollTo(0, 0)")
+        await page.wait_for_timeout(100)
+        natural = await page.evaluate(
+            "document.querySelector('#document-view .tab-bar').getBoundingClientRect().top + scrollY"
         )
-        expect(state["on"] == [key], f"after a click on {key} the bar marks {state['on']}")
-        expect(state["hash"] == hash_before, f"a section click changed the URL to {state['hash']}")
-    expect(await page.evaluate("document.querySelector('[data-section=samples]').open"), "样品与通道 stayed folded")
-    # A scroll the bar did not make: the mark follows it.
-    await page.evaluate(
-        "scrollTo(0, document.querySelector('[data-section=figures]').getBoundingClientRect().top"
-        " + scrollY - 56 - 42 - 8)"
-    )
-    await page.wait_for_function(
-        "document.querySelector('#document-view .section-link.on')?.dataset.goto === 'figures'", timeout=3000
-    )
-    await page.evaluate("scrollTo(0, 0)")
-    await page.wait_for_function(
-        "document.querySelector('#document-view .section-link.on')?.dataset.goto === 'results'", timeout=3000
-    )
+        await page.evaluate(f"scrollTo(0, {natural} + 60)")
+        await page.wait_for_timeout(100)
+        state = await tab_state(page)
+        expect(state["on"] == [key], f"after a click the bar marks {state['on']}")
+        shown = {name: visible for name, visible in state["panels"].items() if visible}
+        expect(shown == {key: True}, f"after clicking {key} the visible panels are {shown}")
+        if await page.evaluate(f"scrollY >= {natural} - 56"):
+            expect(abs(state["barTop"] - 56) <= 1, f"the bar is not stuck under the topbar: {state['barTop']} at {key}")
+        expect(state["hash"] == hash_before, f"a tab click changed the URL to {state['hash']}")
 
 
-@check("a fact deep link still selects its fact and shows it on screen, below the section bar")
-async def section_fact_link(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+@check("a fact deep link lands on the 事实对照 tab, its row selected and on screen under the tab bar")
+async def tab_fact_link(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"], fact=2)
     await page.wait_for_selector('tr.selected[data-index="2"]')
+    state = await tab_state(page)
+    expect(state["on"] == ["facts"], f"the deep link left the bar on {state['on']}")
     expect(await page.evaluate("location.hash") == f"#/doc/{docs['A']}/fact/2", "the deep link lost its fact")
     box = await page.evaluate("document.querySelector('tr.selected').getBoundingClientRect().toJSON()")
-    bar = await page.evaluate("document.querySelector('#document-view .section-bar').getBoundingClientRect().bottom")
-    expect(bar <= box["top"] and box["bottom"] <= 901, f"the selected fact is at {box}, the bar ends at {bar}")
+    expect(state["barBottom"] <= box["top"] and box["bottom"] <= 901, f"the selected fact is at {box}")
     highlighted = await page.locator('[data-slot="viewer"] .hl').count()
     expect(highlighted > 0, "the viewer highlights none of the fact's blocks")
-    await page.click('#document-view .section-link[data-goto="results"]')
+    await page.click('#document-view .tab-bar [data-tab="results"]')
     await page.wait_for_timeout(300)
-    expect(await page.evaluate("location.hash") == f"#/doc/{docs['A']}/fact/2", "a section click dropped the fact")
-    expect(await page.locator('tr.selected[data-index="2"]').count() == 1, "a section click unselected the fact")
+    expect(await page.evaluate("location.hash") == f"#/doc/{docs['A']}/fact/2", "a tab click dropped the fact")
+    expect(await page.locator('tr.selected[data-index="2"]').count() == 1, "a tab click unselected the fact")
 
 
-@check("the log appears in the section bar once a job runs")
-async def section_log(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+@check("the processing log stays below the tab panels and appears once a job runs")
+async def job_log(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["W"])
-    expect("日志" not in (await section_state(page))["labels"], "日志 is offered with no job")
-    await page.click('#document-view [data-action="run"]')
-    await page.wait_for_function(
-        "[...document.querySelectorAll('#document-view .section-link')]"
-        ".some((b) => !b.hidden && b.textContent === '日志')",
-        timeout=5000,
+    expect(
+        await page.evaluate("document.querySelector('#document-view details.joblog').classList.contains('hidden')"),
+        "the log is offered with no job",
     )
+    await page.click('#document-view [data-action="run"]')
+    await page.wait_for_selector("#document-view details.joblog:not(.hidden)", timeout=5000)
     await jobs_idle(page)
 
 
-async def section_margin(page: Page) -> str | None:
-    return await page.evaluate("import('/sections.js').then((sections) => sections.sectionBarMargin())")
-
-
-async def wait_margin_change(page: Page, before: str | None) -> str | None:
-    deadline = time.monotonic() + 3
-    while (now := await section_margin(page)) == before:
-        expect(time.monotonic() < deadline, f"the section bar's reading line stayed {before!r}")
-        await asyncio.sleep(0.05)
-    return now
-
-
-def margin_px(margin: str | None) -> list[float]:
-    return [float(part.removesuffix("px")) for part in (margin or "").split()]
-
-
-@check("the section bar's reading line follows a resize and the layout switch, and goes with the page")
-async def section_resize(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+@check("the open tab survives a job-finish reload, and a document switch returns to the results table")
+async def tab_persistence(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["W"])
+    await page.click('#document-view .tab-bar [data-tab="figures"]')
+    # Mark the bar: a finish re-clones the template, so the mark vanishing proves the re-render happened.
+    await page.evaluate("document.querySelector('#document-view .tab-bar').dataset.marked = '1'")
+    await page.click('#document-view [data-action="run"]')
+    await page.wait_for_selector("text=处理完成", timeout=len(stage_names()) * STAGE_SECONDS * 1000 + 10000)
+    await page.wait_for_function("!document.querySelector('#document-view .tab-bar')?.dataset.marked", timeout=5000)
+    # The finish reloaded the whole view (a fresh template clone): the tab must survive it.
+    expect((await tab_state(page))["on"] == ["figures"], "the job-finish reload lost the tab")
+    expect(await page.is_visible('[data-panel="figures"]'), "the figures panel did not survive the reload")
+    # Another document: a fresh view starts on the results table again. The h1 the helper waits for belongs
+    # to the old view until the swap, so the document id is what says the new view is on screen.
     await open_doc(page, base, docs["A"])
-    first = await section_margin(page)
-    top, _, bottom, _ = margin_px(first)
-    expect(-top - bottom + 1 == 900, f"at 900 px the line's margin reads {first!r}")
-    await page.set_viewport_size({"width": 1440, "height": 600})
-    shorter = await wait_margin_change(page, first)
-    top, _, bottom, _ = margin_px(shorter)
-    expect(-top - bottom + 1 == 600, f"at 600 px the line's margin reads {shorter!r}")
-    # Narrow: the bar no longer sticks, so the line is just under the topbar.
-    await page.set_viewport_size({"width": 800, "height": 600})
-    narrow = await wait_margin_change(page, shorter)
-    expect(margin_px(narrow)[0] > margin_px(shorter)[0], f"the narrow line {narrow!r} is not above {shorter!r}")
-    await home(page, base)
-    expect(await section_margin(page) is None, "the section bar outlived its page")
-    await page.set_viewport_size({"width": 1440, "height": 900})
-    await page.wait_for_timeout(300)
-    expect(await section_margin(page) is None, "a resize after the page was left restarted its bar")
+    await page.wait_for_function(
+        f"document.querySelector('#document-view [data-slot=id]')?.textContent.startsWith('{docs['A'][:4]}')",
+        timeout=5000,
+    )
+    state = await tab_state(page)
+    expect(state["on"] == ["results"], f"a document switch left the bar on {state['on']}")
+    expect(state["panels"]["results"], "the results panel is not shown on a fresh document")
 
 
+@check("the tab bar exposes tablist/tab/tabpanel roles, keeps aria-selected in sync and arrows between tabs")
+async def tabs_a11y(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    expect(await page.get_attribute("#document-view .tab-bar", "role") == "tablist", "the bar is not a tablist")
+    roles = await page.evaluate(
+        "[...document.querySelectorAll('#document-view .tab-bar > button')].map((b) => b.getAttribute('role'))"
+    )
+    expect(roles == ["tab"] * 4, f"the bar's buttons read {roles}")
+    panels = await page.evaluate(
+        "[...document.querySelectorAll('#document-view [data-panel]')].map((s) => s.getAttribute('role'))"
+    )
+    expect(panels == ["tabpanel"] * 4, f"the panels read {panels}")
+    # Roving tabindex plus arrow keys: focus and selection move together.
+    await page.focus('#document-view .tab-bar [data-tab="results"]')
+    expect(
+        await page.evaluate("document.activeElement.getAttribute('tabindex')") == "0",
+        "the selected tab does not own the roving tabindex",
+    )
+    for key, target in (("ArrowRight", "figures"), ("End", "samples"), ("ArrowLeft", "facts"), ("Home", "results")):
+        await page.keyboard.press(key)
+        expect(
+            await page.evaluate("document.activeElement.dataset.tab") == target,
+            f"{key} focused {await page.evaluate('document.activeElement.dataset.tab')!r}, not {target}",
+        )
+        expect((await tab_state(page))["on"] == [target], f"{key} did not select {target}")
+
+
+@check("a phone-width page does not scroll sideways and keeps 重新处理 on screen", width=390, height=844)
 @check("a phone-width page does not scroll sideways and keeps 重新处理 on screen", width=390, height=844)
 async def narrow_doc(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
@@ -1597,6 +1607,7 @@ async def narrow_home(page: Page, base: str, docs: dict[str, str], _: Path) -> N
 @check("clicking a fact below the viewer brings the viewer into view", width=390, height=844)
 async def reveal(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await page.locator('[data-slot="rows"] tr').first.click()
     await page.wait_for_timeout(800)
     top = await page.evaluate("document.querySelector('[data-slot=viewer]').getBoundingClientRect().top")
@@ -1623,6 +1634,7 @@ async def keyboard(page: Page, base: str, docs: dict[str, str], _: Path) -> None
     await page.keyboard.press("Escape")
 
     await open_doc(page, base, docs["A"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await page.focus('[data-slot="rows"] tr[data-index="4"]')
     await page.keyboard.press("Enter")
     expect((await page.evaluate("location.hash")).endswith("/fact/4"), "Enter on a fact row did not select it")
@@ -1670,6 +1682,8 @@ async def entity_evidence(page: Page, _: str, docs: dict[str, str], __: Path) ->
     empty = page.locator('.entity-table[data-entity="wear_test"] td.cell.empty[data-field="wear_mode"]')
     expect(await empty.get_attribute("aria-label") == "两路冲突", "the refused cell lost its quality row")
     await empty.click()
+    expect((await tab_state(page))["on"] == ["samples"], "the empty cell did not open the records tab")
+    expect(await page.is_visible('[data-panel="samples"]'), "the records panel stayed hidden")
     marked = await page.evaluate(
         "[...document.querySelectorAll('.field.evidence')].map((row) => row.closest('.sample').dataset.entity)"
     )
@@ -1685,6 +1699,8 @@ async def one_entity_evidence(page: Page, _: str, docs: dict[str, str], __: Path
     empty = page.locator('td.cell.empty[data-field="solvent"]')
     await empty.first.wait_for()
     await empty.first.click()
+    expect((await tab_state(page))["on"] == ["samples"], "the empty cell did not open the records tab")
+    expect(await page.is_visible('[data-panel="samples"]'), "the records panel stayed hidden")
     marked = await page.evaluate(
         "[...document.querySelectorAll('.field.evidence')].map((row) => row.closest('.sample').dataset.entity)"
     )
@@ -2094,6 +2110,7 @@ async def profile_switch_race(page: Page, _: str, docs: dict[str, str], __: Path
     hash_ = await page.evaluate("location.hash")
     expect(hash_ == f"#/p/{DEMO}/doc/{docs['M']}", f"the switch went to {hash_!r} (the fact must be dropped)")
     await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr')
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     first = await page.text_content('[data-slot="results-head"] th')
     expect(first == "涂层", f"the primary table's first column is {first!r}")
     scopes = await page.locator('[data-slot="rows"] td.mono').all_text_contents()
@@ -2104,6 +2121,7 @@ async def profile_switch_race(page: Page, _: str, docs: dict[str, str], __: Path
 @check("while another profile loads, the old profile's view takes no clicks: no fact of its report reaches the URL")
 async def stale_view_inert(page: Page, _: str, docs: dict[str, str], __: Path) -> None:
     await open_doc(page, docs["multi"], docs["M"])
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await page.route(lambda url: f"/report?profile={DEMO}" in url, delayed(1.5))
     report = settled(page, f"/report?profile={DEMO}")
     await page.select_option("#profile-select", DEMO)
@@ -2120,6 +2138,7 @@ async def stale_view_inert(page: Page, _: str, docs: dict[str, str], __: Path) -
     await page.wait_for_selector('.entity-table[data-entity="wear_test"] tbody tr')
     expect(not await page.evaluate("document.getElementById('document-view').inert"), "the new view is inert")
     expect(await page.locator("tr.selected").count() == 0, "a fact is selected")
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
     await page.click('[data-slot="rows"] tr[data-index="1"]')
     hash_ = await page.evaluate("location.hash")
     expect(hash_ == f"#/p/{DEMO}/doc/{docs['M']}/fact/1", f"a fact of the new view wrote {hash_!r}")
