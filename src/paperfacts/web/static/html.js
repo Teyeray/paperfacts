@@ -88,6 +88,14 @@ export function writeStored(key, value) {
   }
 }
 
+export function removeStored(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // not remembered
+  }
+}
+
 // Re-render `root` without dropping the keyboard focus. A control that re-renders its own table replaces
 // itself, and the browser then puts focus on <body>: a keyboard user would have to tab back from the top of
 // the page after every toggle. Controls that should survive carry a stable `data-focus` key.

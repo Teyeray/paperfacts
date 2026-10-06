@@ -184,16 +184,26 @@ const VIEWER_KEY = "paperfacts.viewer-collapsed";
 
 // Called with each document render: applies the remembered state and wires the pane's two buttons.
 export function setupViewerPane(view, node) {
+  // On collapse the focused ✕ is display:none'd with the pane, so focus would fall to <body>:
+  // hand it to the expand button, the continuation of this action. The ✕ exposes the pane state.
+  const collapse = node.querySelector('[data-action="collapse-viewer"]');
+  const expand = node.querySelector('[data-action="expand-viewer"]');
+  const sync = () => {
+    const collapsed = view.dataset.viewer === "collapsed";
+    collapse?.setAttribute("aria-expanded", String(!collapsed));
+  };
   const apply = (collapsed) => {
     if (collapsed) view.dataset.viewer = "collapsed";
     else view.dataset.viewer = "";
+    sync();
   };
   apply(readStored(VIEWER_KEY) === "1");
-  node.querySelector('[data-action="collapse-viewer"]')?.addEventListener("click", () => {
+  collapse?.addEventListener("click", () => {
     apply(true);
     writeStored(VIEWER_KEY, "1");
+    expand?.focus();
   });
-  node.querySelector('[data-action="expand-viewer"]')?.addEventListener("click", () => {
+  expand?.addEventListener("click", () => {
     apply("");
     writeStored(VIEWER_KEY, "0");
   });
