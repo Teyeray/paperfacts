@@ -18,8 +18,11 @@ const clampPx = (px, min, max) => Math.round(Math.max(min, Math.min(px, max)));
 export const paneDefault = (vw) => (vw >= 1440 ? 480 : 340);
 
 // Width storage: whitelisted on read like viewer.js's readZoomIndex — anything odd falls back to the default.
+// A missing key must short-circuit before Number(): Number(null) is 0, which would clamp to the minimum.
 function readWidth(key, min, max, fallback) {
-  const n = Number(readStored(key));
+  const raw = readStored(key);
+  if (raw === null) return fallback;
+  const n = Number(raw);
   return Number.isFinite(n) ? clampPx(n, min, max) : fallback;
 }
 
@@ -105,6 +108,31 @@ export function setupRailResizer() {
   wireSeparator(handle, { key: RAIL_KEY, min: RAIL_MIN, limit, current, apply, reset: () => 300 });
 }
 
+// The viewer-pane seam, wired per render inside setupViewerPane (the template clones fresh handles). Unlike
+// the rail, the inline --viewer-pane is always applied: with no stored key it is the JS band default
+// (340 below 1440, else 480 — the deleted CSS rung), so the value shadows :root at every width.
+export function setupViewerPaneResizer(view, node) {
+  const handle = node.querySelector(".pane-resizer");
+  if (!handle) return;
+  // The pane element is captured now, not re-queried later: `node` is a DocumentFragment, and once it is
+  // appended to the view the fragment empties — the element lives on, the fragment's query would not find it.
+  const paneEl = node.querySelector(".viewer-pane");
+  // The rail's live width caps the pane: the middle column keeps its 570px floor however wide both get.
+  const railLiveWidth = () => {
+    const rail = document.querySelector(".rail");
+    return rail && getComputedStyle(rail).display !== "none" ? Math.round(rail.getBoundingClientRect().width) : 300;
+  };
+  const fallback = () => paneDefault(window.innerWidth);
+  const limit = () => paneMax(window.innerWidth, railLiveWidth());
+  // The template fragment is not laid out at wire time, so the applied width — not the pane's rect — is the
+  // source of truth until the first drag (by then the pane is live and the rect takes over).
+  let applied = readWidth(PANE_KEY, PANE_MIN, limit(), fallback());
+  const apply = (px) => { applied = px; view.style.setProperty("--viewer-pane", `${px}px`); };
+  const current = () => Math.round(paneEl.getBoundingClientRect().width) || applied;
+  apply(applied);
+  wireSeparator(handle, { key: PANE_KEY, min: PANE_MIN, limit, current, apply, reset: fallback, invert: true });
+}
+
 // The viewport listeners (the app has none today), rAF-debounced: stored widths are re-clamped against the
 // new viewport so a shrunk window never overflows horizontally. Besides window resize, the static
 // #document-view is observed: the document (and its viewer pane, which caps the rail's live max) renders
@@ -114,10 +142,17 @@ export function installReclamp() {
   const reclamp = () => {
     const shell = document.querySelector(".shell");
     const railEl = document.querySelector(".rail");
+    const pane = document.querySelector(".viewer-pane");
+    const paneWidth = pane && getComputedStyle(pane).display !== "none" ? Math.round(pane.getBoundingClientRect().width) : 0;
     if (shell && railEl && readStored(RAIL_KEY) !== null) {
-      const pane = document.querySelector(".viewer-pane");
-      const paneWidth = pane && getComputedStyle(pane).display !== "none" ? Math.round(pane.getBoundingClientRect().width) : 0;
       shell.style.setProperty("--rail", `${clampPx(Number(readStored(RAIL_KEY)) || 300, RAIL_MIN, railMax(window.innerWidth, paneWidth))}px`);
+    }
+    // The pane re-clamps too — a stored width against the shrunk viewport, or a fresh band default when the
+    // window crossed 1440 since the last render. Inert below 1280/collapsed, where the media rules win anyway.
+    const view = document.getElementById("document-view");
+    if (view && pane && getComputedStyle(pane).display !== "none") {
+      const railWidth = Math.round(railEl.getBoundingClientRect().width);
+      view.style.setProperty("--viewer-pane", `${readWidth(PANE_KEY, PANE_MIN, paneMax(window.innerWidth, railWidth), paneDefault(window.innerWidth))}px`);
     }
   };
   const schedule = () => {

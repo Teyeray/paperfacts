@@ -1433,6 +1433,195 @@ async def viewer_collapse(page: Page, base: str, docs: dict[str, str], _: Path) 
     )
 
 
+PANE_WIDTH = "document.querySelector('.viewer-pane').getBoundingClientRect().width"
+
+
+@check("dragging the viewer seam resizes the pane, keeps the lanes fitting, and remembers it")
+async def pane_drag(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    box = await page.locator(".pane-resizer").bounding_box()
+    before = await page.evaluate(PANE_WIDTH)
+    expect(before == 480, f"the pane does not start at its 480px default: {before}")
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 - 120, 450, steps=5)  # dragging left widens (right-anchored)
+    live = await page.evaluate(PANE_WIDTH)
+    expect(live > before, f"the pane did not widen while dragging: {before} -> {live}")
+    expect(await page.evaluate("window.getSelection().toString()") == "", "dragging selected text")
+    await page.mouse.up()
+    after = await page.evaluate(PANE_WIDTH)
+    stored = await page.evaluate("localStorage.getItem('paperfacts.viewer-pane-width')")
+    expect(stored == str(round(after)), f"the dragged width was not remembered: {after} vs {stored}")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    kept = await page.evaluate(PANE_WIDTH)
+    expect(abs(kept - after) <= 1, f"reload dropped the pane width: {after} -> {kept}")
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
+    await lanes_visible(page)
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+
+
+@check("the viewer drag clamps at its bounds", width=1920, height=1080)
+async def pane_drag_clamp(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+
+    async def seam() -> tuple[float, float]:
+        box = await page.locator(".pane-resizer").bounding_box()
+        return box["x"] + box["width"] / 2, 450
+
+    mid = await seam()
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] - 900, 450, steps=5)
+    await page.mouse.up()
+    # With the rail at its 300px default the live max is 1920-56-570-300 = 994.
+    expect(
+        await page.evaluate(PANE_WIDTH) == 994,
+        f"the pane passed its live max: {await page.evaluate(PANE_WIDTH)}",
+    )
+    mid = await seam()  # the seam moved with the pane: re-aim before dragging the other way
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] + 900, 450, steps=5)  # dragging right narrows: 994 far overshoots the floor
+    await page.mouse.up()
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 300, f"the pane went below its 300px floor: {width}")
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+
+
+@check("the viewer seam is hidden when the pane is collapsed, and expanding restores the dragged width")
+async def pane_drag_collapsed(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    box = await page.locator(".pane-resizer").bounding_box()
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 - 80, 450, steps=5)
+    await page.mouse.up()
+    dragged = await page.evaluate(PANE_WIDTH)
+    await page.click('[data-action="collapse-viewer"]')
+    expect(await page.is_hidden(".pane-resizer"), "the seam handle shows on a collapsed pane")
+    await page.click(".viewer-expand")
+    expect(await page.is_visible(".viewer-pane"), "the expanded pane is not on screen")
+    expect(
+        abs(await page.evaluate(PANE_WIDTH) - dragged) <= 1,
+        f"expanding dropped the dragged width: {dragged} -> {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+
+
+@check("the viewer seam resizes from the keyboard (inverted arrows) and resets on double-click")
+async def pane_resize_keyboard(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.focus(".pane-resizer")
+    expect(await page.get_attribute(".pane-resizer", "role") == "separator", "the handle is no separator")
+    expect(await page.get_attribute(".pane-resizer", "aria-orientation") == "vertical", "no vertical orientation")
+    await page.keyboard.press("ArrowLeft")  # left widens: the pane is right-anchored
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 496, f"ArrowLeft did not widen by 16px: {width}")
+    await page.keyboard.press("ArrowRight")
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 480, f"ArrowRight did not narrow by 16px: {width}")
+    await page.keyboard.press("End")
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 514, f"End did not reach the 1440px live max: {width}")
+    await page.keyboard.press("Home")
+    expect(await page.evaluate(PANE_WIDTH) == 300, "Home did not reach the 300px floor")
+    await page.dblclick(".pane-resizer")
+    expect(await page.evaluate(PANE_WIDTH) == 480, "double-click did not reset to 480px")
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.viewer-pane-width')") is None,
+        "the reset kept the stored width",
+    )
+
+
+@check("the pane's band defaults hold at 1280 and 1440 with no stored key, and follow a resize")
+async def pane_band_defaults(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    expect(
+        await page.evaluate(PANE_WIDTH) == 480,
+        f"the 1440 band default is not 480px: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)  # one rAF tick for the debounced re-clamp / re-default
+    expect(
+        await page.evaluate(PANE_WIDTH) == 340,
+        f"the 1280 band default is not 340px: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.set_viewport_size({"width": 1440, "height": 900})
+    await page.wait_for_timeout(100)
+    expect(
+        await page.evaluate(PANE_WIDTH) == 480,
+        f"the band default did not return to 480px: {await page.evaluate(PANE_WIDTH)}",
+    )
+
+
+@check("a seeded pane width is clamped to the live max on load, and the lanes still fit")
+async def pane_seeded_reload(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.viewer-pane-width', '700')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    # The boot clamp caps the stored 700 at the 1440 live max, 1440-56-570-300 = 514.
+    expect(
+        await page.evaluate(PANE_WIDTH) == 514,
+        f"the stored 700px was not clamped at boot: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
+    await lanes_visible(page)
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)
+    expect(
+        await page.evaluate(PANE_WIDTH) == 354,
+        f"the pane was not re-clamped at 1280: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+
+
+@check("shrinking the viewport re-clamps a stored pane width and never overflows")
+async def pane_viewport_shrink(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.viewer-pane-width', '514')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    expect(await page.evaluate(PANE_WIDTH) == 514, f"the stored 514px did not load: {await page.evaluate(PANE_WIDTH)}")
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)  # one rAF tick for the debounced re-clamp
+    expect(
+        await page.evaluate(PANE_WIDTH) == 354,
+        f"the pane was not re-clamped after the shrink: {await page.evaluate(PANE_WIDTH)}",
+    )
+    overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+    expect(overflow <= 1, f"the page overflows {overflow}px sideways after the shrink")
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+
+
+@check("dragging the pane seam leaves the zoom state alone")
+async def pane_zoom_smoke(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_selector('[data-slot="viewer"] .page')
+    level = page.locator(".viewer-bar .zoom-level")
+    expect(await level.text_content() == "100%", "the zoom level does not start at 100%")
+    page_width = await page.evaluate(
+        "document.querySelector('[data-slot=\"viewer\"] .page').getBoundingClientRect().width"
+    )
+    box = await page.locator(".pane-resizer").bounding_box()
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 - 60, 450, steps=5)
+    await page.mouse.up()
+    expect(await level.text_content() == "100%", "the pane drag disturbed the zoom level")
+    after_drag = await page.evaluate(
+        "document.querySelector('[data-slot=\"viewer\"] .page').getBoundingClientRect().width"
+    )
+    expect(after_drag > page_width, f"the page did not follow the wider pane: {page_width} -> {after_drag}")
+    await page.click(".viewer-bar .zoomer button:last-child")
+    expect(await level.text_content() == "125%", "the zoom ladder broke after a pane drag")
+    await page.click(".viewer-bar .zoom-level")  # the percentage button resets to 100%
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+
+
 @check("the viewer's zoom controls step the ladder, disable at the ends and survive a reload")
 async def zoom_controls(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"], fact=2)

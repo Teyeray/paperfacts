@@ -4,6 +4,7 @@
 // cropping tools.
 
 import { escapeHtml, readStored, writeStored } from "./html.js";
+import { setupViewerPaneResizer } from "./panes.js";
 import { LANES, LANE_LABEL } from "./state.js";
 
 const LANE_CLASS = { mineru: "a", paddleocr_vl: "b" };
@@ -290,6 +291,7 @@ const VIEWER_KEY = "paperfacts.viewer-collapsed";
 
 // Called with each document render: applies the remembered state and wires the pane's two buttons.
 export function setupViewerPane(view, node) {
+  setupViewerPaneResizer(view, node); // the cloned seam handle: per-render wiring, like the two buttons below
   // On collapse the focused ✕ is display:none'd with the pane, so focus would fall to <body>:
   // hand it to the expand button, the continuation of this action. The ✕ exposes the pane state.
   const collapse = node.querySelector('[data-action="collapse-viewer"]');

@@ -31,6 +31,29 @@ so every existing check and screenshot keeps passing.
 
 ## PR2 — viewer seam + the 1280–1439.98 rung
 
-- [ ] `setupViewerPaneResizer(view, node)` wired per render inside `setupViewerPane`; band default
+- [x] `setupViewerPaneResizer(view, node)` wired per render inside `setupViewerPane`; band default
       (340 below 1440, else 480) via `paneDefault()`; rung deletion in `app.css`; pane side of
       `reclamp()`; e2e pane checks; final ISC walk-through and screenshot run.
+- [x] Viewer seam handle in `#tpl-document` (between the expand button and `aside.viewer-pane`,
+      调整预览宽度), wired per render — the pane element is captured at wire time because the
+      template fragment empties once appended. Inline `--viewer-pane` on `#document-view` always
+      applied (band default or stored width, clamped against the rail's live width); Arrow keys
+      inverted (left widens), Home/End to bounds, double-click resets to the band default and
+      removes the key.
+- [x] `app.css` 1280–1439.98 rung deleted: the single ≥1280 rule reads `var(--viewer-pane)`; JS
+      owns the band default (accepted risk: no-JS 1280–1439.98 would show 480 — the UI is
+      JS-rendered anyway).
+- [x] `reclamp()` extended: the pane re-clamps against the new viewport (stored width or a fresh
+      band default when crossing 1440), and a `readWidth` fix — `Number(null)` is 0, so a missing
+      key short-circuits to the fallback before the clamp.
+- [x] e2e in `tests/e2e/web_races.py`: `pane_drag` (live + persist + reload + lanes relation),
+      `pane_drag_clamp` (994 max / 300 floor at 1920×1080), `pane_drag_collapsed` (handle hidden,
+      expand restores the dragged width), `pane_resize_keyboard` (inverted arrows, End 514, Home
+      300, dblclick 480), `pane_band_defaults` (480@1440 / 340@1280 with no key, following a
+      resize), `pane_seeded_reload` (700→514 at boot, →354 at 1280, lanes fit),
+      `pane_viewport_shrink` (514→354, no overflow), `pane_zoom_smoke` (a drag leaves the zoom
+      level and ladder alone).
+- [x] Gates: `uv run pytest`, ruff check/format, `tests/e2e/web_races.py` all green (all checks,
+      old and new); `scripts/ui_screenshots.py` — no new pixel diffs: branch-vs-main matches
+      main-vs-baseline diff set (the seed's own viewer-image nondeterminism plus a 1×2 px
+      antialiasing flake in home-query); pane geometry identical at rest.

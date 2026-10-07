@@ -313,11 +313,9 @@ body.pane-dragging { cursor: col-resize; user-select: none; }
 }
 @media (min-width: 1280px) {
   .document:not([data-viewer="collapsed"]) { grid-template-columns: minmax(0, 1fr) var(--viewer-pane); }
-  /* The facts table's two lane columns need ~570 px; at the 1280 rung the full 480 px pane would
-     squeeze the middle below that, so the pane starts narrower and reaches its token width at 1440. */
-  @media (max-width: 1439.98px) {
-    .document:not([data-viewer="collapsed"]) { grid-template-columns: minmax(0, 1fr) 340px; }
-  }
+  /* The facts table's two lane columns need ~570 px: panes.js keeps the pane default at 340 below 1440
+     (the old hard-coded rung, now a JS band default) and clamps any dragged width so the middle never
+     starves below that. */
   .viewer-pane {
     position: sticky; top: var(--topbar); height: calc(100vh - var(--topbar)); overflow: auto;
     border-left: 1px solid var(--line); background: var(--surface);
