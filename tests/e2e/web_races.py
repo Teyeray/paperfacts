@@ -766,7 +766,7 @@ async def rail_drag(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
     await page.mouse.down()
     await page.mouse.move(
         box["x"] + box["width"] / 2 + 120, 450, steps=5
-    )  # clamps at the live max (334 @1440/pane 480)
+    )  # no viewer pane on home: the live max is the 600 cap, so +120 (→420) does not clamp
     live = await page.evaluate(RAIL_WIDTH)
     expect(live > before, f"the rail did not widen while dragging: {before} -> {live}")
     expect(await page.evaluate("window.getSelection().toString()") == "", "dragging selected text")
@@ -850,6 +850,7 @@ async def rail_viewport_shrink(page: Page, base: str, docs: dict[str, str], _: P
     await page.reload()
     await page.wait_for_selector("#document-view:not(.hidden) h1")
     # With the viewer pane live at 480, the boot clamp already caps the rail at 1440-56-570-480 = 334.
+    await page.wait_for_function(f"Math.round({RAIL_WIDTH}) === 334")  # wait out the rAF-debounced re-clamp
     expect(
         await page.evaluate(RAIL_WIDTH) == 334,
         f"the stored 600px was not clamped at boot: {await page.evaluate(RAIL_WIDTH)}",
@@ -862,6 +863,42 @@ async def rail_viewport_shrink(page: Page, base: str, docs: dict[str, str], _: P
     )
     overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
     expect(overflow <= 1, f"the page overflows {overflow}px sideways after the shrink")
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")
+
+
+@check("the rail seam works on a document page in the stacked-pane band (961–1279px)", width=1100, height=900)
+async def rail_stacked_band_doc(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    # Below 1280 the viewer pane is a stacked full-width band, not a side column: it must not count against
+    # the rail's live max, or the clamp floors every width at 280 and drags move the rail backwards.
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.rail-width', '400')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    await page.wait_for_function(f"Math.round({RAIL_WIDTH}) === 400")  # stored width survives, not snapped to 280
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 400,
+        f"the stored 400px did not survive load: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    await page.focus(".rail-resizer")
+    await page.keyboard.press("ArrowRight")
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 416,
+        f"ArrowRight did not widen the rail: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    box = await page.locator(".rail-resizer").bounding_box()
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 + 120, 450, steps=5)
+    await page.mouse.up()
+    # From 416, +120 clamps at the true stacked-band max 1100-56-570 = 474 (still forward, never 280).
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 474,
+        f"the drag did not move forward to the 474px max: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.rail-width')") == "474",
+        "the dragged width was not remembered",
+    )
     await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")
 
 

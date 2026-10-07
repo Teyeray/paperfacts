@@ -58,6 +58,8 @@ export function wireSeparator(handle, { key, min, limit, current, apply, reset, 
       handle.removeEventListener("pointermove", onMove);
       handle.removeEventListener("pointerup", onUp);
       handle.removeEventListener("pointercancel", onCancel);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
     };
     const onUp = () => { move(current(), true); cleanup(); };
     const onCancel = cleanup;
@@ -67,6 +69,8 @@ export function wireSeparator(handle, { key, min, limit, current, apply, reset, 
     // Orphaned-capture safety: if the handle is re-rendered away mid-drag, a document-level pointerup still
     // persists and cleans up.
     document.addEventListener("pointerup", onUp, { once: true });
+    // Same safety for a drag that ends in pointercancel (e.g. a re-render tearing the capture away).
+    document.addEventListener("pointercancel", onCancel, { once: true });
   });
   // Keyboard parity with tabs.js's roving-arrow discipline: arrows resize by step (direction-aware), Home/End
   // jump to the bounds, modifiers pass through.
@@ -98,6 +102,7 @@ export function setupRailResizer() {
   const current = () => Math.round(railEl.getBoundingClientRect().width);
   // The viewer pane only takes a column at ≥1280 expanded; otherwise the rail max is just geometry/RAIL_MAX.
   const paneLiveWidth = () => {
+    if (window.innerWidth < 1280) return 0; // below the breakpoint the pane is a stacked full-width band, not a side column
     const pane = document.querySelector(".viewer-pane");
     if (!pane || getComputedStyle(pane).display === "none") return 0;
     return Math.round(pane.getBoundingClientRect().width);
@@ -143,16 +148,26 @@ export function installReclamp() {
     const shell = document.querySelector(".shell");
     const railEl = document.querySelector(".rail");
     const pane = document.querySelector(".viewer-pane");
-    const paneWidth = pane && getComputedStyle(pane).display !== "none" ? Math.round(pane.getBoundingClientRect().width) : 0;
+    const paneWidth = pane && window.innerWidth >= 1280 && getComputedStyle(pane).display !== "none"
+      ? Math.round(pane.getBoundingClientRect().width)
+      : 0;
     if (shell && railEl && readStored(RAIL_KEY) !== null) {
       shell.style.setProperty("--rail", `${clampPx(Number(readStored(RAIL_KEY)) || 300, RAIL_MIN, railMax(window.innerWidth, paneWidth))}px`);
     }
     // The pane re-clamps too — a stored width against the shrunk viewport, or a fresh band default when the
     // window crossed 1440 since the last render. Inert below 1280/collapsed, where the media rules win anyway.
     const view = document.getElementById("document-view");
-    if (view && pane && getComputedStyle(pane).display !== "none") {
+    if (view && pane && railEl && getComputedStyle(pane).display !== "none") {
       const railWidth = Math.round(railEl.getBoundingClientRect().width);
       view.style.setProperty("--viewer-pane", `${readWidth(PANE_KEY, PANE_MIN, paneMax(window.innerWidth, railWidth), paneDefault(window.innerWidth))}px`);
+    }
+    // The handles' aria-valuemax come from the other seam's live width, so re-clamping one width stales the
+    // other handle's bounds — resync both from the just-computed geometry.
+    const railHandle = document.querySelector(".rail-resizer");
+    if (railHandle) railHandle.setAttribute("aria-valuemax", String(railMax(window.innerWidth, paneWidth)));
+    const paneHandle = document.querySelector(".pane-resizer");
+    if (paneHandle && pane && window.innerWidth >= 1280 && getComputedStyle(pane).display !== "none" && railEl) {
+      paneHandle.setAttribute("aria-valuemax", String(paneMax(window.innerWidth, Math.round(railEl.getBoundingClientRect().width))));
     }
   };
   const schedule = () => {

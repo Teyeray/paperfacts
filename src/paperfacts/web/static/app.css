@@ -315,7 +315,8 @@ body.pane-dragging { cursor: col-resize; user-select: none; }
   .document:not([data-viewer="collapsed"]) { grid-template-columns: minmax(0, 1fr) var(--viewer-pane); }
   /* The facts table's two lane columns need ~570 px: panes.js keeps the pane default at 340 below 1440
      (the old hard-coded rung, now a JS band default) and clamps any dragged width so the middle never
-     starves below that. */
+     starves below that. Accepted risk: with no JS, --viewer-pane stays at the :root 480px token at this
+     band (e.g. at exactly 1280px) — there is no JS-free clamp. */
   .viewer-pane {
     position: sticky; top: var(--topbar); height: calc(100vh - var(--topbar)); overflow: auto;
     border-left: 1px solid var(--line); background: var(--surface);
