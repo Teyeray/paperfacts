@@ -1401,12 +1401,21 @@ PANE = """() => {
 }"""
 
 
+SEAM_ALIGN = """() => {
+  const h = document.querySelector('.pane-resizer').getBoundingClientRect();
+  const p = document.querySelector('.viewer-pane').getBoundingClientRect();
+  return h.x + h.width / 2 - p.x;
+}"""
+
+
 @check("the viewer pane stands beside the content at 1280 px", width=1280)
 async def pane_1280(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
     pane = await page.evaluate(PANE)
     expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
     expect(pane["inside"], "the viewer does not live in the viewer pane")
+    delta = await page.evaluate(SEAM_ALIGN)
+    expect(abs(delta) <= 1, f"the drag handle is off the real seam by {delta}px (content padding drift)")
 
 
 @check("the viewer pane stands beside the content at 1440 px, and a fact click scrolls no page", width=1440)
@@ -1416,6 +1425,8 @@ async def pane_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
     pane = await page.evaluate(PANE)
     expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
     expect(pane["inside"], "the viewer does not live in the viewer pane")
+    delta = await page.evaluate(SEAM_ALIGN)
+    expect(abs(delta) <= 1, f"the drag handle is off the real seam by {delta}px (content padding drift)")
     before = await page.evaluate("window.scrollY")
     # focus without scrolling (a click would auto-scroll to the row): the keyboard path activates the row too
     await page.evaluate("document.querySelector('.facts tbody tr[data-index=\"0\"]').focus({preventScroll: true})")
