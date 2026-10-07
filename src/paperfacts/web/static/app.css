@@ -187,14 +187,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
    only state; library.js keeps it in localStorage. */
 .shell[data-rail="collapsed"] { grid-template-columns: 0 minmax(0, 1fr); }
 .shell[data-rail="collapsed"] .rail { visibility: hidden; padding: 0; border-right: 0; }
-.content { padding: 22px 28px 60px; min-width: 0; }
+.content { --content-pad-x: 28px; padding: 22px var(--content-pad-x) 60px; min-width: 0; }
 /* Stacked: the rail sits above the content and folds its list away (the <details>); the collapse does not apply. */
 @media (max-width: 960px) {
   .shell, .shell[data-rail="collapsed"] { grid-template-columns: minmax(0, 1fr); }
   .rail, .shell[data-rail="collapsed"] .rail { position: static; height: auto; overflow: visible; visibility: visible; padding: 14px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
   .rail-toggle { display: none; }
 }
-@media (max-width: 520px) { .content { padding: 16px 14px 48px; } .topbar { padding: 0 14px 0 10px; } }
+@media (max-width: 520px) { .content { --content-pad-x: 14px; padding: 16px var(--content-pad-x) 48px; } .topbar { padding: 0 14px 0 10px; } }
 
 /* ---------- pane resizers ---------- */
 /* Out-of-flow strips over the two seams: they paint nothing at rest (the borders remain the seam), tint on
@@ -205,7 +205,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   cursor: col-resize; touch-action: none; background: none; border: 0;
 }
 .rail-resizer { left: calc(var(--rail) - 4px); }
-.pane-resizer { right: calc(var(--viewer-pane) - 4px); } /* right edge of the fixed strip = the seam */
+/* The seam sits --content-pad-x short of the viewport's right edge (the .content gutter); the 8px strip stays centered on the pane's border-left. */
+.pane-resizer { right: calc(var(--viewer-pane) + var(--content-pad-x) - 4px); }
 .rail-resizer:hover, .rail-resizer:focus-visible,
 .pane-resizer:hover, .pane-resizer:focus-visible,
 body.pane-dragging .rail-resizer.is-active, body.pane-dragging .pane-resizer.is-active {
