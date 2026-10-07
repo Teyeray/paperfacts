@@ -875,6 +875,7 @@ async def rail_stacked_band_doc(page: Page, base: str, docs: dict[str, str], _: 
     await page.reload()
     await page.wait_for_selector("#document-view:not(.hidden) h1")
     await page.wait_for_function(f"Math.round({RAIL_WIDTH}) === 400")  # stored width survives, not snapped to 280
+    expect(await page.is_hidden("#viewer-toggle"), "the viewer toggle shows below 1280px")
     expect(
         await page.evaluate(RAIL_WIDTH) == 400,
         f"the stored 400px did not survive load: {await page.evaluate(RAIL_WIDTH)}",
@@ -1450,14 +1451,21 @@ async def pane_1920(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
     expect(pane["inside"], "the viewer does not live in the viewer pane")
 
 
-@check("the viewer pane's collapse is remembered and the expand button brings it back")
+@check("the topbar's viewer toggle collapses and restores the pane, survives a reload, and `]` works")
 async def viewer_collapse(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await page.goto(base)
+    await page.wait_for_selector("#corpus-view:not(.hidden)")
+    expect(await page.is_hidden("#viewer-toggle"), "the viewer toggle shows outside a document page")
     await open_doc(page, base, docs["A"])
-    await page.click('[data-action="collapse-viewer"]')
+    expect(await page.is_visible("#viewer-toggle"), "the document page does not show the viewer toggle")
+    expect(await page.get_attribute("#viewer-toggle", "aria-expanded") == "true", "not marked expanded")
+    await page.click("#viewer-toggle")
     expect(
         await page.get_attribute("#document-view", "data-viewer") == "collapsed",
         "the collapse toggle did not collapse the pane",
     )
+    expect(await page.get_attribute("#viewer-toggle", "aria-expanded") == "false", "aria-expanded did not follow")
+    expect(await page.get_attribute("#viewer-toggle", "title") == "展开预览", "the tooltip did not follow")
     expect(await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "1", "not remembered")
     expect(await page.is_hidden(".viewer-pane"), "the collapsed pane still takes width")
     await page.reload()
@@ -1469,16 +1477,19 @@ async def viewer_collapse(page: Page, base: str, docs: dict[str, str], _: Path) 
         await page.get_attribute("#document-view", "data-viewer") == "collapsed",
         "a reload forgot the collapsed pane",
     )
-    await page.click(".viewer-expand")
+    await page.keyboard.press("]")
     expect(
         await page.get_attribute("#document-view", "data-viewer") == "",
-        "the expand button did not restore the pane",
+        "the `]` shortcut did not restore the pane",
     )
     expect(await page.is_visible(".viewer-pane"), "the expanded pane is not on screen")
     expect(
         await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "0",
         "the expansion is not remembered",
     )
+    await page.click("#viewer-toggle")
+    await page.keyboard.press("]")  # leave the state off for later checks
+    expect(await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "0", "left collapsed")
 
 
 PANE_WIDTH = "document.querySelector('.viewer-pane').getBoundingClientRect().width"
@@ -1546,9 +1557,9 @@ async def pane_drag_collapsed(page: Page, base: str, docs: dict[str, str], _: Pa
     await page.mouse.move(box["x"] + box["width"] / 2 - 80, 450, steps=5)
     await page.mouse.up()
     dragged = await page.evaluate(PANE_WIDTH)
-    await page.click('[data-action="collapse-viewer"]')
+    await page.click("#viewer-toggle")
     expect(await page.is_hidden(".pane-resizer"), "the seam handle shows on a collapsed pane")
-    await page.click(".viewer-expand")
+    await page.click("#viewer-toggle")
     expect(await page.is_visible(".viewer-pane"), "the expanded pane is not on screen")
     expect(
         abs(await page.evaluate(PANE_WIDTH) - dragged) <= 1,
