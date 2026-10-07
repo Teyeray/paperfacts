@@ -640,7 +640,12 @@ def create_app(
         require_document(document_id)
         if manager.is_active(document_id):
             raise HTTPException(status_code=409, detail="A job is still queued or running for this document")
-        name = await run_in_threadpool(default_library.delete, document_id)
+        try:
+            name = await run_in_threadpool(default_library.delete, document_id)
+        except FileNotFoundError:
+            # A concurrent delete (another tab, another client) removed the directory between the check
+            # above and the rmtree; the document is gone either way, so the answer is the same 404.
+            raise HTTPException(status_code=404, detail=f"No document {document_id}") from None
         logger.info("deleted document=%s", document_id)
         return DeletedDocument(document_id=document_id, name=name)
 

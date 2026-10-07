@@ -3516,11 +3516,16 @@ async def delete_document(page: Page, base: str, docs: dict[str, str], pdf: Path
     expect(deletes == [], f"cancelling sent {deletes}")
     expect("delete-me.pdf" in await listed_names_join(page), "the row vanished on cancel")
 
-    # Confirm: the row goes, the toast names the paper, and the rail still counts.
+    # Confirm: the open paper's row goes, the toast names the paper, and the rail still counts.
+    # The paper is deleted while it is the open one, so the page must land back on home (corpus view),
+    # not flash the missing view for a document that was just deleted under the route.
+    await page.evaluate(f"location.hash = '#/doc/{doc_id}'")
+    await page.wait_for_selector("#document-view:not(.hidden)")
     await row.locator(".doc-delete").click()
     await page.wait_for_selector("#delete-dialog[open]")
     await page.click("#delete-confirm")
     await page.wait_for_selector("#delete-dialog[open]", state="detached")
+    await page.wait_for_selector("#corpus-view:not(.hidden)")
     for _ in range(50):
         if "delete-me.pdf" not in await listed_names_join(page):
             break

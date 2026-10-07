@@ -1291,8 +1291,9 @@ its declared units and retrieval words, the papers with results under it, and a 
 -- the same text `paperfacts prompts` prints, the system prompts or one field's question, fetched when opened.
 
 The HTTP interface names the profile with `?profile=<name>` on every route whose answer depends on one:
-`/api/profile`, `/api/documents` (upload, run, run-all, delete, and every per-document read but the parse artifact and
-the page images, which are the document's under every profile), `/api/dataset` and `/api/dataset.xlsx`. Absent
+`/api/profile`, `/api/documents` (upload, run, run-all, and every per-document read but the parse artifact and
+the page images, which are the document's under every profile; the per-document delete is also profile-free, since
+the directory it removes holds every profile's results at once), `/api/dataset` and `/api/dataset.xlsx`. Absent
 means the default, and every such response names the profile that answered in an `X-PaperFacts-Profile` header,
 so a caller that forgot the parameter can tell. `GET /api/profiles` lists the served profiles (with how many documents each has finished,
 whether each is runnable and whether its file changed on disk) and the invalid files; `GET /api/profiles/<name>`
