@@ -281,7 +281,7 @@ this file is the part that is easy to get wrong.
 
 - No build step: ES modules plus CSS custom properties, no framework, no external fonts (the server may be
   offline). Modules are `state`, `api`, `html`, `router`, `profiles`, `profile`, `library`, `upload`, `document`, `tabs`, `table`,
-  `fieldpicker`, `tsv`, `corpus`, `explorer`, `filters`, `facts`, `figures`, `samples`, `job`, `viewer`, `theme`, `check`;
+  `fieldpicker`, `tsv`, `corpus`, `explorer`, `filters`, `facts`, `figures`, `samples`, `job`, `viewer`, `panes`, `theme`, `check`;
   `app.js` is only the entry point.
   `profile.js`'s `renderDefinition(root, definition, …)` draws any profile definition (the read-only page,
   `(#/p/<name>)/profile`, and the check page's preview); its fields table takes its columns from the definition's

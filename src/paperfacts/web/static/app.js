@@ -8,7 +8,8 @@
 // column model, sorting and the density switch), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
 // library-wide results table), explorer (its search box, the home query and the flattened rows), filters (its filter
 // panel), facts (fact comparison), figures (chart readings), samples (sample records), job
-// (job progress), viewer (page-level provenance), theme (the manual light/dark override), check (the page that checks a pasted profile).
+// (job progress), viewer (page-level provenance), panes (the drag seams' width controller), theme (the manual
+// light/dark override), check (the page that checks a pasted profile).
 
 import { api } from "./api.js";
 import { setupCheck, showCheck } from "./check.js";
@@ -24,6 +25,7 @@ import {
   setupRailToggle,
   setupRunAll,
 } from "./library.js";
+import { installReclamp, setupRailResizer } from "./panes.js";
 import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
 import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
@@ -69,6 +71,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupThemeToggle();
   setupSkipLink();
   setupRailToggle();
+  setupRailResizer();
+  installReclamp();
   applyStoredDensity();
   setupUpload();
   setupRunAll();
