@@ -16,6 +16,7 @@ so the tests here watch "is the mapping right", not the business outcome:
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import threading
 from collections.abc import Iterator
@@ -1047,3 +1048,66 @@ def test_health_says_when_the_profile_file_changed_on_disk(settings: Settings, t
     gone = client.get("/api/health").json()["profile_on_disk_changed"]
 
     assert (before, after, gone) == (False, True, True)
+
+
+# ---- delete ---------------------------------------------------------------------------------------------
+
+
+def test_delete_removes_the_document_and_answers_its_name(
+    client: TestClient, library: Library, uploaded: str, pdf_bytes: bytes
+):
+    response = client.delete(f"/api/documents/{uploaded}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["document_id"] == uploaded
+    assert body["name"] == "paper.pdf"
+    assert not library.layout.doc_dir(uploaded).exists()
+    assert uploaded not in {doc["document_id"] for doc in client.get("/api/documents").json()}
+
+
+def test_delete_of_an_unknown_or_malformed_id_is_not_found(client: TestClient):
+    for bad_id in (UNKNOWN_ID, "zz"):
+        response = client.delete(f"/api/documents/{bad_id}")
+        assert response.status_code == 404
+        assert response.json() == {"detail": f"No document {bad_id}"}
+
+
+def test_a_second_delete_of_the_same_document_is_not_found(client: TestClient, uploaded: str):
+    assert client.delete(f"/api/documents/{uploaded}").status_code == 200
+
+    response = client.delete(f"/api/documents/{uploaded}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": f"No document {uploaded}"}
+
+
+def test_delete_is_refused_while_a_job_is_still_active(settings: Settings, pdf_bytes: bytes, tco_profile):
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = JobManager(runner, stage_names())
+    try:
+        with TestClient(create_app(settings, jobs=manager)) as client:
+            document_id = upload(client, pdf_bytes)["document"]["document_id"]
+            assert runner.entered.wait(timeout=2.0)
+            library = Library(settings, tco_profile)
+
+            response = client.delete(f"/api/documents/{document_id}")
+
+            assert response.status_code == 409
+            assert response.json() == {"detail": "A job is still queued or running for this document"}
+            assert library.layout.doc_dir(document_id).exists()
+            gate.set()  # leaving the app waits for the running job, so it must be able to finish
+    finally:
+        gate.set()
+    wait_for_status(manager, manager.all_jobs()[0].job_id, "done")
+
+
+def test_delete_leaves_the_llm_cache_alone(client: TestClient, library: Library, uploaded: str, pdf_bytes: bytes):
+    cache_file = library.layout.llm_cache_dir() / f"{hashlib.sha256(pdf_bytes).hexdigest()}.json"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text("{}", encoding="utf-8")
+
+    client.delete(f"/api/documents/{uploaded}")
+
+    assert cache_file.exists()

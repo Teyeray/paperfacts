@@ -3490,6 +3490,59 @@ async def explore_narrow(page: Page, base: str, docs: dict[str, str], _: Path) -
     await wait_ids(page, ["S-P2"])
 
 
+@check("the rail's delete asks first, cancels without asking the server, then deletes its own upload")
+async def delete_document(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
+    await home(page, base)
+    own = make_blank_pdf(pdf.parent / "delete-me.pdf", [(465.0, 665.0)])  # a size no seed uses
+    async with page.expect_response(lambda response: "/api/documents?" in response.url):
+        await page.set_input_files("#file-input", str(own))
+    await jobs_idle(page)  # the delete must not race the upload's job: a busy paper is refused (409)
+    listing = await page.evaluate("fetch('/api/documents').then((response) => response.json())")
+    mine = [doc for doc in listing if doc["name"] == "delete-me.pdf"]
+    expect(len(mine) == 1, f"the upload is not in the list once: {[d['name'] for d in listing]}")
+    doc_id = mine[0]["document_id"]
+    row = page.locator(f'#doc-list li:has(.doc-item[data-focus="doc:{doc_id}"])')
+
+    deletes: list[str] = []
+    page.on("request", lambda request: deletes.append(request.url) if request.method == "DELETE" else None)
+
+    # Cancel first: the dialog opens and names the paper, but no request may leave.
+    await row.locator(".doc-delete").click()
+    await page.wait_for_selector("#delete-dialog[open]")
+    message = await page.text_content("#delete-message") or ""
+    expect("delete-me.pdf" in message and "不可恢复" in message, f"the dialog says {message!r}")
+    await page.click('#delete-dialog [data-action="close"]:not(.dialog-close)')
+    await page.wait_for_function("!document.getElementById('delete-dialog').open")
+    expect(deletes == [], f"cancelling sent {deletes}")
+    expect("delete-me.pdf" in await listed_names_join(page), "the row vanished on cancel")
+
+    # Confirm: the row goes, the toast names the paper, and the rail still counts.
+    await row.locator(".doc-delete").click()
+    await page.wait_for_selector("#delete-dialog[open]")
+    await page.click("#delete-confirm")
+    await page.wait_for_selector("#delete-dialog[open]", state="detached")
+    for _ in range(50):
+        if "delete-me.pdf" not in await listed_names_join(page):
+            break
+        await page.wait_for_timeout(200)
+    expect("delete-me.pdf" not in await listed_names_join(page), "the row stayed after the delete")
+    toasts = await page.locator(".toast").all_text_contents()
+    expect(any("已删除「delete-me.pdf」" in toast for toast in toasts), f"no toast: {toasts}")
+    count = await page.text_content("#doc-count")
+    expect(count is not None and "delete-me" not in count, f"the count reads {count!r}")
+
+    # A stale link to the deleted paper shows the missing view.
+    await page.evaluate(f"location.hash = '#/doc/{doc_id}'")
+    await page.wait_for_selector("text=找不到这篇文档")
+    listing = await page.evaluate("fetch('/api/documents').then((response) => response.json())")
+    expect(all(doc["document_id"] != doc_id for doc in listing), "the server still lists the deleted id")
+    expect(deletes and len(deletes) == 1, f"exactly one DELETE should have left: {deletes}")
+
+
+async def listed_names_join(page: Page) -> str:
+    return "|".join(await listed_names(page))
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--headed", action="store_true")

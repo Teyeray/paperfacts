@@ -23,6 +23,7 @@ import {
   setupLibraryDisclosure,
   setupLibraryFilter,
   setupRailToggle,
+  setupDelete,
   setupRunAll,
 } from "./library.js";
 import { installReclamp, setupRailResizer } from "./panes.js";
@@ -120,6 +121,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyStoredDensity();
   setupUpload();
   setupRunAll();
+  setupDelete();
   setupLibraryFilter();
   setupLibraryDisclosure();
   setupSwitcher();

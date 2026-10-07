@@ -314,6 +314,11 @@ this file is the part that is easy to get wrong.
   dialog and `api.profileUpload` (an XHR with `profileUrl`'s address and `request()`'s profile check); the hidden
   `#file-input` still uploads at once, with the dialog's options as ticked, because the e2e checks and scripts feed it.
   「忽略缓存」 for a bulk run is the run-all confirmation's own box, never the upload dialog's.
+- The rail row is two sibling buttons inside `li.doc-row` (a button cannot hold a button): `.doc-item`
+  (navigates, markup pinned by e2e selectors) and `.doc-delete` (hover/focus-revealed, `删除：<name>`), opened on
+  `#delete-dialog` (mirrors `#run-all-dialog`'s lifecycle in `library.js`'s `setupDelete`).
+  `DELETE /api/documents/{id}` is profile-free (uses `default_library` like the artifact/page routes), removes the
+  one shared document directory, and 409s while `JobManager.is_active` sees a queued/running job for it.
 - A results table is a list of columns `{header, head, html(item), text(item)}` (`table.js`); the rendered
   rows and the clipboard copy are both built from that one list. A sortable column also has `key` (a field's name, or
   `paper` / `entity` / `counts`) and `sort(item)`; the home table sorts its items (`sortItems`, blanks last) before

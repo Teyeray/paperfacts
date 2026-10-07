@@ -103,6 +103,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .primary:hover { background: color-mix(in oklab, var(--accent) 92%, var(--ink)); }
 .primary:disabled { opacity: .5; cursor: default; }
+/* A destructive confirmation: the same shape as 开始处理, the danger colour instead. */
+.primary.danger { background: var(--bad); border-color: var(--bad); }
+.primary.danger:hover { background: color-mix(in oklab, var(--bad) 88%, var(--ink)); }
 /* The same shape, outlined, so a second action (the paid chart read) never looks like the default. */
 .secondary {
   background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius);
@@ -253,7 +256,14 @@ body.pane-dragging { cursor: col-resize; user-select: none; }
 @media (min-width: 961px) { .doc-list-wrap > summary { display: none; } }
 .doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .doc-list-empty { padding: 8px 10px; }
-.doc-item { display: block; width: 100%; text-align: left; background: none; border-radius: var(--radius); padding: var(--row-pad); border: 1px solid transparent; }
+.doc-item { display: block; flex: 1; min-width: 0; text-align: left; background: none; border-radius: var(--radius); padding: var(--row-pad); border: 1px solid transparent; }
+/* One row, two controls: the name area navigates, the bin deletes after asking. The bin is a
+   sibling (a button cannot hold a button), hidden until hover or focus but always focusable. */
+.doc-row { display: flex; gap: 2px; align-items: stretch; }
+.doc-row .doc-item { flex: 1; min-width: 0; }
+.doc-delete { opacity: 0; align-self: center; }
+.doc-row:hover .doc-delete, .doc-delete:focus-visible { opacity: 1; }
+@media (hover: none) { .doc-delete { opacity: 1; } }
 .doc-item:hover { background: var(--paper); border-color: var(--line); }
 .doc-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .doc-item.active { background: var(--paper); border-color: var(--line-strong); box-shadow: inset 3px 0 0 var(--accent), var(--shadow-1); }
