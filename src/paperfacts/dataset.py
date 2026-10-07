@@ -294,13 +294,15 @@ def consolidate_document(
             if field.field == spec.name
         ]
         # Also collect from samples where the model incorrectly placed paper-level fields
-        evidence.extend([
-            (backend, field)
-            for backend, lane in lanes.items()
-            for sample in lane.samples
-            for field in sample.fields
-            if field.field == spec.name
-        ])
+        evidence.extend(
+            [
+                (backend, field)
+                for backend, lane in lanes.items()
+                for sample in lane.samples
+                for field in sample.fields
+                if field.field == spec.name
+            ]
+        )
         paper[spec.name] = decide_cell(
             spec,
             evidence,

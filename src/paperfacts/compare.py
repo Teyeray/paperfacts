@@ -231,15 +231,23 @@ def compare_lanes(
     # sample.fields (where the model may have incorrectly placed them). The comparison needs to see all the
     # evidence, even when misplaced, to create the comparisons that decide_cell requires.
     paper_fields_a = list(lane_a.paper.fields if lane_a.paper else ())
-    paper_fields_a.extend([
-        f for sample in lane_a.samples for f in sample.fields
-        if any(spec.name == f.field for spec in profile.paper_fields)
-    ])
+    paper_fields_a.extend(
+        [
+            f
+            for sample in lane_a.samples
+            for f in sample.fields
+            if any(spec.name == f.field for spec in profile.paper_fields)
+        ]
+    )
     paper_fields_b = list(lane_b.paper.fields if lane_b.paper else ())
-    paper_fields_b.extend([
-        f for sample in lane_b.samples for f in sample.fields
-        if any(spec.name == f.field for spec in profile.paper_fields)
-    ])
+    paper_fields_b.extend(
+        [
+            f
+            for sample in lane_b.samples
+            for f in sample.fields
+            if any(spec.name == f.field for spec in profile.paper_fields)
+        ]
+    )
 
     comparisons += _compare_records(
         PAPER_SCOPE,

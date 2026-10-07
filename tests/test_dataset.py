@@ -1140,9 +1140,7 @@ def test_paper_level_fields_in_samples_reach_paper_row():
     options = comparison_options()
     report = compare_lanes(lane_a, lane_b, matching, options)
 
-    document = DocumentInput(
-        document_id="a" * 64, sha256="a" * 64, pdf_path=Path("test.pdf"), display_name="test.pdf"
-    )
+    document = DocumentInput(document_id="a" * 64, sha256="a" * 64, pdf_path=Path("test.pdf"), display_name="test.pdf")
 
     lanes = {lane_a.backend: lane_a, lane_b.backend: lane_b}
     result = consolidate_document(document, lanes, report, options)
@@ -1150,4 +1148,3 @@ def test_paper_level_fields_in_samples_reach_paper_row():
     # The paper-level field should reach the paper row
     assert result.paper_row.get("component") == "ITO 90:10 wt%"
     assert result.paper_row.get("component_status") is None  # No status = trusted agreement
-
