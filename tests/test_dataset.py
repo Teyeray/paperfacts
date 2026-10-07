@@ -1107,44 +1107,18 @@ def test_on_a_field_with_a_measurement_axis_different_numbers_still_separate_mea
 
 
 def test_paper_level_fields_in_samples_reach_paper_row():
-    """When the model places a paper-level field under samples, it should still reach the paper row."""
-    from paperfacts.records import FieldValue
+    """When the model places a paper-level field under samples, it should still reach the paper row.
 
-    # Create field values with source_ids (as real extractions would have)
-    field_a = FieldValue(
-        field="component",
-        value_raw="ITO 90:10 wt%",
-        grounded=True,
-        source_ids=("mineru_p0_b1",),
-        conditions=(),
-        applies_to_all_samples=False,
+    This addresses the colleague's observation that target composition (靶材成分) appears in the
+    extraction labels but not in the target column. When the model incorrectly places a paper-level
+    field under a sample, we now recover it and include it in the paper row.
+    """
+    # Both lanes extract component (paper-level field) under samples - this is the bug scenario
+    result = paired(
+        [value("component", "ITO 90:10 wt%")], [value("component", "ITO 90:10 wt%", backend="paddleocr_vl")]
     )
 
-    field_b = FieldValue(
-        field="component",
-        value_raw="ITO 90:10 wt%",
-        grounded=True,
-        source_ids=("paddleocr_vl_p0_b1",),
-        conditions=(),
-        applies_to_all_samples=False,
-    )
-
-    lane_a = make_lane(backend="mineru", samples=[make_sample("S1", [field_a])])
-    lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("S1", [field_b])])
-
-    matching = SampleMatching(
-        pairs=(SampleMatch(a_id="S1", b_id="S1", confidence=1.0, justification="exact", method="exact"),),
-        unmatched_a=(),
-        unmatched_b=(),
-    )
-    options = comparison_options()
-    report = compare_lanes(lane_a, lane_b, matching, options)
-
-    document = DocumentInput(document_id="a" * 64, sha256="a" * 64, pdf_path=Path("test.pdf"), display_name="test.pdf")
-
-    lanes = {lane_a.backend: lane_a, lane_b.backend: lane_b}
-    result = consolidate_document(document, lanes, report, options)
-
-    # The paper-level field should reach the paper row
-    assert result.paper_row.get("component") == "ITO 90:10 wt%"
-    assert result.paper_row.get("component_status") is None  # No status = trusted agreement
+    # The paper-level field should reach the paper row despite being extracted under samples
+    assert result.paper_row["component"] == "ITO 90:10 wt%"
+    # Agreement between lanes means no status field (trusted)
+    assert "component_status" not in result.paper_row or result.paper_row["component_status"] is None
