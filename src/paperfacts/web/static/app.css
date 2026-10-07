@@ -196,6 +196,30 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 @media (max-width: 520px) { .content { padding: 16px 14px 48px; } .topbar { padding: 0 14px 0 10px; } }
 
+/* ---------- pane resizers ---------- */
+/* Out-of-flow strips over the two seams: they paint nothing at rest (the borders remain the seam), tint on
+   hover/focus/while dragging, and read the very custom property they drag — so the strip rides the seam with
+   no layout shift and no new grid track. Fixed positioning is safe: no ancestor uses transform. */
+.rail-resizer, .pane-resizer {
+  position: fixed; top: var(--topbar); bottom: 0; width: 8px; z-index: 4;
+  cursor: col-resize; touch-action: none; background: none; border: 0;
+}
+.rail-resizer { left: calc(var(--rail) - 4px); }
+.pane-resizer { right: calc(var(--viewer-pane) - 4px); } /* right edge of the fixed strip = the seam */
+.rail-resizer:hover, .rail-resizer:focus-visible,
+.pane-resizer:hover, .pane-resizer:focus-visible,
+body.pane-dragging .rail-resizer.is-active, body.pane-dragging .pane-resizer.is-active {
+  background: color-mix(in oklab, var(--accent) 35%, transparent); /* the 10th and last allowed transparent */
+}
+.rail-resizer:focus-visible, .pane-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Gates: the rail seam only exists wide and expanded; the pane seam only from 1280 and expanded. */
+.shell[data-rail="collapsed"] .rail-resizer { display: none; }
+.pane-resizer { display: none; }
+@media (max-width: 960px) { .rail-resizer { display: none; } }
+@media (min-width: 1280px) { .document:not([data-viewer="collapsed"]) .pane-resizer { display: block; } }
+/* While dragging: the col-resize cursor everywhere and no accidental text selection under the pointer. */
+body.pane-dragging { cursor: col-resize; user-select: none; }
+
 .linklike { background: none; border: 0; padding: 0 2px; color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
 .upload-hint { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
 .upload-profile { color: var(--ink-2); }

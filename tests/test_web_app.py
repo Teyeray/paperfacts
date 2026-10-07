@@ -817,6 +817,7 @@ def test_the_index_page_is_served_at_the_root(client: TestClient):
             "samples",
             "job",
             "viewer",
+            "panes",
             "theme",
         )
     ],

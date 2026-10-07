@@ -753,6 +753,118 @@ async def rail_collapse(page: Page, base: str, docs: dict[str, str], _: Path) ->
     expect(await page.evaluate(CONTENT_WIDTH) < await page.evaluate(VIEWPORT_WIDTH), "the expanded rail has no width")
 
 
+RAIL_WIDTH = "document.querySelector('.rail').getBoundingClientRect().width"
+
+
+@check("dragging the rail seam resizes the rail and remembers it")
+async def rail_drag(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    box = await page.locator(".rail-resizer").bounding_box()
+    before = await page.evaluate(RAIL_WIDTH)
+    expect(before == 300, f"the rail does not start at its 300px default: {before}")
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(
+        box["x"] + box["width"] / 2 + 120, 450, steps=5
+    )  # clamps at the live max (334 @1440/pane 480)
+    live = await page.evaluate(RAIL_WIDTH)
+    expect(live > before, f"the rail did not widen while dragging: {before} -> {live}")
+    expect(await page.evaluate("window.getSelection().toString()") == "", "dragging selected text")
+    await page.mouse.up()
+    after = await page.evaluate(RAIL_WIDTH)
+    stored = await page.evaluate("localStorage.getItem('paperfacts.rail-width')")
+    expect(stored == str(round(after)), f"the dragged width was not remembered: {after} vs {stored}")
+    await page.reload()
+    await page.wait_for_selector("#rail-search")
+    kept = await page.evaluate(RAIL_WIDTH)
+    expect(abs(kept - after) <= 1, f"reload dropped the rail width: {after} -> {kept}")
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")  # leave defaults for the later checks
+
+
+@check("the rail drag clamps at its bounds", width=1920, height=1080)
+async def rail_drag_clamp(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+
+    async def seam() -> tuple[float, float]:
+        box = await page.locator(".rail-resizer").bounding_box()
+        return box["x"] + box["width"] / 2, 450
+
+    mid = await seam()
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] - 400, 450, steps=5)
+    await page.mouse.up()
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 280,
+        f"the rail went below its 280px floor: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    mid = await seam()  # the seam moved with the rail: re-aim before dragging the other way
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] + 900, 450, steps=5)
+    await page.mouse.up()
+    # No viewer pane on home, so the live max is the 600px cap itself.
+    expect(await page.evaluate(RAIL_WIDTH) == 600, f"the rail passed its 600px cap: {await page.evaluate(RAIL_WIDTH)}")
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")
+
+
+@check("the rail seam is hidden when the rail is collapsed or the shell is stacked")
+async def rail_drag_hidden(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    await page.click("#rail-toggle")
+    expect(await page.is_hidden(".rail-resizer"), "the seam handle shows on a collapsed rail")
+    await page.keyboard.press("[")
+    expect(not await page.is_hidden(".rail-resizer"), "the seam handle did not come back with the rail")
+    await page.set_viewport_size({"width": 390, "height": 844})
+    expect(await page.is_hidden(".rail-resizer"), "the seam handle shows on a stacked shell")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+
+
+@check("the rail seam resizes from the keyboard and resets on double-click")
+async def rail_resize_keyboard(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    await page.focus(".rail-resizer")
+    expect(await page.get_attribute(".rail-resizer", "role") == "separator", "the handle is no separator")
+    expect(await page.get_attribute(".rail-resizer", "aria-orientation") == "vertical", "no vertical orientation")
+    await page.keyboard.press("ArrowRight")
+    await page.keyboard.press("ArrowRight")
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 332,
+        f"two ArrowRight did not widen by 32px: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    await page.keyboard.press("Home")
+    expect(await page.evaluate(RAIL_WIDTH) == 280, "Home did not reach the 280px floor")
+    await page.keyboard.press("End")
+    expect(await page.evaluate(RAIL_WIDTH) == 600, "End did not reach the 600px cap")
+    await page.dblclick(".rail-resizer")
+    expect(await page.evaluate(RAIL_WIDTH) == 300, "double-click did not reset to 300px")
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.rail-width')") is None, "the reset kept the stored width"
+    )
+
+
+@check("shrinking the viewport re-clamps a stored rail width and never overflows")
+async def rail_viewport_shrink(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.rail-width', '600')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    # With the viewer pane live at 480, the boot clamp already caps the rail at 1440-56-570-480 = 334.
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 334,
+        f"the stored 600px was not clamped at boot: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)  # one rAF tick for the debounced re-clamp
+    expect(
+        await page.evaluate(RAIL_WIDTH) <= 314,
+        f"the rail was not re-clamped after the shrink: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+    expect(overflow <= 1, f"the page overflows {overflow}px sideways after the shrink")
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")
+
+
 @check("the topbar's 总表 link is on every page, marks only home, and returns from a document to the home table")
 async def topbar_home(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     nav = page.locator('.topnav [data-nav="home"]')
