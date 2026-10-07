@@ -284,13 +284,12 @@ body.pane-dragging { cursor: col-resize; user-select: none; }
 
 /* ---------- document page: left rail + middle content + persistent right PDF pane (≥1280 px) ----------
    The summary sits in flow at the top of the middle column at every width; the viewer moves into a sticky
-   pane on the right from 1280 px. The pane's state is one attribute on .document (document.js keeps it in
-   localStorage); collapsed, the pane hides and a fixed ghost button offers it back. The tab bar sticks
+   pane on the right from 1280 px. The pane's state is one attribute on .document, toggled and remembered
+   by the topbar's #viewer-toggle (the rail toggle's counterpart). The tab bar sticks
    under the topbar on a wide screen; what scrolls, or sticks under the bar, clears both
    through --doc-sticky. */
 .document { --tab-bar: 0px; --doc-sticky: calc(var(--topbar) + var(--tab-bar)); display: grid; grid-template-columns: minmax(0, 1fr); }
 .viewer-pane { min-width: 0; }
-.viewer-expand { display: none; }
 .doc-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4) var(--space-5); align-items: start; }
 .doc-summary { min-width: 0; padding: var(--space-4) 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
 .doc-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3) var(--space-5); margin: var(--space-4) 0 0; }
@@ -330,11 +329,10 @@ body.pane-dragging { cursor: col-resize; user-select: none; }
   .viewer-pane .viewer { position: static; border: 0; border-radius: 0; box-shadow: none; }
   /* Collapsed: the pane hides; a fixed ghost button at the content's top right offers it back. */
   .document[data-viewer="collapsed"] .viewer-pane { display: none; }
-  .document[data-viewer="collapsed"] .viewer-expand {
-    display: inline-flex; position: fixed; top: calc(var(--topbar) + var(--space-3)); right: var(--space-4); z-index: 6;
-    background: var(--surface); border-color: var(--line-strong); color: var(--ink-2); box-shadow: var(--shadow-2);
-  }
 }
+/* The viewer toggle rides with the pane: only a wide-screen document page offers it (app.js keeps the
+   hidden attribute in step; the media query is the no-JS backstop). */
+@media (max-width: 1279.98px) { #viewer-toggle { display: none; } }
 
 /* ---------- document header ---------- */
 .doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 20px; flex-wrap: wrap; }

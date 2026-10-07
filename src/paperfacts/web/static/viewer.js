@@ -289,37 +289,11 @@ function svgTitle(text) {
 // The right pane's collapsed state: one attribute on .document, remembered per browser like the rail's.
 const VIEWER_KEY = "paperfacts.viewer-collapsed";
 
-// Called with each document render: applies the remembered state and wires the pane's two buttons.
+// Called with each document render: applies the remembered state. Collapse/expand itself lives in the
+// topbar's #viewer-toggle (app.js wires it once, like the rail's #rail-toggle); the pane carries no button.
 export function setupViewerPane(view, node) {
-  setupViewerPaneResizer(view, node); // the cloned seam handle: per-render wiring, like the two buttons below
-  // On collapse the focused ✕ is display:none'd with the pane, so focus would fall to <body>:
-  // hand it to the expand button, the continuation of this action. The ✕ exposes the pane state.
-  const collapse = node.querySelector('[data-action="collapse-viewer"]');
-  const expand = node.querySelector('[data-action="expand-viewer"]');
-  const sync = () => {
-    const collapsed = view.dataset.viewer === "collapsed";
-    collapse?.setAttribute("aria-expanded", String(!collapsed));
-    if (collapse) {
-      const word = collapsed ? "展开预览" : "收起预览";
-      collapse.title = word;
-      collapse.setAttribute("aria-label", word);
-    }
-  };
-  const apply = (collapsed) => {
-    if (collapsed) view.dataset.viewer = "collapsed";
-    else view.dataset.viewer = "";
-    sync();
-  };
-  apply(readStored(VIEWER_KEY) === "1");
-  collapse?.addEventListener("click", () => {
-    apply(true);
-    writeStored(VIEWER_KEY, "1");
-    expand?.focus();
-  });
-  expand?.addEventListener("click", () => {
-    apply("");
-    writeStored(VIEWER_KEY, "0");
-  });
+  setupViewerPaneResizer(view, node);
+  view.dataset.viewer = readStored(VIEWER_KEY) === "1" ? "collapsed" : "";
 }
 
 // In the stacked layout (and for the results table at any width) the viewer sits below what was clicked:
