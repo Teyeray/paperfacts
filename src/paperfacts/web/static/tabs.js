@@ -13,16 +13,29 @@ export const TABS = [
 ];
 
 // Shows the tab's panel and marks its button; an unknown key (or none) falls back to the results table.
+// Sticky-preservation rule: at >=961px the tab bar is position:sticky under the topbar. Switching to a much
+// shorter panel can shrink the document so far that the browser clamps the scroll position below the bar's
+// natural offset, un-pinning it -- the bar visibly jumps down. When the bar was pinned before the swap, pin
+// it again after (scrolling so its top sits at the topbar edge); if the document is now too short to scroll
+// that far, the browser clamps and the bar rests naturally, which is correct.
 export function activateTab(key) {
   if (!TABS.some((tab) => tab.key === key)) key = "results";
   state.tab = key;
   const view = document.getElementById("document-view");
+  const bar = view.querySelector('[data-slot="tabs"]');
+  const wide = matchMedia("(min-width: 961px)").matches;
+  const topbar = 56;
+  const wasPinned = wide && bar != null && bar.getBoundingClientRect().top <= topbar + 1;
   for (const tab of TABS) {
     const selected = tab.key === key;
     const button = view.querySelector(`[data-slot="tabs"] [data-tab="${tab.key}"]`);
     button?.setAttribute("aria-selected", String(selected));
     button?.setAttribute("tabindex", selected ? "0" : "-1"); // roving tabindex: only the selected tab is in the tab order
     view.querySelector(`[data-panel="${tab.key}"]`)?.toggleAttribute("hidden", !selected);
+  }
+  if (wasPinned && bar && bar.getBoundingClientRect().top > topbar) {
+    const barDocTop = bar.getBoundingClientRect().top + window.scrollY;
+    window.scrollTo(0, Math.max(0, barDocTop - topbar));
   }
 }
 
