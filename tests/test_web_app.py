@@ -18,8 +18,11 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
+import shutil
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -32,6 +35,7 @@ from paperfacts.models import BACKENDS, Backend, ParsedArtifact
 from paperfacts.profile import DomainProfile
 from paperfacts.profile_loader import load_profile
 from paperfacts.records import LaneExtraction
+from paperfacts.web import documents as web_documents
 from paperfacts.web.app import create_app, pipeline_runner
 from paperfacts.web.documents import Library
 from paperfacts.web.jobs import Job, JobManager, JobRunner
@@ -1080,6 +1084,48 @@ def test_a_second_delete_of_the_same_document_is_not_found(client: TestClient, u
 
     assert response.status_code == 404
     assert response.json() == {"detail": f"No document {uploaded}"}
+
+
+def test_a_vanished_directory_answers_not_found(
+    client: TestClient, library: Library, uploaded: str, monkeypatch: pytest.MonkeyPatch
+):
+    """A concurrent delete (another tab, another client) can remove the directory between the route's
+    existence check and the rmtree; the document is gone either way, so the answer is the same 404."""
+
+    def vanish_then_raise(doc_dir):
+        shutil_rmtree(doc_dir)
+        raise FileNotFoundError(doc_dir)
+
+    shutil_rmtree = shutil.rmtree
+    monkeypatch.setattr(web_documents.shutil, "rmtree", vanish_then_raise)
+
+    response = client.delete(f"/api/documents/{uploaded}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": f"No document {uploaded}"}
+
+
+def test_two_concurrent_deletes_answer_one_ok_and_one_not_found(client: TestClient, uploaded: str):
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = sorted(
+            future.result().status_code
+            for future in [pool.submit(client.delete, f"/api/documents/{uploaded}") for _ in range(2)]
+        )
+
+    assert statuses == [200, 404]
+
+
+def test_the_frontend_profile_free_regex_admits_delete_but_not_run_all():
+    """api.js routes paths it calls profile-free through plain ``api()``; the id is 16 hex, so the bare
+    form must not swallow the profile-dependent collection routes like POST /api/documents/run-all."""
+    source = (Path(__file__).parents[1] / "src" / "paperfacts" / "web" / "static" / "api.js").read_text(
+        encoding="utf-8"
+    )
+    pattern = re.compile(re.search(r"const PROFILE_FREE =\n  /(.*?)/;", source, re.DOTALL).group(1))
+
+    assert pattern.match(f"/api/documents/{UNKNOWN_ID}")
+    assert not pattern.match("/api/documents/run-all")
+    assert not pattern.match("/api/documents")
 
 
 def test_delete_is_refused_while_a_job_is_still_active(settings: Settings, pdf_bytes: bytes, tco_profile):
