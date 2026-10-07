@@ -226,6 +226,18 @@
   </div>
 </dialog>
 
+<dialog class="dialog confirm-dialog" id="delete-dialog" aria-labelledby="delete-title">
+  <div class="dialog-head">
+    <h2 id="delete-title">删除文档</h2>
+    <button class="ghost dialog-close" type="button" data-action="close" aria-label="关闭">✕</button>
+  </div>
+  <p class="dialog-text" id="delete-message"></p>
+  <div class="dialog-actions">
+    <button class="secondary" type="button" data-action="close">取消</button>
+    <button class="primary danger" id="delete-confirm" type="button">删除</button>
+  </div>
+</dialog>
+
 <script type="module" src="/app.js"></script>
 </body>
 </html>

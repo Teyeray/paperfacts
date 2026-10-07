@@ -383,3 +383,15 @@ def test_an_uploaded_document_can_be_rerun(client: TestClient, pdf_bytes: bytes)
 
     assert document["runnable"] is True
     assert [stage["name"] for stage in document["stages"]] == list(stage_names())
+
+
+def test_a_cross_origin_delete_is_refused(client: TestClient, library: Library, pdf_bytes: bytes):
+    document = client.post("/api/documents", files={"file": pdf_part(pdf_bytes)}).json()["document"]
+
+    response = client.delete(
+        f"/api/documents/{document['document_id']}", headers={"Origin": "https://elsewhere.example"}
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Cross-origin request refused"
+    assert library.layout.doc_dir(document["document_id"]).exists()

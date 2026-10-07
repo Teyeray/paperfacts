@@ -586,3 +586,22 @@ def test_an_active_job_is_never_pruned(monkeypatch):
     finally:
         gate.set()
     wait_for_status(manager, slow.job_id, "done")
+
+
+# ---- is_active -----------------------------------------------------------------------
+
+
+def test_is_active_tracks_queued_and_running_jobs_only():
+    gate = threading.Event()
+    runner = RecordingRunner(gate=gate)
+    manager = manager_for(runner)
+    try:
+        job = manager.submit("doc-1", profile="demo")
+        assert runner.entered.wait(timeout=2.0)
+        assert manager.is_active("doc-1")
+        assert not manager.is_active("doc-other")
+        assert not manager.is_active("no-such-doc")
+    finally:
+        gate.set()
+    wait_for_status(manager, job.job_id, "done", "failed")
+    assert not manager.is_active("doc-1")
