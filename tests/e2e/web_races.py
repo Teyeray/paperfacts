@@ -39,8 +39,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/, for the 
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport, FieldComparison
 from paperfacts.config import Settings
+from paperfacts.figures import FigureReading
 from paperfacts.matching import SampleMatch, SampleMatching
-from paperfacts.models import BACKENDS, PageGeometry, ParsedArtifact
+from paperfacts.models import BACKENDS, NormalizedBBox, PageGeometry, ParsedArtifact
 from paperfacts.readings import StoredReadings
 from paperfacts.storage import document_key
 from paperfacts.web.app import create_app
@@ -362,6 +363,30 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     )
     docs["U"] = seed_document(library, root, 27, "U 还没处理完的论文.pdf", samples=1, comparisons=1, finished=False)
     docs["W"] = seed_document(library, root, 28, "W Wu 氧化锌薄膜的电学性质.pdf", samples=1, comparisons=2, conflicts=1)
+    # A very tall results table, for the sticky tab-bar pin check: deep scrolling must survive a tab switch.
+    # Its charts are read too, so the figures panel has its own (shorter) body: tall, but shorter than results.
+    docs["T"] = seed_document(library, root, 30, "T 很长的结果表.pdf", samples=8, comparisons=250)
+    StoredReadings(
+        document_id=library.identity(docs["T"]).sha256,
+        figure_key=library.figure_key,
+        model="stub",
+        profile=profile.name,
+        readings=tuple(
+            FigureReading(
+                source_id="mineru_p1_b1",
+                page=1,
+                bbox=NormalizedBBox(x1=0.1, y1=0.1, x2=0.9, y2=0.9),
+                figure="Fig. 1",
+                caption="thickness against growth conditions",
+                panel=1,
+                field="thickness",
+                note=LONG_CONDITION,
+                y_raw=100.0 + n,
+                precision=0.1,
+            )
+            for n in range(24)
+        ),
+    ).write(library.layout.figures_path(docs["T"], library.figure_key, profile.name))
     # A paper whose charts were read under the current settings (and gave nothing): its button offers a re-read.
     docs["R"] = seed_document(library, root, 29, "R 已识图的论文.pdf", samples=1, comparisons=1)
     StoredReadings(
@@ -494,6 +519,23 @@ async def scroll_top(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     await page.evaluate(f"location.hash = '#/doc/{docs['B']}'")
     await page.wait_for_function("document.querySelector('#document-view h1')?.textContent.startsWith('B ')")
     expect(await page.evaluate("window.scrollY") == 0, "the new document kept the old scroll offset")
+
+
+@check("switching to a short tab keeps the tab bar pinned", width=1440, height=700)
+async def tab_bar_pin(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    async def bar_top() -> float:
+        return await page.evaluate(
+            "document.querySelector('#document-view [data-slot=tabs]').getBoundingClientRect().top"
+        )
+
+    await open_doc(page, base, docs["T"])
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    expect(await page.evaluate("window.scrollY") > 0, "there was room to scroll into the results table")
+    expect(await bar_top() <= 57, f"the tab bar starts pinned (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="figures"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned after switching to 图中读数 (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="results"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned after switching back to 结果表 (top {await bar_top()})")
 
 
 @check("a job finishing after the reader left does not redraw the page they left")
