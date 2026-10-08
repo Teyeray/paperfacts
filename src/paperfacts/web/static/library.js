@@ -5,7 +5,7 @@
 import { api, profileApi } from "./api.js";
 import { articleTag, escapeHtml, keepFocus, readStored, siTag, toast, writeStored } from "./html.js";
 import { profileTitle, servedProfile } from "./profiles.js";
-import { documentHash, navigate, reloadView } from "./router.js";
+import { documentHash, hashFor, navigate, reloadView } from "./router.js";
 import { STAGE_LABEL, STAGE_STATUS, STATUS, STATUS_ORDER, isActive, slot, state, viewShows } from "./state.js";
 
 // While anything is queued or running, the rail refreshes itself: a bulk run's progress would otherwise
@@ -209,6 +209,7 @@ export function renderLibrary() {
 // set as a block.
 function libraryItem(doc) {
   const li = document.createElement("li");
+  li.className = "doc-row";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "doc-item" + (doc.document_id === state.current ? " active" : "");
@@ -221,7 +222,16 @@ function libraryItem(doc) {
     if (!WIDE.matches) document.getElementById("doc-list-wrap").open = false;
     navigate(documentHash(doc.document_id));
   });
-  li.append(button);
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "ghost doc-delete";
+  del.dataset.focus = `doc-del:${doc.document_id}`;
+  const label = `删除：${doc.name}`;
+  del.setAttribute("aria-label", label);
+  del.title = label;
+  del.textContent = "🗑";
+  del.addEventListener("click", () => askDelete(doc));
+  li.append(button, del);
   return li;
 }
 
@@ -353,6 +363,44 @@ export function setupRunAll() {
       toast(`批量处理失败：${error.message}`, true);
     } finally {
       button.disabled = false;
+    }
+  });
+}
+
+// ---------- the single delete ----------
+//
+// Deletion crosses every profile and is permanent, so it always asks first and names the paper.
+// A busy paper is the server's reason to refuse (409); the toast carries its words. The deleted
+// row cannot take focus back (it is gone), so the rail's search field does.
+let pendingDelete = null;
+function askDelete(doc) {
+  pendingDelete = doc;
+  document.getElementById("delete-message").textContent =
+    `确定删除「${doc.name}」吗？所有领域的结果和原文 PDF 都会从磁盘上删除，不可恢复。`;
+  document.getElementById("delete-dialog").showModal();
+}
+export function setupDelete() {
+  const dialog = document.getElementById("delete-dialog");
+  const confirm = document.getElementById("delete-confirm");
+  for (const close of dialog.querySelectorAll('[data-action="close"]')) close.addEventListener("click", () => dialog.close());
+  confirm.addEventListener("click", async () => {
+    const doc = pendingDelete;
+    pendingDelete = null;
+    dialog.close();
+    confirm.disabled = true;
+    try {
+      const result = await api(`/api/documents/${doc.document_id}`, { method: "DELETE" });
+      toast(`已删除「${result.name}」`);
+      // The open paper cannot stay open once its files are gone: home is the deterministic answer
+      // (its missing-view copy already says a link may point at a deleted paper).
+      if (state.current === doc.document_id) navigate(hashFor({ profile: state.profileName }));
+      await loadLibrary();
+    } catch (error) {
+      toast(`删除失败：${error.message}`, true);
+      if (error.status === 404) await loadLibrary();  // someone else deleted it: the row must go
+    } finally {
+      confirm.disabled = false;
+      document.getElementById("rail-search").focus();
     }
   });
 }

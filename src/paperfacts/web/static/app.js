@@ -8,13 +8,14 @@
 // column model, sorting and the density switch), fieldpicker (which field columns are shown), tsv (the clipboard copy), corpus (the home view's
 // library-wide results table), explorer (its search box, the home query and the flattened rows), filters (its filter
 // panel), facts (fact comparison), figures (chart readings), samples (sample records), job
-// (job progress), viewer (page-level provenance), theme (the manual light/dark override), check (the page that checks a pasted profile).
+// (job progress), viewer (page-level provenance), panes (the drag seams' width controller), theme (the manual
+// light/dark override), check (the page that checks a pasted profile).
 
 import { api } from "./api.js";
 import { setupCheck, showCheck } from "./check.js";
 import { onSortChange, refreshCorpus } from "./corpus.js";
 import { showDocument, showEmpty, showMissing, showMissingProfile, showProfilePage } from "./document.js";
-import { toast } from "./html.js";
+import { toast, readStored, writeStored } from "./html.js";
 import { sortParam, updateQuery } from "./explorer.js";
 import {
   loadLibrary,
@@ -22,8 +23,10 @@ import {
   setupLibraryDisclosure,
   setupLibraryFilter,
   setupRailToggle,
+  setupDelete,
   setupRunAll,
 } from "./library.js";
+import { installReclamp, setupRailResizer } from "./panes.js";
 import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
 import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
@@ -64,14 +67,61 @@ function setupThemeToggle() {
   });
 }
 
+// The viewer pane's one collapse control, in the topbar like the rail's: a click or `]` flips the document's
+// data-viewer attribute and remembers it (setupViewerPane applies the stored value per render). Visible only
+// while the document view is on screen at ≥1280px — the pane itself is a wide-screen layout.
+const VIEWER_KEY = "paperfacts.viewer-collapsed";
+function setupViewerToggle() {
+  const view = document.getElementById("document-view");
+  const toggle = document.getElementById("viewer-toggle");
+  const wide = matchMedia("(min-width: 1280px)");
+  const apply = (collapsed) => {
+    if (collapsed) view.dataset.viewer = "collapsed";
+    else view.dataset.viewer = "";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    const word = collapsed ? "展开预览" : "收起预览";
+    toggle.title = word;
+    toggle.setAttribute("aria-label", word);
+  };
+  const flip = () => {
+    const collapsed = view.dataset.viewer !== "collapsed";
+    apply(collapsed);
+    writeStored(VIEWER_KEY, collapsed ? "1" : "0");
+  };
+  const sync = () => {
+    apply(readStored(VIEWER_KEY) === "1");
+    toggle.hidden = !wide.matches;
+  };
+  toggle.hidden = true;
+  toggle.addEventListener("click", flip);
+  // `]` anywhere on the page, except where the key is text or the toggle is not offered, mirroring the rail's `[`.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "]" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (toggle.hidden) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("input, textarea, select, [contenteditable], dialog[open]")) return;
+    if (document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    flip();
+  });
+  wide.addEventListener("change", sync);
+  // Route hook: showViews toggles .hidden on the views; the document view's class is the one truth for
+  // "a document is on screen", so follow it wherever it changes (document, home, missing, check, …).
+  new MutationObserver(sync).observe(view, { attributes: true, attributeFilter: ["class"] });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   initTheme();
   setupThemeToggle();
+  setupViewerToggle();
   setupSkipLink();
   setupRailToggle();
+  setupRailResizer();
+  installReclamp();
   applyStoredDensity();
   setupUpload();
   setupRunAll();
+  setupDelete();
   setupLibraryFilter();
   setupLibraryDisclosure();
   setupSwitcher();

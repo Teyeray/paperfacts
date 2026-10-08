@@ -706,3 +706,55 @@ def test_a_cli_document_is_displayed_under_the_name_it_was_first_seen_with(libra
     document = library.document(DOC_KEY)
 
     assert document.display_filename == two_page_pdf.name
+
+
+# ---- delete ---------------------------------------------------------------------------------------------
+
+
+def test_delete_removes_the_document_directory_and_the_listing_entry(library: Library, two_page_pdf: Path):
+    seed_cli_document(library, two_page_pdf)
+    seed_report(library)
+    doc_dir = library.layout.doc_dir(DOC_KEY)
+    assert doc_dir.exists()
+
+    name = library.delete(DOC_KEY)
+
+    assert not doc_dir.exists()
+    assert DOC_KEY not in library.document_ids()
+    assert name == two_page_pdf.name
+
+
+def test_delete_of_a_malformed_id_raises_keyerror(library: Library):
+    for bad_id in ("nope", "abc", "0123456789ABCDEF"):
+        with pytest.raises(KeyError):
+            library.delete(bad_id)
+
+
+def test_delete_evicts_this_librarys_counts_cache_entries(library: Library):
+    document = library.register_upload("paper.pdf", PDF_BYTES)
+    key = document.document_id[:16]
+    seed_report(library, document_sha=document.sha256)
+    library.summary(key)
+    doc_dir = library.layout.doc_dir(key)
+    assert any(doc_dir in p.parents for p in library._counts_cache)
+
+    library.delete(key)
+
+    assert not any(doc_dir in p.parents for p in library._counts_cache)
+
+
+def test_delete_leaves_the_llm_cache_alone(library: Library):
+    document = library.register_upload("paper.pdf", PDF_BYTES)
+    cache_file = library.layout.llm_cache_dir() / f"{document.sha256}.json"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text("{}", encoding="utf-8")
+
+    library.delete(document.document_id[:16])
+
+    assert cache_file.exists()
+
+
+def test_delete_of_an_upload_returns_its_display_name(library: Library):
+    document = library.register_upload("Sputtered ITO.pdf", PDF_BYTES)
+
+    assert library.delete(document.document_id[:16]) == "Sputtered ITO.pdf"

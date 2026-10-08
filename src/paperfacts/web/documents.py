@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import shutil
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -105,7 +106,7 @@ def _file_stamp(path: Path) -> tuple[int, int, int] | None:
 class DuplicateDocument(BaseModel):
     """Another document holding the same main text as an upload: the main PDF alone when the upload carried SI,
     or a document merged from it and its SI when the upload is the main PDF alone. The upload goes ahead either
-    way (there is no delete); the page only says so."""
+    way (delete the other one from the rail if the duplicate is the one to keep); the page only says so."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -462,6 +463,24 @@ class Library:
             if other is not None and other.parts and other.parts[0].sha256 == main_sha256:
                 return DuplicateDocument(document_id=key, name=other.name, has_si=True)
         return None
+
+    def delete(self, document_id: str) -> str:
+        """Remove the document: its directory holds the PDF and every result every profile has produced
+        for it (one shared tree, whatever profile this library was built under), so this is all of it at
+        once and irreversible. The content-addressed llm_cache and the corpus-wide data/exports
+        workbooks are other documents' and stay. Returns the display name for the answer."""
+        self._require_key(document_id)  # malformed -> KeyError; existence is the route's question
+        identity = self.identity(document_id)
+        name = identity.name if identity else document_id
+        doc_dir = self.layout.doc_dir(document_id)
+        shutil.rmtree(doc_dir)
+        # This library's tallies die with the report they parsed; the other profiles' libraries keep
+        # dead entries, which their is_file() stamps already treat as absent.
+        with self._counts_lock:
+            for path in [p for p in self._counts_cache if doc_dir in p.parents]:
+                del self._counts_cache[path]
+        logger.info("deleted document=%s name=%s", document_id, name)
+        return name
 
     # ---- internal -----------------------------------------------------------------------
 

@@ -47,6 +47,8 @@ PAGES = {
     "upload-si-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "document-si": ("#/", "#corpus-view:not(.hidden) table"),
     "run-all-dialog": ("#/", "#corpus-view:not(.hidden) table"),
+    "rail-delete-hover": ("#/", "#corpus-view:not(.hidden) table"),
+    "delete-dialog": ("#/", "#corpus-view:not(.hidden) table"),
     "document": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     "document-compact": ("#/doc/{A}", "#document-view:not(.hidden) .results-table tbody tr"),
     # The page zoomed to 200%: the controls and the widened page inside the viewport.
@@ -143,8 +145,22 @@ async def open_run_all_dialog(page: Page, _: Path) -> None:
     await page.wait_for_selector("#run-all-dialog[open]")
 
 
+async def hover_delete(page: Page, _: Path) -> None:
+    # The bin is hidden at rest and revealed by hover: the shot shows the revealed state (a static
+    # screenshot cannot hover for itself, so the hover is done here).
+    row = page.locator("#doc-list li", has=page.locator(".doc-item")).first
+    await row.locator(".doc-item").hover()
+
+
+async def open_delete_dialog(page: Page, _: Path) -> None:
+    # Only opens: nothing is confirmed, so no seeded document is touched.
+    row = page.locator("#doc-list li", has=page.locator(".doc-item")).first
+    await row.locator(".doc-delete").click()
+    await page.wait_for_selector("#delete-dialog[open]")
+
+
 # The collapse exists on a wide screen only (a phone stacks the rail).
-DESKTOP_ONLY = {"home-rail-collapsed", "home-scrolled", "document-dark"}
+DESKTOP_ONLY = {"home-rail-collapsed", "home-scrolled", "document-dark", "rail-delete-hover", "delete-dialog"}
 # Shot at 1600 px as well; every other page is shot at 1440 and 390 only.
 AT_1600 = {"document", "document-tabs"}
 # One screen rather than the full length: a sticky element is shown where it sticks.
@@ -166,6 +182,8 @@ PREPARE = {
     "upload-si-dialog": open_upload_dialog_with_si,
     "document-si": upload_with_si,
     "run-all-dialog": open_run_all_dialog,
+    "rail-delete-hover": hover_delete,
+    "delete-dialog": open_delete_dialog,
 }
 
 

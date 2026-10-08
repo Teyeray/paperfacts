@@ -239,6 +239,11 @@ is on, and the filter survives the rail's own refresh. The toggle at the left of
 typing in a field or inside a dialog) collapses the rail so the table takes the whole width; the choice is remembered
 in the browser. The rail scrolls on its own under the header. On a narrow screen it stacks above the content and the
 list folds into 「文档列表」; there is no collapse.
+Each row also carries a delete control (a 🗑 beside the name, shown on hover or keyboard focus and always visible on
+touch): it asks first -- 「删除文档」 names the paper and says that every domain's results and the original PDF are
+deleted from disk, irreversibly -- then removes the document, its PDF and **every profile's** results for it with one
+`DELETE /api/documents/<id>`. The server refuses with 409 while a job is queued or running for that paper, whatever
+its profile; there is no undo and no trash, and a deleted paper re-uploads as a new document.
 「处理全部未完成」 asks first -- its confirmation offers 「忽略缓存，全部重跑」 for every paper -- then queues every
 document that can run and is not already finished (exported) under the current keys, one job each, in library order; a
 document already queued or running simply gets its existing job back, so pressing it twice costs nothing. It never
@@ -1287,7 +1292,8 @@ its declared units and retrieval words, the papers with results under it, and a 
 
 The HTTP interface names the profile with `?profile=<name>` on every route whose answer depends on one:
 `/api/profile`, `/api/documents` (upload, run, run-all, and every per-document read but the parse artifact and
-the page images, which are the document's under every profile), `/api/dataset` and `/api/dataset.xlsx`. Absent
+the page images, which are the document's under every profile; the per-document delete is also profile-free, since
+the directory it removes holds every profile's results at once), `/api/dataset` and `/api/dataset.xlsx`. Absent
 means the default, and every such response names the profile that answered in an `X-PaperFacts-Profile` header,
 so a caller that forgot the parameter can tell. `GET /api/profiles` lists the served profiles (with how many documents each has finished,
 whether each is runnable and whether its file changed on disk) and the invalid files; `GET /api/profiles/<name>`

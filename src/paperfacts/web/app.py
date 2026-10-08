@@ -24,6 +24,8 @@ the default profile when absent, so a URL from before there were several keeps i
                                                     job does everything asked); figures reads the
                                                     charts, force_figures re-asks every one
     GET  /api/documents/{id}                       single document summary
+    DELETE /api/documents/{id}                     remove the document, its PDF and every profile's
+                                                    results for it
     GET  /api/documents/{id}/report                ComparisonReport
     GET  /api/documents/{id}/extraction/{backend}  normalized LaneExtraction
     GET  /api/documents/{id}/artifact/{backend}    ParsedArtifact (blocks + Markdown + page geometry)
@@ -116,6 +118,13 @@ class UploadAccepted(BaseModel):
     document: DocumentSummary
     job: Job
     duplicate_of: DuplicateDocument | None = None
+
+
+class DeletedDocument(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    document_id: str
+    name: str
 
 
 class SkippedDocument(BaseModel):
@@ -622,6 +631,23 @@ def create_app(
                 status_code=409, detail="No PDF and no cached parse for this document; re-upload it to process it"
             )
         return submit(document_id, library, force=force, figures=figures, force_figures=force_figures)
+
+    @app.delete("/api/documents/{document_id}")
+    async def delete_document(document_id: str) -> DeletedDocument:
+        """Remove the document and every profile's results for it (one shared directory; profile-free
+        like the artifact and page routes). Refused while a job is queued or running for it, because
+        there is no cancel and the runner would be reading a directory out from under the job."""
+        require_document(document_id)
+        if manager.is_active(document_id):
+            raise HTTPException(status_code=409, detail="A job is still queued or running for this document")
+        try:
+            name = await run_in_threadpool(default_library.delete, document_id)
+        except FileNotFoundError:
+            # A concurrent delete (another tab, another client) removed the directory between the check
+            # above and the rmtree; the document is gone either way, so the answer is the same 404.
+            raise HTTPException(status_code=404, detail=f"No document {document_id}") from None
+        logger.info("deleted document=%s", document_id)
+        return DeletedDocument(document_id=document_id, name=name)
 
     @app.get("/api/documents/{document_id}")
     def get_document(document_id: str, library: ProfileLibrary) -> DocumentSummary:
