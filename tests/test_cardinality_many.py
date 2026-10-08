@@ -335,6 +335,29 @@ def test_without_categories_elements_keep_first_seen_order_mineru_first_and_one_
     assert decision.status == "single_source"
 
 
+def test_an_element_is_written_as_the_quote_with_its_unit_once_and_its_spacing_collapsed():
+    # The same string a single-valued text cell shows (TextRules.cell): the unit once, wherever the quote carried
+    # it, and OCR's newline or double space inside the quote folded to one space, as a list cell always did.
+    spec = SOLVENT
+    evidence = [
+        ("mineru", FieldValue(field="solvent", value_raw="ethanol\n(anhydrous)", source_ids=("mineru_p0_b1",))),
+        (
+            "paddleocr_vl",
+            FieldValue(field="solvent", value_raw="toluene", unit_raw="vol%", source_ids=("paddleocr_vl_p0_b1",)),
+        ),
+        (
+            "mineru",
+            FieldValue(field="solvent", value_raw="toluene vol%", unit_raw="vol%", source_ids=("mineru_p0_b2",)),
+        ),
+    ]
+    comparisons = report(
+        lane("mineru", solvent=["ethanol (anhydrous)", "toluene vol%"]), lane("paddleocr_vl", solvent=["toluene"])
+    ).comparisons
+    decision = decide_many(spec, evidence, [c for c in comparisons if c.field == "solvent"])
+
+    assert decision.value == ["ethanol (anhydrous)", "toluene vol%"]
+
+
 @pytest.mark.parametrize(
     ("kwargs", "status"),
     [

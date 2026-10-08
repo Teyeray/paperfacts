@@ -449,7 +449,7 @@ def decide_many(
     written = [min(group, key=lambda e: _preference(spec, e.backend, e.value)) for group in groups]
     lanes = [tuple(backend for backend in BACKENDS if any(e.backend == backend for e in group)) for group in groups]
     # A category is written as declared; any other element as its lane quoted it.
-    names = [element.key if spec.categories else " ".join(element.value.value_raw.split()) for element in written]
+    names = [element.key if spec.categories else " ".join(_quote(element.value).split()) for element in written]
     details.append("列表为两路已定位证据的并集")
     details.append(
         "元素来源：" + "；".join(f"{name}（{', '.join(held)}）" for name, held in zip(names, lanes, strict=True))
@@ -486,7 +486,8 @@ def _elements(spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]]) ->
 
 
 def _quote(value: FieldValue) -> str:
-    """The quote and its unit for an audit note, the unit once (:func:`paperfacts.normalize.quote_with_unit`)."""
+    """The quote and its unit, once (:func:`paperfacts.normalize.quote_with_unit`): an audit note's text and a list
+    element's cell, the string a single-valued text cell is too."""
     return quote_with_unit(value.value_raw, value.unit_raw)
 
 
