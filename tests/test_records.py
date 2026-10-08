@@ -746,6 +746,10 @@ def test_named_value_returns_the_declared_phrase_and_its_number():
         ("wt%", "wt%", "wt%"),
         ("ethanol\n(anhydrous)", None, "ethanol (anhydrous)"),
         ("toluene vol%", "vol%", "toluene vol%"),
+        # Production (wu2017, 7.pdf): the unit sits inside the quote, where the paper put it, not at its end.
+        ("2.5 at% fluorine", "at%", "2.5 at% fluorine"),
+        ("90 wt% In2O3 and 10 wt% ZnO", "wt%", "90 wt% In2O3 and 10 wt% ZnO"),
+        ("10 nm", "n", "10 nm n"),
         ("RF", None, "RF"),
         # The unit is a suffix only on a word boundary: the "m" of "nm" and the "H" of "LiOH" are not units.
         ("ITO 10 nm", "m", "ITO 10 nm m"),

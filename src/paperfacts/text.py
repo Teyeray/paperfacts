@@ -85,22 +85,18 @@ def loose_key(text: str | None) -> str:
     return LOOSE_PUNCTUATION.sub("", normalize_key(text))
 
 
-def ends_with_unit(text: str, unit: str) -> bool:
-    """Whether ``text`` already ends with ``unit``, folded as :func:`loose_key` folds text but with the spacing
-    kept, so the character before the unit can be seen: "90:10 wt.%" and "5:95wt%" end with "wt%", and so does
-    "wt %"; "ITO 10 nm" does not end with "m", nor "LiOH" with "H", because a letter runs straight into it."""
+def has_unit(text: str, unit: str) -> bool:
+    """Whether ``text`` already carries ``unit`` somewhere, folded as :func:`loose_key` folds text but with the
+    spacing kept, so the characters around the unit can be seen: "90:10 wt.%" and "5:95wt%" carry "wt%", so do
+    "wt %" and "2.5 at% fluorine" its "at%" (a composition states its unit where the paper did, not always last);
+    "ITO 10 nm" does not carry "m", nor "LiOH" "H", because a letter runs straight into it, and "10 nm" does not
+    carry "n" since a letter follows."""
     folded = LOOSE_PUNCTUATION.sub("", normalize_text(text).casefold())
     tail = LOOSE_PUNCTUATION.sub("", normalize_text(unit).casefold()).replace(" ", "")
     if not tail:
         return False
-    i = len(folded)
-    for char in reversed(tail):
-        while i > 0 and folded[i - 1] == " ":
-            i -= 1
-        if i == 0 or folded[i - 1] != char:
-            return False
-        i -= 1
-    return not folded[i - 1 : i].isalpha()
+    pattern = r"(?<![^\W\d_])" + r" ?".join(re.escape(char) for char in tail) + r"(?![^\W_])"
+    return re.search(pattern, folded) is not None
 
 
 def is_word_edge(character: str) -> bool:

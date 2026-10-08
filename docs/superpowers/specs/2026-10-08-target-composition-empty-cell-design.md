@@ -38,7 +38,7 @@ PR #54 最初的假设是模型把论文级字段放进了样品里，比较与�
 `'ITO 90:10 wt%'`，模型两种写法都会出现。
 
 **决策：修。** 一个字符串，所有地方共用：`FieldValue.quote`（`records.py`）给出「引文 + 单位，单位只写一次，空白折叠」——
-引文末尾已经是该单位（按 `text.loose_key` 的折叠判断，所以 `wt.%`、`wt %` 都算 `wt%`；字母紧贴的不算，`ITO 10 nm` 不以单位 `m` 结尾）就原样保留，否则把 `unit_raw` 接在后面。
+引文里已经写着该单位（`text.has_unit`：按 `loose_key` 的折叠判断，所以 `wt.%`、`wt %` 都算 `wt%`；在文本中间也算，`2.5 at% fluorine` 带着 `at%`；字母紧贴的不算，`ITO 10 nm` 不带单位 `m`）就原样保留，否则把 `unit_raw` 接在后面。
 `TextRules.compare`、`TextRules.cell`、`TextRules.prefer`、`decide` 的审计备注、`compare._set_pairs` 与
 `decide._elements`（列表字段的元素键与元素文本）读的都是这同一个属性，因此比较与单元格不可能对同一对值给出不同判断；
 单位不同（`wt%` 对 `at%`）自然是不同文本，不需要单独的分支。重放结果：2 条 `agree`（备注「conditions worded
