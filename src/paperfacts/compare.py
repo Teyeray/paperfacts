@@ -532,10 +532,10 @@ def _set_pairs(
     """A list field's pairing: each value of lane A with the first of lane B holding the same element
     (:func:`~paperfacts.kinds.element_key`, the union cell's identity too) under conditions that do not measure
     differently; everything else one-sided. A value naming no category pairs with nothing."""
-    rest_b = [(element_key(spec, b.value_raw), b) for b in values_b]
+    rest_b = [(element_key(spec, b.quote), b) for b in values_b]
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     for a in values_a:
-        key = element_key(spec, a.value_raw)
+        key = element_key(spec, a.quote)
         j = next(
             (
                 j

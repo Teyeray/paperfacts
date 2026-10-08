@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Protocol
 
 from paperfacts.fields import RANGE_ENDS, FieldKind, FieldSpec
 from paperfacts.normalize import (
-    LOOSE_PUNCTUATION,
     NUMBER_ATOM,
     SCALAR,
     Reading,
@@ -43,6 +42,7 @@ from paperfacts.normalize import (
 )
 from paperfacts.readers import read_date, read_interval, read_range
 from paperfacts.records import FieldValue, KindContext, resolve_reference, sample_key
+from paperfacts.text import LOOSE_PUNCTUATION
 from paperfacts.units import UnitRegistry
 
 if TYPE_CHECKING:
@@ -360,19 +360,20 @@ class NumericRules:
 
 class TextRules:
     """Text as quoted, equal as :func:`paperfacts.normalize.same_text` judges it: across spacing, case and a
-    lost hyphen, or by the category both name. A composition is compared the same way."""
+    lost hyphen, or by the category both name. A composition is compared the same way, as the quote with its
+    unit (:attr:`paperfacts.records.FieldValue.quote`): one lane quotes "In2O3:SnO2 = 90:10 wt%" and the other
+    "In2O3:SnO2 = 90:10" with "wt%" in ``unit_raw``, and both are the one target the paper names."""
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext) -> FieldValue:
         # Compared through same_text on the fly.
         return field
 
     def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext) -> tuple[FactStatus, str]:
-        if same_text(spec, a.value_raw, b.value_raw):
-            category = canonical_category(spec.categories, a.value_raw) or canonical_category(
-                spec.categories, b.value_raw
-            )
+        text_a, text_b = a.quote, b.quote
+        if same_text(spec, text_a, text_b):
+            category = canonical_category(spec.categories, text_a) or canonical_category(spec.categories, text_b)
             return "agree", f"both name {category}" if category else "identical after text normalization"
-        return "conflict", f"{a.value_raw!r} vs {b.value_raw!r}"
+        return "conflict", f"{text_a!r} vs {text_b!r}"
 
     def distance(self, a: FieldValue, b: FieldValue) -> float | None:
         return None
@@ -380,7 +381,8 @@ class TextRules:
     def cell(
         self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext
     ) -> tuple[CellValue, str | None]:
-        return value.value_raw.strip(), None
+        # The string the comparison judged, so ``same`` cannot disagree with it.
+        return value.quote, None
 
     def same(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
         """Text is judged as the comparison judges it (:func:`same_text`): "DC and RF" and "DC and RF magnetron
@@ -395,7 +397,7 @@ class TextRules:
     def prefer(self, value: FieldValue, spec: FieldSpec) -> tuple[object, ...]:
         # Of spellings judged the same, one naming the field's category is the cell: "rf-magnetron sputtering" is
         # RF, its twin that lost the hyphen names nothing.
-        return (canonical_category(spec.categories, value.value_raw) is None,)
+        return (canonical_category(spec.categories, value.quote) is None,)
 
     def note(self, spec: FieldSpec, ctx: KindContext) -> str:
         if spec.cardinality != "many":

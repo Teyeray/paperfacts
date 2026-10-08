@@ -12,7 +12,13 @@ import unicodedata
 
 import pytest
 
-from paperfacts.normalize import canonical_category, delatex, normalize_key, normalize_text, text_key
+from paperfacts.normalize import (
+    canonical_category,
+    delatex,
+    normalize_key,
+    normalize_text,
+    text_key,
+)
 from paperfacts.records import sample_key
 from support.profiles import shipped_profile
 
