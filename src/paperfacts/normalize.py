@@ -32,7 +32,7 @@ from paperfacts.records import (
     named_value,
     spell_number_word,
 )
-from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, normalize_key, normalize_text
+from paperfacts.text import LATEX_WRAPPERS, clean_unit, delatex, loose_key, normalize_key, normalize_text
 from paperfacts.units import UnitRegistry
 
 # ---- Closed category sets --------------------------------------------------------------------------------
@@ -78,12 +78,6 @@ def text_key(spec: FieldSpec, raw: str | None) -> str:
     return f"\0category:{category}" if category is not None else normalize_key(raw)
 
 
-# A hyphen or a period one parser keeps and the other drops: MinerU read "rf-magnetron sputtering" as
-# "rfmagnetron sputtering", and "wt.%" is also written "wt%". Before a digit either is part of a number (a sign,
-# a range, a decimal point), so there it stays: "10-20" is not "1020", nor "1.5" "15".
-LOOSE_PUNCTUATION = re.compile(r"[-.](?!\d)")
-
-
 def same_text(spec: FieldSpec, a: str | None, b: str | None) -> bool:
     """Whether two text values state the same fact, for the comparison and the dataset cell alike.
 
@@ -95,22 +89,7 @@ def same_text(spec: FieldSpec, a: str | None, b: str | None) -> bool:
         return True
     if canonical_category(spec.categories, a) is not None and canonical_category(spec.categories, b) is not None:
         return False
-    return _loose(a) == _loose(b)
-
-
-def quote_with_unit(value_raw: str, unit_raw: str | None) -> str:
-    """The quote with its unit, written once: "In2O3:SnO2 = 90:10" with "wt%" beside it and "In2O3:SnO2 = 90:10 wt%"
-    with the same "wt%" both read "In2O3:SnO2 = 90:10 wt%". Whether the quote already ends with its unit is judged
-    as :func:`same_text` judges text, so "wt.%" and "wt %" end with "wt%". The one string the comparison, the cell
-    and the audit notes share, so none of them can disagree about a composition."""
-    text, unit = value_raw.strip(), (unit_raw or "").strip()
-    if not unit or _loose(text).endswith(_loose(unit)):
-        return text
-    return f"{text} {unit}"
-
-
-def _loose(text: str) -> str:
-    return LOOSE_PUNCTUATION.sub("", normalize_key(text))
+    return loose_key(a) == loose_key(b)
 
 
 # ---- Numbers ------------------------------------------------------------------------------------------------

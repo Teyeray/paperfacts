@@ -42,7 +42,6 @@ from paperfacts.normalize import (
     normalize_key,
     normalize_lane,
     normalize_text,
-    quote_with_unit,
 )
 from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.records import FieldValue, KindContext, LaneExtraction
@@ -533,10 +532,10 @@ def _set_pairs(
     """A list field's pairing: each value of lane A with the first of lane B holding the same element
     (:func:`~paperfacts.kinds.element_key`, the union cell's identity too) under conditions that do not measure
     differently; everything else one-sided. A value naming no category pairs with nothing."""
-    rest_b = [(element_key(spec, quote_with_unit(b.value_raw, b.unit_raw)), b) for b in values_b]
+    rest_b = [(element_key(spec, b.quote), b) for b in values_b]
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     for a in values_a:
-        key = element_key(spec, quote_with_unit(a.value_raw, a.unit_raw))
+        key = element_key(spec, a.quote)
         j = next(
             (
                 j

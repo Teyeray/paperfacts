@@ -73,6 +73,36 @@ def normalize_key(text: str | None) -> str:
     return _NON_KEY.sub("", normalize_text(text).lower().replace("ω", "Ω"))
 
 
+# A hyphen or a period one parser keeps and the other drops: MinerU read "rf-magnetron sputtering" as
+# "rfmagnetron sputtering", and "wt.%" is also written "wt%". Before a digit either is part of a number (a sign,
+# a range, a decimal point), so there it stays: "10-20" is not "1020", nor "1.5" "15".
+LOOSE_PUNCTUATION = re.compile(r"[-.](?!\d)")
+
+
+def loose_key(text: str | None) -> str:
+    """:func:`normalize_key` without the hyphens and periods :data:`LOOSE_PUNCTUATION` drops: the key under which
+    the two spellings the parsers disagree about are one text."""
+    return LOOSE_PUNCTUATION.sub("", normalize_key(text))
+
+
+def ends_with_unit(text: str, unit: str) -> bool:
+    """Whether ``text`` already ends with ``unit``, folded as :func:`loose_key` folds text but with the spacing
+    kept, so the character before the unit can be seen: "90:10 wt.%" and "5:95wt%" end with "wt%", and so does
+    "wt %"; "ITO 10 nm" does not end with "m", nor "LiOH" with "H", because a letter runs straight into it."""
+    folded = LOOSE_PUNCTUATION.sub("", normalize_text(text).casefold())
+    tail = LOOSE_PUNCTUATION.sub("", normalize_text(unit).casefold()).replace(" ", "")
+    if not tail:
+        return False
+    i = len(folded)
+    for char in reversed(tail):
+        while i > 0 and folded[i - 1] == " ":
+            i -= 1
+        if i == 0 or folded[i - 1] != char:
+            return False
+        i -= 1
+    return not folded[i - 1 : i].isalpha()
+
+
 def is_word_edge(character: str) -> bool:
     """Whether a pattern ending (or starting) on ``character`` may be closed by ``\\b``: a letter or digit of a
     script that separates its words with spaces. Chinese and Japanese run their words together, so ``\\b``

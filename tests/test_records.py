@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from paperfacts.records import (
     ExtractionResponse,
+    FieldValue,
     InventoryResponse,
     ResponseCleaning,
     named_value,
@@ -729,3 +730,29 @@ def test_named_value_returns_the_declared_phrase_and_its_number():
 
     assert named_value(spec, " at  Room temperature ") == ("room temperature", 25.0)
     assert named_value(spec, "room temperature (RT)") == ("room temperature", 25.0)
+
+
+# ---- FieldValue.quote: the quote with its unit, once -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value_raw", "unit_raw", "expected"),
+    [
+        ("In2O3:SnO2 = 90:10", "wt%", "In2O3:SnO2 = 90:10 wt%"),
+        ("In2O3:SnO2 = 90:10 wt%", "wt%", "In2O3:SnO2 = 90:10 wt%"),
+        ("ITO 90:10 wt.%", "wt%", "ITO 90:10 wt.%"),
+        ("ITO 90:10 wt %", "wt%", "ITO 90:10 wt %"),
+        ("5:95wt%", "wt%", "5:95wt%"),
+        ("wt%", "wt%", "wt%"),
+        ("ethanol\n(anhydrous)", None, "ethanol (anhydrous)"),
+        ("toluene vol%", "vol%", "toluene vol%"),
+        ("RF", None, "RF"),
+        # The unit is a suffix only on a word boundary: the "m" of "nm" and the "H" of "LiOH" are not units.
+        ("ITO 10 nm", "m", "ITO 10 nm m"),
+        ("LiOH", "H", "LiOH H"),
+    ],
+)
+def test_the_quote_writes_its_unit_once_however_the_quote_spelled_it(value_raw, unit_raw, expected):
+    # The production case behind PR #54: PaddleOCR-VL quoted the target composition with "wt%" inside the text,
+    # MinerU with the same "wt%" beside it, and the two lanes were reported as each missing the other's value.
+    assert FieldValue(field="component", value_raw=value_raw, unit_raw=unit_raw).quote == expected

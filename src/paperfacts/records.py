@@ -33,7 +33,7 @@ from paperfacts.fields import DIGIT_KINDS, MAX_NUMBER_QUOTE, FieldSpec
 from paperfacts.models import Backend
 from paperfacts.profile import IMPLICIT_ENTITY
 from paperfacts.storage import write_text_atomic
-from paperfacts.text import normalize_text
+from paperfacts.text import ends_with_unit, normalize_text
 
 if TYPE_CHECKING:
     from paperfacts.profile import EntitySpec
@@ -264,6 +264,19 @@ class FieldValue(BaseModel):
     # Filled in at read time for a reference field, and left out of every file when null: the id of the lane's sample
     # of the referenced entity type the quote names (:func:`resolve_reference`), None when it names none.
     ref_id: str | None = Field(default=None, exclude_if=lambda ref_id: ref_id is None)
+
+    @property
+    def quote(self) -> str:
+        """The quote with its unit, written once and its spacing folded: "In2O3:SnO2 = 90:10" with "wt%" beside it
+        and "In2O3:SnO2 = 90:10 wt%" with the same "wt%" both read "In2O3:SnO2 = 90:10 wt%". The quote already
+        ends with its unit as :func:`paperfacts.text.ends_with_unit` judges it: "wt.%" and "wt %" end with "wt%",
+        "5:95wt%" does, "ITO 10 nm" does not end with the unit "m". The one string the comparison, the cell, a
+        list element and the audit notes share, so none of them can disagree about a composition."""
+        text = " ".join(self.value_raw.split())
+        unit = " ".join((self.unit_raw or "").split())
+        if not unit or ends_with_unit(text, unit):
+            return text
+        return f"{text} {unit}"
 
 
 class PaperRecord(BaseModel):

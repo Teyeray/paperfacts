@@ -17,7 +17,6 @@ from paperfacts.normalize import (
     delatex,
     normalize_key,
     normalize_text,
-    quote_with_unit,
     text_key,
 )
 from paperfacts.records import sample_key
@@ -308,22 +307,3 @@ def test_delatex_restores_the_degree_and_percent_symbols(latex, folded):
     # One table (normalize.LATEX_SYMBOLS) serves retrieval, grounding and unit parsing, so the three fold a
     # LaTeX degree the same way.
     assert " ".join(delatex(latex).split()) == folded
-
-
-# ---- A quote and its unit, once -----------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("value_raw", "unit_raw", "expected"),
-    [
-        ("In2O3:SnO2 = 90:10", "wt%", "In2O3:SnO2 = 90:10 wt%"),
-        ("In2O3:SnO2 = 90:10 wt%", "wt%", "In2O3:SnO2 = 90:10 wt%"),
-        ("ITO 90:10 wt.%", "wt%", "ITO 90:10 wt.%"),
-        ("ITO 90:10 wt %", "wt%", "ITO 90:10 wt %"),
-        ("RF", None, "RF"),
-    ],
-)
-def test_quote_with_unit_writes_the_unit_once_however_the_quote_spelled_it(value_raw, unit_raw, expected):
-    # The production case: PaddleOCR-VL quoted the target composition with "wt%" inside the text, MinerU with the
-    # same "wt%" beside it, and the two lanes were reported as each missing the other's value.
-    assert quote_with_unit(value_raw, unit_raw) == expected

@@ -54,7 +54,7 @@ from paperfacts.compare import (
 from paperfacts.fields import FieldSpec
 from paperfacts.kinds import CellValue, element_key, joined, rules_for
 from paperfacts.models import BACKENDS, Backend
-from paperfacts.normalize import normalize_key, quote_with_unit
+from paperfacts.normalize import normalize_key
 from paperfacts.records import FieldValue, KindContext
 from paperfacts.units import UnitRegistry
 
@@ -145,7 +145,7 @@ def decide(
     details = [_UNTRUSTED_NOTE] if untrusted else []
     details.extend(judged.notes)
     if superseded:
-        dropped = joined([f"{c.backend}: {_quote(c.value)}".strip() for c in superseded])
+        dropped = joined([f"{c.backend}: {c.value.quote}".strip() for c in superseded])
         details.append(f"已排除整系列表述的候选（{dropped}）：同一解析通道对该样品另有同一测量条件下的专属数值")
     several = _several_conditions(candidates)
     if narrowed is None:
@@ -158,7 +158,7 @@ def decide(
     if not final:
         return reject("non_scalar", aside[0].note or "无法生成唯一标量")
     if aside:
-        dropped = joined([f"{c.backend}: {_quote(c.value)}".strip() for c in aside])
+        dropped = joined([f"{c.backend}: {c.value.quote}".strip() for c in aside])
         details.append(f"已排除不是唯一标量的候选（{dropped}）：{aside[0].note}")
     details.extend(c.note for c in final if c.note)
 
@@ -218,7 +218,7 @@ def _commit(
 
 def _rejection(evidence: Sequence[tuple[Backend, FieldValue]], status: str, reason: str) -> Decision:
     """A refused cell: no value, with every candidate's quote, condition and blocks in the audit trail."""
-    raw = joined([f"{backend}: {_quote(value)}" for backend, value in evidence])
+    raw = joined([f"{backend}: {value.quote}" for backend, value in evidence])
     conditions = joined([value.condition or "" for _, value in evidence])
     sources = joined(sorted({source for _, value in evidence for source in value.source_ids}))
     return Decision(None, status, conditions, sources, joined([reason, raw]))
@@ -348,8 +348,8 @@ def _supervised(
         winners.add(_identity(winner))
         won, lost = scores[_identity(winner)], scores[_identity(loser)]
         notes.append(
-            f"双路冲突由监督模型裁定：采用 {_lane(lane_of, winner)} {_quote(winner)}（评分 {won.score:.2f}），"
-            f"排除 {_lane(lane_of, loser)} {_quote(loser)}（评分 {lost.score:.2f}：{_critique(lost)}）"
+            f"双路冲突由监督模型裁定：采用 {_lane(lane_of, winner)} {winner.quote}（评分 {won.score:.2f}），"
+            f"排除 {_lane(lane_of, loser)} {loser.quote}（评分 {lost.score:.2f}：{_critique(lost)}）"
         )
     return _Judged(tuple(settled), frozenset(losers), frozenset(winners), scores, tuple(notes))
 
@@ -376,7 +376,7 @@ def _scores_note(c: FieldComparison) -> str:
         if value is None:
             continue
         judged = "未评分" if score is None else f"{score.score:.2f}（{_critique(score)}）"
-        sides.append(f"{_quote(value)}：{judged}")
+        sides.append(f"{value.quote}：{judged}")
     return "监督模型未能裁定：" + "；".join(sides)
 
 
@@ -449,7 +449,7 @@ def decide_many(
     written = [min(group, key=lambda e: _preference(spec, e.backend, e.value)) for group in groups]
     lanes = [tuple(backend for backend in BACKENDS if any(e.backend == backend for e in group)) for group in groups]
     # A category is written as declared; any other element as its lane quoted it.
-    names = [element.key if spec.categories else " ".join(_quote(element.value).split()) for element in written]
+    names = [element.key if spec.categories else element.value.quote for element in written]
     details.append("列表为两路已定位证据的并集")
     details.append(
         "元素来源：" + "；".join(f"{name}（{', '.join(held)}）" for name, held in zip(names, lanes, strict=True))
@@ -471,7 +471,7 @@ def _elements(spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]]) ->
     groups: dict[str, list[_Element]] = {}
     refused: list[str] = []
     for backend, value in sorted(trusted, key=lambda item: BACKENDS.index(item[0])):
-        text = _quote(value)
+        text = value.quote
         if not text:
             continue
         key = element_key(spec, text)
@@ -483,12 +483,6 @@ def _elements(spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]]) ->
     if spec.categories:
         ordered.sort(key=lambda group: spec.categories.index(group[0].key))
     return ordered, refused
-
-
-def _quote(value: FieldValue) -> str:
-    """The quote and its unit, once (:func:`paperfacts.normalize.quote_with_unit`): an audit note's text and a list
-    element's cell, the string a single-valued text cell is too."""
-    return quote_with_unit(value.value_raw, value.unit_raw)
 
 
 def _only_about(comparison: FieldComparison, aside: set[tuple[object, ...]]) -> bool:

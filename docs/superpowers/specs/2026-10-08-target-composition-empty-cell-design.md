@@ -37,10 +37,10 @@ PR #54 最初的假设是模型把论文级字段放进了样品里，比较与�
 `In2O3:SnO2=90:10` ≠ `In2O3:SnO2=90:10wt%`，第二阶段「相等值跨条件配对」也配不上。配置里该字段的示例本身就是
 `'ITO 90:10 wt%'`，模型两种写法都会出现。
 
-**决策：修。** 一个字符串，所有地方共用：`normalize.quote_with_unit(value_raw, unit_raw)` 给出「引文 + 单位，单位只写一次」——
-引文末尾已经是该单位（按 `same_text` 的折叠判断，所以 `wt.%`、`wt %` 都算 `wt%`）就原样保留，否则把 `unit_raw` 接在后面。
-`TextRules.compare`、`TextRules.cell`、`TextRules.prefer`、`decide._quote`（审计备注）、`compare._set_pairs` 与
-`decide._elements`（列表字段的元素键）读的都是这同一个字符串，因此比较与单元格不可能对同一对值给出不同判断；
+**决策：修。** 一个字符串，所有地方共用：`FieldValue.quote`（`records.py`）给出「引文 + 单位，单位只写一次，空白折叠」——
+引文末尾已经是该单位（按 `text.loose_key` 的折叠判断，所以 `wt.%`、`wt %` 都算 `wt%`；字母紧贴的不算，`ITO 10 nm` 不以单位 `m` 结尾）就原样保留，否则把 `unit_raw` 接在后面。
+`TextRules.compare`、`TextRules.cell`、`TextRules.prefer`、`decide` 的审计备注、`compare._set_pairs` 与
+`decide._elements`（列表字段的元素键与元素文本）读的都是这同一个属性，因此比较与单元格不可能对同一对值给出不同判断；
 单位不同（`wt%` 对 `at%`）自然是不同文本，不需要单独的分支。重放结果：2 条 `agree`（备注「conditions worded
 differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
 
@@ -65,7 +65,7 @@ differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
 
 ## 测试
 
-- `tests/test_normalize_text.py`：`quote_with_unit` 的几种写法（单位在旁、在文本里、`wt.%`、`wt %`、无单位）。
+- `tests/test_records.py`：`FieldValue.quote` 的几种写法（单位在旁、在文本里、`wt.%`、`wt %`、紧贴数字、无单位、空白折叠、字母边界）。
 - `tests/test_compare.py`：同一组成两种单位写法 → `paper/component agree`；`wt.%` 对 `wt%` → `agree`；文本同、单位异 → `conflict`。
 - `tests/test_dataset.py`：两种写法进论文行，单元格为 `In2O3:SnO2 = 90:10 wt%`，判定 `agree`；`wt.%` 在文本里对 `wt%`
   在旁边，比较与单元格同判 `agree`。
