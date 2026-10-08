@@ -54,7 +54,7 @@ from paperfacts.compare import (
 from paperfacts.fields import FieldSpec
 from paperfacts.kinds import CellValue, element_key, joined, rules_for
 from paperfacts.models import BACKENDS, Backend
-from paperfacts.normalize import normalize_key, normalize_text
+from paperfacts.normalize import normalize_key, quote_with_unit
 from paperfacts.records import FieldValue, KindContext
 from paperfacts.units import UnitRegistry
 
@@ -471,7 +471,7 @@ def _elements(spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]]) ->
     groups: dict[str, list[_Element]] = {}
     refused: list[str] = []
     for backend, value in sorted(trusted, key=lambda item: BACKENDS.index(item[0])):
-        text = " ".join(value.value_raw.split())
+        text = _quote(value)
         if not text:
             continue
         key = element_key(spec, text)
@@ -486,12 +486,8 @@ def _elements(spec: FieldSpec, trusted: Sequence[tuple[Backend, FieldValue]]) ->
 
 
 def _quote(value: FieldValue) -> str:
-    """The quote and its unit for an audit note. A unit the quote already ends with is not written twice: "3
-    wt.%" with unit "wt.%" read "3 wt.% wt.%", as if the paper had repeated it."""
-    unit = value.unit_raw or ""
-    if unit and normalize_text(value.value_raw).endswith(normalize_text(unit)):
-        unit = ""
-    return f"{value.value_raw} {unit}"
+    """The quote and its unit for an audit note, the unit once (:func:`paperfacts.normalize.quote_with_unit`)."""
+    return quote_with_unit(value.value_raw, value.unit_raw)
 
 
 def _only_about(comparison: FieldComparison, aside: set[tuple[object, ...]]) -> bool:

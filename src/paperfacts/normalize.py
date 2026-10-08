@@ -95,23 +95,22 @@ def same_text(spec: FieldSpec, a: str | None, b: str | None) -> bool:
         return True
     if canonical_category(spec.categories, a) is not None and canonical_category(spec.categories, b) is not None:
         return False
-    return LOOSE_PUNCTUATION.sub("", normalize_key(a)) == LOOSE_PUNCTUATION.sub("", normalize_key(b))
+    return _loose(a) == _loose(b)
 
 
-def without_own_unit(value_raw: str, unit_raw: str | None) -> str:
-    """The quote without the unit ``unit_raw`` names when it ends the text, so that a composition one lane quotes
-    as "In2O3:SnO2 = 90:10 wt%" and the other as "In2O3:SnO2 = 90:10" with "wt%" beside it reads as one text.
-
-    Only a trailing unit goes, its characters with any spacing between them ("wt %"), and only when a letter does
-    not run straight into it ("ATOwt%" is not a value with a unit). A unit inside the text ("SnO2:Ta (2 wt% Ta2O5)")
-    stays where the paper put it, and a text that is nothing but its unit is left alone."""
-    text = value_raw.strip()
-    unit = clean_unit(unit_raw) if unit_raw else ""
-    if not unit:
+def quote_with_unit(value_raw: str, unit_raw: str | None) -> str:
+    """The quote with its unit, written once: "In2O3:SnO2 = 90:10" with "wt%" beside it and "In2O3:SnO2 = 90:10 wt%"
+    with the same "wt%" both read "In2O3:SnO2 = 90:10 wt%". Whether the quote already ends with its unit is judged
+    as :func:`same_text` judges text, so "wt.%" and "wt %" end with "wt%". The one string the comparison, the cell
+    and the audit notes share, so none of them can disagree about a composition."""
+    text, unit = value_raw.strip(), (unit_raw or "").strip()
+    if not unit or _loose(text).endswith(_loose(unit)):
         return text
-    tail = re.compile(r"(?<![^\W\d_])" + r"\s*".join(re.escape(char) for char in unit) + r"\s*$", re.IGNORECASE)
-    stripped = tail.sub("", text).rstrip()
-    return stripped or text
+    return f"{text} {unit}"
+
+
+def _loose(text: str) -> str:
+    return LOOSE_PUNCTUATION.sub("", normalize_key(text))
 
 
 # ---- Numbers ------------------------------------------------------------------------------------------------

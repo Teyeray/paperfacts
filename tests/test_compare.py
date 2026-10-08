@@ -244,6 +244,15 @@ def test_a_composition_with_the_same_text_but_another_unit_is_a_conflict():
     assert compare_values(a, b, spec, NO_CONTEXT)[0] == "conflict"
 
 
+def test_a_unit_spelled_with_or_without_its_period_is_the_same_composition():
+    # "wt.%" and "wt%" are one spelling for text (LOOSE_PUNCTUATION); the unit beside the quote is judged the same way.
+    spec = FIELD_BY_NAME["component"]
+    a = make_field("component", "ITO 90:10 wt.%", unit_raw="wt.%")
+    b = make_field("component", "ITO 90:10", unit_raw="wt%")
+
+    assert compare_values(a, b, spec, NO_CONTEXT)[0] == "agree"
+
+
 def test_a_target_field_that_shows_up_inside_a_sample_is_ignored():
     # The target belongs to the paper, not to a sample; comparing it at the sample level would conjure up
     # duplicate facts out of nowhere.

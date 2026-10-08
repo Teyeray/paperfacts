@@ -1,7 +1,7 @@
 # 靶材成分（component）论文级单元格为空：原因与决策
 
 Date: 2026-10-08
-Status: Proposed. 问题一（配对）随 PR #54 实现；问题二（单值字段遇多靶材）待拍板。
+Status: 问题一（配对）已随 PR #54 实现；问题二（单值字段遇多靶材）待拍板。
 
 ## 反馈
 
@@ -37,16 +37,18 @@ PR #54 最初的假设是模型把论文级字段放进了样品里，比较与�
 `In2O3:SnO2=90:10` ≠ `In2O3:SnO2=90:10wt%`，第二阶段「相等值跨条件配对」也配不上。配置里该字段的示例本身就是
 `'ITO 90:10 wt%'`，模型两种写法都会出现。
 
-**决策：修。** `normalize.without_own_unit(value_raw, unit_raw)`：引文末尾若是 `unit_raw` 所指的单位（允许字符间有空格，
-字母紧贴的不算），去掉它；文本中间的单位不动，只剩单位的文本不动。`TextRules.compare` 先各自去掉自带单位再 `same_text`，
-文本相同但 `unit_raw` 不同判 `conflict`（wt% 对 at%）；`TextRules.cell` 输出「去单位文本 + 单位」，两路单元格因此同串，
-且单元格仍写着 `wt%`。重放结果：2 条 `agree`（备注「conditions worded differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
+**决策：修。** 一个字符串，所有地方共用：`normalize.quote_with_unit(value_raw, unit_raw)` 给出「引文 + 单位，单位只写一次」——
+引文末尾已经是该单位（按 `same_text` 的折叠判断，所以 `wt.%`、`wt %` 都算 `wt%`）就原样保留，否则把 `unit_raw` 接在后面。
+`TextRules.compare`、`TextRules.cell`、`TextRules.prefer`、`decide._quote`（审计备注）、`compare._set_pairs` 与
+`decide._elements`（列表字段的元素键）读的都是这同一个字符串，因此比较与单元格不可能对同一对值给出不同判断；
+单位不同（`wt%` 对 `at%`）自然是不同文本，不需要单独的分支。重放结果：2 条 `agree`（备注「conditions worded
+differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
 
-`normalize.py` 与 `kinds.py` 均在抽取、比较指纹内，合入后所有已存抽取与比较换名；LLM 缓存按请求载荷命中，
-离线重放零 miss 即可重新推导。
+一处行为变化需知悉：一路写了 `unit_raw`、另一路没写（`ITO 90:10`+`wt%` 对 `ITO 90:10`+无）在 main 上判 `agree`，
+现在判 `conflict`，因为两路的单元格本就是两个不同的字符串；生产数据里尚未见到这种情况。
 
-未改：`cardinality: many` 的文本字段走 `element_key(spec, value_raw)`（`compare._set_pairs`、`decide` 的并集单元格），
-同样的单位写法差异在列表字段上仍不配对；无生产用例，留作后续。
+`normalize.py`、`kinds.py`、`compare.py`、`decide.py` 均在抽取或比较指纹内，合入后所有已存抽取与比较换名；LLM 缓存按
+请求载荷命中，离线重放零 miss 即可重新推导。
 
 ### 问题二：单值字段遇到多靶材（设计决策，待定）
 
@@ -56,14 +58,15 @@ PR #54 最初的假设是模型把论文级字段放进了样品里，比较与�
 
 | 选项 | 效果 | 代价 |
 |---|---|---|
-| A. `component` 改为 `cardinality: "many"` | 靶材栏显示「In2O3:SnO2 = 90:10 wt%；Sb2O5:SnO2 = 5:95 wt%」；om0035 类论文同理 | `cardinality` 是 PROMPT+VERDICT 属性，改后提示词变化，TCO 全库重新抽取（非离线重放）；`description_zh` 需改写；列表字段也需要问题一的「未改」部分 |
+| A. `component` 改为 `cardinality: "many"` | 靶材栏显示「In2O3:SnO2 = 90:10 wt%；Sb2O5:SnO2 = 5:95 wt%」；om0035 类论文同理 | `cardinality` 是 PROMPT+VERDICT 属性，改后提示词变化，TCO 全库重新抽取（非离线重放）；`description_zh` 需改写；列表字段的元素键已走 `quote_with_unit`，无需另改 |
 | B. 保持单值，页面显示原因 | 结果表论文级空格旁显示质量行的原因（如「两个靶材，未填」） | 多靶材论文的靶材栏仍空；仅前端改动 |
 
 建议 A，但这是领域决定，需负责人拍板后再动代码。
 
 ## 测试
 
-- `tests/test_normalize_text.py`：`without_own_unit` 的去留边界（末尾、带空格、紧贴数字去；文本中间、紧贴字母、只有单位留）。
-- `tests/test_compare.py`：同一组成两种单位写法 → `paper/component agree`；文本同、单位异 → `conflict`。
-- `tests/test_dataset.py`：两种写法进论文行，单元格为 `In2O3:SnO2 = 90:10 wt%`，判定 `agree`。
+- `tests/test_normalize_text.py`：`quote_with_unit` 的几种写法（单位在旁、在文本里、`wt.%`、`wt %`、无单位）。
+- `tests/test_compare.py`：同一组成两种单位写法 → `paper/component agree`；`wt.%` 对 `wt%` → `agree`；文本同、单位异 → `conflict`。
+- `tests/test_dataset.py`：两种写法进论文行，单元格为 `In2O3:SnO2 = 90:10 wt%`，判定 `agree`；`wt.%` 在文本里对 `wt%`
+  在旁边，比较与单元格同判 `agree`。
 - `tests/test_records.py` 的「论文级字段出现在样品下即丢弃」保持不变：清洗层的不变量仍成立。

@@ -17,8 +17,8 @@ from paperfacts.normalize import (
     delatex,
     normalize_key,
     normalize_text,
+    quote_with_unit,
     text_key,
-    without_own_unit,
 )
 from paperfacts.records import sample_key
 from support.profiles import shipped_profile
@@ -310,23 +310,20 @@ def test_delatex_restores_the_degree_and_percent_symbols(latex, folded):
     assert " ".join(delatex(latex).split()) == folded
 
 
-# ---- A quote's own unit at its end ---------------------------------------------------------------------
+# ---- A quote and its unit, once -----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("value_raw", "unit_raw", "expected"),
     [
-        ("In2O3:SnO2 = 90:10 wt%", "wt%", "In2O3:SnO2 = 90:10"),
-        ("In2O3:SnO2 = 90:10", "wt%", "In2O3:SnO2 = 90:10"),
-        ("ITO 90:10 wt %", "wt%", "ITO 90:10"),
-        ("5:95wt%", "wt%", "5:95"),
-        ("SnO2:Ta (2 wt% Ta2O5)", "wt%", "SnO2:Ta (2 wt% Ta2O5)"),
-        ("ATOwt%", "wt%", "ATOwt%"),
-        ("wt%", "wt%", "wt%"),
+        ("In2O3:SnO2 = 90:10", "wt%", "In2O3:SnO2 = 90:10 wt%"),
+        ("In2O3:SnO2 = 90:10 wt%", "wt%", "In2O3:SnO2 = 90:10 wt%"),
+        ("ITO 90:10 wt.%", "wt%", "ITO 90:10 wt.%"),
+        ("ITO 90:10 wt %", "wt%", "ITO 90:10 wt %"),
         ("RF", None, "RF"),
     ],
 )
-def test_without_own_unit_removes_only_a_trailing_unit_the_value_names(value_raw, unit_raw, expected):
+def test_quote_with_unit_writes_the_unit_once_however_the_quote_spelled_it(value_raw, unit_raw, expected):
     # The production case: PaddleOCR-VL quoted the target composition with "wt%" inside the text, MinerU with the
     # same "wt%" beside it, and the two lanes were reported as each missing the other's value.
-    assert without_own_unit(value_raw, unit_raw) == expected
+    assert quote_with_unit(value_raw, unit_raw) == expected
