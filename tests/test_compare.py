@@ -253,6 +253,44 @@ def test_a_unit_spelled_with_or_without_its_period_is_the_same_composition():
     assert compare_values(a, b, spec, NO_CONTEXT)[0] == "agree"
 
 
+def test_a_composition_lists_unshared_elements_as_conflicts_and_a_lone_one_as_ambiguous():
+    # A strict list (FieldSpec.strict_list, the TCO component field) both lanes answered: the shared target
+    # agrees, the one each lane spells its own way is paired in order as the conflict it is (both sides, for a
+    # reviewer or the supervisor), and an element with no partner at all is ambiguous. A plain text list would
+    # report the last two one-sided (test_cardinality_many).
+    lane_a = make_lane(
+        backend="mineru",
+        paper=PaperRecord(
+            fields=(
+                make_field("component", "ITO 90:10", unit_raw="wt%"),
+                make_field("component", "ATO 5:95", unit_raw="wt%"),
+                make_field("component", "AZO 98:2", unit_raw="wt%"),
+            )
+        ),
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        paper=PaperRecord(
+            fields=(
+                make_field("component", "ITO 90:10 wt%", unit_raw="wt%"),
+                make_field("component", "Sb2O5:SnO2 = 5:95", unit_raw="wt%"),
+                # The production shape: one lane quotes a target twice, under two condition wordings. A repeat of
+                # an element both lanes read is one-sided as in any list, never an unshared element.
+                make_field("component", "ITO 90:10 wt%", unit_raw="wt%", condition="ITO layer of the bilayer"),
+            )
+        ),
+    )
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
+
+    assert [(c.status, c.a is not None, c.b is not None) for c in report.comparisons if c.field == "component"] == [
+        ("agree", True, True),
+        ("conflict", True, True),
+        ("ambiguous", True, False),
+        ("missing", False, True),
+    ]
+
+
 def test_a_target_field_that_shows_up_inside_a_sample_is_ignored():
     # The target belongs to the paper, not to a sample; comparing it at the sample level would conjure up
     # duplicate facts out of nowhere.
@@ -399,7 +437,8 @@ def test_numeric_values_within_tolerance_pair_across_differently_worded_conditio
 def test_equal_text_values_pair_across_differently_worded_conditions():
     """The observed case: both lanes quote the same target composition, but only one of MinerU's two
     readings carries a condition and PaddleOCR words its own differently. Pairing by condition alone
-    reported three MISSING rows for one fact."""
+    reported three MISSING rows for one fact. MinerU's third spelling, left without a partner, is ambiguous
+    rather than missing since component became a strict list: an element one lane alone holds is unsettled."""
     lane_a = make_lane(
         backend="mineru",
         paper=PaperRecord(
@@ -423,8 +462,8 @@ def test_equal_text_values_pair_across_differently_worded_conditions():
     report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
     paired = next(c for c in report.comparisons if c.status == "agree")
 
-    assert sorted(statuses(report)) == [("component", "agree"), ("component", "missing")]
-    assert report.counts.agree == 1 and report.counts.missing == 1 and report.counts.total == 2
+    assert sorted(statuses(report)) == [("component", "agree"), ("component", "ambiguous")]
+    assert report.counts.agree == 1 and report.counts.ambiguous == 1 and report.counts.total == 2
     assert paired.condition == "Alloy target"
     assert paired.detail == (
         "identical after text normalization; conditions worded differently: "

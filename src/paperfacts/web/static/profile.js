@@ -35,6 +35,7 @@ const ATTRIBUTE_LABEL = {
   after_clause: "后置从句",
   named_values: "文字表述的数值",
   prompt_categories: "提示中的类别",
+  strict_list: "严格列表",
   figure_readable: "可从图中读数",
   figure_spectrum_axis: "光谱横轴",
   figure_spectrum_points: "光谱读数位置",

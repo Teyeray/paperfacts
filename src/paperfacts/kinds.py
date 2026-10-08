@@ -98,10 +98,6 @@ class KindRules(Protocol):
 
     def note(self, spec: FieldSpec, ctx: KindContext) -> str:
         """Text appended to the field's description in its field line; "" when the kind adds nothing."""
-
-    def union_needs_shared_element(self, spec: FieldSpec) -> bool:
-        """Whether a list cell (``cardinality: many``) both lanes answered is refused when they share no element:
-        true for a kind whose two spellings of one thing must never be written as two things."""
         ...
 
 
@@ -358,9 +354,6 @@ class NumericRules:
     def note(self, spec: FieldSpec, ctx: KindContext) -> str:
         return ""
 
-    def union_needs_shared_element(self, spec: FieldSpec) -> bool:
-        return False
-
 
 # ---- text and composition ----------------------------------------------------------------------------------
 
@@ -369,15 +362,7 @@ class TextRules:
     """Text as quoted, equal as :func:`paperfacts.normalize.same_text` judges it: across spacing, case and a
     lost hyphen, or by the category both name. A composition is compared the same way, as the quote with its
     unit (:attr:`paperfacts.records.FieldValue.quote`): one lane quotes "In2O3:SnO2 = 90:10 wt%" and the other
-    "In2O3:SnO2 = 90:10" with "wt%" in ``unit_raw``, and both are the one material the paper names.
-
-    ``shared_element`` is the composition row's: a list of compositions the two lanes answered without one element
-    in common is far more often one composition spelled two ways ("ITO 90:10" against "In2O3:SnO2 = 90:10") than
-    two materials, so the cell refuses it as a conflict instead of listing both. A plain text list (reagents,
-    techniques) keeps the union: each lane reading a different reagent is two reagents."""
-
-    def __init__(self, *, shared_element: bool = False) -> None:
-        self.shared_element = shared_element
+    "In2O3:SnO2 = 90:10" with "wt%" in ``unit_raw``, and both are the one material the paper names."""
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext) -> FieldValue:
         # Compared through same_text on the fly.
@@ -420,9 +405,6 @@ class TextRules:
         # One entry per value: a quote naming two categories ("XRD and XPS") names none, and is refused in the cell.
         named = f" Name each with one of: {', '.join(spec.prompt_categories)}." if spec.prompt_categories else ""
         return f" {LIST_NOTE}{named}"
-
-    def union_needs_shared_element(self, spec: FieldSpec) -> bool:
-        return self.shared_element
 
 
 def _unparsed(a: FieldValue, b: FieldValue) -> tuple[FactStatus, str]:
@@ -471,9 +453,6 @@ class BooleanRules:
             " A yes/no field: quote in value_raw the words that state it, and set holds to true when they affirm it,"
             " false when they deny it. Report nothing when the paper does not say."
         )
-
-    def union_needs_shared_element(self, spec: FieldSpec) -> bool:
-        return False
 
 
 # ---- date --------------------------------------------------------------------------------------------------
@@ -524,9 +503,6 @@ class DateRules:
 
     def note(self, spec: FieldSpec, ctx: KindContext) -> str:
         return " Quote the date exactly as written."
-
-    def union_needs_shared_element(self, spec: FieldSpec) -> bool:
-        return False
 
 
 # ---- interval ----------------------------------------------------------------------------------------------
@@ -622,9 +598,6 @@ class IntervalRules:
             ' Quote the whole range as written, both ends and the unit (e.g. "2.8-4.3 V"), or a one-sided bound'
             ' (">80 %").'
         )
-
-    def union_needs_shared_element(self, spec: FieldSpec) -> bool:
-        return False
 
 
 def _is_interval(value: CellValue) -> bool:
@@ -726,14 +699,11 @@ class ReferenceRules:
             f' "{referenced.sample_list_heading}" below.'
         )
 
-    def union_needs_shared_element(self, spec: FieldSpec) -> bool:
-        return False
-
 
 RULES: Mapping[FieldKind, KindRules] = MappingProxyType(
     {
         "numeric": NumericRules(),
-        "composition": TextRules(shared_element=True),
+        "composition": TextRules(),
         "text": TextRules(),
         "boolean": BooleanRules(),
         "date": DateRules(),

@@ -421,8 +421,10 @@ def decide_many(
 
     The refusals are :func:`decide`'s, in its order, and nothing else: a list has no condition to narrow and no
     one value to agree on. The comparison pairs a list as a set (:func:`paperfacts.compare._set_pairs`), so a
-    ``conflict`` cannot arise; an ``ambiguous`` one (a one-sided element whose sample match failed) still refuses,
-    and refuses the whole list: a union without the doubted element, or with a stray one, is no answer either.
+    ``conflict`` cannot arise -- except for a strict list (``FieldSpec.strict_list``) both lanes answered, whose
+    unshared elements the comparison reports as conflicts; that and an ``ambiguous`` one (a one-sided element whose
+    sample match failed, or a strict list's element left alone) refuse the whole list: a union without the doubted
+    element, or with a stray one, is no answer either.
 
     An element is one trusted value, identified by :func:`~paperfacts.kinds.element_key` -- the comparison's
     identity too. A field with categories keeps the category a value names and refuses as an element a value
@@ -448,18 +450,6 @@ def decide_many(
         return _rejection(evidence, "non_scalar", joined([*details, "没有可作为列表元素的证据"]))
     written = [min(group, key=lambda e: _preference(spec, e.backend, e.value)) for group in groups]
     lanes = [tuple(backend for backend in BACKENDS if any(e.backend == backend for e in group)) for group in groups]
-    answered = {backend for backend, _ in trusted}
-    if (
-        len(answered) == len(BACKENDS)
-        and rules_for(spec).union_needs_shared_element(spec)
-        and not any(len(held) == len(BACKENDS) for held in lanes)
-    ):
-        # Two lanes, no element in common: for a composition that is one thing spelled two ways far more often
-        # than two things, and a list claiming two would invent a fact. The disagreement stays visible, as a
-        # single-valued cell shows it.
-        return _rejection(
-            evidence, "conflict", "两路记录的元素没有一个相同；同一事物的两种写法不能当作两个元素，留空待核"
-        )
     # A category is written as declared; any other element as its lane quoted it.
     names = [element.key if spec.categories else element.value.quote for element in written]
     details.append("列表为两路已定位证据的并集")

@@ -36,6 +36,7 @@ NAME_BASED = {"condition_rule", "missing_condition_note_zh", "figure_readable", 
 AFTER_B0 = {
     "after_clause": "refuse",
     "cardinality": "one",
+    "strict_list": False,
     "prompt_categories": [],
     "entity": None,
     "references": None,
@@ -51,6 +52,7 @@ AFTER_B0 = {
 # description_zh is display-only and moves no key, listed because the table comparison covers every attribute.
 EDITED_AFTER_B0 = {
     ("component", "cardinality"): "many",
+    ("component", "strict_list"): True,
     (
         "component",
         "description",

@@ -863,6 +863,28 @@ def test_one_target_spelled_two_ways_is_refused_not_listed_as_two():
     assert decision(result, "component")["decision"] == "conflict"
 
 
+def test_one_shared_target_and_one_spelled_two_ways_is_refused_not_listed_as_three():
+    # The case next to the previous one: the lanes agree on the ITO target and spell the ATO target differently.
+    # A union would claim three targets for a two-target paper.
+    result = dataset(
+        make_lane(
+            paper=PaperRecord(fields=(value("component", "ITO 90:10", "wt%"), value("component", "ATO 5:95", "wt%")))
+        ),
+        make_lane(
+            backend="paddleocr_vl",
+            paper=PaperRecord(
+                fields=(
+                    value("component", "ITO 90:10 wt%", "wt%", backend="paddleocr_vl"),
+                    value("component", "Sb2O5:SnO2 = 5:95", "wt%", backend="paddleocr_vl"),
+                )
+            ),
+        ),
+    )
+
+    assert result.paper_row["component"] is None
+    assert decision(result, "component")["decision"] == "conflict"
+
+
 def test_a_target_only_one_lane_read_is_listed_as_single_source():
     result = dataset(make_lane(paper=PaperRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
     assert result.paper_row["component"] == ["SnO2", "ZnO"]
