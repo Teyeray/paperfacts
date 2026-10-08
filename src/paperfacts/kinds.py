@@ -40,6 +40,7 @@ from paperfacts.normalize import (
     read_value,
     same_text,
     unit_of_value,
+    without_own_unit,
 )
 from paperfacts.readers import read_date, read_interval, read_range
 from paperfacts.records import FieldValue, KindContext, resolve_reference, sample_key
@@ -360,17 +361,20 @@ class NumericRules:
 
 class TextRules:
     """Text as quoted, equal as :func:`paperfacts.normalize.same_text` judges it: across spacing, case and a
-    lost hyphen, or by the category both name. A composition is compared the same way."""
+    lost hyphen, or by the category both name. A composition is compared the same way, with its unit set
+    apart first: one lane quotes "In2O3:SnO2 = 90:10 wt%" and the other "In2O3:SnO2 = 90:10" with "wt%" in
+    ``unit_raw``, and both are the one target the paper names."""
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext) -> FieldValue:
         # Compared through same_text on the fly.
         return field
 
     def compare(self, a: FieldValue, b: FieldValue, spec: FieldSpec, ctx: KindContext) -> tuple[FactStatus, str]:
-        if same_text(spec, a.value_raw, b.value_raw):
-            category = canonical_category(spec.categories, a.value_raw) or canonical_category(
-                spec.categories, b.value_raw
-            )
+        text_a, text_b = _text_of(a), _text_of(b)
+        if same_text(spec, text_a, text_b):
+            if a.unit_raw and b.unit_raw and _unit_key(a.unit_raw) != _unit_key(b.unit_raw):
+                return "conflict", f"same text, units differ: {a.unit_raw!r} vs {b.unit_raw!r}"
+            category = canonical_category(spec.categories, text_a) or canonical_category(spec.categories, text_b)
             return "agree", f"both name {category}" if category else "identical after text normalization"
         return "conflict", f"{a.value_raw!r} vs {b.value_raw!r}"
 
@@ -380,7 +384,10 @@ class TextRules:
     def cell(
         self, value: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext
     ) -> tuple[CellValue, str | None]:
-        return value.value_raw.strip(), None
+        # The unit once, at the end, wherever the quote carried it: so the two lanes' cells of one composition
+        # are the same string, which is what ``same`` compares, and the cell still says "wt%".
+        text = _text_of(value)
+        return f"{text} {clean_unit(value.unit_raw)}" if value.unit_raw else text, None
 
     def same(self, a: CellValue, b: CellValue, spec: FieldSpec) -> bool:
         """Text is judged as the comparison judges it (:func:`same_text`): "DC and RF" and "DC and RF magnetron
@@ -403,6 +410,10 @@ class TextRules:
         # One entry per value: a quote naming two categories ("XRD and XPS") names none, and is refused in the cell.
         named = f" Name each with one of: {', '.join(spec.prompt_categories)}." if spec.prompt_categories else ""
         return f" {LIST_NOTE}{named}"
+
+
+def _text_of(value: FieldValue) -> str:
+    return without_own_unit(value.value_raw, value.unit_raw)
 
 
 def _unparsed(a: FieldValue, b: FieldValue) -> tuple[FactStatus, str]:

@@ -98,6 +98,22 @@ def same_text(spec: FieldSpec, a: str | None, b: str | None) -> bool:
     return LOOSE_PUNCTUATION.sub("", normalize_key(a)) == LOOSE_PUNCTUATION.sub("", normalize_key(b))
 
 
+def without_own_unit(value_raw: str, unit_raw: str | None) -> str:
+    """The quote without the unit ``unit_raw`` names when it ends the text, so that a composition one lane quotes
+    as "In2O3:SnO2 = 90:10 wt%" and the other as "In2O3:SnO2 = 90:10" with "wt%" beside it reads as one text.
+
+    Only a trailing unit goes, its characters with any spacing between them ("wt %"), and only when a letter does
+    not run straight into it ("ATOwt%" is not a value with a unit). A unit inside the text ("SnO2:Ta (2 wt% Ta2O5)")
+    stays where the paper put it, and a text that is nothing but its unit is left alone."""
+    text = value_raw.strip()
+    unit = clean_unit(unit_raw) if unit_raw else ""
+    if not unit:
+        return text
+    tail = re.compile(r"(?<![^\W\d_])" + r"\s*".join(re.escape(char) for char in unit) + r"\s*$", re.IGNORECASE)
+    stripped = tail.sub("", text).rstrip()
+    return stripped or text
+
+
 # ---- Numbers ------------------------------------------------------------------------------------------------
 # Returns ``(value, note)``: None when parsing fails, with the note saying why, so "why couldn't the two
 # lanes be compared" stays traceable.

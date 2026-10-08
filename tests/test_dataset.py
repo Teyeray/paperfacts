@@ -797,6 +797,20 @@ def test_a_target_size_written_as_a_number_word_fills_the_cell():
     assert decision(result, "inch")["decision"] == "agree"
 
 
+def test_a_composition_quoted_with_its_unit_inside_or_beside_the_text_fills_the_paper_row():
+    # The same two quotes as the comparison's test: the cell carries the unit once, whichever lane put it where.
+    result = dataset(
+        make_lane(paper=PaperRecord(fields=(value("component", "In2O3:SnO2 = 90:10", "wt%"),))),
+        make_lane(
+            backend="paddleocr_vl",
+            paper=PaperRecord(fields=(value("component", "In2O3:SnO2 = 90:10 wt%", "wt%", backend="paddleocr_vl"),)),
+        ),
+    )
+
+    assert result.paper_row["component"] == "In2O3:SnO2 = 90:10 wt%"
+    assert decision(result, "component")["decision"] == "agree"
+
+
 def test_different_target_compositions_cannot_be_picked_or_joined():
     result = dataset(make_lane(paper=PaperRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
     assert result.paper_row["component"] is None

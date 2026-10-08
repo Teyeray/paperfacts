@@ -218,6 +218,32 @@ def test_target_fields_are_compared_at_the_paper_level():
     assert [(c.scope, c.field, c.status) for c in report.comparisons] == [("paper", "density", "agree")]
 
 
+def test_a_composition_quoted_with_its_unit_inside_or_beside_the_text_agrees():
+    # Production: MinerU quoted "In2O3:SnO2 = 90:10" with "wt%" in unit_raw, PaddleOCR-VL "In2O3:SnO2 = 90:10 wt%"
+    # with the same unit_raw, and the comparison reported each lane missing the other's target.
+    lane_a = make_lane(
+        backend="mineru", paper=PaperRecord(fields=(make_field("component", "In2O3:SnO2 = 90:10", unit_raw="wt%"),))
+    )
+    lane_b = make_lane(
+        backend="paddleocr_vl",
+        paper=PaperRecord(
+            fields=(make_field("component", "In2O3:SnO2 = 90:10 wt%", unit_raw="wt%", condition="ITO target"),)
+        ),
+    )
+
+    report = compare_lanes(lane_a, lane_b, SampleMatching(), comparison_options())
+
+    assert [(c.scope, c.field, c.status) for c in report.comparisons] == [("paper", "component", "agree")]
+
+
+def test_a_composition_with_the_same_text_but_another_unit_is_a_conflict():
+    spec = FIELD_BY_NAME["component"]
+    a = make_field("component", "Sn/Ta 95:5 wt%", unit_raw="wt%")
+    b = make_field("component", "Sn/Ta 95:5", unit_raw="at%")
+
+    assert compare_values(a, b, spec, NO_CONTEXT)[0] == "conflict"
+
+
 def test_a_target_field_that_shows_up_inside_a_sample_is_ignored():
     # The target belongs to the paper, not to a sample; comparing it at the sample level would conjure up
     # duplicate facts out of nowhere.
