@@ -536,6 +536,20 @@ async def tab_bar_pin(page: Page, base: str, docs: dict[str, str], _: Path) -> N
     expect(await bar_top() <= 57, f"the tab bar un-pinned after switching to 图中读数 (top {await bar_top()})")
     await page.click('#document-view .tab-bar [data-tab="results"]')
     expect(await bar_top() <= 57, f"the tab bar un-pinned after switching back to 结果表 (top {await bar_top()})")
+    # A genuinely short document (no results, no comparisons, no readings) has no scroll room of its
+    # own; the middle column's minimum height must still leave enough to keep the bar pinned.
+    await open_doc(page, base, docs["C"])
+    # Coming from doc T this is a same-document hash navigation: the old content is still on the page
+    # until the report lands, so wait for paper C itself before measuring anything.
+    await page.wait_for_function("document.querySelector('#document-view h1')?.textContent.startsWith('C ')")
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    expect(await page.evaluate("window.scrollY") > 0, "a short document was still given room to scroll")
+    await page.click('#document-view .tab-bar [data-tab="figures"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned on a short document's 图中读数 (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="results"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned on a short document's 结果表 (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned on a short document's 事实对照 (top {await bar_top()})")
 
 
 @check("a job finishing after the reader left does not redraw the page they left")

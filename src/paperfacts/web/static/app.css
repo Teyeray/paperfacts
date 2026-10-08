@@ -319,6 +319,13 @@ body.pane-dragging { cursor: col-resize; user-select: none; }
 .evidence .kpis { margin-top: 0; }
 @media (min-width: 961px) {
   .document { --tab-bar: 42px; }
+  /* The tab bar only pins while the page has room to scroll, and a short document (empty 图中读数, a
+     few results) would otherwise collapse under one viewport and drop the bar to its natural spot.
+     This minimum on the middle column — the bar is its first child — guarantees
+     docHeight ≥ bar top + (100vh − topbar): wherever the reader was scrolled, the bar can reach its
+     sticky top. The extra height lands at the column tail, after the joblog, never as a mid-page
+     gap. (Below 961px the bar doesn't stick, so phones stay compact.) */
+  .doc-main { min-height: calc(100vh - var(--topbar)); }
   .tab-bar { position: sticky; top: var(--topbar); z-index: 4; height: var(--tab-bar); flex-wrap: nowrap; box-shadow: var(--shadow-2); }
 }
 @media (min-width: 1280px) {
