@@ -102,7 +102,7 @@ Rules:
     A value the paper states for a named subset of the listed samples -- "all films deposited at 100 °C", "the annealed films", "the samples on glass" -- belongs to each sample in that subset when the excerpts or the sample list say exactly which listed samples form the subset: then report it once per sample of the subset, each time under that sample's own id, never as one entry without a sample id. Never guess which samples a subset holds. `applies_to_all_samples` stays reserved for a value that holds for the whole list; a subset, however large, is reported sample by sample. If they do not say which samples form the subset, leave the value out rather than attach it to samples it may not belong to.
 
 Fields to extract:
-- `component` (group: target, kind: composition): Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.
+- `component` (group: target, kind: composition): Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'. A paper that sputters from several targets (an ITO and an ATO target for a bilayer) has one entry per target; never split one target's composition into its constituents. Several values may hold at once: report each as its own entry.
 - `resistance` (group: target, kind: numeric, canonical unit: Ω·cm): Electrical resistivity of the sputtering target itself (not the film).
 - `density` (group: target, kind: numeric, canonical unit: %): Relative density of the sputtering target as a percentage of theoretical density.
 - `inch` (group: target, kind: numeric, canonical unit: inch): Size of the sputtering target: diameter, or length and width for a rectangular or rotary target.

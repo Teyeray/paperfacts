@@ -798,7 +798,7 @@ The twenty-three shipped fields are aimed at sputtered transparent-conductive-ox
 
 | Field | 中文名 | Group | Kind | Unit |
 |---|---|---|---|---|
-| `component` | 靶材成分 | target | composition | — |
+| `component` | 靶材成分 | target | composition, list (one entry per sputtering target) | — |
 | `resistance` | 靶材电阻率 | target | numeric | Ω·cm |
 | `density` | 靶材密度 | target | numeric | % |
 | `inch` | 靶材尺寸 | target | numeric | inch |

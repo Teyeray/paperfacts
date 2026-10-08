@@ -110,8 +110,9 @@
       "label": "靶材成分",
       "group": "target",
       "kind": "composition",
-      "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.",
-      "description_zh": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
+      "cardinality": "many",
+      "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'. A paper that sputters from several targets (an ITO and an ATO target for a bilayer) has one entry per target; never split one target's composition into its constituents.",
+      "description_zh": "溅射靶材的化学组成；论文用了几种靶材就记几条，每条一种靶材的组成。",
       "keywords": [
         "target",
         "sputtering target",

@@ -807,7 +807,7 @@ def test_a_composition_quoted_with_its_unit_inside_or_beside_the_text_fills_the_
         ),
     )
 
-    assert result.paper_row["component"] == "In2O3:SnO2 = 90:10 wt%"
+    assert result.paper_row["component"] == ["In2O3:SnO2 = 90:10 wt%"]
     assert decision(result, "component")["decision"] == "agree"
 
 
@@ -823,14 +823,50 @@ def test_the_cell_judges_a_composition_as_the_comparison_did():
         ),
     )
 
-    assert result.paper_row["component"] == "ITO 90:10 wt.%"
+    assert result.paper_row["component"] == ["ITO 90:10 wt.%"]
     assert decision(result, "component")["decision"] == "agree"
 
 
-def test_different_target_compositions_cannot_be_picked_or_joined():
-    result = dataset(make_lane(paper=PaperRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
+def test_a_paper_sputtering_from_several_targets_lists_every_target():
+    # The TCO profile declares `component` as a list: a bilayer deposited from an ITO and an ATO target has two
+    # compositions, and the cell holds both rather than refusing to pick one (the production case of PR #54).
+    ito, ato = ("In2O3:SnO2 = 90:10", "wt%"), ("Sb2O5:SnO2 = 5:95", "wt%")
+    result = dataset(
+        make_lane(paper=PaperRecord(fields=(value("component", *ito), value("component", *ato)))),
+        make_lane(
+            backend="paddleocr_vl",
+            paper=PaperRecord(
+                fields=(
+                    value("component", "Sb2O5:SnO2 = 5:95 wt%", "wt%", backend="paddleocr_vl"),
+                    value("component", "In2O3:SnO2 = 90:10 wt%", "wt%", backend="paddleocr_vl"),
+                )
+            ),
+        ),
+    )
+
+    assert result.paper_row["component"] == ["In2O3:SnO2 = 90:10 wt%", "Sb2O5:SnO2 = 5:95 wt%"]
+    assert decision(result, "component")["decision"] == "agree"
+
+
+def test_one_target_spelled_two_ways_is_refused_not_listed_as_two():
+    # The common shape, which must not get worse for the two-target case: both lanes read the one ITO target, in
+    # words the text comparison cannot unify. A list of both would claim two targets; the cell refuses instead.
+    result = dataset(
+        make_lane(paper=PaperRecord(fields=(value("component", "In2O3 to SnO2 of 90% to 10%", "wt%"),))),
+        make_lane(
+            backend="paddleocr_vl",
+            paper=PaperRecord(fields=(value("component", "ITO, In2O3:SnO2 = 90:10", "wt%", backend="paddleocr_vl"),)),
+        ),
+    )
+
     assert result.paper_row["component"] is None
-    assert decision(result, "component")["decision"] == "multiple_values"
+    assert decision(result, "component")["decision"] == "conflict"
+
+
+def test_a_target_only_one_lane_read_is_listed_as_single_source():
+    result = dataset(make_lane(paper=PaperRecord(fields=(value("component", "SnO2"), value("component", "ZnO")))))
+    assert result.paper_row["component"] == ["SnO2", "ZnO"]
+    assert decision(result, "component")["decision"] == "single_source"
 
 
 def test_unmatched_samples_with_the_same_id_stay_separate_per_backend():

@@ -26,16 +26,19 @@ def test_a_field_is_dispatched_by_its_kind(tco_profile: DomainProfile):
         assert isinstance(rules_for(spec), NumericRules if spec.kind == "numeric" else TextRules)
 
 
-def test_no_kind_adds_a_note_to_a_field_line_yet(tco_profile: DomainProfile):
-    # The field line's {note} renders "" for every kind so far, which keeps the TCO prompts byte-identical.
-    assert {rules_for(spec).note(spec, NO_CONTEXT) for spec in tco_profile.fields} == {""}
+def test_only_the_list_field_adds_a_note_to_its_field_line(tco_profile: DomainProfile):
+    # The field line's {note} renders "" for every single-valued field, so the TCO prompts move only where a field
+    # was deliberately made a list (component: one entry per sputtering target).
+    notes = {spec.name: rules_for(spec).note(spec, NO_CONTEXT) for spec in tco_profile.fields}
+
+    assert {name for name, note in notes.items() if note} == {"component"}
 
 
 def test_every_column_carries_its_field_kind(tco_profile: DomainProfile):
     columns = field_columns(tco_profile)
 
     assert [(column.kind, column.cardinality) for column in columns] == [
-        (spec.kind, "one") for spec in tco_profile.fields
+        (spec.kind, spec.cardinality) for spec in tco_profile.fields
     ]
 
 

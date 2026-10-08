@@ -1,7 +1,7 @@
 # 靶材成分（component）论文级单元格为空：原因与决策
 
 Date: 2026-10-08
-Status: 问题一（配对）已随 PR #54 实现；问题二（单值字段遇多靶材）待拍板。
+Status: 问题一（配对）已随 PR #54 实现；问题二选项 A 在分支 `feat/component-many-targets` 上实现，待负责人批准全库重抽后合入。
 
 ## 反馈
 
@@ -50,18 +50,41 @@ differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
 `normalize.py`、`kinds.py`、`compare.py`、`decide.py` 均在抽取或比较指纹内，合入后所有已存抽取与比较换名；LLM 缓存按
 请求载荷命中，离线重放零 miss 即可重新推导。
 
-### 问题二：单值字段遇到多靶材（设计决策，待定）
+### 问题二：单值字段遇到多靶材（选项 A，已实现，待批准）
 
-`component` 在 `profiles/tco.json` 里是 `cardinality: one`（默认），`description_zh` 明说「保留唯一组成文本，不拆选多个靶材」。
+`component` 在 `profiles/tco.json` 里曾是 `cardinality: one`（默认），`description_zh` 明说「保留唯一组成文本，不拆选多个靶材」。
 这篇论文用了 ITO 与 ATO 两个靶，两路都如实给出两个组成，`decide` 在一个通道里看到两个不同值后依规则拒绝填格。
 问题一修复后该论文的靶材栏仍为空（`multiple_conditions`），空是「拒绝猜测」，不是丢失。
 
 | 选项 | 效果 | 代价 |
 |---|---|---|
-| A. `component` 改为 `cardinality: "many"` | 靶材栏显示「In2O3:SnO2 = 90:10 wt%；Sb2O5:SnO2 = 5:95 wt%」；om0035 类论文同理 | `cardinality` 是 PROMPT+VERDICT 属性，改后提示词变化，TCO 全库重新抽取（非离线重放）；`description_zh` 需改写；列表字段的元素键已走 `quote_with_unit`，无需另改 |
+| A. `component` 改为 `cardinality: "many"` | 靶材栏显示「In2O3:SnO2 = 90:10 wt%；Sb2O5:SnO2 = 5:95 wt%」；om0035 类论文同理 | `cardinality` 是 PROMPT+VERDICT 属性，改后提示词变化，每篇每路重问一次 `component`（其余请求命中缓存）；`description_zh` 改写；B0/B1 的钉子（指纹、提示词快照、请求载荷、CLI 金样、工作簿快照）重录 |
 | B. 保持单值，页面显示原因 | 结果表论文级空格旁显示质量行的原因（如「两个靶材，未填」） | 多靶材论文的靶材栏仍空；仅前端改动 |
 
-建议 A，但这是领域决定，需负责人拍板后再动代码。
+**决策：A。** 实现（分支 `feat/component-many-targets`）：
+
+- `profiles/tco.json`：`component.cardinality = "many"`，`description` 加一句「几个靶材就几条」，`description_zh` 改为
+  「溅射靶材的化学组成；论文用了几种靶材就记几条，每条一种靶材的组成」。
+- 前端不改：`many` 列本就由 `table.js` / `tsv.js` / 工作簿按列的 `cardinality` 以「；」连接显示。
+- `description` 另加一句「never split one target's composition into its constituents」：B1 的 GZO 用例里 MinerU 把
+  `3 wt.%`、`97 wt.%` 各记一条，正是列表字段会诱发的拆分。
+- **守卫**（`kinds.TextRules(shared_element=True)`，只有 `composition` 这一行开启；`decide.decide_many` 询问
+  `rules_for(spec).union_needs_shared_element`）：两路都作答、却没有一个共同元素的组成列表，判 `conflict` 留空，
+  不并集。因为「一种组成两种写法」（`ITO 90:10` 对 `In2O3:SnO2 = 90:10`）远比「两种靶材各被一路读到」常见，
+  并集会凭空多出一个靶材。文本类列表（试剂、表征手段）不受影响，仍取并集。
+- 重录的钉子，均只动 `component` 一行：`tests/fixtures/prompts/snapshot.json`、`tests/fixtures/payloads/b0.json`（两条
+  `component` 请求的 `cache_key` 变化）、`tests/fixtures/cli_prompts/tco.txt`、`tests/fixtures/workbook/tco_workbook.json`
+  （字段说明表的单位列「文本（多值）」与说明）、`tests/test_tco_fingerprints_pinned.py`（抽取/比较指纹、文件 sha、content_hash）、
+  `tests/test_profile_load.py` 的 `EDITED_AFTER_B0`。检索与识图指纹不动。
+- 该论文离线重放：比较 2 条 `agree` + 2 条 `missing`，`paper_row.component = ["In2O3:SnO2 = 90:10 wt%", "Sb2O5:SnO2 = 5:95 wt%"]`，判定 `agree`。
+
+对现有金标的影响：B0/B2 金标里的 4 个 `component` 格都不是多靶材论文。有守卫时它们的结果与单值时一致（GZO 与 ITO 的
+两种写法照旧留空：原来是 `multiple_values`/`conflict`，现在是 `conflict`），没有守卫则会变成「两个靶材」的错误列表。
+`eval/score.py` 对列表格逐元素计分，所以 `component` 的计数在此改动前后不可直接比较；下次对 B0/B2 评分时按此解读。
+
+合入前需负责人安排重抽：passage 模式下只有 `component` 这一个字段问题的请求变了
+（`tests/fixtures/payloads/b0.json` 的 50 条请求中只有 2 条换了 `cache_key`），其余问题仍命中 LLM 缓存，所以
+`deploy.sh --rerun` 的代价是每篇论文每路各一次 `component` 提问，而不是全库重抽。
 
 ## 测试
 
@@ -70,3 +93,5 @@ differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
 - `tests/test_dataset.py`：两种写法进论文行，单元格为 `In2O3:SnO2 = 90:10 wt%`，判定 `agree`；`wt.%` 在文本里对 `wt%`
   在旁边，比较与单元格同判 `agree`。
 - `tests/test_records.py` 的「论文级字段出现在样品下即丢弃」保持不变：清洗层的不变量仍成立。
+- 选项 A：`tests/test_dataset.py` 两靶材双路 → 两元素 `agree`；一靶材两种写法 → 留空 `conflict`；
+  `tests/test_production_cases_b1.py` GZO 仍留空；`tests/test_cardinality_many.py` 只有 composition 行开启守卫。

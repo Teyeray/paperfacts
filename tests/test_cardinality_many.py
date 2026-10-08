@@ -26,7 +26,7 @@ from paperfacts.keys import (
     extractor_key,
     profile_extraction_fingerprint,
 )
-from paperfacts.kinds import LIST_NOTE, element_key
+from paperfacts.kinds import LIST_NOTE, element_key, rules_for
 from paperfacts.matching import SampleMatch, SampleMatching
 from paperfacts.models import DocumentInput
 from paperfacts.profile import DomainProfile
@@ -333,6 +333,12 @@ def test_without_categories_elements_keep_first_seen_order_mineru_first_and_one_
 
     assert decision.value == ["ethanol", "Toluene"]
     assert decision.status == "single_source"
+
+
+def test_only_the_composition_row_refuses_a_union_the_lanes_share_no_element_of():
+    # A text list keeps the union (two reagents, one per lane); a composition list is one thing spelled two ways.
+    assert not rules_for(SOLVENT).union_needs_shared_element(SOLVENT)
+    assert rules_for(dataclasses.replace(SOLVENT, kind="composition")).union_needs_shared_element(SOLVENT)
 
 
 def test_an_element_is_written_as_the_quote_with_its_unit_once_and_its_spacing_collapsed():

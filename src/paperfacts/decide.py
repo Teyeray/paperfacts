@@ -448,6 +448,18 @@ def decide_many(
         return _rejection(evidence, "non_scalar", joined([*details, "没有可作为列表元素的证据"]))
     written = [min(group, key=lambda e: _preference(spec, e.backend, e.value)) for group in groups]
     lanes = [tuple(backend for backend in BACKENDS if any(e.backend == backend for e in group)) for group in groups]
+    answered = {backend for backend, _ in trusted}
+    if (
+        len(answered) == len(BACKENDS)
+        and rules_for(spec).union_needs_shared_element(spec)
+        and not any(len(held) == len(BACKENDS) for held in lanes)
+    ):
+        # Two lanes, no element in common: for a composition that is one thing spelled two ways far more often
+        # than two things, and a list claiming two would invent a fact. The disagreement stays visible, as a
+        # single-valued cell shows it.
+        return _rejection(
+            evidence, "conflict", "两路记录的元素没有一个相同；同一事物的两种写法不能当作两个元素，留空待核"
+        )
     # A category is written as declared; any other element as its lane quoted it.
     names = [element.key if spec.categories else element.value.quote for element in written]
     details.append("列表为两路已定位证据的并集")
