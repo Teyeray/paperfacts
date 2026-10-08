@@ -26,6 +26,9 @@
     <a class="topbar-link" id="profile-link" href="#/profile" title="当前领域配置的字段、单位和提示词">配置说明</a>
     <a class="topbar-link" id="check-link" href="#/check" title="粘贴一份领域配置 JSON，检查它能否加载">检查配置</a>
     <button class="ghost" id="theme-toggle" type="button" aria-label="主题" title="切换浅色 / 深色">◐</button>
+    <button class="ghost" id="viewer-toggle" type="button" aria-label="收起预览" aria-expanded="true" aria-controls="document-view" title="收起预览" aria-keyshortcuts="]" hidden>
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg>
+    </button>
     <div class="topbar-meta" id="health">…</div>
   </div>
 </header>
@@ -53,6 +56,8 @@
       <ul class="doc-list" id="doc-list"></ul>
     </details>
   </aside>
+
+  <div class="rail-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整侧栏宽度"></div>
 
   <section class="content" id="content" tabindex="-1">
     <div class="intro" id="empty-state">
@@ -169,11 +174,10 @@
       </details>
     </div>
   </div>
-  <button class="ghost viewer-expand" data-action="expand-viewer" type="button" hidden>展开预览</button>
+  <div class="pane-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整预览宽度"></div>
   <aside class="viewer-pane" aria-label="页面预览">
     <div class="viewer-pane-head">
       <span class="viewer-pane-title">页面溯源</span>
-      <button class="ghost pane-toggle" data-action="collapse-viewer" aria-label="收起预览" title="收起预览" type="button"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
     </div>
     <section class="viewer" aria-label="页面溯源" data-slot="viewer"></section>
   </aside>
@@ -219,6 +223,18 @@
   <div class="dialog-actions">
     <button class="secondary" type="button" data-action="close">取消</button>
     <button class="primary" id="run-all-confirm" type="button">开始处理</button>
+  </div>
+</dialog>
+
+<dialog class="dialog confirm-dialog" id="delete-dialog" aria-labelledby="delete-title">
+  <div class="dialog-head">
+    <h2 id="delete-title">删除文档</h2>
+    <button class="ghost dialog-close" type="button" data-action="close" aria-label="关闭">✕</button>
+  </div>
+  <p class="dialog-text" id="delete-message"></p>
+  <div class="dialog-actions">
+    <button class="secondary" type="button" data-action="close">取消</button>
+    <button class="primary danger" id="delete-confirm" type="button">删除</button>
   </div>
 </dialog>
 

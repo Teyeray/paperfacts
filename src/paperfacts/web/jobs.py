@@ -189,6 +189,12 @@ class JobManager:
         with self._lock:
             return sorted((j for j in self._jobs.values() if j.document_id == document_id), key=lambda j: j.created_at)
 
+    def is_active(self, document_id: str) -> bool:
+        """Whether any queued or running job still holds the document, whatever the profile: a delete
+        refuses while this is true, because the runner would be reading files out from under the job."""
+        with self._lock:
+            return any(job.document_id == document_id and job.status in ACTIVE for job in self._jobs.values())
+
     def shutdown(self, *, wait: bool = False) -> None:
         """Stop accepting new jobs; queued ones are dropped, running ones finish. ``wait`` blocks until
         they have: the workers are daemon threads, so a process that exits without waiting ends them."""

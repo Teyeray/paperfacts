@@ -39,8 +39,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/, for the 
 
 from paperfacts.compare import ComparisonCounts, ComparisonReport, FieldComparison
 from paperfacts.config import Settings
+from paperfacts.figures import FigureReading
 from paperfacts.matching import SampleMatch, SampleMatching
-from paperfacts.models import BACKENDS, PageGeometry, ParsedArtifact
+from paperfacts.models import BACKENDS, NormalizedBBox, PageGeometry, ParsedArtifact
 from paperfacts.readings import StoredReadings
 from paperfacts.storage import document_key
 from paperfacts.web.app import create_app
@@ -362,6 +363,30 @@ def serve(root: Path) -> Iterator[tuple[str, dict[str, str], Path]]:
     )
     docs["U"] = seed_document(library, root, 27, "U 还没处理完的论文.pdf", samples=1, comparisons=1, finished=False)
     docs["W"] = seed_document(library, root, 28, "W Wu 氧化锌薄膜的电学性质.pdf", samples=1, comparisons=2, conflicts=1)
+    # A very tall results table, for the sticky tab-bar pin check: deep scrolling must survive a tab switch.
+    # Its charts are read too, so the figures panel has its own (shorter) body: tall, but shorter than results.
+    docs["T"] = seed_document(library, root, 30, "T 很长的结果表.pdf", samples=8, comparisons=250)
+    StoredReadings(
+        document_id=library.identity(docs["T"]).sha256,
+        figure_key=library.figure_key,
+        model="stub",
+        profile=profile.name,
+        readings=tuple(
+            FigureReading(
+                source_id="mineru_p1_b1",
+                page=1,
+                bbox=NormalizedBBox(x1=0.1, y1=0.1, x2=0.9, y2=0.9),
+                figure="Fig. 1",
+                caption="thickness against growth conditions",
+                panel=1,
+                field="thickness",
+                note=LONG_CONDITION,
+                y_raw=100.0 + n,
+                precision=0.1,
+            )
+            for n in range(24)
+        ),
+    ).write(library.layout.figures_path(docs["T"], library.figure_key, profile.name))
     # A paper whose charts were read under the current settings (and gave nothing): its button offers a re-read.
     docs["R"] = seed_document(library, root, 29, "R 已识图的论文.pdf", samples=1, comparisons=1)
     StoredReadings(
@@ -494,6 +519,37 @@ async def scroll_top(page: Page, base: str, docs: dict[str, str], _: Path) -> No
     await page.evaluate(f"location.hash = '#/doc/{docs['B']}'")
     await page.wait_for_function("document.querySelector('#document-view h1')?.textContent.startsWith('B ')")
     expect(await page.evaluate("window.scrollY") == 0, "the new document kept the old scroll offset")
+
+
+@check("switching to a short tab keeps the tab bar pinned", width=1440, height=700)
+async def tab_bar_pin(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    async def bar_top() -> float:
+        return await page.evaluate(
+            "document.querySelector('#document-view [data-slot=tabs]').getBoundingClientRect().top"
+        )
+
+    await open_doc(page, base, docs["T"])
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    expect(await page.evaluate("window.scrollY") > 0, "there was room to scroll into the results table")
+    expect(await bar_top() <= 57, f"the tab bar starts pinned (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="figures"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned after switching to 图中读数 (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="results"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned after switching back to 结果表 (top {await bar_top()})")
+    # A genuinely short document (no results, no comparisons, no readings) has no scroll room of its
+    # own; the middle column's minimum height must still leave enough to keep the bar pinned.
+    await open_doc(page, base, docs["C"])
+    # Coming from doc T this is a same-document hash navigation: the old content is still on the page
+    # until the report lands, so wait for paper C itself before measuring anything.
+    await page.wait_for_function("document.querySelector('#document-view h1')?.textContent.startsWith('C ')")
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    expect(await page.evaluate("window.scrollY") > 0, "a short document was still given room to scroll")
+    await page.click('#document-view .tab-bar [data-tab="figures"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned on a short document's 图中读数 (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="results"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned on a short document's 结果表 (top {await bar_top()})")
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
+    expect(await bar_top() <= 57, f"the tab bar un-pinned on a short document's 事实对照 (top {await bar_top()})")
 
 
 @check("a job finishing after the reader left does not redraw the page they left")
@@ -751,6 +807,156 @@ async def rail_collapse(page: Page, base: str, docs: dict[str, str], _: Path) ->
         "the expansion is not remembered",
     )
     expect(await page.evaluate(CONTENT_WIDTH) < await page.evaluate(VIEWPORT_WIDTH), "the expanded rail has no width")
+
+
+RAIL_WIDTH = "document.querySelector('.rail').getBoundingClientRect().width"
+
+
+@check("dragging the rail seam resizes the rail and remembers it")
+async def rail_drag(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    box = await page.locator(".rail-resizer").bounding_box()
+    before = await page.evaluate(RAIL_WIDTH)
+    expect(before == 300, f"the rail does not start at its 300px default: {before}")
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(
+        box["x"] + box["width"] / 2 + 120, 450, steps=5
+    )  # no viewer pane on home: the live max is the 600 cap, so +120 (→420) does not clamp
+    live = await page.evaluate(RAIL_WIDTH)
+    expect(live > before, f"the rail did not widen while dragging: {before} -> {live}")
+    expect(await page.evaluate("window.getSelection().toString()") == "", "dragging selected text")
+    await page.mouse.up()
+    after = await page.evaluate(RAIL_WIDTH)
+    stored = await page.evaluate("localStorage.getItem('paperfacts.rail-width')")
+    expect(stored == str(round(after)), f"the dragged width was not remembered: {after} vs {stored}")
+    await page.reload()
+    await page.wait_for_selector("#rail-search")
+    kept = await page.evaluate(RAIL_WIDTH)
+    expect(abs(kept - after) <= 1, f"reload dropped the rail width: {after} -> {kept}")
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")  # leave defaults for the later checks
+
+
+@check("the rail drag clamps at its bounds", width=1920, height=1080)
+async def rail_drag_clamp(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+
+    async def seam() -> tuple[float, float]:
+        box = await page.locator(".rail-resizer").bounding_box()
+        return box["x"] + box["width"] / 2, 450
+
+    mid = await seam()
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] - 400, 450, steps=5)
+    await page.mouse.up()
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 280,
+        f"the rail went below its 280px floor: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    mid = await seam()  # the seam moved with the rail: re-aim before dragging the other way
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] + 900, 450, steps=5)
+    await page.mouse.up()
+    # No viewer pane on home, so the live max is the 600px cap itself.
+    expect(await page.evaluate(RAIL_WIDTH) == 600, f"the rail passed its 600px cap: {await page.evaluate(RAIL_WIDTH)}")
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")
+
+
+@check("the rail seam is hidden when the rail is collapsed or the shell is stacked")
+async def rail_drag_hidden(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    await page.click("#rail-toggle")
+    expect(await page.is_hidden(".rail-resizer"), "the seam handle shows on a collapsed rail")
+    await page.keyboard.press("[")
+    expect(not await page.is_hidden(".rail-resizer"), "the seam handle did not come back with the rail")
+    await page.set_viewport_size({"width": 390, "height": 844})
+    expect(await page.is_hidden(".rail-resizer"), "the seam handle shows on a stacked shell")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+
+
+@check("the rail seam resizes from the keyboard and resets on double-click")
+async def rail_resize_keyboard(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await home(page, base)
+    await page.focus(".rail-resizer")
+    expect(await page.get_attribute(".rail-resizer", "role") == "separator", "the handle is no separator")
+    expect(await page.get_attribute(".rail-resizer", "aria-orientation") == "vertical", "no vertical orientation")
+    await page.keyboard.press("ArrowRight")
+    await page.keyboard.press("ArrowRight")
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 332,
+        f"two ArrowRight did not widen by 32px: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    await page.keyboard.press("Home")
+    expect(await page.evaluate(RAIL_WIDTH) == 280, "Home did not reach the 280px floor")
+    await page.keyboard.press("End")
+    expect(await page.evaluate(RAIL_WIDTH) == 600, "End did not reach the 600px cap")
+    await page.dblclick(".rail-resizer")
+    expect(await page.evaluate(RAIL_WIDTH) == 300, "double-click did not reset to 300px")
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.rail-width')") is None, "the reset kept the stored width"
+    )
+
+
+@check("shrinking the viewport re-clamps a stored rail width and never overflows")
+async def rail_viewport_shrink(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.rail-width', '600')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    # With the viewer pane live at 480, the boot clamp already caps the rail at 1440-56-570-480 = 334.
+    await page.wait_for_function(f"Math.round({RAIL_WIDTH}) === 334")  # wait out the rAF-debounced re-clamp
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 334,
+        f"the stored 600px was not clamped at boot: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)  # one rAF tick for the debounced re-clamp
+    expect(
+        await page.evaluate(RAIL_WIDTH) <= 314,
+        f"the rail was not re-clamped after the shrink: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+    expect(overflow <= 1, f"the page overflows {overflow}px sideways after the shrink")
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")
+
+
+@check("the rail seam works on a document page in the stacked-pane band (961–1279px)", width=1100, height=900)
+async def rail_stacked_band_doc(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    # Below 1280 the viewer pane is a stacked full-width band, not a side column: it must not count against
+    # the rail's live max, or the clamp floors every width at 280 and drags move the rail backwards.
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.rail-width', '400')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    await page.wait_for_function(f"Math.round({RAIL_WIDTH}) === 400")  # stored width survives, not snapped to 280
+    expect(await page.is_hidden("#viewer-toggle"), "the viewer toggle shows below 1280px")
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 400,
+        f"the stored 400px did not survive load: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    await page.focus(".rail-resizer")
+    await page.keyboard.press("ArrowRight")
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 416,
+        f"ArrowRight did not widen the rail: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    box = await page.locator(".rail-resizer").bounding_box()
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 + 120, 450, steps=5)
+    await page.mouse.up()
+    # From 416, +120 clamps at the true stacked-band max 1100-56-570 = 474 (still forward, never 280).
+    expect(
+        await page.evaluate(RAIL_WIDTH) == 474,
+        f"the drag did not move forward to the 474px max: {await page.evaluate(RAIL_WIDTH)}",
+    )
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.rail-width')") == "474",
+        "the dragged width was not remembered",
+    )
+    await page.evaluate("localStorage.removeItem('paperfacts.rail-width')")
 
 
 @check("the topbar's 总表 link is on every page, marks only home, and returns from a document to the home table")
@@ -1252,12 +1458,21 @@ PANE = """() => {
 }"""
 
 
+SEAM_ALIGN = """() => {
+  const h = document.querySelector('.pane-resizer').getBoundingClientRect();
+  const p = document.querySelector('.viewer-pane').getBoundingClientRect();
+  return h.x + h.width / 2 - p.x;
+}"""
+
+
 @check("the viewer pane stands beside the content at 1280 px", width=1280)
 async def pane_1280(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_doc(page, base, docs["A"])
     pane = await page.evaluate(PANE)
     expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
     expect(pane["inside"], "the viewer does not live in the viewer pane")
+    delta = await page.evaluate(SEAM_ALIGN)
+    expect(abs(delta) <= 1, f"the drag handle is off the real seam by {delta}px (content padding drift)")
 
 
 @check("the viewer pane stands beside the content at 1440 px, and a fact click scrolls no page", width=1440)
@@ -1267,6 +1482,8 @@ async def pane_1440(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
     pane = await page.evaluate(PANE)
     expect(0 < pane["right"] <= pane["width"], f"the viewer pane is not inside the viewport: {pane}")
     expect(pane["inside"], "the viewer does not live in the viewer pane")
+    delta = await page.evaluate(SEAM_ALIGN)
+    expect(abs(delta) <= 1, f"the drag handle is off the real seam by {delta}px (content padding drift)")
     before = await page.evaluate("window.scrollY")
     # focus without scrolling (a click would auto-scroll to the row): the keyboard path activates the row too
     await page.evaluate("document.querySelector('.facts tbody tr[data-index=\"0\"]').focus({preventScroll: true})")
@@ -1290,14 +1507,21 @@ async def pane_1920(page: Page, base: str, docs: dict[str, str], _: Path) -> Non
     expect(pane["inside"], "the viewer does not live in the viewer pane")
 
 
-@check("the viewer pane's collapse is remembered and the expand button brings it back")
+@check("the topbar's viewer toggle collapses and restores the pane, survives a reload, and `]` works")
 async def viewer_collapse(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await page.goto(base)
+    await page.wait_for_selector("#corpus-view:not(.hidden)")
+    expect(await page.is_hidden("#viewer-toggle"), "the viewer toggle shows outside a document page")
     await open_doc(page, base, docs["A"])
-    await page.click('[data-action="collapse-viewer"]')
+    expect(await page.is_visible("#viewer-toggle"), "the document page does not show the viewer toggle")
+    expect(await page.get_attribute("#viewer-toggle", "aria-expanded") == "true", "not marked expanded")
+    await page.click("#viewer-toggle")
     expect(
         await page.get_attribute("#document-view", "data-viewer") == "collapsed",
         "the collapse toggle did not collapse the pane",
     )
+    expect(await page.get_attribute("#viewer-toggle", "aria-expanded") == "false", "aria-expanded did not follow")
+    expect(await page.get_attribute("#viewer-toggle", "title") == "展开预览", "the tooltip did not follow")
     expect(await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "1", "not remembered")
     expect(await page.is_hidden(".viewer-pane"), "the collapsed pane still takes width")
     await page.reload()
@@ -1309,16 +1533,208 @@ async def viewer_collapse(page: Page, base: str, docs: dict[str, str], _: Path) 
         await page.get_attribute("#document-view", "data-viewer") == "collapsed",
         "a reload forgot the collapsed pane",
     )
-    await page.click(".viewer-expand")
+    await page.keyboard.press("]")
     expect(
         await page.get_attribute("#document-view", "data-viewer") == "",
-        "the expand button did not restore the pane",
+        "the `]` shortcut did not restore the pane",
     )
     expect(await page.is_visible(".viewer-pane"), "the expanded pane is not on screen")
     expect(
         await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "0",
         "the expansion is not remembered",
     )
+    await page.click("#viewer-toggle")
+    await page.keyboard.press("]")  # leave the state off for later checks
+    expect(await page.evaluate("localStorage.getItem('paperfacts.viewer-collapsed')") == "0", "left collapsed")
+
+
+PANE_WIDTH = "document.querySelector('.viewer-pane').getBoundingClientRect().width"
+
+
+@check("dragging the viewer seam resizes the pane, keeps the lanes fitting, and remembers it")
+async def pane_drag(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    box = await page.locator(".pane-resizer").bounding_box()
+    before = await page.evaluate(PANE_WIDTH)
+    expect(before == 480, f"the pane does not start at its 480px default: {before}")
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 - 120, 450, steps=5)  # dragging left widens (right-anchored)
+    live = await page.evaluate(PANE_WIDTH)
+    expect(live > before, f"the pane did not widen while dragging: {before} -> {live}")
+    expect(await page.evaluate("window.getSelection().toString()") == "", "dragging selected text")
+    await page.mouse.up()
+    after = await page.evaluate(PANE_WIDTH)
+    stored = await page.evaluate("localStorage.getItem('paperfacts.viewer-pane-width')")
+    expect(stored == str(round(after)), f"the dragged width was not remembered: {after} vs {stored}")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    kept = await page.evaluate(PANE_WIDTH)
+    expect(abs(kept - after) <= 1, f"reload dropped the pane width: {after} -> {kept}")
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
+    await lanes_visible(page)
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+
+
+@check("the viewer drag clamps at its bounds", width=1920, height=1080)
+async def pane_drag_clamp(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+
+    async def seam() -> tuple[float, float]:
+        box = await page.locator(".pane-resizer").bounding_box()
+        return box["x"] + box["width"] / 2, 450
+
+    mid = await seam()
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] - 900, 450, steps=5)
+    await page.mouse.up()
+    # With the rail at its 300px default the live max is 1920-56-570-300 = 994.
+    expect(
+        await page.evaluate(PANE_WIDTH) == 994,
+        f"the pane passed its live max: {await page.evaluate(PANE_WIDTH)}",
+    )
+    mid = await seam()  # the seam moved with the pane: re-aim before dragging the other way
+    await page.mouse.move(*mid)
+    await page.mouse.down()
+    await page.mouse.move(mid[0] + 900, 450, steps=5)  # dragging right narrows: 994 far overshoots the floor
+    await page.mouse.up()
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 300, f"the pane went below its 300px floor: {width}")
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+
+
+@check("the viewer seam is hidden when the pane is collapsed, and expanding restores the dragged width")
+async def pane_drag_collapsed(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    box = await page.locator(".pane-resizer").bounding_box()
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 - 80, 450, steps=5)
+    await page.mouse.up()
+    dragged = await page.evaluate(PANE_WIDTH)
+    await page.click("#viewer-toggle")
+    expect(await page.is_hidden(".pane-resizer"), "the seam handle shows on a collapsed pane")
+    await page.click("#viewer-toggle")
+    expect(await page.is_visible(".viewer-pane"), "the expanded pane is not on screen")
+    expect(
+        abs(await page.evaluate(PANE_WIDTH) - dragged) <= 1,
+        f"expanding dropped the dragged width: {dragged} -> {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+
+
+@check("the viewer seam resizes from the keyboard (inverted arrows) and resets on double-click")
+async def pane_resize_keyboard(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.focus(".pane-resizer")
+    expect(await page.get_attribute(".pane-resizer", "role") == "separator", "the handle is no separator")
+    expect(await page.get_attribute(".pane-resizer", "aria-orientation") == "vertical", "no vertical orientation")
+    await page.keyboard.press("ArrowLeft")  # left widens: the pane is right-anchored
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 496, f"ArrowLeft did not widen by 16px: {width}")
+    await page.keyboard.press("ArrowRight")
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 480, f"ArrowRight did not narrow by 16px: {width}")
+    await page.keyboard.press("End")
+    width = await page.evaluate(PANE_WIDTH)
+    expect(width == 514, f"End did not reach the 1440px live max: {width}")
+    await page.keyboard.press("Home")
+    expect(await page.evaluate(PANE_WIDTH) == 300, "Home did not reach the 300px floor")
+    await page.dblclick(".pane-resizer")
+    expect(await page.evaluate(PANE_WIDTH) == 480, "double-click did not reset to 480px")
+    expect(
+        await page.evaluate("localStorage.getItem('paperfacts.viewer-pane-width')") is None,
+        "the reset kept the stored width",
+    )
+
+
+@check("the pane's band defaults hold at 1280 and 1440 with no stored key, and follow a resize")
+async def pane_band_defaults(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    expect(
+        await page.evaluate(PANE_WIDTH) == 480,
+        f"the 1440 band default is not 480px: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)  # one rAF tick for the debounced re-clamp / re-default
+    expect(
+        await page.evaluate(PANE_WIDTH) == 340,
+        f"the 1280 band default is not 340px: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.set_viewport_size({"width": 1440, "height": 900})
+    await page.wait_for_timeout(100)
+    expect(
+        await page.evaluate(PANE_WIDTH) == 480,
+        f"the band default did not return to 480px: {await page.evaluate(PANE_WIDTH)}",
+    )
+
+
+@check("a seeded pane width is clamped to the live max on load, and the lanes still fit")
+async def pane_seeded_reload(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.viewer-pane-width', '700')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    # The boot clamp caps the stored 700 at the 1440 live max, 1440-56-570-300 = 514.
+    expect(
+        await page.evaluate(PANE_WIDTH) == 514,
+        f"the stored 700px was not clamped at boot: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.click('#document-view .tab-bar [data-tab="facts"]')
+    await lanes_visible(page)
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)
+    expect(
+        await page.evaluate(PANE_WIDTH) == 354,
+        f"the pane was not re-clamped at 1280: {await page.evaluate(PANE_WIDTH)}",
+    )
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+
+
+@check("shrinking the viewport re-clamps a stored pane width and never overflows")
+async def pane_viewport_shrink(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.evaluate("localStorage.setItem('paperfacts.viewer-pane-width', '514')")
+    await page.reload()
+    await page.wait_for_selector("#document-view:not(.hidden) h1")
+    expect(await page.evaluate(PANE_WIDTH) == 514, f"the stored 514px did not load: {await page.evaluate(PANE_WIDTH)}")
+    await page.set_viewport_size({"width": 1280, "height": 900})
+    await page.wait_for_timeout(100)  # one rAF tick for the debounced re-clamp
+    expect(
+        await page.evaluate(PANE_WIDTH) == 354,
+        f"the pane was not re-clamped after the shrink: {await page.evaluate(PANE_WIDTH)}",
+    )
+    overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+    expect(overflow <= 1, f"the page overflows {overflow}px sideways after the shrink")
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
+    await page.set_viewport_size({"width": 1440, "height": 900})
+
+
+@check("dragging the pane seam leaves the zoom state alone")
+async def pane_zoom_smoke(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await open_doc(page, base, docs["A"])
+    await page.wait_for_selector('[data-slot="viewer"] .page')
+    level = page.locator(".viewer-bar .zoom-level")
+    expect(await level.text_content() == "100%", "the zoom level does not start at 100%")
+    page_width = await page.evaluate(
+        "document.querySelector('[data-slot=\"viewer\"] .page').getBoundingClientRect().width"
+    )
+    box = await page.locator(".pane-resizer").bounding_box()
+    await page.mouse.move(box["x"] + box["width"] / 2, 450)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] / 2 - 60, 450, steps=5)
+    await page.mouse.up()
+    expect(await level.text_content() == "100%", "the pane drag disturbed the zoom level")
+    after_drag = await page.evaluate(
+        "document.querySelector('[data-slot=\"viewer\"] .page').getBoundingClientRect().width"
+    )
+    expect(after_drag > page_width, f"the page did not follow the wider pane: {page_width} -> {after_drag}")
+    await page.click(".viewer-bar .zoomer button:last-child")
+    expect(await level.text_content() == "125%", "the zoom ladder broke after a pane drag")
+    await page.click(".viewer-bar .zoom-level")  # the percentage button resets to 100%
+    await page.evaluate("localStorage.removeItem('paperfacts.viewer-pane-width')")
 
 
 @check("the viewer's zoom controls step the ladder, disable at the ends and survive a reload")
@@ -3086,6 +3502,64 @@ async def explore_narrow(page: Page, base: str, docs: dict[str, str], _: Path) -
     overflow = await page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
     expect(overflow <= 0, f"the page scrolls {overflow}px sideways")
     await wait_ids(page, ["S-P2"])
+
+
+@check("the rail's delete asks first, cancels without asking the server, then deletes its own upload")
+async def delete_document(page: Page, base: str, docs: dict[str, str], pdf: Path) -> None:
+    await home(page, base)
+    own = make_blank_pdf(pdf.parent / "delete-me.pdf", [(465.0, 665.0)])  # a size no seed uses
+    async with page.expect_response(lambda response: "/api/documents?" in response.url):
+        await page.set_input_files("#file-input", str(own))
+    await jobs_idle(page)  # the delete must not race the upload's job: a busy paper is refused (409)
+    listing = await page.evaluate("fetch('/api/documents').then((response) => response.json())")
+    mine = [doc for doc in listing if doc["name"] == "delete-me.pdf"]
+    expect(len(mine) == 1, f"the upload is not in the list once: {[d['name'] for d in listing]}")
+    doc_id = mine[0]["document_id"]
+    row = page.locator(f'#doc-list li:has(.doc-item[data-focus="doc:{doc_id}"])')
+
+    deletes: list[str] = []
+    page.on("request", lambda request: deletes.append(request.url) if request.method == "DELETE" else None)
+
+    # Cancel first: the dialog opens and names the paper, but no request may leave.
+    await row.locator(".doc-delete").click()
+    await page.wait_for_selector("#delete-dialog[open]")
+    message = await page.text_content("#delete-message") or ""
+    expect("delete-me.pdf" in message and "不可恢复" in message, f"the dialog says {message!r}")
+    await page.click('#delete-dialog [data-action="close"]:not(.dialog-close)')
+    await page.wait_for_function("!document.getElementById('delete-dialog').open")
+    expect(deletes == [], f"cancelling sent {deletes}")
+    expect("delete-me.pdf" in await listed_names_join(page), "the row vanished on cancel")
+
+    # Confirm: the open paper's row goes, the toast names the paper, and the rail still counts.
+    # The paper is deleted while it is the open one, so the page must land back on home (corpus view),
+    # not flash the missing view for a document that was just deleted under the route.
+    await page.evaluate(f"location.hash = '#/doc/{doc_id}'")
+    await page.wait_for_selector("#document-view:not(.hidden)")
+    await row.locator(".doc-delete").click()
+    await page.wait_for_selector("#delete-dialog[open]")
+    await page.click("#delete-confirm")
+    await page.wait_for_selector("#delete-dialog[open]", state="detached")
+    await page.wait_for_selector("#corpus-view:not(.hidden)")
+    for _ in range(50):
+        if "delete-me.pdf" not in await listed_names_join(page):
+            break
+        await page.wait_for_timeout(200)
+    expect("delete-me.pdf" not in await listed_names_join(page), "the row stayed after the delete")
+    toasts = await page.locator(".toast").all_text_contents()
+    expect(any("已删除「delete-me.pdf」" in toast for toast in toasts), f"no toast: {toasts}")
+    count = await page.text_content("#doc-count")
+    expect(count is not None and "delete-me" not in count, f"the count reads {count!r}")
+
+    # A stale link to the deleted paper shows the missing view.
+    await page.evaluate(f"location.hash = '#/doc/{doc_id}'")
+    await page.wait_for_selector("text=找不到这篇文档")
+    listing = await page.evaluate("fetch('/api/documents').then((response) => response.json())")
+    expect(all(doc["document_id"] != doc_id for doc in listing), "the server still lists the deleted id")
+    expect(deletes and len(deletes) == 1, f"exactly one DELETE should have left: {deletes}")
+
+
+async def listed_names_join(page: Page) -> str:
+    return "|".join(await listed_names(page))
 
 
 async def main() -> int:
