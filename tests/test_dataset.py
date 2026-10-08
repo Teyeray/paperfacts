@@ -1104,21 +1104,3 @@ def test_on_a_field_with_a_measurement_axis_different_numbers_still_separate_mea
     result = paired(fields, [])
 
     assert result.paper_row["transmittance"] is None
-
-
-def test_paper_level_fields_in_samples_reach_paper_row():
-    """When the model places a paper-level field under samples, it should still reach the paper row.
-
-    This addresses the colleague's observation that target composition (靶材成分) appears in the
-    extraction labels but not in the target column. When the model incorrectly places a paper-level
-    field under a sample, we now recover it and include it in the paper row.
-    """
-    # Both lanes extract component (paper-level field) under samples - this is the bug scenario
-    result = paired(
-        [value("component", "ITO 90:10 wt%")], [value("component", "ITO 90:10 wt%", backend="paddleocr_vl")]
-    )
-
-    # The paper-level field should reach the paper row despite being extracted under samples
-    assert result.paper_row["component"] == "ITO 90:10 wt%"
-    # Agreement between lanes means no status field (trusted)
-    assert "component_status" not in result.paper_row or result.paper_row["component_status"] is None

@@ -218,16 +218,16 @@ def test_target_fields_are_compared_at_the_paper_level():
     assert [(c.scope, c.field, c.status) for c in report.comparisons] == [("paper", "density", "agree")]
 
 
-def test_a_target_field_that_shows_up_inside_a_sample_is_recovered():
-    # When the model incorrectly places a paper-level field inside a sample, we recover it by comparing
-    # at the paper level, so these values can reach the paper row in the dataset.
+def test_a_target_field_that_shows_up_inside_a_sample_is_ignored():
+    # The target belongs to the paper, not to a sample; comparing it at the sample level would conjure up
+    # duplicate facts out of nowhere.
     fields = (make_field("density", "99", unit_raw="%"),)
     lane_a = make_lane(backend="mineru", samples=[make_sample("A", fields)])
     lane_b = make_lane(backend="paddleocr_vl", samples=[make_sample("A", fields)])
 
     report = compare_lanes(lane_a, lane_b, exact_match(), comparison_options())
 
-    assert [(c.scope, c.field, c.status) for c in report.comparisons] == [("paper", "density", "agree")]
+    assert report.comparisons == ()
 
 
 def test_matched_samples_are_compared_field_by_field():

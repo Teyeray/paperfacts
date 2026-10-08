@@ -283,9 +283,6 @@ def consolidate_document(
 
     paper: dict[str, Decision] = {}
     for spec in profile.paper_fields:
-        # Collect evidence from lane.paper.fields (the correct location) and also from sample fields (where
-        # the model may have incorrectly placed them). The comparison ignores paper-level fields in samples to
-        # avoid duplication, but we still need to collect them here so their values reach the dataset.
         evidence = [
             (backend, field)
             for backend, lane in lanes.items()
@@ -293,16 +290,6 @@ def consolidate_document(
             for field in lane.paper.fields
             if field.field == spec.name
         ]
-        # Also collect from samples where the model incorrectly placed paper-level fields
-        evidence.extend(
-            [
-                (backend, field)
-                for backend, lane in lanes.items()
-                for sample in lane.samples
-                for field in sample.fields
-                if field.field == spec.name
-            ]
-        )
         paper[spec.name] = decide_cell(
             spec,
             evidence,
