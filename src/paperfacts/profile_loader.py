@@ -32,6 +32,7 @@ from paperfacts.errors import ConfigError
 from paperfacts.fields import (
     UNIT_KINDS,
     AfterClause,
+    AtomicBasis,
     BareNumberPolicy,
     Cardinality,
     DisplayFormat,
@@ -657,6 +658,7 @@ _KIND_ATTRIBUTES: Mapping[str, tuple[FieldKind, ...]] = {
     "condition_rule": tuple(kind for kind in get_args(FieldKind) if kind not in ("boolean", "reference")),
     "figure_readable": ("numeric",),
     "display_format": ("numeric",),
+    "atomic_basis": ("composition",),
     "range_policy": ("numeric",),
     "after_clause": ("numeric",),
     # A phrase read as one number in the canonical unit; an interval has two ends to state.
@@ -716,6 +718,12 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
             raise ConfigError(f"{where}: {key} must be a finite number of at least 0, got {value!r}")
         return float(value)
 
+    def optional_choice(key: str, allowed: tuple[str, ...]) -> str | None:
+        value = entry.get(key)
+        if value is not None and value not in allowed:
+            raise ConfigError(f"{where}: {key} must be null or one of {', '.join(allowed)}, got {value!r}")
+        return value
+
     def text_or_none(key: str) -> str | None:
         value = entry.get(key)
         if value is not None and not isinstance(value, str):
@@ -760,6 +768,7 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         "condition_rule": text_or_none("condition_rule"),
         "figure_readable": figure_readable,
         "display_format": choice("display_format", get_args(DisplayFormat)),
+        "atomic_basis": optional_choice("atomic_basis", get_args(AtomicBasis)),
         "range_policy": choice("range_policy", get_args(RangePolicy)),
         "after_clause": choice("after_clause", get_args(AfterClause)),
         "cardinality": choice("cardinality", get_args(Cardinality)),

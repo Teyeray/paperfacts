@@ -535,6 +535,20 @@ h2 { font-family: var(--font-body); font-size: var(--text-lg); font-weight: 650;
 .results-table th .sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sort-mark { margin-left: 5px; font-size: 10.5px; letter-spacing: 0; text-transform: none; color: var(--accent-strong); white-space: nowrap; }
 .results-table th.fcol small { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+/* A composition column's unit switch: a small pill under the title (after the sort button, where there is one),
+   saying the unit shown. */
+.results-table th .comp-switch {
+  display: block; margin-top: 3px; padding: 0 6px; height: 18px; width: max-content; border: 1px solid var(--line);
+  border-radius: var(--radius-pill); background: var(--surface); font: inherit; font-size: 10.5px; letter-spacing: 0;
+  text-transform: none; color: var(--accent-strong); cursor: pointer;
+}
+.results-table th .comp-switch:hover { border-color: var(--accent); }
+.results-table th .comp-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Every switchable composition cell, and the switch itself, carries both units; the shell's attribute shows one. */
+.shell:not([data-composition-unit="at%"]) .comp[data-unit="at%"],
+.shell[data-composition-unit="at%"] .comp[data-unit="wt%"] { display: none; }
+/* A reading with a number the paper did not print is marked: a dotted underline, the paper's words in its tooltip. */
+.results-table td.cell .computed { text-decoration: underline dotted; text-underline-offset: 3px; }
 .results-table td.cell { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; cursor: pointer; }
 /* The colour is a second signal only: every decided cell also carries a badge naming its lane(s). */
 /* The canonical unit rides with the value, so the header does not have to repeat it. */

@@ -56,6 +56,8 @@ Cardinality = Literal["one", "many"]
 BareNumberPolicy = Literal["reject", "assume_canonical", "percent_or_fraction"]
 # How a workbook prints a numeric cell: plainly, or in scientific notation for values spanning decades.
 DisplayFormat = Literal["plain", "scientific"]
+# What an atomic percent of a composition counts: "cations" is every atom but oxygen, the oxide-target convention.
+AtomicBasis = Literal["cations"]
 # What a range quoted as one value ("10-20") becomes: its midpoint, no value at all, or the end the field asks
 # for. Only an end fills a dataset cell: it is a number the paper printed, a midpoint is not.
 RangePolicy = Literal["midpoint", "reject", "lower", "upper"]
@@ -167,6 +169,11 @@ class FieldSpec:
     # Whether a chart's y axis may be read for this field: a numeric property of the sample itself.
     figure_readable: bool = field(default=False, metadata=_roles(FieldRole.FIGURE))
     display_format: DisplayFormat = field(default="plain", metadata=_roles(FieldRole.DISPLAY))
+    # The page's wt% / at% switch on a composition column, and what its at% counts ("cations": every atom but
+    # oxygen, so In2O3:SnO2 90:10 wt% reads as 90.7 at% In). Declared per field, never per kind, because the
+    # convention is the domain's: a battery precursor list or a catalyst loading is a composition too, and the
+    # oxide reading would be wrong chemistry there. None draws no switch.
+    atomic_basis: AtomicBasis | None = field(default=None, metadata=_roles(FieldRole.DISPLAY))
     range_policy: RangePolicy = field(default="midpoint", metadata=_roles(FieldRole.CLEANING, FieldRole.VERDICT))
     # "refuse" suits a quantity whose "after annealing" value is a different sample state ("100 nm after
     # annealing" is not the as-deposited thickness); "condition" suits one that is only ever stated after

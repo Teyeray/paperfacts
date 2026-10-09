@@ -16,6 +16,7 @@ UNHASHED = {
     "workbook.py",
     "columns.py",
     "readings.py",
+    "composition.py",
     "llm.py",
     "config.py",
     "cli.py",

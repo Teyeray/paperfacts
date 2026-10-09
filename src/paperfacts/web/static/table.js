@@ -44,7 +44,12 @@ const KEY_SEPARATOR = "\u0000";
 // ---------- columns, shared with the corpus table ----------
 
 // An identity column: a plain header, and its cell and clipboard value per row.
-export const column = (header, html, text) => ({ header, head: `<th>${escapeHtml(header)}</th>`, html, text });
+export const column = (header, html, text) => ({
+  header,
+  head: `<th><span class="th-title">${escapeHtml(header)}</span></th>`,
+  html,
+  text,
+});
 
 // A field column. `value(item)` is the committed value this row shows in it (or null), and `html(item, value)`
 // wraps it in a <td>; the clipboard gets `value(item)` alone, written out as the column's kind says.
@@ -54,14 +59,82 @@ export function fieldColumn(field, value, html) {
   // numbers stay readable once they leave the page.
   const title = field.label || field.name;
   const sub = field.label ? `<small>${escapeHtml(field.name)}</small>` : "";
+  // The title is one node, so a sortable header's button wraps it alone and a control after it stays a sibling.
+  const heading = `<span class="th-title">${escapeHtml(title)}${sub}</span>`;
   return {
     header: field.unit ? `${title} (${field.unit})` : title,
-    head: `<th class="fcol${numClass(field)}" title="${escapeHtml(field.description ?? "")}">${escapeHtml(title)}${sub}</th>`,
+    head: `<th class="fcol${numClass(field)}" title="${escapeHtml(field.description ?? "")}">${heading}${field.atomic_basis ? COMPOSITION_SWITCH : ""}</th>`,
     html: (item) => html(item, value(item)),
-    text: (item) => fieldText(value(item), field),
+    text: (item) => fieldText(displayValue(field, value(item)), field),
     key: field.name,
     sort: (item) => sortValue(value(item)),
   };
+}
+
+// ---------- composition unit ----------
+
+// wt% or at%, one choice per browser for every composition column a profile marks switchable (`atomic_basis`): the
+// `data-composition-unit` attribute on .shell, which the stylesheet reads to show one of the two readings every such
+// cell carries. A switch changes the attribute and nothing is redrawn, as with the density. The readings themselves
+// come from the server with the column (`field.compositions`, by quote then by unit); a quote without one is shown
+// as the paper wrote it.
+const SHOWN_UNITS = ["wt%", "at%"];
+const COMPOSITION_KEY = "paperfacts.composition-unit";
+const COMPOSITION_SWITCH =
+  '<button type="button" class="comp-switch" title="切换成分的显示单位：wt%（重量百分比）或 at%（原子百分比）">' +
+  SHOWN_UNITS.map((unit) => `<span class="comp" data-unit="${unit}">${unit}</span>`).join("") +
+  "</button>";
+
+const compositionUnit = () => (document.querySelector(".shell")?.dataset.compositionUnit === "at%" ? "at%" : "wt%");
+
+function setCompositionUnit(unit) {
+  const shell = document.querySelector(".shell");
+  if (!shell) return;
+  if (unit === "at%") shell.dataset.compositionUnit = "at%";
+  else delete shell.dataset.compositionUnit;
+}
+
+export function applyStoredCompositionUnit() {
+  setCompositionUnit(readStored(COMPOSITION_KEY));
+}
+
+function bindCompositionSwitches(tr) {
+  for (const button of tr.querySelectorAll("button.comp-switch")) {
+    button.addEventListener("click", () => {
+      const unit = compositionUnit() === "wt%" ? "at%" : "wt%";
+      setCompositionUnit(unit);
+      writeStored(COMPOSITION_KEY, unit);
+    });
+  }
+}
+
+// A quote's reading in `unit`, or the quote itself (nothing computed) when the server had none for it.
+const compositionReading = (field, quote, unit) =>
+  field.compositions?.[quote]?.[unit] ?? { text: quote == null ? "" : String(quote), computed: false };
+
+// A value as the clipboard writes it: a composition the field marks switchable as its reading in the unit shown,
+// each entry of a list alike; every other value as it is.
+function displayValue(field, value) {
+  if (!field.atomic_basis || value == null) return value;
+  const unit = compositionUnit();
+  const text = (quote) => compositionReading(field, quote, unit).text;
+  return Array.isArray(value) ? value.map(text) : text(value);
+}
+
+// A switchable composition cell carries its reading in both units; the shell's attribute shows one. A reading with
+// a number the paper did not print (a converted unit, an inferred balance, a normalised ratio) is marked, with the
+// paper's words in its tooltip.
+function compositionHtml(value, field) {
+  const quotes = Array.isArray(value) ? value : [value];
+  const reading = (unit) =>
+    quotes
+      .map((quote) => {
+        const shown = compositionReading(field, quote, unit);
+        const text = escapeHtml(shown.text);
+        return shown.computed ? `<span class="computed" title="计算值；原文：${escapeHtml(String(quote))}">${text}</span>` : text;
+      })
+      .join("；");
+  return SHOWN_UNITS.map((unit) => `<span class="comp" data-unit="${unit}">${reading(unit)}</span>`).join("");
 }
 
 // Numbers and intervals line up on their digits: the column, never the value's shape, decides (a numeric column's
@@ -130,15 +203,18 @@ export function sortableHeads(tr, columns, sort, onSort) {
     button.dataset.focus = `sort:${column.key}`;
     button.dataset.sort = column.key;
     button.title = "排序：升序 → 降序 → 取消";
-    button.append(...th.childNodes);
+    // The button wraps the title alone; a control after the title (a composition column's unit switch) stays
+    // beside it, a sibling rather than a button inside a button.
+    const title = th.querySelector(".th-title");
+    button.append(title);
     if (dir) {
       const mark = document.createElement("span");
       mark.className = "sort-mark";
       mark.textContent = SORT_LABEL[dir];
-      button.insertBefore(mark, button.querySelector("small"));
+      title.insertBefore(mark, title.querySelector("small"));
     }
     button.addEventListener("click", () => onSort(column.key));
-    th.append(button);
+    th.prepend(button);
   });
 }
 
@@ -192,6 +268,7 @@ export function densitySwitch() {
 function headRow(columns) {
   const tr = document.createElement("tr");
   tr.innerHTML = columns.map((c) => c.head).join("");
+  bindCompositionSwitches(tr);
   return tr;
 }
 
@@ -228,6 +305,7 @@ const shownValue = (value, field) => {
 // e.g. `125 nm`. Text fields have no unit, and a unitless number stays a bare number. A reference is the id of a row
 // of another entity's table, followed by that entity's label where the unit would be.
 function valueHtml(value, field) {
+  if (field?.atomic_basis) return compositionHtml(value, field);
   const shown = escapeHtml(shownValue(value, field));
   const numeric = typeof value === "number" || (field?.kind === "interval" && Array.isArray(value));
   const unit = field?.references ? entityLabel(field.references) : numeric && field?.unit ? field.unit : "";

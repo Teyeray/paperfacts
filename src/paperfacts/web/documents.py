@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperfacts.columns import FieldColumn, field_columns
 from paperfacts.compare import ComparisonCounts, ComparisonReport
+from paperfacts.composition import with_readings
 from paperfacts.config import Settings
 from paperfacts.dataset import DatasetPayload, DocumentDataset
 from paperfacts.fields import FieldSpec
@@ -293,7 +294,10 @@ class Library:
         """
         # Through workflow, so a table of an earlier parse counts as absent here too.
         dataset = stored_dataset(self.layout, document_id, self.extractor_key, self.comparison_key)
-        return None if dataset is None else dataset.model_copy(update={"fields": self.columns})
+        if dataset is None:
+            return None
+        fields = with_readings(self.columns, (dataset.paper_row, *dataset.sample_rows))
+        return dataset.model_copy(update={"fields": fields})
 
     def corpus(self) -> CorpusPayload:
         """The library-wide results table: one row per document that has a dataset under the current keys.
@@ -316,7 +320,10 @@ class Library:
                     sample_categories=tuple(_categories(categorised, row) for row in dataset.sample_rows),
                 )
             )
-        return CorpusPayload(fields=self.columns if rows else (), rows=tuple(rows))
+        if not rows:
+            return CorpusPayload()
+        cells = (cell for row in rows for cell in (row.paper_row, *row.sample_rows))
+        return CorpusPayload(fields=with_readings(self.columns, cells), rows=tuple(rows))
 
     def corpus_datasets(self) -> list[DocumentDataset]:
         """The same documents as :meth:`corpus`, rebuilt as datasets so the whole library can be exported

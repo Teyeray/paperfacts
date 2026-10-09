@@ -42,7 +42,7 @@ CURRENT = {
 CURRENT_RETRIEVAL_PROFILE_PART = "cbd2a932b484"
 CODE_STANDIN = "code"
 # The file itself: the pins are only meaningful over this exact profile.
-TCO_JSON_SHA256 = "265692c7dd621cecf4c381d295d41baeb9a289b37c83318d366661008b129852"
+TCO_JSON_SHA256 = "db14b8e0154f40bf17a21dbef69de24cd4cacd4868a922381002f28cc567b5b5"
 # DomainProfile.content_hash covers every non-display attribute *at default too*, so unlike the fingerprints it
 # moves whenever FieldSpec, GroupSpec or PromptSlots gains an attribute (spec §7). It names no stored file (it
 # serves __hash__, /api/health and the CLI listing), so a step that adds an attribute updates this pin, and says
