@@ -11,7 +11,9 @@ code part held constant.
 record it. ``CURRENT`` is the live profile's, and moves only with a deliberate edit of ``profiles/tco.json``: the
 "Ω cm^-2" aliases of Ω/sq and ``substrate_temperature.named_values`` (units reach all three fingerprints and the
 retrieval part, named values the extraction and comparison ones), and transmittance's spectrum declaration (the
-figure fingerprint only).
+figure fingerprint only). It also moved once without a profile edit, when ``valid_range`` gained the FIGURE role:
+the figure material then took in the ranges transmittance and thickness already declared, which is the point of
+that role (a chart reading is judged by them), not an attribute reaching the material at its default.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ B1 = {
 CURRENT = {
     profile_extraction_fingerprint: "f35cbb952650",
     profile_comparison_fingerprint: "727a3bdbd4ee",
-    figure_profile_fingerprint: "d5a2ab6a6ede",
+    figure_profile_fingerprint: "aae0738ac159",
 }
 # retrieval_fingerprint(tco) with every source fingerprint replaced by CODE_STANDIN: the profile's part only. B1's
 # was "71fd3107c43c"; the Ω/sq aliases widen the unit's retrieval pattern.

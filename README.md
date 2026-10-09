@@ -613,8 +613,12 @@ and every request that failed, leaves the cell refused as before with the scores
 | `vote_threshold` | At or above this score a value is `trusted`; between the two it is `uncertain` and settles nothing. Default 0.6. Must be at least `min_confidence` |
 | `timeout_s` | Per request. Default 30; one failed request is retried once. Requests run `llm.concurrency` at a time |
 
-A request that still fails leaves that value unscored, and a report holding one is not stored: the next run
-asks again, and only that request reaches the endpoint. A side the judge cannot be shown whole (a value citing
+The reply is checked against the prompt's own rules before it is stored: the flag must be one the judge may
+give (never the code's `error`), and it must sit on the same side of 0.7 as the score (`correct` and `plausible`
+at or above, `unit_mismatch` and `value_not_in_passage` below), since the verdict follows the score alone. A
+reply that contradicts itself is sent back once with the error, like a malformed one. A request that still
+fails leaves that value unscored, and a report holding one is not stored: the next run asks again, and only
+that request reaches the endpoint. A side the judge cannot be shown whole (a value citing
 no block, or a passage over 12 000 characters) is not scored at all, so a passage cut short can never doubt a
 value. The model, both thresholds and the supervisor's prompt are hashed into `comparison_key` only while the
 stage is on, so turning it on or off renames the reports it changes and nothing else.
@@ -726,7 +730,9 @@ the confusions a unit cannot catch: the spin-coating rpm of an absorber read as 
 thickness of a wafer or a glass substrate read as the electrode's. The shipped table caps `rotation_speed`
 at 100 rpm and `thickness` at 5000 nm and floors `transmittance` at 60 %. A value that
 cannot be converted is kept, since there is no number to judge. A range changes the prompt and which values
-survive, so it moves both cache keys; a field without one keeps the keys it had. A numeric field with no
+survive, so it moves both cache keys, and the `figure_key` when the field is `figure_readable` (its chart
+readings are judged by the same range, see [Reading figures](#reading-figures)); a field without one keeps
+the keys it had. A numeric field with no
 `canonical_unit` (a count, such as the battery profile's `cycle_number`) may declare one too; it is judged on
 the number as parsed.
 
@@ -1016,7 +1022,7 @@ names from the LLM cache.
 | `missing_condition_note_zh` | none | verdict | The note on a dataset cell whose value came without its condition |
 | `bare_number` | `reject` | cleaning, figure | `reject`, `assume_canonical`, or `percent_or_fraction` (only with `%`) |
 | `categories` | `[]` | verdict | A text field's closed set of answers |
-| `valid_range` | none | prompt, cleaning | `{min, max}`, either end open, in `canonical_unit`: told to the model, and a converted value outside it is dropped |
+| `valid_range` | none | prompt, cleaning, figure | `{min, max}`, either end open, in `canonical_unit`: told to the model, and a converted value outside it is dropped; a chart reading of a `figure_readable` field is judged by it too |
 | `condition_preference` | `[]` | verdict | Which measurement fills the dataset cell when a sample has several |
 | `range_policy` | `midpoint` | cleaning, verdict | `midpoint`, `reject`, `lower` or `upper`: what a range quoted as one value becomes; an end (`lower` / `upper`) also fills the dataset cell. Numeric only |
 | `after_clause` | `refuse` | cleaning, verdict | `refuse` or `condition`: what "92.5% after 100 cycles" becomes. Numeric only |
@@ -1190,7 +1196,7 @@ re-keying the comparison recomputes it from the stored extractions, for free.
 |---|---|---|---|
 | Display: `label`, `description_zh`, `display_format`, a group's `label_zh`, `title_zh`, `description_zh`, `maturity`, `ui`, `$comment`, the file name | — | — | — |
 | Verdict: `rel_tol`, `abs_tol`, `categories` (of a `many` field: also extraction, as its `prompt_categories`), `condition_preference`, `missing_condition_note_zh` | — | yes | — |
-| Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, `named_values`, `cardinality`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number` |
+| Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, `named_values`, `cardinality`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number`, `valid_range` |
 | `keywords` | passage mode | — | for a `figure_readable` field |
 | `retrieval` | passage mode | — | — |
 | `units`, `ignored_unit_suffixes` | yes | yes | yes |
@@ -1382,6 +1388,15 @@ them: the job manager reuses an active job only when it does everything asked (`
   reading is **approximate**, labelled ±10 % on a linear axis and ±20 % on a log axis or a chart with four
   or more series: the measured p90 error was 6 % on ordinary charts and 13.6 % over all of them
   (`.omc/research/figure-reading-accuracy.md`).
+- **Judged by the field's plausible range.** A reading whose converted value lies outside the field's
+  `valid_range` (TCO: transmittance at least 60 %, thickness at most 5000 nm) is dropped, as the text lanes drop
+  such a value: a "10^-2" on a log axis read as "10^2", or a device's EQE curve read as the film's transmittance,
+  is a number the model got wrong, not a value of the field. The band the reading is labelled with is allowed
+  for -- a marker read as 58 % ±10 % stays, one read as 30 % goes -- and a reading that did not convert is kept,
+  as there is no number to judge. The reasons are recorded per panel in the readings file (`dropped`), counted
+  in the stage detail ("1 outside the plausible range"), and the chart's answer stays cached: the model read
+  the chart, it just read it wrong. A field without a range (TCO: sheet resistance, resistivity) is never
+  refused; giving one a range also changes its text prompt, so it re-keys the stored extractions.
 - **What a reading is not.** The chart's x is shown for the reader only: the models round it to the nearest
   tick label, so it never creates a sample or decides which sample a point is. Readings never fill a cell
   of 结果表 or of the 论文数据 / 样品数据 sheets and never take part in the two-lane comparison; `dataset.py`
@@ -1400,8 +1415,8 @@ them: the job manager reuses an active job only when it does everything asked (`
   plan): each flat file moves into the directory of the profile it records, `tco` when it records none, and is
   stamped with it; a file whose destination already exists is left for you to look at. `figure_key` hashes the vision model and its
   sampling, `figures.dpi`, `figures.max_pixels`, `figures.max_per_document`, the profile's `figures` slots, the
-  `figure_readable` fields' names, descriptions, keywords, units, bare-number policies and spectrum axes and
-  points, the declared units,
+  `figure_readable` fields' names, descriptions, keywords, units, bare-number policies, plausible ranges and
+  spectrum axes and points, the declared units,
   and the source of `figures.py`, `normalize.py`, `readers.py`, `passages.py`, `units.py`, `text.py`, `fields.py` and
   `profile.py`. Stored readings are
   shown and exported even when the stage is switched off for a later run. With nothing under the current

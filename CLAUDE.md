@@ -224,7 +224,10 @@ this file is the part that is easy to get wrong.
   their own file, the 图中读数 sheet (`workbook.write_dataset(figure_rows=...)`), `GET /api/documents/{id}/figures`
   and their own web section; `dataset.py` and `decide.py` must not import `figures.py`. A failure in it marks only its own
   stage failed, and `--force` never re-reads charts (`--force-figures` does). Its prompt lives in `figures.py`, not `prompts.py`, so
-  tuning it never renames stored extractions; `figure_key` in `keys.py` covers it.
+  tuning it never renames stored extractions; `figure_key` in `keys.py` covers it. A converted reading is judged
+  by its field's `valid_range` like a text value (`figures.implausible`, allowing for the reading's ±precision
+  band): dropped, the reason on its `FigurePanel.dropped`, the panel still `read` so the answer stays cached.
+  `valid_range` therefore carries the FIGURE role.
 - Charts are read only on request: a run reads them when `figures.enabled` is on (built-in default off), with
   `--figures`, or when its web job asks (`Job.figures`, from 「识图」 / `POST .../run?figures=true` or the upload's
   `figures` form field; `force_figures` is 「重新识图」 and implies `figures`). `pipeline_runner` switches the stage
