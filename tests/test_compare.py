@@ -253,11 +253,10 @@ def test_a_unit_spelled_with_or_without_its_period_is_the_same_composition():
     assert compare_values(a, b, spec, NO_CONTEXT)[0] == "agree"
 
 
-def test_a_composition_lists_unshared_elements_as_conflicts_and_a_lone_one_as_ambiguous():
+def test_a_strict_list_reports_an_element_one_lane_alone_holds_as_ambiguous():
     # A strict list (FieldSpec.strict_list, the TCO component field) both lanes answered: the shared target
-    # agrees, the one each lane spells its own way is paired in order as the conflict it is (both sides, for a
-    # reviewer or the supervisor), and an element with no partner at all is ambiguous. A plain text list would
-    # report the last two one-sided (test_cardinality_many).
+    # agrees, every element one lane alone holds is its own one-sided ambiguous row (no partner is invented by
+    # position, and ambiguous wakes no supervisor), and a repeat of a shared element stays missing as in any list.
     lane_a = make_lane(
         backend="mineru",
         paper=PaperRecord(
@@ -285,8 +284,9 @@ def test_a_composition_lists_unshared_elements_as_conflicts_and_a_lone_one_as_am
 
     assert [(c.status, c.a is not None, c.b is not None) for c in report.comparisons if c.field == "component"] == [
         ("agree", True, True),
-        ("conflict", True, True),
         ("ambiguous", True, False),
+        ("ambiguous", True, False),
+        ("ambiguous", False, True),
         ("missing", False, True),
     ]
 

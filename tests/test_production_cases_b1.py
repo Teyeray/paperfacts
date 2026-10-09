@@ -219,6 +219,6 @@ def test_the_gzo_component_audit_does_not_repeat_a_unit_the_quote_already_ends_w
     assert "mineru: 3 wt.%" in row["detail"]
     # A list field since option A of the 2026-10-08 design note, but still refused: MinerU's two bare
     # percentages and PaddleOCR-VL's one sentence share no element, and component is a strict list
-    # (FieldSpec.strict_list): the comparison reports the unshared elements as a conflict, and the cell refuses.
+    # (FieldSpec.strict_list): the comparison reports each unshared element ambiguous, and the cell refuses.
     assert row["value"] is None
-    assert row["decision"] == "conflict"
+    assert row["decision"] == "ambiguous"

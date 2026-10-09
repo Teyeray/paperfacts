@@ -70,12 +70,14 @@ differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
   `3 wt.%`、`97 wt.%` 各记一条，正是列表字段会诱发的拆分。
 - **严格列表**（字段属性 `strict_list: true`，角色 VERDICT，默认 `false`，只能配 `cardinality: many`；TCO 的 `component` 开启）：
   两路都作答的列表，只有两路都读到的元素才算数。它是字段的属性而不是 composition 这一「种类」的属性：电池例子里的
-  前驱体也是 composition 列表，却应取并集（一路读到 CoSO4、另一路没读到，是两种盐）。实现在比较层，不在单元格层：`compare._set_pairs` 把两路各自多出的元素按顺序
-  配成 `conflict`（两边都有，审阅者与监督模型都看得到），落单的报 `ambiguous`，但只是重复了两路都读到的元素（一路把同一靶材
-  在两种条件措辞下各引一次，正是该论文的样子）的仍按普通列表报 `missing`；`decide_many` 走既有的 `troubled`
-  拒绝路径，不加分支。于是「一种组成两种写法」（`ITO 90:10` 对 `In2O3:SnO2 = 90:10`）、以及「第一种靶材一致、第二种
-  写法不同」都留空，而不是列出两个或三个靶材；两路都读到两个靶材时仍为 `agree` 列表。代价：一路只读到一个靶材的
-  双靶材论文被拒绝而非列出——与单值字段一贯的保守立场相同。文本类列表（试剂、表征手段）不受影响，仍取并集。
+  前驱体也是 composition 列表，却应取并集（一路读到 CoSO4、另一路没读到，是两种盐）。实现在比较层，不在单元格层：
+  `compare._compare_records` 把只有一路读到的元素报为 `ambiguous`（未定，而非仅仅没读到），只是重复了两路都读到的元素
+  （一路把同一靶材在两种条件措辞下各引一次，正是该论文的样子）的仍按普通列表报 `missing`；不按顺序把两路的剩余元素
+  配成 `conflict`——顺序不同时那是凭空配对，而且 `conflict` 会让监督模型白白打分（`decide_many` 不采用其裁定）。
+  `decide_many` 走既有的 `troubled` 拒绝路径，不加分支。于是「一种组成两种写法」（`ITO 90:10` 对 `In2O3:SnO2 = 90:10`）、
+  以及「第一种靶材一致、第二种写法不同」都留空（`ambiguous`），而不是列出两个或三个靶材；两路都读到两个靶材时仍为
+  `agree` 列表。代价：一路只读到一个靶材的双靶材论文被拒绝而非列出——与单值字段一贯的保守立场相同。文本类列表
+  （试剂、表征手段）不受影响，仍取并集。
 - 重录的钉子，均只动 `component` 一行：`tests/fixtures/prompts/snapshot.json`、`tests/fixtures/payloads/b0.json`（两条
   `component` 请求的 `cache_key` 变化）、`tests/fixtures/cli_prompts/tco.txt`、`tests/fixtures/workbook/tco_workbook.json`
   （字段说明表的单位列「文本（多值）」与说明）、`tests/test_tco_fingerprints_pinned.py`（抽取/比较指纹、文件 sha、content_hash；`strict_list` 只动比较指纹）、
@@ -83,7 +85,7 @@ differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
 - 该论文离线重放：比较 2 条 `agree` + 2 条 `missing`，`paper_row.component = ["In2O3:SnO2 = 90:10 wt%", "Sb2O5:SnO2 = 5:95 wt%"]`，判定 `agree`。
 
 对现有金标的影响：B0/B2 金标里的 4 个 `component` 格都不是多靶材论文。有守卫时它们的结果与单值时一致（GZO 与 ITO 的
-两种写法照旧留空：原来是 `multiple_values`/`conflict`，现在是 `conflict`），没有守卫则会变成「两个靶材」的错误列表。
+两种写法照旧留空：原来是 `multiple_values`/`conflict`，现在是 `ambiguous`），没有守卫则会变成「两个靶材」的错误列表。
 `eval/score.py` 对列表格逐元素计分，所以 `component` 的计数在此改动前后不可直接比较；下次对 B0/B2 评分时按此解读。
 
 合入前需负责人安排重抽：passage 模式下只有 `component` 这一个字段问题的请求变了
@@ -98,4 +100,4 @@ differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
   在旁边，比较与单元格同判 `agree`。
 - `tests/test_records.py` 的「论文级字段出现在样品下即丢弃」保持不变：清洗层的不变量仍成立。
 - 选项 A：`tests/test_dataset.py` 两靶材双路 → 两元素 `agree`；一靶材两种写法 → 留空 `conflict`；
-  `tests/test_production_cases_b1.py` GZO 仍留空；`tests/test_cardinality_many.py` `strict_list` 按字段声明、须为列表；`tests/test_compare.py` 严格列表的 `agree`/`conflict`/`ambiguous` 三种行；一靶材共享、一靶材两种写法 → 留空 `conflict`。
+  `tests/test_production_cases_b1.py` GZO 仍留空；`tests/test_cardinality_many.py` `strict_list` 按字段声明、须为列表；`tests/test_compare.py` 严格列表的 `agree`/`ambiguous`/`missing` 行；一靶材共享、一靶材两种写法 → 留空 `ambiguous`。

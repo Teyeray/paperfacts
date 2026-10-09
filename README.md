@@ -1026,7 +1026,7 @@ names from the LLM cache.
 | `figure_spectrum_points` | `[]` | figure | Where a spectrum is read, in that axis's unit: a single x (`"550"`) or a range with its sampling step (`"400-800/50"`, x = 400, 450, … 800). A range's value is the code's mean of the curve read at every step, and only when every step was read. At most 100 steps per range. Needs `figure_spectrum_axis` |
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
 | `cardinality` | `one` | prompt, verdict | `one` or `many`: a list of values that hold at once (the precursors of a sample, the techniques a paper applies). Text or composition only, at either level; refused together with `figure_readable`, `condition_preference`, `condition_rule` and every numeric attribute. See [List fields](#list-fields) |
-| `strict_list` | `false` | verdict | A `many` field whose list, when both lanes answered, holds only the elements both lanes read: an element one lane alone holds is reported `conflict` (paired with the other lane's own leftover) or `ambiguous` (alone), and the cell refuses the list. For a list whose two spellings of one thing must never become two things (the targets a paper sputters from). `many` only |
+| `strict_list` | `false` | verdict | A `many` field whose list, when both lanes answered, holds only the elements both lanes read: an element one lane alone holds is reported `ambiguous`, and the cell refuses the list. For a list whose two spellings of one thing must never become two things (the targets a paper sputters from). `many` only |
 | `prompt_categories` | derived | prompt | Never written: a `many` field's `categories`, named in its field line; empty for every other field, so a single-valued field's `categories` stay verdict only |
 | `entity` | derived | prompt, cleaning, verdict | Never written: the entity type of the field's group, none for a paper-level field and in a profile without `entities` |
 | `references` | none | prompt, cleaning, verdict | Required with `kind: reference` and refused otherwise: the other [entity type](#entity-types) whose sample the field names (the catalyst a reaction test ran on). The field is sample-level of a declared entity, `one`, with no unit, categories or `condition_rule`. Its question shows that entity's sample list too; a value is grounded when its id resolves to one of the lane's samples of that entity; two lanes agree when that entity's matching pairs the samples they name; the cell is the `sample_id` of the referenced row |
@@ -1101,9 +1101,8 @@ precursor of a sample. A categorical list is `kind: text` with `categories` and 
   `text` but not `composition`), so OCR's `Ni(NO3)2 · 6H2O` and `co-precipitation` are one element with
   `Ni(NO3)2·6H2O` and `coprecipitation`. This is stricter than a single-valued field's text equality, which drops
   Greek letters: `α-Al2O3` and `γ-Al2O3` are two elements. What
-  only one lane read is `missing` on the other. A list never reports `conflict` -- except a `strict_list` field
-  both lanes answered: its leftovers are paired in the order given as the `conflict` two spellings of one thing
-  are (both sides shown, for a reviewer or the supervisor), and a leftover with no partner is `ambiguous`, so the
+  only one lane read is `missing` on the other. A list never reports `conflict`. A `strict_list` field both lanes
+  answered reports an element one lane alone holds `ambiguous` instead -- unsettled, not merely unread -- so the
   cell refuses the list rather than listing a target twice; a leftover that merely repeats an element both lanes
   read (one lane quoting a target under two conditions) stays `missing`, as in any list.
 - **Dataset cell.** The **union** of the elements either lane grounded and cited, after the usual refusals

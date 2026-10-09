@@ -860,7 +860,7 @@ def test_one_target_spelled_two_ways_is_refused_not_listed_as_two():
     )
 
     assert result.paper_row["component"] is None
-    assert decision(result, "component")["decision"] == "conflict"
+    assert decision(result, "component")["decision"] == "ambiguous"
 
 
 def test_one_shared_target_and_one_spelled_two_ways_is_refused_not_listed_as_three():
@@ -882,7 +882,7 @@ def test_one_shared_target_and_one_spelled_two_ways_is_refused_not_listed_as_thr
     )
 
     assert result.paper_row["component"] is None
-    assert decision(result, "component")["decision"] == "conflict"
+    assert decision(result, "component")["decision"] == "ambiguous"
 
 
 def test_a_target_only_one_lane_read_is_listed_as_single_source():

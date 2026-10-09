@@ -177,9 +177,9 @@ class FieldSpec:
     cardinality: Cardinality = field(default="one", metadata=_roles(FieldRole.PROMPT, FieldRole.VERDICT))
     # A list field both lanes answered holds only the elements both lanes read: for a list whose two spellings of
     # one thing must never be written as two things (the targets a paper sputters from, where "ATO 5:95" against
-    # "Sb2O5:SnO2 = 5:95" is one target far more often than two). The comparison reports an unshared element as a
-    # conflict (paired with the other lane's leftover) or ambiguous (alone), and the cell refuses the list. False
-    # where each lane reading a different element is two elements (the precursors of a sample). ``many`` only.
+    # "Sb2O5:SnO2 = 5:95" is one target far more often than two). The comparison reports an unshared element
+    # ambiguous rather than missing, and the cell refuses the list. False where each lane reading a different
+    # element is two elements (the precursors of a sample). ``many`` only.
     strict_list: bool = field(default=False, metadata=_roles(FieldRole.VERDICT))
     # The categories a list field's line names to the model ("Name each with one of: XRD, XPS."). Derived by the
     # loader, never written in a field entry: ``categories`` when the field is ``many``, () otherwise, so a
