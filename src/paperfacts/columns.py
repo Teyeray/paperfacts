@@ -14,6 +14,16 @@ from paperfacts.fields import Cardinality, FieldKind
 from paperfacts.profile import DomainProfile
 
 
+class CompositionReading(BaseModel):
+    """A composition quote as the page shows it in one unit (:mod:`paperfacts.composition`): the sentence, and
+    whether a number in it is not the paper's own (converted, an inferred balance, a normalised ratio)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    computed: bool
+
+
 class FieldColumn(BaseModel):
     """What a reader needs to know about one column, built once for both the web UI and the Excel sheet.
 
@@ -44,6 +54,12 @@ class FieldColumn(BaseModel):
     # The field's closed set of canonical spellings, () when it has none. A cell holds the value as written; what a
     # value names among these is computed by the server (CorpusRow's categories), never re-derived in the browser.
     categories: tuple[str, ...] = ()
+    # Set when the field declares what an atomic percent counts: the page then draws the wt% / at% switch on the
+    # column and shows each cell's reading in the unit chosen; None for every other column.
+    atomic_basis: str | None = None
+    # For such a column, the readings of every quote the rows hold in it, by quote then by unit
+    # (``composition.with_readings``); a quote with no entry is one the page shows as written.
+    compositions: dict[str, dict[str, CompositionReading]] = {}
 
 
 def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
@@ -61,6 +77,7 @@ def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
             references=spec.references,
             group=spec.group,
             categories=spec.categories,
+            atomic_basis=spec.atomic_basis,
         )
         for spec in profile.fields
     )

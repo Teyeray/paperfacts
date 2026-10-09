@@ -277,7 +277,17 @@ the profile's own word for a sample), 复制表格 (the rows shown, as TSV, in t
 it) and 下载全部 Excel (always every paper, whatever is searched or filtered). A click on
 a column's header (or Enter on it) sorts by it: ascending, descending, then back to the server's order; numbers by
 size, text by locale, and blank cells last in either direction. A paper row is sorted by the value it shows (its
-chosen sample's) and an expanded paper keeps its sample rows under it. The
+chosen sample's) and an expanded paper keeps its sample rows under it. A composition column whose field declares
+`atomic_basis` (the TCO profile's 靶材成分) carries a wt% / at% switch in its header, on the home table and the
+document page alike. The server reads every quote in such a column (`composition.py`, display code in no key)
+-- a ratio "A:B = 90:10 wt%", or terms "2 wt% B-doped A" -- and hands the page both readings with the column:
+"90 wt% In2O3 and 10 wt% SnO2", and in at% the share of each component's atoms other than oxygen ("90.7 at% In
+and 9.3 at% Sn", from the molar masses; an at% the paper states is labelled the same way). A number the paper
+did not print (a converted unit, an inferred balance, a ratio normalised to 100) is marked with a dotted
+underline and the paper's words in its tooltip. A quote the server cannot read (an acronym such as ITO, no
+amounts, no unit, a number that is not part of the mix) is shown as written, and the column still sorts by the
+paper's words. The choice is one attribute on the page, like the density, remembered by the browser; the
+clipboard copy follows it, while the stored cell, the comparison and the Excel sheet keep the paper's words. The
 paper name and the sample id stay frozen on the left while the field columns scroll sideways (on a phone only the
 name), numbers are right-aligned, and the rows alternate in tint.
 The home address carries the search, the filters, the sort and the entity type shown as its query (`#/?q=…`, under a
@@ -1025,6 +1035,7 @@ names from the LLM cache.
 | `figure_spectrum_axis` | none | figure | The x quantity a spectrum of this field runs over, e.g. `"wavelength (nm)"`. With it, a chart of the field may also be read as a spectrum (see [Reading figures](#reading-figures)). Needs `figure_readable` and `figure_spectrum_points`; numeric only, not with `many` |
 | `figure_spectrum_points` | `[]` | figure | Where a spectrum is read, in that axis's unit: a single x (`"550"`) or a range with its sampling step (`"400-800/50"`, x = 400, 450, … 800). A range's value is the code's mean of the curve read at every step, and only when every step was read. At most 100 steps per range. Needs `figure_spectrum_axis` |
 | `display_format` | `plain` | display | `plain` or `scientific` in the workbook. Numeric only |
+| `atomic_basis` | none | display | `cations`: what an atomic percent of this field counts, every atom but oxygen (the oxide-target convention). With it the web page draws the wt% / at% switch on the column, see [Web interface](#web-interface). Composition only |
 | `cardinality` | `one` | prompt, verdict | `one` or `many`: a list of values that hold at once (the precursors of a sample, the techniques a paper applies). Text or composition only, at either level; refused together with `figure_readable`, `condition_preference`, `condition_rule` and every numeric attribute. See [List fields](#list-fields) |
 | `prompt_categories` | derived | prompt | Never written: a `many` field's `categories`, named in its field line; empty for every other field, so a single-valued field's `categories` stay verdict only |
 | `entity` | derived | prompt, cleaning, verdict | Never written: the entity type of the field's group, none for a paper-level field and in a profile without `entities` |
@@ -1188,7 +1199,7 @@ re-keying the comparison recomputes it from the stored extractions, for free.
 
 | Edit | `extractor_key` | `comparison_key` | `figure_key` |
 |---|---|---|---|
-| Display: `label`, `description_zh`, `display_format`, a group's `label_zh`, `title_zh`, `description_zh`, `maturity`, `ui`, `$comment`, the file name | — | — | — |
+| Display: `label`, `description_zh`, `display_format`, `atomic_basis`, a group's `label_zh`, `title_zh`, `description_zh`, `maturity`, `ui`, `$comment`, the file name | — | — | — |
 | Verdict: `rel_tol`, `abs_tol`, `categories` (of a `many` field: also extraction, as its `prompt_categories`), `condition_preference`, `missing_condition_note_zh` | — | yes | — |
 | Prompt and cleaning: `name`, `group`, `kind`, `description`, `canonical_unit`, `condition_hint`, `condition_rule`, `valid_range`, `bare_number`, `range_policy`, `after_clause`, `named_values`, `cardinality`, a group's name or level, the order of the fields | yes | yes | only for a `figure_readable` field's `name`, `description`, `canonical_unit`, `bare_number` |
 | `keywords` | passage mode | — | for a `figure_readable` field |

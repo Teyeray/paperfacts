@@ -34,7 +34,8 @@ this file is the part that is easy to get wrong.
   patterns, the `UnitRegistry` of declared units), `fields.py` (`FieldSpec` and its roles), `profile.py`
   (`DomainProfile` and the slots: value types and their defaults, hashed), `profile_loader.py` (reading and
   checking a profile file, `field_spec`, `load_units`, the regex checks: unhashed, since everything it decides
-  reaches a key as a value). Presentation: `ui_copy.py`, `workbook.py`, `columns.py`, `readings.py`. `batch.py`
+  reaches a key as a value). Presentation: `ui_copy.py`, `workbook.py`, `columns.py`, `readings.py`, `composition.py` (a composition quote's
+  readings in each unit the page can switch to, handed to the page with the column). `batch.py`
   is directory runs and offline export; `stored.py` is what is stored for a document and whether it is current.
   `units.py` and `passages.py` must not import `normalize.py` (that is why `text.py` exists). `readers.py` holds
   the range, interval and date readers built on `normalize.read_number`; `KindContext`/`NO_CONTEXT` live in
@@ -207,7 +208,7 @@ this file is the part that is easy to get wrong.
 - Presentation and orchestration stay out of hashed modules: the Excel layout is `workbook.py`, not
   `dataset.py` (which only assembles the rows, a set of verdicts); the column labels and descriptions are
   `columns.py` and are never stored with a table; display copy defaults are `ui_copy.py`, not `profile.py`; reading
-  a profile file is `profile_loader.py`. `workbook`, `columns`, `readings`, `ui_copy`, `profile_loader`, `llm`,
+  a profile file is `profile_loader.py`. `workbook`, `columns`, `readings`, `composition`, `ui_copy`, `profile_loader`, `llm`,
   `config`, `cli`, `workflow`, `batch`, `stored`, `profile_view` and `profile_check` are in no key list, and `tests/test_keys_unhashed.py`
   holds that. Do not move display, storage or loading code into a hashed module. The prompt preview
   (`profile_view.prompt_sections`, what `paperfacts prompts` prints and `/api/profiles/<name>/prompts` returns) is
@@ -335,6 +336,15 @@ this file is the part that is easy to get wrong.
   the Excel download stays the whole corpus, the copy is the rows shown.
 - Controls that re-render their own table carry a `data-focus` key and the re-render goes through
   `keepFocus`, so keyboard focus survives. Clickable rows and cells are focusable and act on Enter/Space.
+- A composition column whose field declares `atomic_basis` (a DISPLAY attribute, never the kind: the at%
+  convention is the domain's) is switchable between wt% and at%. The readings are the server's
+  (`composition.with_readings`, on `FieldColumn.compositions` by quote then by unit, computed when the dataset or
+  corpus is served); `table.js` only looks a quote up and draws both units in the cell, and `data-composition-unit`
+  on `.shell` (`paperfacts.composition-unit` in localStorage, like the density) shows one. The header's switch
+  flips the attribute and nothing is redrawn. A reading with a number the paper did not print is `computed` and
+  marked. Display only: the stored cell, the comparison and the workbook keep the paper's words, and a quote the
+  server cannot read is shown as written. A sortable header's button wraps the `.th-title` span alone, so a
+  control after the title stays its sibling.
 - The HTTP edge (`web/app.py`'s one middleware): Basic auth compared as UTF-8 bytes, a same-origin check
   on every non-GET request (`Sec-Fetch-Site` decides alone when present; Origin/Referer against Host is
   only the fallback), and frame/nosniff headers on every response. The upload size is the upload route's

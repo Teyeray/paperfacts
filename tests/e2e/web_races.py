@@ -2279,6 +2279,79 @@ async def first_column(page: Page) -> list[str]:
     return [cell.strip() for cell in await page.locator("#corpus-view tbody tr td:first-child").all_text_contents()]
 
 
+COMPOSITION_QUOTE = "In2O3:SnO2 = 90:10 wt%"
+COMPOSITION_WT = "90 wt% In2O3 and 10 wt% SnO2；Ce-doped In2O3"
+COMPOSITION_AT = "90.7 at% In and 9.3 at% Sn；Ce-doped In2O3"
+
+
+async def composition_corpus(page: Page) -> None:
+    """Serve a corpus whose one field is a switchable composition list: one quote with the readings the server
+    would attach to the column, one without (shown as written)."""
+
+    async def corpus(route: Route) -> None:
+        response = await route.fetch()
+        data = await response.json()
+        readings = {
+            "wt%": {"text": "90 wt% In2O3 and 10 wt% SnO2", "computed": False},
+            "at%": {"text": "90.7 at% In and 9.3 at% Sn", "computed": True},
+        }
+        mix = {"name": "mix", "label": "", "scope": "paper", "description": "", "kind": "composition"}
+        switchable = {"cardinality": "many", "atomic_basis": "cations", "compositions": {COMPOSITION_QUOTE: readings}}
+        data["fields"] = [{**mix, **switchable}]
+        quotes = [COMPOSITION_QUOTE, "Ce-doped In2O3"]
+        sample = {"sample_id": "S-M", "available_fields": 1, "agree_fields": 1, "mix": quotes}
+        row = {"document_id": "m" * 16, "name": "M", "paper_row": sample, "sample_count": 1, "sample_rows": [sample]}
+        data["rows"] = [row]
+        await route.fulfill(response=response, json=data)
+
+    await page.route("**/api/dataset", corpus)
+
+
+async def composition_cell(page: Page) -> str:
+    # inner_text is what is rendered: the cell carries both units, and the stylesheet shows one.
+    return (await page.locator("#corpus-view tbody tr td.cell").first.inner_text()).strip()
+
+
+async def composition_unit(page: Page) -> str | None:
+    return await page.get_attribute(".shell", "data-composition-unit")
+
+
+@check("a composition column's header switch shows every cell in wt% or at%, and the choice is remembered")
+async def composition_switch(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
+    await composition_corpus(page)
+    await page.goto(f"{base}/#/")
+    await page.wait_for_selector("#corpus-view:not(.hidden) table")
+    switch = "#corpus-view thead button.comp-switch"
+    try:
+        expect(await composition_cell(page) == COMPOSITION_WT, f"the wt% cell reads {await composition_cell(page)!r}")
+        expect((await page.locator(switch).inner_text()).strip() == "wt%", "the switch does not say wt%")
+        # The switch follows the title (the sort button wraps the title alone) and is not nested in it.
+        nested = await page.locator("#corpus-view thead button.sort-button button").count()
+        expect(nested == 0, "the switch sits inside the sort button")
+        order = await page.evaluate(
+            "[...document.querySelector('#corpus-view thead th:has(.comp-switch)').children].map((n) => n.className)"
+        )
+        expect(order == ["sort-button", "comp-switch"], f"the header reads {order}")
+        await page.click(switch)
+        expect(await composition_unit(page) == "at%", "the shell does not carry the at% choice")
+        expect(await composition_cell(page) == COMPOSITION_AT, f"the at% cell reads {await composition_cell(page)!r}")
+        expect((await page.locator(switch).inner_text()).strip() == "at%", "the switch does not say at%")
+        title = await page.get_attribute("#corpus-view tbody td.cell .computed", "title") or ""
+        expect(COMPOSITION_QUOTE in title, f"a computed value does not carry the paper's words: {title!r}")
+        focused = await page.evaluate("document.activeElement.className")
+        expect(focused == "comp-switch", f"the switch lost the focus to {focused!r}")
+        # Remembered by the browser, like the density; nothing was redrawn to show it.
+        await page.reload()
+        await page.wait_for_selector("#corpus-view:not(.hidden) table")
+        expect(await composition_unit(page) == "at%", "the at% choice was not remembered across a reload")
+        expect(await composition_cell(page) == COMPOSITION_AT, "the at% cell is not shown after a reload")
+        await page.click(switch)
+        expect(await composition_unit(page) is None, "the switch does not go back to wt%")
+        expect(await composition_cell(page) == COMPOSITION_WT, "the wt% cell is not shown again")
+    finally:
+        await page.evaluate("localStorage.removeItem('paperfacts.composition-unit')")
+
+
 @check("a header click sorts the home table ascending, descending, then back to the server's order; blanks last")
 async def corpus_sort(page: Page, base: str, docs: dict[str, str], _: Path) -> None:
     await open_sort_corpus(page, base)

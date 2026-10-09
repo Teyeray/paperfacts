@@ -110,6 +110,7 @@
       "label": "靶材成分",
       "group": "target",
       "kind": "composition",
+      "atomic_basis": "cations",
       "description": "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', 'Sn/Ta 95:5 wt%'.",
       "description_zh": "溅射靶材的化学组成；保留唯一组成文本，不拆选多个靶材。",
       "keywords": [

@@ -39,6 +39,7 @@ const ATTRIBUTE_LABEL = {
   figure_spectrum_axis: "光谱横轴",
   figure_spectrum_points: "光谱读数位置",
   display_format: "显示格式",
+  atomic_basis: "原子百分比基准",
   missing_condition_note_zh: "缺条件说明",
   description: "给模型的说明",
   description_zh: "说明",

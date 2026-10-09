@@ -30,7 +30,7 @@ import { installReclamp, setupRailResizer } from "./panes.js";
 import { loadProfiles, setupSwitcher, syncSwitcher } from "./profiles.js";
 import { installRouter, reloadView, route } from "./router.js";
 import { applyUiCopy, state } from "./state.js";
-import { applyStoredDensity } from "./table.js";
+import { applyStoredCompositionUnit, applyStoredDensity } from "./table.js";
 import { initTheme, cycleTheme } from "./theme.js";
 import { setupUpload } from "./upload.js";
 
@@ -119,6 +119,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupRailResizer();
   installReclamp();
   applyStoredDensity();
+  applyStoredCompositionUnit();
   setupUpload();
   setupRunAll();
   setupDelete();
