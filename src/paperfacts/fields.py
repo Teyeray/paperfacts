@@ -143,9 +143,11 @@ class FieldSpec:
     # the number as parsed. A value outside it is almost always a different quantity the model mistook for
     # this one -- the spin-coating rpm of an absorber read as the substrate rotation, a perovskite layer's
     # thickness read as the electrode's -- so the model is told the range and a converted value outside it is
-    # dropped with an audited reason.
+    # dropped with an audited reason. FIGURE as well: a chart reading is judged by the same range (a log-axis
+    # "10^-2" read as "10^2", a device's EQE curve read as the film's transmittance), so editing it re-keys the
+    # stored readings of a figure_readable field.
     valid_range: tuple[float | None, float | None] = field(
-        default=(None, None), metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING)
+        default=(None, None), metadata=_roles(FieldRole.PROMPT, FieldRole.CLEANING, FieldRole.FIGURE)
     )
     # Which measurement fills the dataset cell when a sample has several, in order of preference: each entry
     # names the numbers a condition states ("400-800" for an average over 400-800 nm, "550" for one

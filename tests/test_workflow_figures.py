@@ -46,7 +46,12 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-def store_artifact(document: DocumentInput, settings: Settings, backend: Backend = "mineru") -> None:
+def store_artifact(
+    document: DocumentInput,
+    settings: Settings,
+    backend: Backend = "mineru",
+    caption: str = "Fig. 2 Sheet resistance of the films versus O2 flow.",
+) -> None:
     blocks = (
         make_block(
             page=0, order=0, type="figure", content="a.jpg", bbox=BOX, backend=backend, document_id=document.document_id
@@ -55,7 +60,7 @@ def store_artifact(document: DocumentInput, settings: Settings, backend: Backend
             page=0,
             order=1,
             type="caption",
-            content="Fig. 2 Sheet resistance of the films versus O2 flow.",
+            content=caption,
             bbox=BOX,
             backend=backend,
             document_id=document.document_id,
@@ -188,6 +193,18 @@ def test_the_stage_runs_beside_extraction_and_its_rows_reach_the_workbook_not_th
     sheet = load_workbook(result.excel_path)["图中读数"]
     assert sheet.max_row == 3
     assert client.closed
+
+
+def test_the_stage_detail_counts_the_readings_outside_the_plausible_range(
+    monkeypatch, document: DocumentInput, settings: Settings
+):
+    store_artifact(document, settings, caption="Fig. 2 Film thickness versus sputtering time.")
+    answer = chart_answer(field="thickness", unit="nm", points=((10, 120.0), (20, 8000.0)))
+
+    figures, result, _marks = run(monkeypatch, document, settings, FakeVisionClient(answer))
+
+    assert figures[-1] == ("figures", "done", "1 readings from 1 panels, 1 outside the plausible range")
+    assert result.figures is not None and len(result.figures.rows) == 1
 
 
 def test_the_stage_overlaps_the_extraction_lanes(monkeypatch, document: DocumentInput, settings: Settings):

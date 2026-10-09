@@ -38,7 +38,7 @@ ROLES = {
     "condition_hint": {P, V},
     "bare_number": {C, F},
     "categories": {V},
-    "valid_range": {P, C},
+    "valid_range": {P, C, F},
     "condition_preference": {V},
     "level": {P, C, V},
     "condition_rule": {P, V},
@@ -99,7 +99,7 @@ def test_display_is_a_role_of_its_own():
 
 
 def test_field_roles_reads_the_metadata():
-    assert field_roles("valid_range") == frozenset({P, C})
+    assert field_roles("valid_range") == frozenset({P, C, F})
 
 
 def _fingerprints(profile) -> dict[str, str]:

@@ -564,6 +564,9 @@ def _figures_detail(readings: FigureReadings) -> str:
         detail += f", {counts['unreadable']} unreadable"
     if counts.get("error"):
         detail += f", {counts['error']} requests failed"
+    dropped = sum(len(panel.dropped) for panel in readings.panels)
+    if dropped:
+        detail += f", {dropped} outside the plausible range"
     return detail
 
 

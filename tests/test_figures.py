@@ -249,6 +249,97 @@ def test_a_unit_that_will_not_convert_keeps_the_raw_reading_with_a_note():
     assert reading.y_raw == 25.0
 
 
+# ---- The plausible range -----------------------------------------------------------------------------------
+
+THICKNESS_FIGURE = (fig(0, 0), cap(0, 1, "Fig. 2 Film thickness and sheet resistance vs sputtering time"))
+
+
+def test_a_reading_outside_the_field_s_plausible_range_is_dropped_with_its_reason_on_the_panel():
+    # The TCO profile's thickness is at most 5000 nm: a "10^2" read off a "10^-2" log axis, or a substrate's
+    # thickness, is a number the model got wrong, as it would be in the text lanes.
+    answer = chart_answer(field="thickness", unit="nm", points=((10, 120.0), (20, 8000.0)), series=("ITO",))
+
+    result = run(artifact(*THICKNESS_FIGURE), FakeVisionClient(answer))
+
+    [panel] = result.panels
+    assert panel.status == "read" and panel.readings == 1
+    assert [reading.y for reading in result.readings] == [120.0]
+    assert panel.dropped == ("thickness (ITO): 8000 nm is 8000 nm, outside the plausible range (at most 5000 nm)",)
+    assert panel.detail == "1 readings outside the plausible range, dropped"
+
+
+def test_a_reading_is_judged_in_the_canonical_unit_with_the_axis_multiplier():
+    # 6 on an axis in μm is 6000 nm; 0.6 μm is 600 nm. The range is in the canonical unit, as in the text lanes.
+    answer = chart_answer(field="thickness", unit="μm", points=((10, 0.6), (20, 6.0)))
+
+    result = run(artifact(*THICKNESS_FIGURE), FakeVisionClient(answer))
+
+    assert [reading.y for reading in result.readings] == [pytest.approx(600.0)]
+    assert result.panels[0].dropped == (
+        "thickness (Rs): 6 μm is 6000 nm, outside the plausible range (at most 5000 nm)",
+    )
+
+
+@pytest.mark.parametrize(
+    ("scale", "y", "kept"),
+    [
+        ("linear", 5400.0, True),  # ±10 %: the band reaches down to 4860 nm, inside
+        ("linear", 5600.0, False),  # ±10 %: 5040 nm at best, outside
+        ("log", 6000.0, True),  # ±20 %: 4800 nm at best, inside
+        ("log", 6300.0, False),  # ±20 %: 5040 nm at best, outside
+    ],
+)
+def test_a_reading_is_refused_only_when_its_whole_precision_band_lies_outside_the_range(scale, y, kept):
+    answer = chart_answer(field="thickness", unit="nm", scale=scale, points=((10, y),))
+
+    result = run(artifact(*THICKNESS_FIGURE), FakeVisionClient(answer))
+
+    assert (len(result.readings), len(result.panels[0].dropped)) == ((1, 0) if kept else (0, 1))
+
+
+def test_a_reading_that_did_not_convert_is_not_judged():
+    answer = chart_answer(field="thickness", unit="arb. units", points=((10, 8000.0),))
+
+    result = run(artifact(*THICKNESS_FIGURE), FakeVisionClient(answer))
+
+    [reading] = result.readings
+    assert reading.y is None and result.panels[0].dropped == ()
+
+
+def test_a_field_without_a_range_is_never_refused():
+    # sheet_resistance declares no valid_range in the TCO profile.
+    answer = chart_answer(points=((100, 1e9),))
+
+    result = run(artifact(*SELECTED), FakeVisionClient(answer))
+
+    assert len(result.readings) == 1 and result.panels[0].dropped == ()
+
+
+def test_a_panel_whose_every_reading_was_refused_is_still_read_not_unreadable():
+    # The answer is a real chart the model misread: asking again with the cache bypassed would buy the same
+    # misreading. The panel stays "read" so the stored file is complete.
+    answer = chart_answer(field="thickness", unit="nm", points=((10, 8000.0), (20, 9000.0)))
+
+    result = run(artifact(*THICKNESS_FIGURE), FakeVisionClient(answer))
+
+    [panel] = result.panels
+    assert panel.status == "read" and panel.readings == 0 and len(panel.dropped) == 2
+    assert result.complete and result.unreadable() == frozenset()
+
+
+def test_a_panel_stored_before_the_range_check_loads_without_dropped_readings():
+    stored = {
+        "source_id": "mineru_p0_b0",
+        "page": 0,
+        "caption": "Fig. 2",
+        "fields": ["thickness"],
+        "status": "read",
+        "readings": 2,
+    }
+
+    assert figures.FigurePanel.model_validate(stored).dropped == ()
+
+
 def test_an_axis_the_model_did_not_tie_to_a_listed_field_is_not_read():
     answer = chart_answer(field="carrier_concentration")
 
@@ -458,6 +549,7 @@ def charted_key(changes: dict[str, object] | None = None) -> str:
         {"fields.1.canonical_unit": "cm"},
         {"fields.0.figure_readable": True},
         {"fields.1.figure_spectrum_axis": "wavelength (nm)", "fields.1.figure_spectrum_points": ["550"]},
+        {"fields.1.valid_range": {"max": 5000}},
     ],
     ids=[
         "chart_definition",
@@ -467,6 +559,7 @@ def charted_key(changes: dict[str, object] | None = None) -> str:
         "canonical_unit",
         "another_field_readable",
         "spectrum",
+        "valid_range",
     ],
 )
 def test_the_figure_key_moves_with_a_chart_slot_or_a_chart_field(changes):
@@ -478,6 +571,7 @@ def test_the_figure_key_moves_with_a_chart_slot_or_a_chart_field(changes):
     [
         {"fields.0.description": "Purity of the metal precursor, as the supplier states it."},
         {"fields.0.keywords": ["purity", "assay"]},
+        {"fields.0.valid_range": {"min": 90}},
         {"fields.2.description": "Solvent of the sol."},
         {"prompt.domain_subject": "dip-coated films"},
         {"retrieval.condition_keywords": ["annealed", "coating", "cured"]},
@@ -825,6 +919,22 @@ def test_a_spectrum_answer_gives_a_point_reading_and_the_code_s_mean_per_curve()
         assert reading.field == "transmittance"
         assert reading.note.startswith(figures.SPECTRUM_NOTE)
     assert by["ITO-300", "spectrum_mean"].y == pytest.approx(90.0)
+
+
+def test_a_curve_below_the_field_s_floor_is_dropped_as_another_quantity():
+    # A device's EQE curve drawn beside the film's transmittance, read as transmittance: at 30 % it cannot be
+    # the film's (the TCO profile's floor is 60 %). The 58 % curve stays: its ±10 % band reaches the floor.
+    curves = {"EQE": {x: 30.0 for x in RANGE_XS}, "ITO": {x: 58.0 for x in RANGE_XS}}
+
+    result = run_spectral(spectrum_answer(curves))
+
+    [panel] = result.panels
+    assert panel.status == "read" and panel.readings == 2
+    assert {reading.series for reading in result.readings} == {"ITO"}
+    assert panel.dropped == (
+        "transmittance (EQE): 30 % is 30 %, outside the plausible range (at least 60 %) [x = 550]",
+        "transmittance (EQE): 30 % is 30 %, outside the plausible range (at least 60 %) [x = 400-800/50]",
+    )
 
 
 def test_a_partly_read_range_has_no_mean():

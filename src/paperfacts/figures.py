@@ -22,6 +22,10 @@ Boundaries, all from the measurement in ``.omc/research/figure-reading-accuracy.
   declared range becomes the code's mean of every sampled x, and none at all when one of them was not read.
 - **The model quotes, the code converts.** y comes back in the axis's own unit, multiplier included
   ("10^2 ohm/sq"), and :func:`paperfacts.normalize.convert_to_canonical` does the arithmetic.
+- **Judged by the field's plausible range.** A converted reading whose whole ±precision band lies outside the
+  field's ``valid_range`` is dropped with an audited reason on its panel (:func:`implausible`), as the text
+  lanes drop such a value: the misreadings seen in use -- a log axis's "10^-2" read as "10^2", a device's EQE
+  curve read as the film's transmittance -- are off by far more than the band.
 
 The prompt lives here rather than in :mod:`paperfacts.prompts` on purpose: that module's source is hashed
 into ``extractor_key``, so putting it there would rename every stored extraction whenever this prompt is
@@ -199,6 +203,8 @@ class FigurePanel(BaseModel):
     status: PanelStatus
     detail: str = ""
     readings: int = 0
+    # Readings refused by the field's plausible range, one reason each: the audit trail of :func:`implausible`.
+    dropped: tuple[str, ...] = ()
     usage: dict[str, int] = Field(default_factory=dict)
 
 
@@ -636,14 +642,39 @@ def _x_axis(answer: dict[str, Any]) -> _XAxis:
         return _XAxis()
 
 
+def implausible(
+    spec: FieldSpec, *, value: float | None, precision: float, y_raw: float, unit_raw: str | None, series: str | None
+) -> str | None:
+    """Why a converted reading cannot be a value of ``spec``, or None when it may be one.
+
+    The text lanes' rule (:func:`paperfacts.normalize.drop_implausible`) with the reading's own tolerance: every
+    reading is approximate by ±``precision``, so it is refused only when its whole band lies outside the field's
+    ``valid_range``, judged in the canonical unit like the text. A marker a few percent under a floor stays,
+    labelled approximate as every reading is. A reading that did not convert is kept: there is no number to
+    judge, and its note already says so.
+    """
+    if value is None or spec.describe_range() is None:
+        return None
+    band_low, band_high = sorted((value * (1 - precision), value * (1 + precision)))
+    low, high = spec.valid_range
+    if (low is None or band_high >= low) and (high is None or band_low <= high):
+        return None
+    who = f"{spec.name} ({series})" if series else spec.name
+    unit = f" {unit_raw}" if unit_raw else ""
+    canonical = f" {spec.canonical_unit}" if spec.canonical_unit else ""
+    return f"{who}: {y_raw:g}{unit} is {value:g}{canonical}, outside the plausible range ({spec.describe_range()})"
+
+
 def readings_from_answer(
     answer: dict[str, Any], request: PanelRequest, units: UnitRegistry
-) -> tuple[tuple[FigureReading, ...], int]:
-    """Turn a chart answer into readings: only for the fields asked about, y converted, precision labelled.
+) -> tuple[tuple[FigureReading, ...], int, tuple[str, ...]]:
+    """Turn a chart answer into readings: only for the fields asked about, y converted, precision labelled,
+    judged by the field's plausible range.
 
     Also returns how many points could not be put on any axis at all -- as opposed to points on an axis
-    that plots something nobody asked about, which are dropped on purpose. Axis ids and series labels are
-    matched case-insensitively: "Left" and "left" are the same axis to the model.
+    that plots something nobody asked about, which are dropped on purpose -- and why each implausible reading
+    was refused. Axis ids and series labels are matched case-insensitively: "Left" and "left" are the same
+    axis to the model.
 
     An axis without an id is keyed by its position, never by a default name: two id-less axes must not
     collapse into one, or a sheet resistance of 12000 ohm/sq becomes a transmittance of 12000 %. A point
@@ -662,6 +693,7 @@ def readings_from_answer(
 
     readings: list[FigureReading] = []
     unplaced = 0
+    dropped: list[str] = []
     for point in points:
         entry = series.get(_fold(point.series))
         named = _fold(entry.y_axis) if entry is not None else ""
@@ -676,6 +708,13 @@ def readings_from_answer(
             continue  # a field nobody asked about, or one this table does not have
         unit_raw = _axis_unit(axis.unit)
         value, unit, note = convert_to_canonical(spec, point.y, unit_raw, units)
+        precision = precision_for(axis.scale or "linear", series_count)
+        reason = implausible(
+            spec, value=value, precision=precision, y_raw=point.y, unit_raw=unit_raw, series=point.series
+        )
+        if reason is not None:
+            dropped.append(reason)
+            continue
         notes = [note] if note else []
         if point.confidence is not None and point.confidence < LOW_CONFIDENCE:
             notes.append(f"model confidence {point.confidence:g}: likely a hidden or overlapping marker")
@@ -701,12 +740,12 @@ def readings_from_answer(
                 y=value,
                 unit=unit if value is not None else None,
                 scale="log" if (axis.scale or "").lower().startswith("log") else "linear",
-                precision=precision_for(axis.scale or "linear", series_count),
+                precision=precision,
                 confidence=point.confidence,
                 note="; ".join(notes) or None,
             )
         )
-    return tuple(readings), unplaced
+    return tuple(readings), unplaced, tuple(dropped)
 
 
 def _as_x(value: float | str | None) -> float | None:
@@ -729,15 +768,17 @@ def _declared_axis(axis: str) -> tuple[str, str | None]:
 
 def _spectrum_readings(
     answer: dict[str, Any], request: PanelRequest, units: UnitRegistry
-) -> tuple[tuple[FigureReading, ...], int]:
+) -> tuple[tuple[FigureReading, ...], int, tuple[str, ...]]:
     """A spectrum answer as readings: per curve and declared point, the y at a single x, or the code's mean over a
     range's sampled x values. A mean is kept only when every sampled x of the range was read, since the mean of a
-    partly covered range is the mean of another window. Axes and curves are placed as markers are
-    (:func:`readings_from_answer`); the second value counts the curve readings placed on no described axis."""
+    partly covered range is the mean of another window. Axes and curves are placed, and readings judged, as
+    markers are (:func:`readings_from_answer`); the second value counts the curve readings placed on no
+    described axis, the third says why each implausible reading was refused."""
     specs = {spec.name.lower(): spec for spec in request.fields if spec.figure_spectrum_axis is not None}
     axes, only_axis = _axes(answer)
     readings: list[FigureReading] = []
     unplaced = 0
+    dropped: list[str] = []
     curves = _items(answer, "curves", _Curve)
     for curve in curves:
         read = _items({"readings": curve.readings}, "readings", _CurveReading)
@@ -770,6 +811,15 @@ def _spectrum_readings(
             confidences = [entry.confidence for entry in taken if entry.confidence is not None]
             confidence = min(confidences) if confidences else None
             value, unit, note = convert_to_canonical(spec, y_raw, unit_raw, units)
+            # The marker rule: a log axis or a crowded panel doubles the error, whether it plots markers or
+            # curves.
+            precision = precision_for(axis.scale or "linear", len(curves))
+            reason = implausible(
+                spec, value=value, precision=precision, y_raw=y_raw, unit_raw=unit_raw, series=curve.label
+            )
+            if reason is not None:
+                dropped.append(f"{reason} [x = {point}]")
+                continue
             notes = [SPECTRUM_NOTE, *([note] if note else [])]
             if confidence is not None and confidence < LOW_CONFIDENCE:
                 notes.append(f"model confidence {confidence:g}")
@@ -794,14 +844,12 @@ def _spectrum_readings(
                     y=value,
                     unit=unit if value is not None else None,
                     scale="log" if (axis.scale or "").lower().startswith("log") else "linear",
-                    # The marker rule: a log axis or a crowded panel doubles the error, whether it plots markers
-                    # or curves.
-                    precision=precision_for(axis.scale or "linear", len(curves)),
+                    precision=precision,
                     confidence=confidence,
                     note="; ".join(notes),
                 )
             )
-    return tuple(readings), unplaced
+    return tuple(readings), unplaced, tuple(dropped)
 
 
 # ---- The stage -------------------------------------------------------------------------------------------
@@ -861,14 +909,23 @@ def _read_panel(
         reason = str(answer.get("reason") or "not a property-vs-condition chart")
         return FigurePanel(**base, status="not_chart", detail=reason[:500], usage=result.usage), ()
     try:
-        readings, unplaced = readings_from_answer(answer, request, profile.units)
+        readings, unplaced, dropped = readings_from_answer(answer, request, profile.units)
     except (ValueError, TypeError) as exc:
         return FigurePanel(**base, status="unreadable", detail=str(exc)[:500], usage=result.usage), ()
-    if unplaced and not readings:
+    if unplaced and not readings and not dropped:
         detail = f"{unplaced} points, none of them on an axis the answer describes"
         return FigurePanel(**base, status="unreadable", detail=detail, usage=result.usage), ()
-    detail = f"{unplaced} points on no axis the answer describes, not read" if unplaced else ""
-    return FigurePanel(**base, status="read", readings=len(readings), detail=detail, usage=result.usage), readings
+    notes = [f"{unplaced} points on no axis the answer describes, not read"] if unplaced else []
+    if dropped:
+        # The chart was read, so the answer stays cached: a reading outside the range is a reading the model got
+        # wrong, not a request to ask again. The reasons are the panel's audit; the detail only counts them.
+        notes.append(f"{len(dropped)} readings outside the plausible range, dropped")
+        for reason in dropped:
+            logger.info("figure %s: dropped %s", block.source_id, reason)
+    panel = FigurePanel(
+        **base, status="read", readings=len(readings), detail="; ".join(notes), dropped=dropped, usage=result.usage
+    )
+    return panel, readings
 
 
 def _crop(render: CropRenderer, request: PanelRequest) -> bytes | Exception:
