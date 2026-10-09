@@ -13,11 +13,17 @@
   "paper": {
     "component": [
       {
+        "value": "Sn",
+        "raw": "one equipped with a Sn target, the other with a Sn/Ta target 95:5 wt.%",
+        "page": 1,
+        "accept": [
+          "^\\s*(pure\\s+)?Sn\\s*(target)?\\s*$"
+        ]
+      },
+      {
         "value": "Sn/Ta 95:5 wt.%",
         "raw": "one equipped with a Sn target, the other with a Sn/Ta target 95:5 wt.%",
         "page": 1,
-        "ambiguous": true,
-        "why": "two targets are co-sputtered (pure Sn plus Sn/Ta 95:5 wt.%); the field holds a single composition",
         "accept": [
           "95\\s*:\\s*5",
           "Sn\\s*/\\s*Ta"

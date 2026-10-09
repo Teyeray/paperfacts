@@ -44,6 +44,9 @@ class FieldColumn(BaseModel):
     # The field's closed set of canonical spellings, () when it has none. A cell holds the value as written; what a
     # value names among these is computed by the server (CorpusRow's categories), never re-derived in the browser.
     categories: tuple[str, ...] = ()
+    # A list both lanes answered holds only the elements both read (``FieldSpec.strict_list``): the workbook's
+    # field rule says so, since such a cell is empty when the lanes disagree, not a union.
+    strict_list: bool = False
 
 
 def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
@@ -61,6 +64,7 @@ def field_columns(profile: DomainProfile) -> tuple[FieldColumn, ...]:
             references=spec.references,
             group=spec.group,
             categories=spec.categories,
+            strict_list=spec.strict_list,
         )
         for spec in profile.fields
     )

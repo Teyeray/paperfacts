@@ -14,11 +14,16 @@
         "value": "In2O3:CeO2 (3 wt%)",
         "raw": "a ceramic In2O3:CeO2 target (3 wt%) and ceramic In2O3:SnO2 target (10 wt%), respectively",
         "page": 2,
-        "ambiguous": true,
-        "why": "two targets (ICO and ITO) for two film families; the field holds one composition",
         "accept": [
           "CeO2?",
-          "\\bICO\\b",
+          "\\bICO\\b"
+        ]
+      },
+      {
+        "value": "In2O3:SnO2 (10 wt%)",
+        "raw": "a ceramic In2O3:CeO2 target (3 wt%) and ceramic In2O3:SnO2 target (10 wt%), respectively",
+        "page": 2,
+        "accept": [
           "SnO2",
           "\\bITO\\b"
         ]

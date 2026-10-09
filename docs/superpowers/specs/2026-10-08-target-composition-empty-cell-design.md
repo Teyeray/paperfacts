@@ -101,3 +101,12 @@ differently」）+ PaddleOCR-VL 重复引文 2 条 `missing`。
 - `tests/test_records.py` 的「论文级字段出现在样品下即丢弃」保持不变：清洗层的不变量仍成立。
 - 选项 A：`tests/test_dataset.py` 两靶材双路 → 两元素 `agree`；一靶材两种写法 → 留空 `conflict`；
   `tests/test_production_cases_b1.py` GZO 仍留空；`tests/test_cardinality_many.py` `strict_list` 按字段声明、须为列表；`tests/test_compare.py` 严格列表的 `agree`/`ambiguous`/`missing` 行；一靶材共享、一靶材两种写法 → 留空 `ambiguous`。
+
+### 已知限制与金标
+
+- 仅一路作答时没有第二路可对照：该路把同一靶材用两种写法各记一次（`ATO 5:95` 与 `Sb2O5:SnO2 = 5:95`），两条都进单元格
+  （`single_source`）。两路都作答时同样的情形会被拒绝。可接受，与 `strict_list` 的保守取向一致。
+- 金标按列表语义修订：`eval/score.py` 把列表字段的金标格读作必须含有的元素，所以多靶材论文的金标从「一个组成 + 其余
+  写入 accept」改为每个靶材一格。`80c3b69d570c2b6d`、`219df6e1cd7b19fe`、`5c10f7a0128f15e0` 的原引文本就写着两个靶材，
+  直接拆成两格（同一引文、同一页）；`8977655673fa6d9a` 的 ITO 靶材只有生产两路的引文（`In2O3:SnO2 = 90:10 wt%`），
+  页码未对照 PDF 复核，暂记为 `ambiguous`，待复核后转为确定格。单靶材论文的金标不变：一格就是列表的唯一元素。

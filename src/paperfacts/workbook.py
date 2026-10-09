@@ -108,6 +108,10 @@ _REFERENCE_RULE = (
     "两路所引样品未被匹配为同一样品或引用未定位到列表中的样品时留空。"
 )
 _LIST_RULE = "多值：两路已定位证据的并集，以“; ”分隔，每个元素的来源通道见数据质量说明；有分类时按分类顺序排列。"
+_STRICT_LIST_RULE = (
+    "多值（严格）：两路都作答时只保留两路都读到的元素，以“; ”分隔；任一元素仅一路读到即整格留空（见数据质量说明）；"
+    "仅一路作答时取该路读到的全部元素。"
+)
 # The characters openpyxl refuses in a cell, removed from every string it appends. Tab, newline and carriage return
 # are legal in a cell and a quote may hold them, so they stay. profile_loader._CONTROL_CHARACTER is the stricter set
 # a label_zh is refused for at load time (a sheet title and a one-line header have no use for a tab either); this one
@@ -292,8 +296,11 @@ def write_dataset(
             "rule": "冲突、多条件、多值、范围、上下界或无引用定位时留空；近似值和 ± 不确定度保留中心值并备注。",
         }
         | (
-            # A list column says so, and that its cell is the union of both lanes, not one agreed value.
-            {"unit": "文本（多值）", "rule": _LIST_RULE} if column.cardinality == "many" else {}
+            # A list column says so, and what its cell holds: the union of both lanes, or for a strict list only
+            # what both read.
+            {"unit": "文本（多值）", "rule": _STRICT_LIST_RULE if column.strict_list else _LIST_RULE}
+            if column.cardinality == "many"
+            else {}
         )
         | ({"rule": _INTERVAL_RULE} if column.kind == "interval" else {})
         | (

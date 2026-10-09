@@ -15,15 +15,23 @@
         "value": "Sb2O5:SnO2 = 5:95 wt%",
         "raw": "an ATO ceramic target with a composition of Sb2O5:SnO2 = 5:95 wt% was utilized",
         "page": 1,
-        "ambiguous": true,
-        "why": "two targets (ATO and ITO) for two film families; the field holds one composition",
         "accept": [
           "5\\s*:\\s*95",
           "95\\s*:\\s*5",
           "Sb2O5",
-          "\\bATO\\b",
+          "\\bATO\\b"
+        ]
+      },
+      {
+        "value": "In2O3:SnO2 = 90:10 wt%",
+        "raw": "In2O3:SnO2 = 90:10 wt% (ITO ceramic sputtering target)",
+        "page": null,
+        "ambiguous": true,
+        "why": "the second target, as both production lanes quoted it; its page has not been re-checked against the PDF",
+        "accept": [
           "90\\s*:\\s*10",
-          "In2O3"
+          "In2O3",
+          "\\bITO\\b"
         ]
       }
     ]
