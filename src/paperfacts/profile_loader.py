@@ -743,6 +743,9 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
     figure_readable = entry.get("figure_readable", _FIELD_DEFAULTS["figure_readable"])
     if type(figure_readable) is not bool:
         raise ConfigError(f"{where}: figure_readable must be true or false, got {figure_readable!r}")
+    strict_list = entry.get("strict_list", _FIELD_DEFAULTS["strict_list"])
+    if type(strict_list) is not bool:
+        raise ConfigError(f"{where}: strict_list must be true or false, got {strict_list!r}")
     kind = choice("kind", get_args(FieldKind))
     group = choice("group", tuple(levels))
     stated: dict[str, Any] = {
@@ -763,6 +766,7 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         "range_policy": choice("range_policy", get_args(RangePolicy)),
         "after_clause": choice("after_clause", get_args(AfterClause)),
         "cardinality": choice("cardinality", get_args(Cardinality)),
+        "strict_list": strict_list,
         "named_values": _named_values(entry, where),
         "figure_spectrum_axis": text_or_none("figure_spectrum_axis"),
         "figure_spectrum_points": _spectrum_points(entry, where),
@@ -774,6 +778,8 @@ def field_spec(entry: Any, position: int, source: str, levels: Mapping[str, Fiel
         raise ConfigError(f"{where}: cardinality 'many' needs a text or composition field, not a {kind!r} one")
     if many and (refused := [key for key in _NOT_WITH_MANY if key in changed]):
         raise ConfigError(f"{where}: cardinality 'many' cannot be combined with {', '.join(refused)}")
+    if strict_list and not many:
+        raise ConfigError(f"{where}: strict_list needs cardinality 'many'")
     for key, kinds in _KIND_ATTRIBUTES.items():
         if key in changed and kind not in kinds:
             named = " or ".join(filter(None, (", ".join(kinds[:-1]), kinds[-1])))

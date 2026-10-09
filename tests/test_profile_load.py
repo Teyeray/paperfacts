@@ -36,6 +36,7 @@ NAME_BASED = {"condition_rule", "missing_condition_note_zh", "figure_readable", 
 AFTER_B0 = {
     "after_clause": "refuse",
     "cardinality": "one",
+    "strict_list": False,
     "prompt_categories": [],
     "entity": None,
     "references": None,
@@ -43,10 +44,22 @@ AFTER_B0 = {
     "figure_spectrum_axis": None,
     "figure_spectrum_points": [],
 }
-# Post-B0 attributes a field deliberately moved off its B0 behaviour, with the value it now has; every other field
-# keeps the AFTER_B0 value. substrate_temperature: "at room temperature (RT)" (coatings-13-01719) reads as 25 ℃.
-# transmittance: its spectra are read at 550 nm and as the 400-800 nm mean (the figures stage only).
+# Attributes a field deliberately moved off its B0 value or off its AFTER_B0 default, with the value it now has;
+# every other attribute of every field is still B0's. substrate_temperature: "at room temperature (RT)"
+# (coatings-13-01719) reads as 25 ℃. transmittance: its spectra are read at 550 nm and as the 400-800 nm mean (the
+# figures stage only). component: a paper sputtering from several targets (an ITO and an ATO target for a bilayer)
+# lists every one (docs/superpowers/specs/2026-10-08-target-composition-empty-cell-design.md, option A); its
+# description_zh is display-only and moves no key, listed because the table comparison covers every attribute.
 EDITED_AFTER_B0 = {
+    ("component", "cardinality"): "many",
+    ("component", "strict_list"): True,
+    (
+        "component",
+        "description",
+    ): "Chemical composition of the sputtering TARGET (not the film), e.g. 'SnO2:Ta (2 wt% Ta2O5)', 'ITO 90:10 wt%', "
+    "'Sn/Ta 95:5 wt%'. A paper that sputters from several targets (an ITO and an ATO target for a bilayer) has one "
+    "entry per target; never split one target's composition into its constituents.",
+    ("component", "description_zh"): "溅射靶材的化学组成；论文用了几种靶材就记几条，每条一种靶材的组成。",
     ("substrate_temperature", "named_values"): [
         ["room temperature", 25.0],
         ["RT", 25.0],

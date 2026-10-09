@@ -335,6 +335,17 @@ def test_without_categories_elements_keep_first_seen_order_mineru_first_and_one_
     assert decision.status == "single_source"
 
 
+def test_strict_list_is_declared_per_field_and_needs_a_list():
+    # Strictness is the field's, not the kind's: a composition list of precursors keeps the union (each lane
+    # reading a different salt is two salts), a composition list of targets refuses an unshared one.
+    assert load_field(entry(kind="composition", strict_list=True)).strict_list
+    assert not load_field(entry(kind="composition")).strict_list
+    with pytest.raises(ConfigError, match="strict_list needs cardinality 'many'"):
+        load_field(entry(cardinality="one", strict_list=True))
+    with pytest.raises(ConfigError, match="strict_list must be true or false"):
+        load_field(entry(strict_list="yes"))
+
+
 def test_an_element_is_written_as_the_quote_with_its_unit_once_and_its_spacing_collapsed():
     # The same string a single-valued text cell shows (TextRules.cell): the unit once, wherever the quote carried
     # it, and OCR's newline or double space inside the quote folded to one space, as a list cell always did.

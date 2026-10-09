@@ -217,7 +217,8 @@ def test_the_gzo_component_audit_does_not_repeat_a_unit_the_quote_already_ends_w
 
     assert "wt.% wt.%" not in row["detail"]
     assert "mineru: 3 wt.%" in row["detail"]
-    # Still refused: MinerU quoted two bare percentages with no compound named, the other lane one sentence
-    # naming both oxides. They are not the same text, and no rule may make them so.
+    # A list field since option A of the 2026-10-08 design note, but still refused: MinerU's two bare
+    # percentages and PaddleOCR-VL's one sentence share no element, and component is a strict list
+    # (FieldSpec.strict_list): the comparison reports each unshared element ambiguous, and the cell refuses.
     assert row["value"] is None
-    assert row["decision"] == "conflict"
+    assert row["decision"] == "ambiguous"

@@ -13,15 +13,23 @@
   "paper": {
     "component": [
       {
+        "value": "In2O3:SnO2 = 90:10 wt%",
+        "raw": "Cylindrical ITO (In2O3:SnO2 = 90:10 wt%) and ICO (In2O3:CeO2 = 99:1 wt%) targets",
+        "page": 1,
+        "accept": [
+          "90\\s*:\\s*10",
+          "SnO2",
+          "\\bITO\\b"
+        ]
+      },
+      {
         "value": "In2O3:CeO2 = 99:1 wt%",
         "raw": "Cylindrical ITO (In2O3:SnO2 = 90:10 wt%) and ICO (In2O3:CeO2 = 99:1 wt%) targets",
         "page": 1,
-        "ambiguous": true,
-        "why": "two targets (ITO and ICO) for two film families; the field holds one composition",
         "accept": [
           "99\\s*:\\s*1",
           "CeO",
-          "90\\s*:\\s*10"
+          "\\bICO\\b"
         ]
       }
     ],

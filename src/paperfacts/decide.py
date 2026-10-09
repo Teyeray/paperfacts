@@ -421,8 +421,9 @@ def decide_many(
 
     The refusals are :func:`decide`'s, in its order, and nothing else: a list has no condition to narrow and no
     one value to agree on. The comparison pairs a list as a set (:func:`paperfacts.compare._set_pairs`), so a
-    ``conflict`` cannot arise; an ``ambiguous`` one (a one-sided element whose sample match failed) still refuses,
-    and refuses the whole list: a union without the doubted element, or with a stray one, is no answer either.
+    ``conflict`` cannot arise; an ``ambiguous`` one (a one-sided element whose sample match failed, or an element of
+    a strict list that one lane alone holds, ``FieldSpec.strict_list``) refuses the whole list: a union without the
+    doubted element, or with a stray one, is no answer either.
 
     An element is one trusted value, identified by :func:`~paperfacts.kinds.element_key` -- the comparison's
     identity too. A field with categories keeps the category a value names and refuses as an element a value

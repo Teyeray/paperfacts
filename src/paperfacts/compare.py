@@ -406,6 +406,10 @@ def _compare_records(
         # A list's leftovers are elements one lane did not read, never two readings of one value.
         positional = pair_leftovers_ambiguous and spec.cardinality != "many"
         leftover = _split_off_first_leftover_pair(pairs) if positional else None
+        # A strict list both lanes answered: an element one lane alone holds is unsettled, not merely unread,
+        # unless it repeats an element both lanes read (one lane quoting a target under two conditions).
+        strict = spec.strict_list and bool(values_a and values_b)
+        matched = _matched_keys(spec, pairs) if strict else set()
         for a, b in pairs:
             if a is None or b is None:
                 if not emit_one_sided:
@@ -413,17 +417,22 @@ def _compare_records(
                 present = a if a is not None else b
                 assert present is not None
                 missing_in = backend_a if a is None else backend_b
+                unsettled = strict and element_key(spec, present.quote) not in matched
+                status: FactStatus = "ambiguous" if unsettled else one_sided
+                detail = one_sided_detail or f"only in {backend_b if a is None else backend_a}"
+                if unsettled:
+                    detail = f"{detail}; the other lane lists other elements, so the list is unsettled"
                 out.append(
                     FieldComparison(
                         scope=scope,
                         field=name,
                         condition=present.condition,
-                        status=one_sided,
-                        missing_in=missing_in if one_sided == "missing" else None,
+                        status=status,
+                        missing_in=missing_in if status == "missing" else None,
                         match_confidence=match_confidence,
                         a=a,
                         b=b,
-                        detail=one_sided_detail or f"only in {backend_b if a is None else backend_a}",
+                        detail=detail,
                     )
                 )
                 continue
@@ -503,7 +512,9 @@ def _pair_values(
 
     A list field (``cardinality: many``) pairs as a set (:func:`_set_pairs`): its values are several facts that
     hold at once, so pairing "LiOH" with "NiSO4" because they came first would report a conflict the paper never
-    made. What one lane has and the other lacks is reported one-sided, so a list never reports ``conflict``.
+    made. What one lane has and the other lacks is reported one-sided, so a list never reports ``conflict`` --
+    and a strict list's unshared element (``FieldSpec.strict_list``, the targets a paper sputters from) is
+    reported ambiguous rather than missing when both lanes answered: unsettled, not merely unread.
     """
     if spec.cardinality == "many":
         return _set_pairs(values_a, values_b, spec)
@@ -531,7 +542,10 @@ def _set_pairs(
 ) -> list[tuple[FieldValue | None, FieldValue | None]]:
     """A list field's pairing: each value of lane A with the first of lane B holding the same element
     (:func:`~paperfacts.kinds.element_key`, the union cell's identity too) under conditions that do not measure
-    differently; everything else one-sided. A value naming no category pairs with nothing."""
+    differently; everything else one-sided. A value naming no category pairs with nothing.
+
+    A strict list's unshared element (``FieldSpec.strict_list``) is one-sided here too; :func:`_compare_records`
+    reports it unsettled, since pairing leftovers in the order given would invent a partner."""
     rest_b = [(element_key(spec, b.quote), b) for b in values_b]
     pairs: list[tuple[FieldValue | None, FieldValue | None]] = []
     for a in values_a:
@@ -546,6 +560,11 @@ def _set_pairs(
         )
         pairs.append((a, None if j is None else rest_b.pop(j)[1]))
     return pairs + [(None, b) for _, b in rest_b]
+
+
+def _matched_keys(spec: FieldSpec, shared: Sequence[tuple[FieldValue | None, FieldValue | None]]) -> set[str]:
+    """The elements both lanes read: the keys of the pairs the set pairing made."""
+    return {element_key(spec, a.quote) for a, b in shared if a is not None and b is not None}
 
 
 def conditions_measure_differently(condition_a: str | None, condition_b: str | None) -> bool:

@@ -20,7 +20,7 @@ from generate_b0 import RECORDING, record
 
 # Pinned for the same reason as the prompt snapshot's: the comparison runs the generator's own code, so a
 # re-record must not be able to pass unnoticed.
-RECORDING_SHA256 = "46101c66b8e82e4298321a94851c51e3c4bf209b50a2f6b2575e10b27cf7b411"
+RECORDING_SHA256 = "18315e235020a424b2d4320a3d881dcb0890ddd72619c33277fe4ae6a558005a"
 
 RECORDED = json.loads(RECORDING.read_text(encoding="utf-8"))
 

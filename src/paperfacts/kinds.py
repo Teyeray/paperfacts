@@ -362,7 +362,7 @@ class TextRules:
     """Text as quoted, equal as :func:`paperfacts.normalize.same_text` judges it: across spacing, case and a
     lost hyphen, or by the category both name. A composition is compared the same way, as the quote with its
     unit (:attr:`paperfacts.records.FieldValue.quote`): one lane quotes "In2O3:SnO2 = 90:10 wt%" and the other
-    "In2O3:SnO2 = 90:10" with "wt%" in ``unit_raw``, and both are the one target the paper names."""
+    "In2O3:SnO2 = 90:10" with "wt%" in ``unit_raw``, and both are the one material the paper names."""
 
     def read(self, field: FieldValue, spec: FieldSpec, units: UnitRegistry, ctx: KindContext) -> FieldValue:
         # Compared through same_text on the fly.

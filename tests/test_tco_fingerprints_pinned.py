@@ -10,8 +10,10 @@ code part held constant.
 ``B1`` is what the profile material was when ``tests/fixtures/b1_formats`` was written, and stays so: those files
 record it. ``CURRENT`` is the live profile's, and moves only with a deliberate edit of ``profiles/tco.json``: the
 "Ω cm^-2" aliases of Ω/sq and ``substrate_temperature.named_values`` (units reach all three fingerprints and the
-retrieval part, named values the extraction and comparison ones), and transmittance's spectrum declaration (the
-figure fingerprint only).
+retrieval part, named values the extraction and comparison ones), transmittance's spectrum declaration (the
+figure fingerprint only), and ``component`` as a strict list with its description reworded (``cardinality`` is PROMPT
+and VERDICT, ``strict_list`` VERDICT, the description PROMPT and FIGURE: the extraction and comparison fingerprints
+move; the figure part does not, because ``component`` is not ``figure_readable``, and retrieval is untouched).
 """
 
 from __future__ import annotations
@@ -33,8 +35,8 @@ B1 = {
     figure_profile_fingerprint: "623d87026f22",
 }
 CURRENT = {
-    profile_extraction_fingerprint: "f35cbb952650",
-    profile_comparison_fingerprint: "727a3bdbd4ee",
+    profile_extraction_fingerprint: "66f4dcb016c5",
+    profile_comparison_fingerprint: "a170e426444d",
     figure_profile_fingerprint: "d5a2ab6a6ede",
 }
 # retrieval_fingerprint(tco) with every source fingerprint replaced by CODE_STANDIN: the profile's part only. B1's
@@ -42,7 +44,7 @@ CURRENT = {
 CURRENT_RETRIEVAL_PROFILE_PART = "cbd2a932b484"
 CODE_STANDIN = "code"
 # The file itself: the pins are only meaningful over this exact profile.
-TCO_JSON_SHA256 = "265692c7dd621cecf4c381d295d41baeb9a289b37c83318d366661008b129852"
+TCO_JSON_SHA256 = "3c7797a1fa7b59827c192778cb59d8afea0b161193cc8c6b3bf378211bb702be"
 # DomainProfile.content_hash covers every non-display attribute *at default too*, so unlike the fingerprints it
 # moves whenever FieldSpec, GroupSpec or PromptSlots gains an attribute (spec §7). It names no stored file (it
 # serves __hash__, /api/health and the CLI listing), so a step that adds an attribute updates this pin, and says
@@ -50,8 +52,9 @@ TCO_JSON_SHA256 = "265692c7dd621cecf4c381d295d41baeb9a289b37c83318d366661008b129
 # PromptSlots.sample_list_heading, both at their defaults in TCO; in S6 by FieldSpec.references, None in TCO; by
 # FieldSpec.named_values, () in TCO; then by TCO's own edit: the Ω/sq aliases, substrate_temperature's named values
 # and the article_type_hint slot; then by FieldSpec.figure_spectrum_axis and figure_spectrum_points and TCO's
-# transmittance spectrum declaration.
-TCO_CONTENT_HASH = "2b2c166fd30bc055bdbb62c55af14ec62dc59b7167f860a57b46e99813afbe01"
+# transmittance spectrum declaration; then by FieldSpec.strict_list and TCO's component becoming a strict list, with
+# its description reworded.
+TCO_CONTENT_HASH = "5527e90f7190bdeed85331bf45139f7f28a2b0c7bb0ace034c57c8cd810feecf"
 
 
 def test_the_pinned_profile_file_is_unchanged():
